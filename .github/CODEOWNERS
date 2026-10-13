@@ -1,0 +1,8 @@
+# Every change is reviewed by the owner.
+* @Tzvi1234
+
+# Security-sensitive paths: owner review is mandatory and should be explicit.
+/supabase/migrations/ @Tzvi1234
+/packages/application/ @Tzvi1234
+/infra/ @Tzvi1234
+/.github/ @Tzvi1234

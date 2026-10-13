@@ -1,0 +1,33 @@
+name: Bug
+description: Something does not work as specified
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Include request IDs or correlation IDs, never tokens or buyer data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+      description: Link the requirement or acceptance criterion if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Critical (data leak, wrong money, unapproved external action)
+        - High (feature broken)
+        - Medium
+        - Low
+    validations:
+      required: true
