@@ -26,13 +26,17 @@ The frame every later feature is built inside: a uv workspace whose packages fol
 | AC-1.1.2 | Given `htco_domain` imports `fastapi`, when `just arch` runs, then it fails naming the contract. | 1.1 | Pass |
 | AC-1.1.3 | Given Python 3.14 and the pinned LangGraph version, when the smoke test builds and runs a two-node graph with an in-memory checkpointer, then it passes. | 1.1 | Pass |
 | AC-1.1.4 | Coverage below the floors (domain 95%, application 90%) fails the run. | 1.1 | Pass |
+| AC-1.4.1 | A pull request with a failing test, lint error, type error, forbidden import, secret-like string or vulnerable pinned dependency cannot merge (`ci-gate` red). | 1.4 | Open |
+| AC-1.4.2 | A pull request that adds `@pytest.mark.skip` without a "Test changes" section fails `test-integrity`. | 1.4 | Open |
+| AC-1.4.3 | Every `uses:` line references a full commit SHA (checked by a script). | 1.4 | Open |
 
 Slices 1.2 to 1.7 add their criteria here as they start; the full list is in the [phase plan](../../plan/phases/phase-01-walking-skeleton.md).
 
 ## Scope
 
 - **In (1.1):** workspace and packages, Ruff, mypy, import-linter and the layer purity test, pytest with AnyIO and Hypothesis, coverage floors, `just` recipes, prek Git hooks (ruff, gitleaks, file hygiene, Conventional Commits).
-- **Out (1.1):** the API itself (1.2), the OpenAPI contract (1.3), CI (1.4), the container and deployment (1.5), agent hooks and the branch ruleset (1.6), monitoring (1.7).
+- **In (1.4):** the CI workflow with one required status (`ci-gate`), secret and dependency scans, workflow linting, the test-weakening check, the pull request title check, and the Renovate configuration.
+- **Out (1.1 and 1.4):** the API itself (1.2), the OpenAPI contract and its CI job (1.3), the container, its CI job and deployment (1.5), agent hooks and the branch ruleset (1.6), monitoring (1.7).
 
 ## External facts learned
 

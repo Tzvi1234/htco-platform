@@ -40,9 +40,31 @@ flowchart BT
 
 ## Task runner and hooks
 
-`just` recipes call tools through `uv run`, so the versions come from `uv.lock`; `just` itself is a dev dependency (`rust-just`). `check` = `lint` + `types` + `arch` + `test`; `check-fast` = `lint` + `types` + tests without coverage, for the agent hooks of slice 1.6.
+`just` recipes call tools through `uv run`, so the versions come from `uv.lock`; `just` itself is a dev dependency (`rust-just`). `check` = `lint` + `types` + `arch` + `workflows` + `test`; `check-fast` = `lint` + `types` + tests without coverage, for the agent hooks of slice 1.6.
 
 Git hooks (prek, `.pre-commit-config.yaml`): file hygiene and private-key detection (prek built-ins), gitleaks pinned by commit SHA, Ruff format and lint, and `tools/conventional_commit.py` on `commit-msg`. CI re-runs all of them, so a skipped hook only delays the failure.
+
+## Continuous integration (slice 1.4)
+
+`.github/workflows/ci.yml` runs on every pull request (opened, updated, reopened or edited) and on every push to `main`.
+
+```mermaid
+flowchart LR
+  pr[Pull request or push to main] --> checks[checks<br/>hooks · lint · types · contracts]
+  pr --> tests[tests<br/>coverage floors]
+  pr --> security[security<br/>gitleaks · osv-scanner]
+  pr --> workflows[workflows<br/>actionlint · zizmor · SHA pins]
+  pr --> integrity[test-integrity<br/>pull requests only]
+  pr --> title[pr-title<br/>pull requests only]
+  checks & tests & security & workflows & integrity & title --> gate{ci-gate}
+```
+
+- **One required status.** `ci-gate` runs even when a job fails (`if: always()`) and passes only if every job succeeded; on pushes to `main` the two pull-request-only jobs may be skipped. Branch rules will require only `ci-gate` (slice 1.6), so adding a job never needs a settings change.
+- **Least privilege.** The workflow grants nothing by default (`permissions: {}`); each job gets `contents: read`, and `ci-gate` gets nothing. Checkouts do not keep credentials.
+- **No template injection.** The pull request title, body and base commit reach scripts only through environment variables.
+- **Same tools as local.** Jobs call `just` recipes through `uv run` with `UV_LOCKED=1`, so CI fails when `uv.lock` is stale and uses exactly the locked versions. gitleaks and osv-scanner are release binaries checked against pinned SHA-256 sums.
+- **Re-run on edit.** Editing the title or the "Test changes" section re-runs the whole workflow instead of only the cheap jobs: a partial run could otherwise replace a red `ci-gate` with a green one for the same commit.
+- **Test integrity.** `tools/test_integrity.py` reads the merge-base diff and the base and head `pyproject.toml`. It flags added skip or expected-failure markers, removed test functions, changed or removed assertions, changed coverage thresholds, and any change to the `pytest`, `coverage`, `importlinter`, `mypy` or `ruff.lint` settings. Any finding fails the job unless the pull request has a non-empty "Test changes" section.
 
 ## Decisions and alternatives
 
@@ -54,3 +76,6 @@ Git hooks (prek, `.pre-commit-config.yaml`): file hygiene and private-key detect
 | `rust-just` and `prek` in the dev group | Global installs | Contributors install only uv; CI uses the locked versions. |
 | Own Conventional Commits checker | commitizen | Same rule in about 80 lines, no extra dependency, reused by the CI title check. |
 | `exclude-newer = "7 days"` | Release age enforced only by Renovate | Applies to every resolution, including manual `uv lock --upgrade`. |
+| One `ci-gate` job as the required status | Requiring every job in the branch rules | New jobs are protected automatically; the rules never drift from the workflow. |
+| Our own test-integrity and SHA-pin scripts | Marketplace actions | Small, tested, no extra third-party code with access to the workflow. |
+| Scanner binaries with pinned checksums | gitleaks and osv-scanner GitHub Actions | The gitleaks action needs write access to comment on pull requests; a checksum-verified binary needs none. |

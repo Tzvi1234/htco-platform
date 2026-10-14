@@ -56,12 +56,13 @@
 
 | Area | Choice | Notes |
 |---|---|---|
-| Secrets | gitleaks v8.30.1 (feature-frozen; Betterleaks is the successor to evaluate) | Pre-commit hook pinned by commit SHA (built with Go by prek); CI from slice 1.4 |
-| Dependencies | osv-scanner (reads `uv.lock`), `uv audit` when stable | Every pull request |
+| Secrets | gitleaks v8.30.1 (feature-frozen; Betterleaks is the successor to evaluate) | Pre-commit hook pinned by commit SHA (built with Go by prek); CI downloads the release binary and checks its SHA-256, then scans the full history |
+| Dependencies | osv-scanner 2.6.0 (reads `uv.lock`), `uv audit` when stable | Every pull request; release binary checked by SHA-256 in CI. Binary versions and checksums in `ci.yml` are updated by hand (Renovate cannot update the checksum). |
 | Static analysis | Ruff `S` rules on every pull request; Semgrep CE weekly | Semgrep registry rules are licensed for internal use |
 | Container | Grype, or Trivy pinned by full commit SHA | Trivy's GitHub Action tags were compromised in March 2026 |
-| Workflows | zizmor, actionlint, SHA-pinned actions, `permissions: {}` by default | |
-| Updates | Renovate (one config for Python, npm, Gradle, NuGet, Docker, Actions) with a 3–7 day minimum release age; Dependabot alerts on | |
+| Workflows | zizmor 1.30.1, actionlint 1.7.12 (`actionlint-py`, which verifies the binary against pinned checksums), `tools/check_action_pins.py`, `permissions: {}` by default | Installed on demand from the `ci` dependency group (`just workflows`). Actions in use: `actions/checkout` v7.0.1, `astral-sh/setup-uv` v10.2.0 (newest release older than seven days). |
+| CI gate | `.github/workflows/ci.yml` with one required status, `ci-gate` | Jobs: checks, tests, security, workflows, test-integrity (`tools/test_integrity.py`), pr-title (`tools/conventional_commit.py`); `contract` and `image` jobs arrive with slices 1.3 and 1.5 |
+| Updates | Renovate (`.github/renovate.json5`: seven-day minimum release age, weekly schedule, lock-file maintenance, Actions pinned by digest); Dependabot alerts on | Needs the Renovate GitHub App installed by the owner |
 | SBOM | Syft (CycloneDX) attached to releases | |
 
 ## Release

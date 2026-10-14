@@ -63,11 +63,12 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 | Command | What it runs | Created in |
 |---|---|---|
 | `just setup` | Install the workspace and the Git hooks (prek: ruff, gitleaks, file hygiene, Conventional Commits) | Slice 1.1 |
-| `just check` | Formatting, lint, types, architecture contracts, tests with coverage floors (what CI runs) | Slice 1.1 |
+| `just check` | Formatting, lint, types, architecture contracts, workflow lint, tests with coverage floors (CI also scans secrets and dependencies) | Slice 1.1 |
 | `just check-fast` | Lint, types and tests without coverage (used by the agent hooks) | Slice 1.1 |
 | `just test` | Tests with branch coverage; fails below the floors (domain 95%, application 90%, total 80%) | Slice 1.1 |
 | `just fmt` | Format and apply safe lint fixes | Slice 1.1 |
 | `just lint`, `just types`, `just arch` | Ruff, mypy (strict), architecture contracts (import-linter and layer purity tests) | Slice 1.1 |
+| `just workflows` | actionlint, zizmor and the SHA-pin check on `.github/` | Slice 1.4 |
 | `just contract` | OpenAPI snapshot, breaking-change check, Schemathesis | Slice 1.3 |
 | `just up` | Local API (the worker joins in Phase 5) | Slice 1.2 |
 | `just db-start`, `just db-reset`, `just db-test` | Local Supabase stack, migrations, pgTAP tests | Slice 2.1 |
