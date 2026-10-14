@@ -30,6 +30,7 @@ Accepted ADRs are not rewritten. Two things may be added later: a status change,
 | [0013](0013-automation-engine.md) | Automation registry and workflow engine independent of the agent runtime | Accepted |
 | [0014](0014-tool-registry.md) | Central tool registry with capability-level, least-privilege access | Accepted |
 | [0015](0015-decision-advisor-and-routing.md) | Shared Decision Advisor; one router with a policy per employee | Accepted; amends 0004 |
+| [0016](0016-web-first.md) | Web first: every feature works on the web before any native app | Accepted |
 
 Client decisions live in `htco-clients/docs/adr/`.
 
