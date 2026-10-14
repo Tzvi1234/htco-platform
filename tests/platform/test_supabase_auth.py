@@ -158,3 +158,124 @@ async def test_sign_out__revokes_this_session_only_and_ignores_already_gone() ->
 async def test_tokens__repr_hides_them() -> None:
     tokens = AuthTokens("secret-access", "secret-refresh", datetime.now(UTC))
     assert "secret" not in repr(tokens)
+
+
+# MFA (slice 3.5 part 2) -------------------------------------------------------------------------
+
+
+async def test_enroll_totp__returns_the_factor_and_its_qr_code() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "factor-1",
+                "type": "totp",
+                "totp": {
+                    "qr_code": "data:image/svg+xml;utf-8,<svg/>",
+                    "secret": "S3CR3T",
+                    "uri": "otpauth://x",
+                },
+            },
+        )
+
+    subject, client = auth(handler)
+    async with client:
+        enrollment = await subject.enroll_totp("access-1", friendly_name="Phone")
+
+    assert (enrollment.factor_id, enrollment.secret, enrollment.uri) == (
+        "factor-1",
+        "S3CR3T",
+        "otpauth://x",
+    )
+    assert enrollment.qr_code.startswith("data:image/svg+xml")
+    assert str(seen[0].url) == f"{URL}/auth/v1/factors"
+    assert seen[0].headers["authorization"] == "Bearer access-1"
+    assert json.loads(seen[0].content) == {"factor_type": "totp", "friendly_name": "Phone"}
+
+
+async def test_verify_totp__challenges_then_verifies_and_returns_aal2_tokens() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(f"{request.method} {request.url.path}")
+        if request.url.path.endswith("/challenge"):
+            return httpx.Response(200, json={"id": "challenge-1", "expires_at": 1_800_000_000})
+        assert json.loads(request.content) == {"challenge_id": "challenge-1", "code": "123456"}
+        return httpx.Response(200, json=TOKENS | {"access_token": "access-aal2"})
+
+    subject, client = auth(handler)
+    async with client:
+        tokens = await subject.verify_totp("access-1", "factor-1", "123456")
+
+    assert tokens.access_token == "access-aal2"  # noqa: S105 - test value
+    assert seen == [
+        "POST /auth/v1/factors/factor-1/challenge",
+        "POST /auth/v1/factors/factor-1/verify",
+    ]
+
+
+@pytest.mark.parametrize(
+    "code", ["mfa_verification_failed", "mfa_challenge_expired", "invalid_credentials"]
+)
+async def test_verify_totp__wrong_code__is_refused(code: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/challenge"):
+            return httpx.Response(200, json={"id": "c"})
+        return httpx.Response(422, json={"error_code": code})
+
+    subject, client = auth(handler)
+    async with client:
+        with pytest.raises(InvalidCredentialsError):
+            await subject.verify_totp("a", "f", "000000")
+
+
+async def test_factors__reads_the_users_factors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/auth/v1/user"
+        return httpx.Response(
+            200,
+            json={
+                "id": "u",
+                "factors": [
+                    {
+                        "id": "f1",
+                        "factor_type": "totp",
+                        "status": "verified",
+                        "friendly_name": "Phone",
+                    },
+                    {"id": "f2", "factor_type": "totp", "status": "unverified"},
+                ],
+            },
+        )
+
+    subject, client = auth(handler)
+    async with client:
+        factors = await subject.factors("access-1")
+
+    assert [(f.id, f.factor_type, f.verified, f.friendly_name) for f in factors] == [
+        ("f1", "totp", True, "Phone"),
+        ("f2", "totp", False, None),
+    ]
+
+
+async def test_factors__user_without_factors__empty() -> None:
+    subject, client = auth(lambda _: httpx.Response(200, json={"id": "u"}))
+    async with client:
+        assert await subject.factors("a") == []
+
+
+async def test_unenroll__deletes_the_factor() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"id": "f1"})
+
+    subject, client = auth(handler)
+    async with client:
+        await subject.unenroll("access-1", "f1")
+
+    assert (seen[0].method, seen[0].url.path) == ("DELETE", "/auth/v1/factors/f1")
