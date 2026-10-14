@@ -11,9 +11,10 @@ MIGRATIONS = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
 
 def _check_values(constraint: str) -> set[str]:
     sql = "\n".join(p.read_text(encoding="utf-8") for p in sorted(MIGRATIONS.glob("*.sql")))
-    match = re.search(rf"constraint {constraint} check \(\s*\w+ in \(([^)]*)\)", sql)
-    assert match, f"check constraint {constraint} not found in the migrations"
-    return set(re.findall(r"'([^']+)'", match.group(1)))
+    # Migrations run in file order, so the last definition of a constraint is the effective one.
+    matches = re.findall(rf"constraint {constraint} check \(\s*\w+ in \(([^)]*)\)", sql)
+    assert matches, f"check constraint {constraint} not found in the migrations"
+    return set(re.findall(r"'([^']+)'", matches[-1]))
 
 
 def test_memberships_role_check__lists_exactly_the_domain_roles() -> None:

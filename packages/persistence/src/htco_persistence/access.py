@@ -88,15 +88,29 @@ class _PostgresAccessWork:
             [membership_id, organization_id, user_id, role.value],
         )
 
+    def registered_user_id(self, organization_id: uuid.UUID, email: str) -> uuid.UUID | None:
+        row = self._connection.execute(
+            "select app.registered_user_id(%s, %s)", [organization_id, email]
+        ).fetchone()
+        return None if row is None else row[0]
+
+    # `role <> 'owner'` is checked by the write itself, not only by the earlier read, so a
+    # concurrent promotion to Owner cannot slip between the check and the change.
     def update_role(self, membership_id: uuid.UUID, role: Role) -> None:
         self._changed_one(
-            "update app.memberships set role = %s where id = %s and revoked_at is null",
+            """
+            update app.memberships set role = %s
+            where id = %s and revoked_at is null and role <> 'owner'
+            """,
             [role.value, membership_id],
         )
 
     def revoke_membership(self, membership_id: uuid.UUID, at: datetime) -> None:
         self._changed_one(
-            "update app.memberships set revoked_at = %s where id = %s and revoked_at is null",
+            """
+            update app.memberships set revoked_at = %s
+            where id = %s and revoked_at is null and role <> 'owner'
+            """,
             [at, membership_id],
         )
 
@@ -120,14 +134,17 @@ class _PostgresAccessWork:
         organization_id: uuid.UUID,
         membership_id: uuid.UUID,
         shop_id: uuid.UUID,
-    ) -> None:
-        self._connection.execute(
+    ) -> bool:
+        created = self._connection.execute(
             """
             insert into app.shop_access (id, organization_id, membership_id, shop_id)
             values (%s, %s, %s, %s)
+            on conflict (membership_id, shop_id) do nothing
+            returning id
             """,
             [grant_id, organization_id, membership_id, shop_id],
-        )
+        ).fetchone()
+        return created is not None
 
     def delete_grant(self, grant_id: uuid.UUID) -> None:
         self._changed_one("delete from app.shop_access where id = %s", [grant_id])

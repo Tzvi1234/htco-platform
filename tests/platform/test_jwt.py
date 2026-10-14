@@ -285,3 +285,48 @@ async def test_http_jwks_source__error_status__raises() -> None:
 
 async def test_jwt_verifier__repr__names_the_issuer() -> None:
     assert ISSUER in repr(verifier(FakeJwks()))
+
+
+@pytest.mark.parametrize("document", [{"keys": []}, {"keys": [{"kid": "rsa", "kty": "RSA"}]}])
+async def test_jwks__no_usable_signing_key__is_unavailable_not_bad_signature(
+    document: dict[str, Any],
+) -> None:
+    class NoUsableKeys(FakeJwks):
+        @override
+        async def fetch(self) -> Mapping[str, Any]:
+            self.fetches += 1
+            return document
+
+    with pytest.raises(KeySetUnavailableError):
+        await verifier(NoUsableKeys()).verify(SigningKey("k1").sign(claims()))
+
+
+async def test_jwks__a_slow_refresh_does_not_block_tokens_with_cached_keys() -> None:
+    import anyio  # noqa: PLC0415 - local to this test
+
+    key = SigningKey("k1")
+    release = anyio.Event()
+
+    class SlowAfterFirst(FakeJwks):
+        @override
+        async def fetch(self) -> Mapping[str, Any]:
+            if self.fetches >= 1:
+                await release.wait()
+            return await super().fetch()
+
+    jwks, clock = SlowAfterFirst(key), Clock()
+    subject = verifier(jwks, clock)
+    await subject.verify(key.sign(claims()))
+    clock.now += JwtVerifier.DEFAULT_REFRESH_COOLDOWN_SECONDS + 1
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(_expect_unknown_key, subject, key.sign(claims(), kid="forged"))
+        await anyio.sleep(0.05)  # the forged key ID's refresh is now waiting on the provider
+        with anyio.fail_after(1):
+            assert (await subject.verify(key.sign(claims()))).subject == USER_ID
+        release.set()
+
+
+async def _expect_unknown_key(subject: JwtVerifier, token: str) -> None:
+    with pytest.raises(InvalidTokenError):
+        await subject.verify(token)

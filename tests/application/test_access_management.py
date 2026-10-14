@@ -1,6 +1,7 @@
 """User and shop-access management (slice 2.6, AC-2.6.1, AC-2.6.2 and AC-2.6.4)."""
 
 import uuid
+from typing import override
 
 import pytest
 
@@ -10,6 +11,7 @@ from htco_application.access.management import (
     GrantNotFoundError,
     InviteeAlreadyRegisteredError,
     MemberAlreadyExistsError,
+    MemberRow,
     MembershipNotFoundError,
     MfaRequiredError,
     ShopNotInOrganizationError,
@@ -318,3 +320,65 @@ async def test_list_members__the_organizations_members_with_their_shops() -> Non
         (M_SUPPORT, Role.SUPPORT),
     ]
     assert members[2].shop_ids == frozenset({SHOP})
+
+
+# Review fixes ------------------------------------------------------------------------------------
+
+
+async def test_invite__email_already_registered__adds_that_user() -> None:
+    """An invitation interrupted after the sign-in service created the user can be retried, and a
+    member of another organization can be added."""
+    store = Store(registered={"known@example.test": NEWCOMER})
+    member = await invite_member(
+        AS_OWNER,
+        store,
+        Inviter(registered=True),
+        ORG,
+        email="Known@Example.test",
+        role=Role.VIEWER,
+        now=NOW,
+        correlation_id="c",
+    )
+    assert member.user_id == NEWCOMER
+    [record] = store.audit
+    assert record.after == {"user_id": str(NEWCOMER), "role": "viewer"}
+
+
+async def test_admin__can_remove_their_own_membership() -> None:
+    """The audit record is written while the actor is still a member."""
+    store = Store()
+    await remove_member(AS_ADMIN, store, ORG, M_ADMIN, now=NOW, correlation_id="c")
+    assert M_ADMIN not in store.members
+    assert [record.action for record in store.audit] == ["membership.revoked"]
+
+
+async def test_grant__lost_race_with_an_identical_grant__is_a_quiet_success() -> None:
+    class Racing(Store):
+        @override
+        def grant_of(
+            self,
+            membership_id: uuid.UUID,
+            shop_id: uuid.UUID,
+        ) -> uuid.UUID | None:
+            return None  # read before the other request's insert committed
+
+    store = Racing()
+    store.grants[(M_SUPPORT, SHOP)] = uuid.UUID(int=99)
+    await grant_shop(AS_ADMIN, store, ORG, M_SUPPORT, SHOP, now=NOW, correlation_id="c")
+    assert store.audit == []
+
+
+async def test_concurrent_promotion_to_owner__the_admins_change_is_refused() -> None:
+    """The Admin read the member as Support; by the write it is the Owner: the database refuses."""
+
+    class Promoted(Store):
+        @override
+        def member(self, organization_id: uuid.UUID, membership_id: uuid.UUID) -> MemberRow | None:
+            stale = super().member(organization_id, membership_id)
+            self.update_role(M_SUPPORT, Role.OWNER)  # the Owner's promotion commits meanwhile
+            return stale
+
+    store = Promoted()
+    with pytest.raises(AccessDeniedError):
+        await remove_member(AS_ADMIN, store, ORG, M_SUPPORT, now=NOW, correlation_id="c")
+    assert store.audit == []

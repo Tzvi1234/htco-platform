@@ -23,11 +23,17 @@ class DatabaseCheck:
         self._connect_timeout = connect_timeout
 
     async def __call__(self) -> None:
-        await anyio.to_thread.run_sync(self._probe)
+        # A server can accept the connection and then stall; `connect_timeout` no longer bounds
+        # that. The caller's timeout abandons the worker thread, and the statement has its own
+        # server-side timeout, so a stalled probe neither hangs `/readyz` nor runs forever.
+        await anyio.to_thread.run_sync(self._probe, abandon_on_cancel=True)
 
     def _probe(self) -> None:
         with psycopg.connect(
-            self._conninfo, connect_timeout=self._connect_timeout, autocommit=True
+            self._conninfo,
+            connect_timeout=self._connect_timeout,
+            autocommit=True,
+            options=f"-c statement_timeout={self._connect_timeout * 1000}",
         ) as connection:
             connection.execute("select 1")
 

@@ -111,3 +111,27 @@ def test_deploy__secrets_reach_only_the_deploy_step() -> None:
             if uses.startswith(("digitalocean/app_action/deploy@", "docker/login-action@")):
                 continue
             assert "secrets." not in yaml.safe_dump(step), step.get("name")
+
+
+WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+
+
+def _workflow(name: str) -> dict[Any, Any]:
+    loaded: dict[Any, Any] = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+    return loaded
+
+
+@pytest.mark.ac("AC-2.1.4")
+@pytest.mark.parametrize("name", ["migrate.yml", "deploy.yml"])
+def test_production_workflows__refuse_anyone_but_the_repository_owner(name: str) -> None:
+    """Write access is enough to start a dispatched workflow; the first step stops non-owners."""
+    for job in _workflow(name)["jobs"].values():
+        first = job["steps"][0]
+        assert first["name"] == "Only the repository owner may run this"
+        assert '"$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER"' in first["run"]
+
+
+def test_migrate__records_the_history_even_when_applying_fails() -> None:
+    [job] = _workflow("migrate.yml")["jobs"].values()
+    [record] = [step for step in job["steps"] if step.get("name") == "Record the applied versions"]
+    assert record["if"] == "${{ !cancelled() }}"
