@@ -1,0 +1,73 @@
+# Commerce Catalog tools (ADR-0014). DRAFT: none is production-ready yet.
+
+[[tools]]
+name = "orders.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "confidential"
+audit_required = false
+readiness = "draft"
+description = "Read orders, items and shipments of granted shops (buyer data masked by default)."
+
+[[tools]]
+name = "catalog.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read products, variants and listing specifications."
+
+[[tools]]
+name = "listings.read_stats"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read marketplace listing stats (views, favourites)."
+
+[[tools]]
+name = "catalog.create_draft"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "internal"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Create or update an internal catalog specification."
+
+[[tools]]
+name = "catalog.update_draft_content"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "internal"
+risk = "low"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Update draft titles, descriptions and tags."
+
+[[tools]]
+name = "listings.apply_approved_fix"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "high"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Apply one approved Listing Health fix to the Etsy listing through the outbox, then re-read and verify it. Runs only with a decided approval; granted in Phase 11."

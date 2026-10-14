@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft 1.0 — the baseline every phase builds on |
+| **Status** | Draft 2.0 — the baseline every phase builds on; the living office of [ADR-0012](../adr/0012-living-office-organization.md) |
 | **Last updated** | 2026-10-14 |
 | **Related** | [PRD](../product/PRD.md) · [Engineering rules](../engineering/ENGINEERING_RULES.md) · [Threat model](THREAT_MODEL.md) · [Data model](DATA_MODEL.md) · [Event catalog](EVENT_CATALOG.md) · [Permission matrix](PERMISSION_MATRIX.md) · [ADRs](../adr/README.md) |
 
@@ -49,7 +49,7 @@ flowchart TB
     direction TB
     web[web<br/>SPA served by Caddy<br/>strict security headers]
     api[api<br/>FastAPI · BFF for web · bearer for native<br/>webhook ingress]
-    worker[worker<br/>job consumers · schedulers<br/>agent runtime from Phase 8]
+    worker[agent-worker<br/>automations · job consumers · schedulers<br/>AI employees from Phase 8]
   end
   subgraph SB[Supabase Pro · eu-central-1]
     pg[(Postgres<br/>app · private · agent_runtime)]
@@ -73,12 +73,12 @@ flowchart TB
 |---|---|---|---|---|
 | `web` | Service (Caddy serving the built SPA) or static site | `htco-clients/apps/web` | Serves the web app with CSP, HSTS and frame-ancestors headers | Static assets, CDN |
 | `api` | Web service | `htco-platform/apps/api` | HTTP API, BFF session handling for the web, bearer auth for native apps, webhook ingress, health | More instances; dedicated CPU when needed |
-| `worker` | Worker | `htco-platform/workers` | Job consumers (ingest, sync, inspectors, outbox delivery), scheduled jobs, and from Phase 8 the agent runtime | Split into `automation-worker` and `agent-worker` when load or isolation requires (ADR) |
+| `agent-worker` | Worker | `htco-platform/workers` | The automation engine (ingest, sync, reconciliation, outbox delivery, schedules) and, from Phase 8, the AI employees through the agent runtime | An `automation-worker` splits out when isolation or measured load requires it (ADR); never one container per employee |
 | `browser-runner` | Isolated worker or job, later | `htco-platform/workers/browser` | Playwright automation only if an approved AutoVA path needs it | Possibly a separate droplet for sandboxing (ADR) |
 
 Routing: `app.ht-co.app/` goes to `web`, `app.ht-co.app/api` to `api` (same origin, so the web session cookie needs no CORS), and `api.ht-co.app` to `api` for native clients and webhooks. `office.ht-co.app` and `agents.ht-co.app` are **mail domains only** (MX, SPF, DKIM, DMARC) and never get web records.
 
-Why this shape ([ADR-0002](../adr/0002-modular-monolith-hexagonal.md), [ADR-0005](../adr/0005-hosting-digitalocean-supabase.md)): one API and one worker are cheap, simple to operate, and enough for the pilot. Eighteen agents are eighteen *profiles* running in one worker, not eighteen services.
+Why this shape ([ADR-0002](../adr/0002-modular-monolith-hexagonal.md), [ADR-0005](../adr/0005-hosting-digitalocean-supabase.md), [ADR-0012](../adr/0012-living-office-organization.md)): one API and one worker are cheap, simple to operate, and enough for the pilot. Sixteen employees are sixteen *profiles* running in one worker, not sixteen services; employee, tool and automation definitions are data. Containers are stateless: sessions, checkpoints and executions live in Postgres.
 
 ## 4. Code structure
 
@@ -106,6 +106,7 @@ htco-platform/
   packages/model-router/    Model gateway: routing policy, provider adapters, price table, budget ledger client
   packages/agent-runtime/   Agent runtime port implementation (LangGraph), graphs, tool bridge
   packages/platform/        Cross-cutting infrastructure: settings, logging, tracing, crypto, clock, IDs
+  registry/                 The office as reviewed data: employees, automations, tools, advisors (TOML; database rows from Phase 8)
   supabase/migrations/      SQL migrations (single source of truth for the schema)
   supabase/tests/           pgTAP database tests
   infra/digitalocean/       App spec and environment documentation
@@ -154,8 +155,13 @@ Each context is a sub-package inside `domain`, `application` and the relevant ad
 | Sourcing | Supplier quotes, supplier mappings | `QuoteRequest`, `SupplierMapping` |
 | Finance | Financial entries, fees, payouts, cost snapshots, budgets | `LedgerEntry`, `Budget` |
 | Support | Tickets, customer messages, consents | `Ticket` |
-| AI Workforce | Agent profiles and versions, tasks, approvals, agent runs, memory | `Task`, `Approval`, `AgentProfile` |
-| Observability & Incidents | Incidents, remediations, audit log, alerts | `Incident` |
+| Workforce | Departments, employee identities and versioned profiles, agent sessions, memory, internal messages | `EmployeeProfile`, `AgentSession` |
+| Work & Approvals | Business tasks, approvals | `BusinessTask`, `Approval` |
+| Automation | Automation definitions and executions | `AutomationDefinition`, `AutomationExecution` |
+| Tools | Tool definitions, invocations | `ToolDefinition` |
+| Decisions & Routing | Routing policies and decisions, model usage, decision records | `ModelRoutingPolicy`, `DecisionRecord` |
+| Activity, Audit & Incidents | Activity records, audit log, incidents, remediations, alerts | `ActivityRecord`, `Incident` |
+| Supervision & Improvement | Quality findings, optimization proposals, engineering requests | `QualityFinding`, `OptimizationProposal`, `EngineeringRequest` |
 | Media & Marketing | Images and provenance, campaigns | `Asset` |
 
 ## 5. Domain design
@@ -171,11 +177,14 @@ Each context is a sub-package inside `domain`, `application` and the relevant ad
 
 | Entity | States | Notes |
 |---|---|---|
-| Order | `PAID → INGESTED → AWAITING_SHIPMENT → SHIPPED → DELIVERED`; terminal `CANCELLED`, `REFUNDED`; `SUPPLIER_ORDERED` added in Phase 11 when supplier evidence exists | Only observable facts drive transitions; each records `source` and `observed_at`; problems are linked incidents |
+| Order | `PAID → INGESTED → AWAITING_SHIPMENT → SHIPPED → DELIVERED`; terminal `CANCELLED`, `REFUNDED`; `SUPPLIER_ORDERED` added in Phase 13 when supplier evidence exists | Only observable facts drive transitions; each records `source` and `observed_at`; problems are linked incidents |
 | Task | `CREATED → QUEUED → CLAIMED → RUNNING → COMPLETED`, with `WAITING_FOR_EXTERNAL`, `WAITING_FOR_AGENT`, `WAITING_FOR_APPROVAL`, `RETRY_SCHEDULED`, `BLOCKED`, `FAILED`, `ESCALATED`, `CANCELLED` | Business-level state; separate from the technical job queue |
 | Approval | `PENDING → APPROVED │ REJECTED │ EXPIRED │ CANCELLED` | Decision stores approver, MFA level, policy version |
 | Incident | `DETECTED → TRIAGED → INVESTIGATING → REMEDIATION_PROPOSED → (AUTO_REMEDIATING │ APPROVAL_REQUIRED │ DEVELOPER_REQUIRED) → VERIFYING → RESOLVED`, or `ESCALATED` | Resolved only on verified evidence |
 | Quote request | `REQUESTED → WAITING_FOR_QUOTES → QUOTES_READY → EVALUATING → APPROVAL_PENDING → APPROVED → ACTIVE`; `EXPIRED`, `REJECTED`, `FAILED` | Re-opened by price, SKU, shipping or SLA change |
+| Automation execution | `PENDING → RUNNING → SUCCEEDED`; `FAILED → RETRY_SCHEDULED → RUNNING`; terminal `DEAD_LETTERED`, `COMPENSATED`, `CANCELLED` | Unique per automation and idempotency key (`htco_domain.automation`) |
+| Optimization proposal | `DETECTED → PROPOSED → EVALUATING → APPROVED │ REJECTED → DEVELOPMENT → TESTING → DEPLOYED → MEASURING → VERIFIED │ ROLLED_BACK` | Proposing needs acceptance criteria and a rollback plan (`htco_domain.improvement`) |
+| Employee profile readiness | `DRAFT → SPECIFIED → EVALUATING → READY → ACTIVE`; `SUSPENDED`, `RETIRED` | `READY` and `ACTIVE` need every specification section defined and a passed evaluation (`htco_domain.workforce`) |
 
 ## 6. Data architecture
 
@@ -204,7 +213,9 @@ All external systems sit behind ports owned by the application layer.
 | `AutoVaPort` | `ManualAutoVaAdapter` first; API adapter if AutoVA offers one; browser adapter only by ADR | Tracking does not need AutoVA access: AutoVA writes tracking to Etsy and we read it there |
 | `EmailPort` | `ResendAdapter` | Idempotency keys on send; inbound via `email.received` webhook then fetch content; attachments copied within one hour |
 | `ModelGateway` | `AnthropicAdapter`, `OpenAIAdapter` (official SDKs) | Only path to models; see §9 |
-| `DecisionPort` | Experimental adapters (TypeSafe Jev, OpenAI Decisions) | Typed decisions with a structured-output fallback; benchmark before use |
+| `DecisionAdvisor` | TypeSafe Jev adapter, economy model through the gateway (Phase 9) | Typed decisions (choice or score) after deterministic rules; schema-validated; benchmarked before use ([ADR-0015](../adr/0015-decision-advisor-and-routing.md)) |
+| `AgentRuntime` | `LangGraphRuntime` (Phase 8) | `invoke`, `resume`, `interrupt`, `cancel`, `inspect`; sessions reference employees and tasks by ID |
+| `ExecutionStore` | Postgres store on the job queue (Phase 5) | Automation executions, unique per idempotency key |
 | `BlobStore` | Supabase Storage | Product media with provenance metadata |
 | `Clock`, `IdGenerator` | System and test implementations | Determinism in tests |
 
@@ -243,7 +254,7 @@ A Postgres-native queue with atomic claims (`FOR UPDATE SKIP LOCKED`), visibilit
   "correlation_id": "…",
   "causation_id": "…",
   "idempotency_key": "etsy:shop123:receipt456:paid",
-  "actor": {"type": "worker", "id": "ingest"},
+  "actor": {"type": "automation", "id": "etsy-order-intake"},
   "payload_version": 1,
   "payload": {}
 }
@@ -255,7 +266,19 @@ Every event type has a JSON Schema in `packages/contracts/events/` and an entry 
 
 Recurring work (reconciliation, SLA inspection, token refresh, retention) is enqueued as jobs by the queue's scheduler or by `pg_cron`; DigitalOcean cron jobs are not used for frequent work (their minimum interval is 15 minutes). Only one scheduler instance enqueues a given schedule (unique keys per period).
 
-## 9. AI workforce architecture
+## 9. The living office architecture
+
+[ADR-0012](../adr/0012-living-office-organization.md) separates four concepts. Where each lives, and what exists today:
+
+| Concept | Domain (pure) | Application (rules, ports) | Data | Status |
+|---|---|---|---|---|
+| AI employees | `htco_domain.workforce` (identity, versioned profile, 22-section sheet, readiness gate) | `htco_application.workforce.registry`, `htco_application.agents.runtime` (port) | `registry/employees/` | Foundation implemented; runtime adapter PLANNED (Phase 8) |
+| Automations | `htco_domain.automation` (definition, 18-section spec, execution state machine) | `htco_application.automation.engine` | `registry/automations/` | In-memory engine implemented; durable store PLANNED (Phase 5) |
+| Tools | `htco_domain.tooling` | `htco_application.workforce.tool_access` | `registry/tools/` | Access rules implemented; tool bridge PLANNED (Phase 8) |
+| Routing and decisions | `htco_domain.routing` | `htco_application.routing.router`, `htco_application.decisions.advisor` | per-employee `[routing]` tables; `registry/advisors/` | Implemented with fakes; gateway and providers PLANNED (Phase 9) |
+| Records | `htco_domain.actors`, `htco_domain.activity`, `htco_domain.tasks`, `htco_domain.improvement` | — | — | Domain implemented; stores PLANNED (Phases 2, 7, 10, 18) |
+
+Employees reason; automations act deterministically; tools expose capabilities; engineering changes the system through pull requests. An employee never touches the database or an external API directly: it calls tools, which call use cases, which emit activity records and outbox messages.
 
 ### 9.1 Agent runtime behind a port
 
@@ -276,7 +299,7 @@ flowchart LR
 ```
 
 - **Runtime**: LangGraph 1.2.x with `AsyncPostgresSaver` checkpoints in the `agent_runtime` schema, over a direct (IPv4 add-on) or session-mode connection, because checkpoints need prepared statements. `LANGGRAPH_STRICT_MSGPACK=true` and an encrypted serializer are mandatory. No `langchain` package at first; nodes call our own ports ([ADR-0003](../adr/0003-agent-runtime-langgraph.md)).
-- **Graphs**: `listing_health`, `catalog`, `supplier_quote`, `fulfillment_inspection`, `incident`, `manager`, later `support` and `marketing`. Graphs exchange events and resource references through the database, never whole state blobs.
+- **Graphs**: one graph per reasoning workflow of an employee (Eitan's exception investigation first, then Noa's reviews, Daniel and Noam's Listing Health, and so on). Deterministic steps are automations, not graph nodes. Graphs exchange events and resource references through the database, never whole state blobs; their state is a runtime concern, never the record of an order, a payment, a product or an employee.
 - **Threads**: one `thread_id` per business resource run (for example `quote:{variant_id}:{request_id}`). A row lock in `app.agent_threads` guarantees that only one run touches a thread at a time (open-source LangGraph does not prevent concurrent runs on a thread).
 - **Waiting**: long waits use `interrupt()` and are resumed by an event or a delayed job. Because a node restarts from the beginning on resume, everything before an interrupt must be idempotent.
 - **Durability**: `durability="sync"` for supplier quotes, inspections and incidents; `"async"` elsewhere.
@@ -294,7 +317,7 @@ flowchart LR
 ### 9.3 Model gateway and router
 
 - **Port** `ModelGateway.complete(request) -> result`, where the request names a *capability tier* (`economy`, `balanced`, `advanced`, `critical`, `vision`, `image`), data class, budget and output schema, never a model name.
-- **Router**: deterministic, versioned policy that first checks whether the task is `NO_AI`, then picks a tier and a fallback chain from the model catalog. The catalog is data (provider model IDs, prices with as-of dates, limits, health, eval scores), seeded and reviewed by pull request.
+- **Router** (`htco_application.routing.router.route`): one deterministic router for every employee, each with its own versioned `ModelRoutingPolicy` (allowed providers, required capabilities, default and maximum tier, per-task budget, maximum data class, fallback tiers, advisor use). It returns `NO_AI` for deterministic tasks, refuses data above the policy's class, raises the tier to the task's difficulty within the policy's maximum, picks the cheapest healthy catalog model meeting providers, capabilities, data class and budget, and falls back through the policy's tiers, never below the task's difficulty ([ADR-0015](../adr/0015-decision-advisor-and-routing.md)). The catalog is data (provider model IDs, prices with as-of dates, limits, health, eval scores), seeded and reviewed by pull request.
 - **Adapters**: official Anthropic and OpenAI SDKs. Provider quirks live here (for example, restrictions on forcing a tool choice with some models and settings), so the rest of the system only sees structured outputs.
 - **Budget ledger**: reserve an estimated cost before the call, settle the actual cost after, at organization, shop, agent, task, day and month levels. Calls are refused when the reservation would exceed a cap; a safety reserve remains for critical tasks.
 - **Logging**: every call writes a `routing_decisions` row and a `model_usage` row with trace ID, tokens, cache hits, cost and outcome.
@@ -311,7 +334,27 @@ flowchart LR
 
 ### 9.5 Evaluation
 
-Each agent capability has a gold dataset, metrics and thresholds (for example precision on "high risk" listing findings, false-approve rate, cost per item, p95 latency). Evals run nightly and before any autonomy promotion. Deterministic fakes drive unit and graph tests; evals are the only place real models run in automation.
+Each employee has a gold dataset, metrics and thresholds (for example precision on "high risk" listing findings, false-approve rate, cost per item, p95 latency). Evals run nightly and before any autonomy promotion. Deterministic fakes drive unit and graph tests; evals are the only place real models run in automation. An employee or automation is `ready` only with every specification section defined and a passed evaluation; the domain refuses anything else.
+
+### 9.6 Automation engine
+
+`AutomationEngine.trigger` is the single entry for events, schedules, user actions, workflows and employees (through `automation.trigger`). It checks readiness, the deployed handler, the trigger kind and the employee's grants; executions are unique per `(automation_id, idempotency_key)`, so a replay returns the existing execution; failures follow the retry policy into the dead-letter state. From Phase 5 executions live on the Postgres job queue with leases and heartbeats, inbox and outbox ([ADR-0013](../adr/0013-automation-engine.md)).
+
+### 9.7 Tool registry and access
+
+`decide_tool_access` denies unknown employees and tools, employees that are not production-ready, tools not granted or not ready; requires approval for critical tools and for external or financial tools below L3; allows the rest. Every decision becomes a tool invocation record. The registry refuses a grant to an automation that is not callable as an agent tool ([ADR-0014](../adr/0014-tool-registry.md)).
+
+### 9.8 Decision Advisor
+
+`advise` runs deterministic rules first and calls providers (Jev, then an economy model) only for inconclusive questions, validating every answer against the question's schema and recording every attempt. It never authorizes ([ADR-0015](../adr/0015-decision-advisor-and-routing.md)).
+
+### 9.9 Supervision
+
+Four layers (Phase 10): deterministic monitors on activity records, tasks, leases and queues; Noa's exception handling and risk-based sampling; scheduled daily and weekly reviews, including the nightly supervisor; follow-up verification of corrections. Critical activity is 100% observable; model review is risk-based, never one call per event.
+
+### 9.10 Optimization and engineering
+
+Omer's proposals (`OptimizationProposal`) carry baselines, evidence, acceptance criteria and a rollback plan (Phase 18). Engineering requests link the source (owner, Maya, Noa, incidents, Omer, monitoring) to GitHub issues, pull requests, tests and releases (Phase 19). Engineering employees work only through pull requests, CI and the owner's release gate; they cannot weaken tests, remove logging, widen their own permissions or bypass branch protection.
 
 ## 10. Security architecture
 
@@ -322,7 +365,7 @@ Details and threat analysis: [THREAT_MODEL.md](THREAT_MODEL.md). Permissions: [P
 | Actor | Authentication | Token handling |
 |---|---|---|
 | Web user | Supabase Auth (email and password, TOTP MFA) through the **API acting as a backend-for-frontend** | The API performs the PKCE exchange server-side, keeps Supabase tokens encrypted server-side, and gives the browser only an opaque `__Host-` session cookie (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`). Unsafe methods require a custom CSRF header and a same-site `Sec-Fetch-Site`/`Origin` check ([ADR-0006](../adr/0006-web-auth-bff.md)). |
-| Native user | Supabase Auth through native sign-in screens, or through the HTCO web sign-in page in the system browser with PKCE (Supabase does not host a sign-in page; the choice is made by ADR at the start of Phase 14) | Bearer access token; refresh token in Android Keystore-backed encrypted storage or Windows Credential Locker / DPAPI; step-up through a biometric-protected device key verified by the server |
+| Native user | Supabase Auth through native sign-in screens, or through the HTCO web sign-in page in the system browser with PKCE (Supabase does not host a sign-in page; the choice is made by ADR at the start of Phase 16) | Bearer access token; refresh token in Android Keystore-backed encrypted storage or Windows Credential Locker / DPAPI; step-up through a biometric-protected device key verified by the server |
 | API → database | Dedicated database role; user requests run with `role authenticated` and verified claims | Connection secrets in DigitalOcean encrypted environment variables |
 | Workers | Dedicated database role per worker type | Same |
 | Agents | Service identity per agent profile, checked by the policy engine on every tool call | No credentials in prompts, memory or tool results |
@@ -367,6 +410,7 @@ Mapped to the OWASP Top 10 for Agentic Applications (2026) in the threat model: 
 | Errors | Sentry behind the `ErrorReporter` port (`htco_platform.error_reporting`) | An isolated client with no integrations: only the exception, stack trace (no local variables), environment, release and the `request_id`/`trace_id` tags; request, user and breadcrumb data are dropped |
 | Metrics | Job queue depth and age, retries, DLQ size, webhook lag, sync freshness per shop, budget consumption, agent run outcomes | Alerts link to runbooks |
 | Audit | `audit` schema, append-only | Every money, permission, publishing, approval and external action |
+| Activity | `app.activity_records` (Phase 7) | One record per meaningful operation of any actor (user, employee, automation, advisor, system) with organization, shop, task, correlation and causation IDs and outcome; business summaries only, never private model reasoning |
 | Health | `/healthz` (process), `/readyz` (database and critical config); worker heartbeat rows | DigitalOcean liveness and readiness checks |
 
 ## 13. Delivery pipeline
@@ -416,6 +460,10 @@ Details: `htco-clients/docs/architecture/CLIENT_ARCHITECTURE.md`.
 | [0009](../adr/0009-autova-integration.md) | AutoVA behind a port; read tracking from Etsy; manual adapter first | Accepted |
 | [0010](../adr/0010-test-first-development.md) | Test-first development with enforced quality gates | Accepted |
 | [0011](../adr/0011-data-access-and-migrations.md) | psycopg with explicit SQL; Supabase CLI migrations as the single schema source | Accepted |
+| [0012](../adr/0012-living-office-organization.md) | The living office: 16 employees, automations, tools and engineering as separate concepts; supersedes the 18 roles | Accepted |
+| [0013](../adr/0013-automation-engine.md) | Automation registry and workflow engine independent of the agent runtime | Accepted |
+| [0014](../adr/0014-tool-registry.md) | Central tool registry with least-privilege, capability-level access | Accepted |
+| [0015](../adr/0015-decision-advisor-and-routing.md) | Shared Decision Advisor; one router with a policy per employee (amends 0004) | Accepted |
 
 ## 16. Known risks and open questions
 
@@ -425,6 +473,8 @@ Details: `htco-clients/docs/architecture/CLIENT_ARCHITECTURE.md`.
 | AutoVA integration options (API, export, partner program) | Owner | Phase 0 inquiry |
 | Region choice (Frankfurt vs US East) | Owner | Phase 0 |
 | Job queue implementation | Platform | Phase 5 spike |
-| Server-sent events through DigitalOcean's request timeout vs Supabase Realtime for live updates | Platform | Phase 13 spike |
-| Point-in-time recovery cost vs recovery objectives | Owner | Before Phase 16 |
-| Catalog model vs Etsy reselling policy | Owner | Before Phase 10 |
+| Server-sent events through DigitalOcean's request timeout vs Supabase Realtime for live updates | Platform | Phase 15 spike |
+| Point-in-time recovery cost vs recovery objectives | Owner | Before Phase 20 |
+| Catalog model vs Etsy reselling policy | Owner | Before Phase 12 |
+| Jev's real API, terms, limits and accuracy on our questions | Platform | Phase 9 benchmark |
+| When to split an `automation-worker` from `agent-worker` | Platform | Measured load, Phase 10 onward |

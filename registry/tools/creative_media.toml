@@ -1,0 +1,37 @@
+# Creative Media tools (ADR-0014). DRAFT: none is production-ready yet.
+
+[[tools]]
+name = "media.read_asset"
+version = 1
+family = "creative_media"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read assets with provenance."
+
+[[tools]]
+name = "media.edit_image"
+version = 1
+family = "creative_media"
+owner = "iris"
+side_effect = "internal"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Edit an authorized image; records provenance."
+
+[[tools]]
+name = "media.generate_image"
+version = 1
+family = "creative_media"
+owner = "iris"
+side_effect = "internal"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Generate an image through the model gateway; records provenance."

@@ -12,17 +12,20 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 | ID | Decision | Recommendation | Needed by | Status |
 |---|---|---|---|---|
 | D-01 | Upgrade GitHub to Pro (about $4/month) for branch rulesets and required checks on private repositories | Yes | Phase 1 | Open |
-| D-02 | Region for DigitalOcean and Supabase | Frankfurt (`fra` + `eu-central-1`) | Phase 2 | Open |
-| D-03 | Start the first AI workflow with Listing Health instead of Product Studio | Yes ([MVP.md](MVP.md)) | Phase 8 | Open |
-| D-04 | Catalog model on Etsy, given Etsy's reselling and production-partner rules | Owner review with Etsy's current Seller Policy before Phase 10 | Phase 10 | Open |
-| D-05 | Native app order: Android after the operational core, Windows last | Yes | Phase 13 | Open |
-| D-06 | Monthly AI budget cap for the pilot | Owner sets a number | Phase 8 | Open |
+| D-02 | Region for DigitalOcean and Supabase | Frankfurt (`fra` + `eu-central-1`) | Phase 2 | Decided 2026-10-14: Frankfurt; container registry GHCR |
+| D-03 | Start the first content workflow with Listing Health instead of Product Studio | Yes ([MVP.md](MVP.md)) | Phase 11 | Open |
+| D-04 | Catalog model on Etsy, given Etsy's reselling and production-partner rules | Owner review with Etsy's current Seller Policy before Phase 12 | Phase 12 | Open |
+| D-05 | Native app order: Android after the operational core, Windows last | Yes | Phase 15 | Open |
+| D-06 | Monthly AI budget cap for the pilot | Owner sets a number | Phase 9 | Open |
 | D-07 | Repository license while private | Proprietary, all rights reserved; revisit before going public | Now | Decided (proprietary) |
 | D-08 | A machine account for AI agents' pull requests, so the owner can review and approve them | Yes, from Phase 1 | Phase 1 | Open |
-| D-09 | Point-in-time recovery (about $100+/month) vs daily backups | Daily backups for the pilot; decide before launch | Phase 16 | Open |
-| D-10 | Hermes integration as an Owner Assistant channel | Decide in Phase 13 | Phase 13 | Open |
+| D-09 | Point-in-time recovery (about $100+/month) vs daily backups | Daily backups for the pilot; decide before launch | Phase 20 | Open |
+| D-10 | Hermes integration as a channel for Lia (Owner Assistant) | Decide in Phase 15 | Phase 15 | Open |
 | D-11 | DNS provider for `ht-co.app` | Same provider as the owner's other domains, or Cloudflare | Phase 1 | Open |
 | D-12 | Git commit identity for these repositories (current global email or the GitHub no-reply address) before they ever become public | GitHub no-reply address | Before going public | Open |
+| D-13 | The living-office organization (16 employees, Jev, automations, tools, engineering) | Accepted as [ADR-0012](../adr/0012-living-office-organization.md) | Now | Decided (owner's brief, 2026-10-14) |
+| D-14 | Autonomy level of each employee at activation | Start at the level in PRD §8.1; promote only after its evaluation | Each activation phase | Open |
+| D-15 | Whether engineering employees (Alex, Amir, Iris) may open pull requests under a machine account | Yes, with D-08; merging and releasing stay with the owner | Phase 19 | Open |
 
 ## 2. Assumptions to verify
 
@@ -39,11 +42,14 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 | A-09 | Etsy's current API Terms allow storing order data for our retention periods and sending buyer data to AI models when needed | Owner reads the live terms | Owner | Phase 4 | Open |
 | A-10 | LangGraph works on Python 3.14 in our setup | Smoke test in Phase 1 CI | Platform | Phase 1 | Verified 2026-10-14 (langgraph 1.2.14 on CPython 3.14.8, `tests/agent_runtime`) |
 | A-11 | The Python Supabase client supports a server-side PKCE exchange (or the Auth REST API is used directly) | Spike | Platform | Phase 2 | Open |
-| A-12 | Server-sent events survive DigitalOcean's request timeout with reconnects, or Supabase Realtime is needed | Spike | Platform | Phase 13 | Open |
+| A-12 | Server-sent events survive DigitalOcean's request timeout with reconnects, or Supabase Realtime is needed | Spike | Platform | Phase 15 | Open |
 | A-13 | Supabase Micro compute (60 direct connections) is enough for API, worker and agent pools | Load test | Platform | Phase 8 | Open |
 | A-14 | The shop's buyers are mostly in the US (affects region and data-protection scope) | Order data after Phase 5 | Platform | Phase 5 | Open |
 | A-15 | Etsy offers a way to revoke an app's OAuth tokens programmatically (otherwise the owner removes access in Etsy's settings) | Etsy docs and a test during the Phase 4 spike | Platform | Phase 4 | Open |
-| A-16 | Supabase Auth's OAuth 2.1 server can back a system-browser sign-in for the native apps with an HTCO-hosted sign-in page | Spike at the start of Phase 14 | Platform | Phase 14 | Open |
+| A-16 | Supabase Auth's OAuth 2.1 server can back a system-browser sign-in for the native apps with an HTCO-hosted sign-in page | Spike at the start of Phase 16 | Platform | Phase 16 | Open |
+| A-17 | Jev's API, terms, limits and price are as reported (decision-only model; early access via TypeSafe and OpenRouter; about $0.042 per million input tokens, output free; 32K or 64K context) | TypeSafe documentation and a sandbox call | Platform | Phase 9 | Open |
+| A-18 | Jev is at least as accurate as rules plus an economy model on our triage questions | 200-example benchmark per task family (FR-MDL-08) | Platform | Phase 9 | Open |
+| A-19 | One `agent-worker` carries automations and employees at pilot load | Load test and queue-age metrics | Platform | Phase 10 | Open |
 
 ## 3. Verified facts (research on 2026-10-14)
 
@@ -57,3 +63,4 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 | V-06 | GitHub branch rulesets on private repositories need GitHub Pro or higher; environment approval rules are not available for private repositories on Free, Pro or Team | GitHub plan docs; confirmed by a 403 on the owner's account |
 | V-07 | The "Jev" site in the original brief (jevtypesafeai.com) states in its terms that it is not affiliated with TypeSafe AI; Jev itself comes from TypeSafe AI and is in early access | [jevtypesafeai.com/terms](https://jevtypesafeai.com/terms), [typesafe.ai](https://typesafe.ai) |
 | V-08 | AutoVA has no public API or developer docs | autova.io |
+| V-09 | Jev is TypeSafe AI's decision-only model (typed choice and score answers, no free text), launched in September 2026 and listed on OpenRouter | [OpenRouter: Jev 1.13](https://openrouter.ai/typesafe/jev-1.13), [OpenRouter: What is Jev](https://openrouter.ai/blog/insights/what-is-jev/) |

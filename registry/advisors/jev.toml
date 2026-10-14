@@ -1,0 +1,10 @@
+# Jev — shared Decision Advisor (ADR-0015). A shared service, not an employee: it has an
+# identity and activity history in the office, no department and no headcount.
+id = "jev"
+name = "Jev"
+title = "Decision Advisor"
+# Tried in order after deterministic rules: TypeSafe's Jev, then an economy model through the
+# gateway. Neither is used in production before the Phase 9 benchmark (FR-MDL-08).
+providers = ["typesafe-jev", "model-gateway-economy"]
+readiness = "draft"
+description = "Answers typed triage, ranking and classification questions (choice or score) when rules are inconclusive. Never authorizes: security, payment and permission policies stay with the policy engine."

@@ -1,6 +1,6 @@
 ---
 name: feature-verification
-description: How to verify that a feature in htco-platform really works before calling it done — beyond the unit and edge-case tests. Use after the tests pass and before opening or merging a pull request, for every slice. Contains a universal verification protocol, a playbook per feature type (endpoint, migration and RLS, webhook, job, integration adapter, outbound side effect, state machine, money, agent graph, model gateway, security change, deployment), adversarial checks, and the evidence format to record in the feature's tests.md.
+description: How to verify that a feature in htco-platform really works before calling it done — beyond the unit and edge-case tests. Use after the tests pass and before opening or merging a pull request, for every slice. Contains a universal verification protocol, a playbook per feature type (endpoint, migration and RLS, webhook, job, integration adapter, outbound side effect, state machine, money, agent graph, automation, registry change, model gateway, security change, deployment), adversarial checks, and the evidence format to record in the feature's tests.md.
 ---
 
 # Feature verification
@@ -83,6 +83,19 @@ Tests prove the code does what we expected. Verification proves the feature does
 - Budget: set a tiny cap → the run stops cleanly with a clear status, and the safety reserve still works for critical tasks.
 - Rule of Two: write down which of the three properties this run has; there must be at most two without a human approval.
 - Evals: run the eval suite; compare with the last accepted report; record cost per item.
+- Records: every step left an activity record with the employee, profile version, task and correlation ID; the session state was not used as the business record.
+
+### Automation
+
+- Replay the trigger several times (and concurrently): one execution, one business effect (Scenario G pattern).
+- Make the handler fail: retries follow the policy, then the dead-letter state and an incident; nothing is half-applied.
+- Trigger it as an employee without the grant, and with a trigger kind not in `callable_from`: refused, recorded, no effect.
+- Check that no model is called unless the specification names an AI step.
+
+### Registry change (employee, automation, tool, advisor)
+
+- `just registry` passes and the diff shows exactly the intended grants, policies and sections.
+- An employee or automation becomes `ready` only with every section defined and its evaluation report linked; nobody's autonomy, tools or budget change without the owner's approval in the pull request.
 
 ### Model gateway or budget
 - Fake primary provider failing → fallback used, both attempts logged.

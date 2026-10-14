@@ -1,0 +1,37 @@
+# Infrastructure Observability tools (ADR-0014). DRAFT: none is production-ready yet.
+
+[[tools]]
+name = "observability.query_logs"
+version = 1
+family = "infrastructure_observability"
+owner = "amir"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Query structured logs (no PII or secrets)."
+
+[[tools]]
+name = "observability.query_traces"
+version = 1
+family = "infrastructure_observability"
+owner = "amir"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Query traces by correlation ID."
+
+[[tools]]
+name = "remediation.run_allowlisted"
+version = 1
+family = "infrastructure_observability"
+owner = "amir"
+side_effect = "external"
+risk = "high"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Run one allowlisted, reversible, idempotent remediation."

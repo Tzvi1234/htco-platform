@@ -105,7 +105,7 @@ We use these as tools for judgment, not as goals in themselves.
 - **ER-SEC-10 Security review per change.** The pull request template's security checklist is filled in honestly, citing the OWASP ASVS 5.0 requirement IDs the change touches; anything touching auth, money, PII, webhooks, agents or migrations gets a one-page threat model in the feature's `security.md`.
 - **ER-SEC-11 Security baseline.** OWASP ASVS 5.0 Level 2, plus these higher-level requirements pulled forward because of agents and money: 8.3.3 (act with the originating user's permissions), 10.2.3 (minimal OAuth scopes), 2.3.5 (multi-party approval for high-value flows: while the organization has a single owner it is met by step-up re-authentication, and a two-person rule becomes a policy option once a second Admin exists) and chapter 15.4 (safe concurrency). Agent features also follow the OWASP Top 10 for Agentic Applications (2026).
 
-## 8. AI and agents (ER-AI)
+## 8. AI employees, automations and tools (ER-AI)
 
 - **ER-AI-01 Zero-AI first.** If a rule, a query or arithmetic can do it, an LLM does not.
 - **ER-AI-02 One gateway.** Every model call goes through the Model Gateway (routing, budget, masking, logging). Importing a provider SDK anywhere else fails the architecture tests.
@@ -114,11 +114,17 @@ We use these as tools for judgment, not as goals in themselves.
 - **ER-AI-05 No self-approval.** The identity that requests an action can never approve it.
 - **ER-AI-06 Budgets are enforced before the call,** not reconciled after it.
 - **ER-AI-07 Prompts and policies are code.** Versioned in the repository, reviewed, and recorded with every run.
-- **ER-AI-08 Evaluate before promoting.** An agent's autonomy level goes up only after its eval suite passes the agreed thresholds.
+- **ER-AI-08 Evaluate before promoting.** An employee's autonomy level goes up only after its eval suite passes the agreed thresholds and the owner approves.
 - **ER-AI-09 Store outcomes, not hidden reasoning.** We keep inputs, tool calls, outputs, decisions and summaries; we do not store or display chain-of-thought.
 - **ER-AI-10 Mask personal data** before it reaches a model unless the task needs it, and record when it did.
 - **ER-AI-11 Rule of Two.** One agent run may combine at most two of: reading untrusted content, seeing sensitive data, changing state outside HTCO or communicating externally. Needing all three means splitting the workflow or adding a human approval before the third.
 - **ER-AI-12 Tenant and actor come from the run, never from the model.** Tool arguments produced by a model never choose the organization, shop or acting user.
+- **ER-AI-13 Four concepts, never mixed** ([ADR-0012](../adr/0012-living-office-organization.md)). Judgment is an employee's job; repeatable actions are automations; capabilities are tools; changing the system is engineering. A deterministic step is never a graph node, and an employee never performs an automation's action directly.
+- **ER-AI-14 The office is reviewed data.** Employees, automations, tools and advisors are defined in `registry/` and changed only by pull requests that pass `just registry` and the registry tests. A profile, automation or tool is production-ready only with every specification section defined and a passed evaluation.
+- **ER-AI-15 No framework in the business model.** Domain and application code never import LangGraph or any other agent framework; runtime state is never the source of truth for business records (`tests/application/test_framework_independence.py`).
+- **ER-AI-16 Every operation leaves a record.** A use case that changes state or calls outside HTCO writes an activity record with actor kind, organization, shop, task, correlation and causation IDs and an outcome.
+- **ER-AI-17 Advisors advise.** The Decision Advisor's answers never enter authorization, approval, payment or security decisions; rules run before any advisor call.
+- **ER-AI-18 Engineering employees follow the human rules, and more.** Alex, Amir and Iris work only through branches and pull requests, never merge or release, never weaken tests (ER-TEST-02), remove logging, widen their own permissions or bypass branch protection.
 
 ## 9. Testing (ER-TEST)
 

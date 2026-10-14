@@ -1,0 +1,169 @@
+# Office Crm tools (ADR-0014). DRAFT: none is production-ready yet.
+
+[[tools]]
+name = "tasks.read"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read tasks visible to the caller."
+
+[[tools]]
+name = "tasks.create"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "internal"
+risk = "low"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Create a task with an owner, SLA and idempotency key."
+
+[[tools]]
+name = "tasks.update"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "internal"
+risk = "low"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Move a task along its state machine."
+
+[[tools]]
+name = "approvals.request"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "internal"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Create an approval with impact, risk, cost range, rollback and expiry."
+
+[[tools]]
+name = "approvals.read"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read pending and decided approvals."
+
+[[tools]]
+name = "incidents.open"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "internal"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Open (or join) the one incident per root cause and resource."
+
+[[tools]]
+name = "activity.query"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Query activity records by actor, task, shop, kind and time."
+
+[[tools]]
+name = "messages.send_internal"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "internal"
+risk = "low"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Send a message to an employee, department or task thread."
+
+[[tools]]
+name = "quality.record_finding"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "internal"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Record a quality finding with evidence and a required follow-up."
+
+[[tools]]
+name = "optimization.propose"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "internal"
+risk = "low"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Record an optimization proposal with baseline and acceptance criteria."
+
+[[tools]]
+name = "engineering.create_request"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "internal"
+risk = "low"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Create an engineering request linked to its source."
+
+[[tools]]
+name = "metrics.query_costs"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read cost and usage metrics per employee, workflow and unit of work."
+
+[[tools]]
+name = "registry.read"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read employee, tool and automation definitions."
+
+[[tools]]
+name = "evaluations.run"
+version = 1
+family = "office_crm"
+owner = "iris"
+side_effect = "internal"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Run an employee's evaluation set in the test environment."

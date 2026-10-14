@@ -7,7 +7,7 @@
 | **Size** | L |
 | **Depends on** | Phase 2 |
 | **Requirements** | FR-ADM-01, FR-IAM-01, FR-IAM-02, FR-IAM-05, FR-IAM-06 |
-| **Status** | Not started |
+| **Status** | In progress: 3.1, 3.2 and 3.3 (part 1) in htco-clients pull requests #1–#4 |
 
 ## Progress
 
@@ -33,7 +33,7 @@ Every later phase adds screens. If tokens, components, i18n, RTL, accessibility 
 
 **In:** `htco-clients` tooling and CI; design tokens build (CSS, Kotlin and XAML outputs, only CSS consumed now); web app skeleton; core components with Storybook; Lingui (Hebrew and English) with RTL; light and dark themes; BFF auth in the API (sign in, MFA enroll and verify, sign out, session list and revoke); generated TypeScript API client; overview and shops screens; web deployment with security headers.
 
-**Out:** Android and Windows apps (Phases 14–15); business screens beyond overview and shops.
+**Out:** Android and Windows apps (Phases 16–17); business screens beyond overview and shops.
 
 ## Owner prerequisites
 

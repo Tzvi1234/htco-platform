@@ -19,14 +19,14 @@
 
 ---
 
-> **Status:** Phase 1 — building the walking skeleton (workspace, quality gates, API skeleton, CI). See the [master plan](docs/plan/PLAN.md).
+> **Status:** Phase 1 code complete (deploy, ruleset and alerts wait for accounts); the living-office foundation is in place. See the [master plan](docs/plan/PLAN.md).
 
 ## What HTCO OS does
 
 HTCO OS runs the operations of online shops on marketplaces, starting with Etsy:
 
 - **A trustworthy operational core.** Orders, fulfillment and tracking, incidents, finance and audit, synchronized from the marketplace and computed by deterministic code.
-- **An AI workforce.** Eighteen agent roles in four departments that research, write, check and coordinate work, using typed tools under a deny-by-default policy engine, with human approval for anything that spends money or changes something outside the system.
+- **A living office.** Sixteen AI employees in seven departments (from Maya, the General Manager, and Noa, who independently supervises the work, to Alex, Amir and Iris in engineering), deterministic automations for every repeatable business action, a library of versioned tools granted with least privilege, and a shared Decision Advisor. Employees ask a human before anything that spends money or changes something outside the system; the office measures and improves itself through reviewed pull requests ([ADR-0012](docs/adr/0012-living-office-organization.md)).
 - **One command surface.** Web, Windows and Android apps (in [`htco-clients`](https://github.com/Tzvi1234/htco-clients)) where the owner sees verified business state, approves actions and watches the office at work.
 
 The guiding promise is **autonomy you can audit**: every number shows its source and freshness, every agent action leaves a receipt, every risky action needs the right approval.
@@ -38,7 +38,7 @@ flowchart LR
   clients[Web · Windows · Android] -->|HTTPS| api[API<br/>FastAPI]
   etsy[Etsy] -->|webhooks| api
   api --> db[(Supabase Postgres<br/>RLS · audit)]
-  worker[Worker<br/>jobs · schedules · agents] --> db
+  worker[agent-worker<br/>automations · schedules · AI employees] --> db
   worker -->|outbox| etsy
   worker --> mail[Email provider]
   worker -->|model gateway| llm[Model providers]
@@ -47,7 +47,7 @@ flowchart LR
 - **Modular monolith** with hexagonal boundaries enforced in CI: pure domain, use cases and ports, adapters, thin transport.
 - **Supabase Postgres** as the single source of truth, with row-level security as defense in depth behind server-side authorization.
 - **Durable, idempotent work**: inbox and outbox, a Postgres job queue, explicit state machines.
-- **Agents as profiles, not services**: LangGraph workflows with checkpoints and human-approval interrupts, behind our own runtime port; every model call goes through a budgeted, logged gateway.
+- **Employees as data, not services**: each employee, automation and tool is a versioned, reviewed document in [`registry/`](registry); reasoning runs in LangGraph behind our own runtime port, and the business model never depends on it; every model call goes through one router with a policy per employee.
 - **DigitalOcean App Platform** for the API and workers.
 
 Read the full [software design](docs/architecture/SOFTWARE_DESIGN.md).
@@ -56,7 +56,8 @@ Read the full [software design](docs/architecture/SOFTWARE_DESIGN.md).
 
 ```text
 apps/api/               HTTP API and composition root
-workers/                Background jobs, schedules and agent runs
+workers/                The agent-worker: automations, schedules and employee sessions
+registry/               The office as data: employees, automations, tools, advisors
 packages/domain/        Pure business rules
 packages/application/   Use cases, ports, policy engine
 packages/persistence/   Postgres adapters, inbox/outbox, job queue

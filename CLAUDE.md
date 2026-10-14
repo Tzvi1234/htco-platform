@@ -4,7 +4,7 @@ Operating manual for AI coding agents in this repository. Read it fully at the s
 
 ## What this repository is
 
-The backend of **HTCO OS** (HT Commerce, by H.T.Z Studios): a FastAPI API, background workers, a LangGraph agent runtime, Supabase Postgres migrations, API and event contracts, DigitalOcean infrastructure as code, and the **system-level documentation** for the whole product. The clients (web, Windows, Android, design system) live in the sibling repository `htco-clients` (checked out next to this one at `../htco-clients`).
+The backend of **HTCO OS** (HT Commerce, by H.T.Z Studios): a FastAPI API, the automation engine and the AI workforce (a LangGraph runtime behind a port), Supabase Postgres migrations, API and event contracts, DigitalOcean infrastructure as code, and the **system-level documentation** for the whole product. HTCO is a living office of 16 AI employees, deterministic automations, versioned tools and an engineering department ([ADR-0012](docs/adr/0012-living-office-organization.md)); keep the four concepts separate. The clients (web, Windows, Android, design system) live in the sibling repository `htco-clients` (checked out next to this one at `../htco-clients`).
 
 ## Talking to the owner
 
@@ -38,7 +38,8 @@ If code and docs disagree, stop and resolve it; do not silently pick one.
 
 ```text
 apps/api/                 FastAPI app: routes, schemas, BFF session, composition root
-workers/                  Worker process: jobs, schedules, agent runs; browser worker later
+workers/                  The agent-worker: automations, schedules, employee sessions; browser worker later
+registry/                 The office as reviewed data: employees, automations, tools, advisors (TOML)
 packages/domain/          Pure business rules (standard library only)
 packages/application/     Use cases, ports, policy engine
 packages/persistence/     Postgres adapters, inbox/outbox, job queue, audit
@@ -73,6 +74,7 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 | `just workflows` | actionlint, zizmor and the SHA-pin check on `.github/` | Slice 1.4 |
 | `just openapi` | Regenerate `packages/contracts/openapi.yaml` from the API (review the diff before committing) | Slice 1.3 |
 | `just contract` | The committed OpenAPI matches the API; Schemathesis against it (the `oasdiff` breaking-change check runs in CI) | Slice 1.3 |
+| `just registry` | Validate `registry/` (employees, automations, tools, advisors) and print a summary | ADR-0012 foundation |
 | `just up` | Local API on http://127.0.0.1:8000 with `.env.example` settings (the worker joins in Phase 5) | Slice 1.2 |
 | `docker build -t htco-api .` | The production API image (CI also runs it read-only and scans it) | Slice 1.5 |
 | `just db-start`, `just db-reset`, `just db-test` | Local Supabase stack, migrations, pgTAP tests | Slice 2.1 |
@@ -85,7 +87,7 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 3. Money is `Decimal` with a currency. Time is UTC and injected.
 4. Every handler and job is idempotent; external side effects go through the outbox.
 5. No secrets anywhere in the repository, logs, prompts or fixtures.
-6. Model calls only through the model gateway; agent tools only through the policy engine; Rule of Two for every agent run.
+6. Model calls only through the router and gateway with the employee's policy; tools only through access checks; automations only through the engine; Rule of Two for every agent run. No employee or automation is production-ready without a passed evaluation.
 7. Migrations are forward-only and tested; never applied to production by an agent.
 8. Docs change in the same pull request as the code. No junk files (no session notes, scratch files or summaries).
 9. Small pull requests, one slice each, Conventional Commit titles.
@@ -93,7 +95,7 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 
 ## Ask the owner first
 
-Production migrations or data changes; spending money; writes to Etsy, AutoVA or email with real data; permission, security or secret changes; new kinds of dependencies; deviations from an ADR; deleting anything you did not create.
+Production migrations or data changes; spending money; writes to Etsy, AutoVA or email with real data; permission, security or secret changes; activating an employee or automation, or changing an employee's autonomy, tools or budget; new kinds of dependencies; deviations from an ADR; deleting anything you did not create.
 
 ## Git
 

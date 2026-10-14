@@ -17,15 +17,19 @@ Accepted ADRs are not rewritten. Two things may be added later: a status change,
 |---|---|---|
 | [0001](0001-two-repositories.md) | Two repositories: platform and clients | Accepted |
 | [0002](0002-modular-monolith-hexagonal.md) | Modular monolith with hexagonal boundaries | Accepted |
-| [0003](0003-agent-runtime-langgraph.md) | LangGraph agent runtime behind a port | Accepted (validated by the Phase 8 gates) |
-| [0004](0004-model-gateway.md) | Own model gateway on official SDKs | Accepted |
-| [0005](0005-hosting-digitalocean-supabase.md) | DigitalOcean App Platform and Supabase Pro | Proposed (accepted with the region decision) |
+| [0003](0003-agent-runtime-langgraph.md) | LangGraph agent runtime behind a port | Accepted (validated by the Phase 8 gates); scope narrowed by 0012 and 0013 |
+| [0004](0004-model-gateway.md) | Own model gateway on official SDKs | Accepted; amended by 0015 |
+| [0005](0005-hosting-digitalocean-supabase.md) | DigitalOcean App Platform and Supabase Pro | Accepted (Frankfurt, GHCR) |
 | [0006](0006-web-auth-bff.md) | Web authentication through a backend-for-frontend | Accepted |
 | [0007](0007-job-queue.md) | Postgres-native job queue behind a port | Proposed (Phase 5 spike) |
 | [0008](0008-etsy-integration.md) | Etsy integration: Seller App, webhooks plus reconciliation, read-first tracking | Accepted (validated in Phases 0 and 4) |
 | [0009](0009-autova-integration.md) | AutoVA behind a port, tracking read from Etsy | Accepted |
 | [0010](0010-test-first-development.md) | Test-first development with mechanical enforcement | Accepted |
 | [0011](0011-data-access-and-migrations.md) | psycopg with explicit SQL; Supabase CLI migrations as the single schema source | Accepted |
+| [0012](0012-living-office-organization.md) | The living office: 16 AI employees, automations, tools and engineering as separate concepts | Accepted; supersedes PRD 1.0 §8 (18 roles) |
+| [0013](0013-automation-engine.md) | Automation registry and workflow engine independent of the agent runtime | Accepted |
+| [0014](0014-tool-registry.md) | Central tool registry with capability-level, least-privilege access | Accepted |
+| [0015](0015-decision-advisor-and-routing.md) | Shared Decision Advisor; one router with a policy per employee | Accepted; amends 0004 |
 
 Client decisions live in `htco-clients/docs/adr/`.
 

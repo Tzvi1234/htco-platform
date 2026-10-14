@@ -61,7 +61,7 @@ The shape is a pyramid with a thick middle: many unit tests, a solid layer of in
 | **End to end** | Critical journeys through web, API and local stack | Playwright | Every pull request for critical paths; full suite nightly |
 | **Security** | Cross-tenant access, authz matrix, webhook signature and replay, secrets, dependencies, static analysis, container scan | pytest, Ruff `S` rules, gitleaks, osv-scanner, Grype; Semgrep CE weekly | Every pull request (Semgrep weekly) |
 | **Resilience drills** | Kill a worker mid-task, restore a backup, provider outage | Scripts + runbooks | Before relying on production data, then quarterly |
-| **Performance** | Latency budgets on hot endpoints, queue throughput | k6 or Locust (Phase 16) | Before launch and on demand |
+| **Performance** | Latency budgets on hot endpoints, queue throughput | k6 or Locust (Phase 20) | Before launch and on demand |
 
 ### 3.1 What each layer must prove for common feature types
 
@@ -164,6 +164,23 @@ Before a slice is done, consider each item and either test it or note why it doe
 - One logical assertion per test; use helpers for complex comparisons.
 - No sleeping in tests; wait on conditions with timeouts.
 
-## 10. Flaky tests
+## 10. Office acceptance scenarios
+
+The living office ([ADR-0012](../adr/0012-living-office-organization.md)) is accepted against ten scenarios. Each is an automated test (marked `@pytest.mark.ac("SCN-<letter>")`) or, where it needs systems that do not exist yet, a scheduled test in the named phase.
+
+| ID | Scenario | Proves | Status and location |
+|---|---|---|---|
+| SCN-A | **CRM observability.** An employee completes a task; identity, task, actions, costs, timestamps, outcomes and the required audit records are stored and queryable. | FR-AUD-04, FR-AUD-05 | Domain record model tested (`tests/domain/test_lifecycles.py`); end to end PLANNED for Phase 10 (stores from Phases 7–9) |
+| SCN-B | **Missing business record.** An Etsy order arrives but the CRM write fails; the event stays recoverable, retries are idempotent, a discrepancy is detected, Noa receives an actionable finding and the corrected state is verified. | FR-ORD-02, FR-QOS-02 | Retry and dead-letter behaviour tested in memory (`tests/application/test_automation_engine.py`); end to end PLANNED for Phases 5 and 10 |
+| SCN-C | **Nightly supervision.** A task stalls after a worker crash; monitoring detects it, the supervisor picks the right recovery and work resumes without duplicate business actions. | FR-QOS-03 | PLANNED for Phase 10 |
+| SCN-D | **Optimization to automation.** Omer detects a repetitive expensive AI operation; the proposal is created, reviewed, assigned to engineering, implemented and tested, deployed in stages, and its cost and quality are measured. | FR-OPT-02 | Proposal lifecycle tested (`tests/domain/test_lifecycles.py`); end to end PLANNED for Phase 18 |
+| SCN-E | **Employee-specific routing.** Two employees ask for different capabilities; both use the central router with their own policies, tool requirements, privacy rules and budgets. | FR-MDL-02 | Tested with a fake catalog (`tests/application/test_model_router.py`); with real providers PLANNED for Phase 9 |
+| SCN-F | **Decision Advisor.** Rules, Jev and a fallback provider answer a structured triage task; schema validity, decision logging, quality, provider failure and the security boundary are checked. | FR-MDL-08, FR-MDL-09 | Tested with fakes (`tests/application/test_decision_advisor.py`); benchmark with real providers PLANNED for Phase 9 |
+| SCN-G | **Deterministic order workflow.** The same paid order event replayed many times yields exactly one logical order, correct counters and no duplicate downstream effects. | FR-ORD-02, FR-AUT-03 | Tested in memory (`tests/application/test_automation_engine.py`); against Postgres PLANNED for Phase 5 |
+| SCN-H | **Unauthorized agent action.** An employee tries a tool or automation outside its policy; the backend refuses even when the employee insists. | FR-AGT-04, FR-TOOL-02 | Tested (`tests/application/test_tool_access.py`, `test_automation_engine.py`); through the tool bridge PLANNED for Phase 8 |
+| SCN-I | **Engineering safety.** An engineering employee proposes a production-changing fix; CI, permissions, review and deployment gates cannot be bypassed. | FR-ENG-03 | PLANNED for Phase 19 |
+| SCN-J | **Framework independence.** An employee profile, a business task, an automation and a CRM record are defined and inspected without importing LangGraph. | FR-AGT-10 | Tested (`tests/application/test_framework_independence.py`) |
+
+## 11. Flaky tests
 
 A flaky test is treated as a production bug: quarantine it the same day with a linked issue, find the root cause (usually time, ordering or shared state), fix or delete it within a week. Re-running CI until it passes is not a fix.

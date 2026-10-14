@@ -1,4 +1,4 @@
-# Phase 2 — Identity, tenancy and audit
+# Phase 2 — Identity, tenancy, actors and audit
 
 | | |
 |---|---|
@@ -20,6 +20,8 @@
 
 Slice 2.4 started early with its pure part: policy engine v0 (`htco_application.access.policy`), which needs no database. Its endpoints (`/v1/me`, `/v1/shops`) follow slices 2.1 to 2.3.
 
+The living-office foundation of [ADR-0012](../../adr/0012-living-office-organization.md) is also in place as tested domain code with no database: `htco_domain.actors` (`ActorKind`, `ActorRef`), `htco_domain.workforce`, `htco_domain.tasks`, `htco_domain.automation`, `htco_domain.activity` and `htco_domain.improvement` (tests in `tests/domain/` and `tests/application/`). This phase uses `ActorRef` for the actor of every audit record. The employee registry tables (departments, employees, profile versions, tools, automations) arrive in [Phase 8](phase-08-workforce-runtime.md); the activity record store in [Phase 7](phase-07-tasks-approvals.md).
+
 ## Goal
 
 The security spine of the system: organizations, users, roles and per-shop access; row-level security proven by tests with two tenants; JWT verification and MFA rules in the API; an append-only audit log. After this phase, every later table and endpoint inherits tenant isolation instead of reinventing it.
@@ -30,7 +32,7 @@ Tenant isolation and audit cannot be bolted on later without rewriting every que
 
 ## Scope
 
-**In:** Supabase project and local development flow, migrations pipeline, identity and access tables, RLS with helpers in a private schema, pgTAP tests, JWT verification against JWKS, `AuthContext`, policy engine v0 (role × capability), `GET /v1/me`, `GET /v1/shops`, audit writer, owner bootstrap command, `/readyz` database check.
+**In:** Supabase project and local development flow, migrations pipeline, identity and access tables, RLS with helpers in a private schema, pgTAP tests, JWT verification against JWKS, `AuthContext`, policy engine v0 (role × capability), `GET /v1/me`, `GET /v1/shops`, audit writer with actor kinds (`user`, `employee`, `automation`, `advisor`, `system`), owner bootstrap command, `/readyz` database check.
 
 **Out:** web sign-in screens (Phase 3), Etsy connection (Phase 4), approvals (Phase 7).
 
@@ -87,12 +89,13 @@ Role × capability table from the [permission matrix](../../architecture/PERMISS
 
 ### 2.5 — Audit writer and bootstrap
 
-`AuditPort` and Postgres adapter; audit records for membership and role changes; `htco admin bootstrap` command that creates the owner's organization and membership idempotently.
+`AuditPort` and Postgres adapter; audit records for membership and role changes; `htco admin bootstrap` command that creates the owner's organization and membership idempotently. The audit actor is an `ActorRef` (`htco_domain.actors`): a kind (`user`, `employee`, `automation`, `advisor`, `system`) and an ID, stored as two columns, so records written later by employees, automations and the Decision Advisor need no schema change. In this phase only `user` and `system` actors write records.
 
 | ID | Acceptance criterion |
 |---|---|
 | AC-2.5.1 | Running bootstrap twice creates one organization and one membership. |
 | AC-2.5.2 | Every membership change writes one audit record with actor, organization, entity, before and after, and correlation ID. |
+| AC-2.5.3 | The audit table accepts exactly the five actor kinds of `ActorKind` (a check constraint, tested in pgTAP); a record with an unknown kind or a blank actor ID is rejected; the bootstrap command writes its records as a `system` actor. |
 
 ### 2.6 — User and shop-access management (API)
 
@@ -118,7 +121,7 @@ pgTAP for RLS, grants and constraints; repository integration tests against the 
 
 ## Documentation
 
-`docs/features/identity-access/`; DATA_MODEL tables marked as created; PERMISSION_MATRIX confirmed; THREAT_MODEL T1, T14, T15 controls marked implemented.
+`docs/features/identity-access/`; DATA_MODEL tables marked as created, with the audit actor columns; PERMISSION_MATRIX confirmed; THREAT_MODEL T1, T14, T15 controls marked implemented.
 
 ## Demo
 

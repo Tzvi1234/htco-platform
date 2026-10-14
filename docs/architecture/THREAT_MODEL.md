@@ -70,9 +70,14 @@ flowchart LR
 | T5 | Agent inputs | **Tampering** (prompt injection) through product pages, emails or messages | Untrusted content kept in data fields and marked; Rule of Two; no tools in quarantined extractors; schema-validated outputs; approvals for external effects | Injection fixture corpus in CI asserts no side effect and no permission change |
 | T6 | Tokens and keys | **Information disclosure**: OAuth or API secrets leak through logs, repos, clients or prompts | Application-level encryption of tokens; secrets only in environment stores; log redaction; secret scanning | Log-scan test for token patterns; gitleaks on every push; tokens never present in tool results |
 | T7 | Outbox, Etsy writes | **Tampering / repudiation**: duplicate external writes (two shipment emails to a buyer) | Outbox with unique idempotency keys; re-read before non-idempotent writes; human confirmation for shipment writes | Crash-between-steps tests; replay of outbox delivery |
-| T8 | Debugger agent | **Elevation of privilege**: an automatic fix changes money, permissions or production code | Allowlisted, reversible remediations only; everything else needs approval or a developer | Attempted non-allowlisted remediation is blocked |
+| T8 | Amir (Debugger & Reliability Engineer) | **Elevation of privilege**: an automatic fix changes money, permissions or production code | Allowlisted, reversible remediations only; everything else needs approval or a developer | Attempted non-allowlisted remediation is blocked |
 | T9 | Workers and queue | **Denial of service**: poison messages, retry storms, backlog | Bounded retries with backoff and jitter; dead-letter state; per-shop locks; alerts on queue age | Poison message lands in dead-letter; backlog alert test |
-| T10 | Model gateway | **Denial of service (financial)**: runaway agent loops or prompt amplification | Budget reservation before calls; caps per task, agent, shop and day; recursion limits; kill switch | Cap reached → call refused; loop test hits recursion limit |
+| T10 | Model gateway | **Denial of service (financial)**: runaway agent loops or prompt amplification | Budget reservation before calls; caps per task, employee, shop and day; per-employee routing policies; recursion limits; kill switch | Cap reached → call refused; loop test hits recursion limit |
+| T10a | Registry (employees, tools, automations) | **Tampering**: a profile or grant changed outside review widens an employee's access | Registry changes only through reviewed pull requests; the registry check refuses unknown tools, unknown automations and grants to automations not callable as agent tools; profile versions recorded on every session; employees have no tool that edits the registry | `tests/tools/test_registry_files.py`; `registry.read` is the only registry tool |
+| T10b | Engineering employees (Alex, Amir, Iris) | **Elevation of privilege / repudiation**: the office changes its own code, tests or permissions | Work only through pull requests; CI, review and the owner's release gate; test-integrity check fails a weakened test; no tool that merges, deploys or edits permissions; every change linked to an engineering request | Scenario I (Phase 19) |
+| T10c | Decision Advisor | **Elevation of privilege**: an advisor's answer used as an authorization | Advisors answer typed triage and ranking questions only; access decisions never take advisor input; schema validation; fallback chain | `test_advisor_answers__never_change_authorization` |
+| T10d | Office view | **Spoofing (of state)**: the office shows invented or inferred activity | The office renders only activity records and verified states; offline worker means read-only office | FR-OFC-01, FR-OFC-02 tests (Phase 15) |
+| T10e | Automation triggers | **Tampering / replay**: a replayed or forged trigger repeats a business action | One entry point with authorization; executions unique per idempotency key; inbox for external events | Scenario G |
 | T11 | Web client | **Spoofing / information disclosure**: XSS steals sessions, clickjacking | BFF with `__Host-` HttpOnly cookies; CSP; `frame-ancestors 'none'`; output encoding; CSRF header | Cookie attribute tests; CSP header test; CSRF rejection tests |
 | T12 | Native clients | **Information disclosure**: stolen device, deep-link hijack, clipboard and screenshot leaks | Keystore or Credential Locker; verified App Links; re-authentication for high-risk approvals; masked PII | Platform security test checklist per release |
 | T13 | Supply chain | **Tampering**: a compromised dependency, action or image | Pinned versions with minimum release age; SHA-pinned actions; scanners; SBOM | Renovate policy; zizmor and actionlint in CI |
@@ -87,14 +92,14 @@ flowchart LR
 |---|---|---|
 | ASI01 | Agent goal hijack | Untrusted content in data fields with spotlighting; goals come only from tasks created by authorized actors |
 | ASI02 | Tool misuse and exploitation | Narrow typed tools only (no generic HTTP, SQL or shell); strict schemas; policy check on every call |
-| ASI03 | Identity and privilege abuse | Separate service identity per agent profile; tenant and actor taken from the run; least-privilege database roles |
+| ASI03 | Identity and privilege abuse | Separate service identity per employee and per automation; tenant and actor taken from the run; least-privilege database roles; tool grants per employee in the registry |
 | ASI04 | Agentic supply chain | Pinned agent framework and SDK versions; no third-party tool servers in production without review; prompts and policies versioned in the repository |
 | ASI05 | Unexpected code execution | No code-execution tools; no `eval`; browser worker isolated |
 | ASI06 | Memory and context poisoning | Memory writes only through validated code paths with source, shop, confidence and expiry; memory scoped per tenant |
 | ASI07 | Insecure inter-agent communication | Handoffs through database events and resource references, authorized like any other write |
 | ASI08 | Cascading failures | Circuit breakers per provider; bounded retries; dead-letter; budgets |
 | ASI09 | Human-agent trust exploitation | Approvals show the raw action, parameters, evidence and diff, not just an agent's summary; what was shown is logged with the decision |
-| ASI10 | Rogue agents | Global and per-agent kill switches (tested); behaviour baselines from evals; each profile has an owner and a review date |
+| ASI10 | Rogue agents | Global, per-employee and per-automation kill switches (tested); behaviour baselines from evals; Noa's independent supervision; each profile has a version, an owner and a review date |
 
 ## 4. Privacy (LINDDUN GO summary)
 
@@ -118,7 +123,10 @@ Controls are built into the phases where the risk first appears:
 | 5 | Webhook verification and rate limits, inbox and outbox, idempotency keys, dead-letter, queue alerts, restore and kill-worker drills |
 | 6 | Security notifications by email (new device, MFA change, shop connected or disconnected) |
 | 7 | Approvals with server-side re-checks, policy engine, self-approval prevention |
-| 8 | Agent controls ASI01–ASI10, budgets, injection corpus, kill switches, validated memory writes, PII masking before model calls |
+| 8 | Agent controls ASI01–ASI10, tool bridge and registry, injection corpus, kill switches, validated memory writes |
+| 9 | Budgets, per-employee routing and data classes, PII masking before model calls, Decision Advisor isolation |
+| 10 | Supervision: monitors cannot be disabled by employees; findings close only on evidence |
+| 19 | Engineering safety: Scenario I; no self-granted permissions |
 | 10 | Media backup job and restore test |
 | 12 | Inbound email quarantine and attachment policy |
 | 16 | External security review against ASVS L2, restore drill, incident response runbook |

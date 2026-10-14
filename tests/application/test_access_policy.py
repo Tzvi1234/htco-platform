@@ -48,8 +48,8 @@ ROWS = {
     "Edit model policies, budgets, kill switches": Capability.EDIT_MODEL_POLICIES,
     "Enter or edit product facts": Capability.EDIT_PRODUCT_FACTS,
     "Run a Listing Health audit": Capability.RUN_LISTING_HEALTH_AUDIT,
-    "View agent directory and costs": Capability.VIEW_AGENT_DIRECTORY,
-    "View agent runs and traces": Capability.VIEW_AGENT_RUNS,
+    "View the office: employees, automations, tools and costs": Capability.VIEW_AGENT_DIRECTORY,
+    "View agent sessions, routing decisions and traces": Capability.VIEW_AGENT_RUNS,
     "View audit log": Capability.VIEW_AUDIT_LOG,
 }
 ROLE_COLUMNS = [

@@ -1,0 +1,25 @@
+# Communication Email tools (ADR-0014). DRAFT: none is production-ready yet.
+
+[[tools]]
+name = "email.draft_reply"
+version = 1
+family = "communication_email"
+owner = "iris"
+side_effect = "internal"
+risk = "low"
+data_scope = "personal"
+audit_required = true
+readiness = "draft"
+description = "Draft a reply in the CRM thread."
+
+[[tools]]
+name = "email.send"
+version = 1
+family = "communication_email"
+owner = "iris"
+side_effect = "external"
+risk = "high"
+data_scope = "personal"
+audit_required = true
+readiness = "draft"
+description = "Send an approved email through the provider adapter (outbox)."
