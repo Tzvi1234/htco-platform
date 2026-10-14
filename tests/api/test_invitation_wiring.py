@@ -98,3 +98,22 @@ def test_main__invitations_need_the_secret_key(
     [app] = server.apps
     assert (app.state.inviter is not None) is on
     assert app.state.access is not None
+
+
+@pytest.mark.usefixtures("restore_logging")
+@pytest.mark.parametrize(("configured", "on"), [(True, True), (False, False)])
+def test_main__web_sign_in_needs_the_session_key_and_publishable_key(
+    environment: pytest.MonkeyPatch, *, configured: bool, on: bool
+) -> None:
+    import base64  # noqa: PLC0415 - local to this test
+
+    if configured:
+        environment.setenv("HTCO_SESSION_KEY", base64.b64encode(b"k" * 32).decode())
+        environment.setenv("HTCO_SUPABASE_PUBLISHABLE_KEY", "sb_publishable_x")
+        environment.setenv("HTCO_WEB_ORIGINS", "https://app.ht-co.app")
+    server = _Server()
+
+    main(serve=server)
+
+    [app] = server.apps
+    assert (app.state.web_auth is not None) is on
