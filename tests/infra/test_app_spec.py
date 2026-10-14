@@ -18,7 +18,12 @@ SPEC: dict[str, Any] = yaml.safe_load(
 DEPLOY_TEXT = (REPO_ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
 DEPLOY: dict[Any, Any] = yaml.safe_load(DEPLOY_TEXT)
 PLACEHOLDER = re.compile(r"^\$\{[A-Z][A-Z0-9_]*\}$")
-SECRET_SETTINGS = {"PGPASSWORD", "HTCO_SENTRY_DSN", "HTCO_SUPABASE_SECRET_KEY"}
+SECRET_SETTINGS = {
+    "PGPASSWORD",
+    "HTCO_SENTRY_DSN",
+    "HTCO_SUPABASE_SECRET_KEY",
+    "HTCO_SESSION_KEY",
+}
 
 
 def _api() -> dict[str, Any]:

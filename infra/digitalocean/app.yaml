@@ -79,3 +79,14 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: ${HTCO_SUPABASE_SECRET_KEY}
+      # Web sign-in (slice 3.5): off until the session key secret exists (blank means unset).
+      - key: HTCO_SESSION_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_SESSION_KEY}
+      - key: HTCO_SUPABASE_PUBLISHABLE_KEY
+        scope: RUN_TIME
+        value: ${HTCO_SUPABASE_PUBLISHABLE_KEY}
+      - key: HTCO_WEB_ORIGINS
+        scope: RUN_TIME
+        value: ${HTCO_WEB_ORIGINS}
