@@ -20,6 +20,8 @@ from htco_application.access.authentication import (
     authenticate,
 )
 from htco_application.access.management import (
+    AccessDeniedError,
+    InviteeAlreadyRegisteredError,
     change_role,
     grant_shop,
     invite_member,
@@ -168,3 +170,102 @@ async def test_rls__rejects_membership_writes_from_an_aal1_session_even_past_the
 
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         await store.run(claims(DEMO_OWNER, "aal1"), create)
+
+
+# Review fixes ------------------------------------------------------------------------------------
+
+
+class RegisteredInviter:
+    """The sign-in service already knows the email."""
+
+    async def invite(self, email: str) -> uuid.UUID:
+        raise InviteeAlreadyRegisteredError(email)
+
+
+async def test_invite__an_already_registered_email__attaches_that_user(database: Database) -> None:
+    store = PostgresAccessStore(database)
+    known = signed_up_user(database)
+    with database.connection() as connection:
+        row = connection.execute("select email from auth.users where id = %s", [known]).fetchone()
+    assert row is not None
+
+    member = await invite_member(
+        OWNER_AAL2,
+        store,
+        RegisteredInviter(),
+        DEMO,
+        email=str(row[0]).upper(),
+        role=Role.VIEWER,
+        now=NOW,
+        correlation_id="it-registered",
+    )
+    assert member.user_id == known
+
+
+async def test_admin__removes_their_own_membership(database: Database) -> None:
+    store = PostgresAccessStore(database)
+    admin = signed_up_user(database)
+    member = await invite_member(
+        OWNER_AAL2,
+        store,
+        FixedInviter(admin),
+        DEMO,
+        email="a@example.test",
+        role=Role.ADMIN,
+        now=NOW,
+        correlation_id="it-self-1",
+    )
+    as_admin = AuthContext(
+        user_id=admin,
+        assurance=AssuranceLevel.AAL2,
+        session_id=None,
+        memberships=(Membership(DEMO, Role.ADMIN, frozenset()),),
+        claims=claims(admin, "aal2"),
+    )
+
+    await remove_member(as_admin, store, DEMO, member.id, now=NOW, correlation_id="it-self-2")
+
+    with database.connection() as connection:
+        row = connection.execute(
+            "select revoked_at is not null from app.memberships where id = %s", [member.id]
+        ).fetchone()
+    assert row == (True,)
+
+
+async def test_owner_rows__refuse_role_changes_and_revocation_in_the_database(
+    database: Database,
+) -> None:
+    store = PostgresAccessStore(database)
+    owner_membership = uuid.UUID("c2000000-0000-0000-0000-000000000001")
+
+    def demote(uow: Any) -> None:
+        uow.update_role(owner_membership, Role.VIEWER)
+
+    def revoke(uow: Any) -> None:
+        uow.revoke_membership(owner_membership, NOW)
+
+    for work in (demote, revoke):
+        with pytest.raises(AccessDeniedError):
+            await store.run(claims(DEMO_OWNER, "aal2"), work)
+
+
+async def test_create_grant__twice__second_is_a_no_op(database: Database) -> None:
+    store = PostgresAccessStore(database)
+    newcomer = signed_up_user(database)
+    member = await invite_member(
+        OWNER_AAL2,
+        store,
+        FixedInviter(newcomer),
+        DEMO,
+        email="g@example.test",
+        role=Role.SUPPORT,
+        now=NOW,
+        correlation_id="it-grant",
+    )
+
+    def grant_twice(uow: Any) -> tuple[bool, bool]:
+        first = uow.create_grant(uuid.uuid4(), DEMO, member.id, SHOP_ONE)
+        second = uow.create_grant(uuid.uuid4(), DEMO, member.id, SHOP_ONE)
+        return first, second
+
+    assert await store.run(claims(DEMO_OWNER, "aal2"), grant_twice) == (True, False)

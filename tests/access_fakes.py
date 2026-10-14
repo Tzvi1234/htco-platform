@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from htco_application.access.management import InviteeAlreadyRegisteredError, MemberRow
+from htco_application.access.management import (
+    AccessDeniedError,
+    InviteeAlreadyRegisteredError,
+    MemberRow,
+)
 from htco_application.audit import AuditRecord
 from htco_domain.identity import Role
 
@@ -36,6 +40,7 @@ class Store:
     grants: dict[tuple[uuid.UUID, uuid.UUID], uuid.UUID] = field(default_factory=dict)
     audit: list[AuditRecord] = field(default_factory=list)
     claims_seen: list[Mapping[str, Any]] = field(default_factory=list)
+    registered: dict[str, uuid.UUID] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for row in (
@@ -81,14 +86,22 @@ class Store:
             membership_id, organization_id, user_id, role, None, frozenset()
         )
 
+    def registered_user_id(self, organization_id: uuid.UUID, email: str) -> uuid.UUID | None:
+        assert organization_id == ORG
+        return self.registered.get(email)
+
     def update_role(self, membership_id: uuid.UUID, role: Role) -> None:
         row = self.members[membership_id]
+        if row.role is Role.OWNER:  # the database refuses (`role <> 'owner'` in the update)
+            raise AccessDeniedError("the database refused the change")
         self.members[membership_id] = MemberRow(
             row.id, row.organization_id, row.user_id, role, row.display_name, row.shop_ids
         )
 
     def revoke_membership(self, membership_id: uuid.UUID, at: datetime) -> None:
         assert at == NOW
+        if self.members[membership_id].role is Role.OWNER:
+            raise AccessDeniedError("the database refused the change")
         del self.members[membership_id]
 
     def shop_in_organization(self, organization_id: uuid.UUID, shop_id: uuid.UUID) -> bool:
@@ -103,14 +116,23 @@ class Store:
         organization_id: uuid.UUID,
         membership_id: uuid.UUID,
         shop_id: uuid.UUID,
-    ) -> None:
+    ) -> bool:
         assert self.shops[shop_id] == organization_id
+        if (membership_id, shop_id) in self.grants:  # `on conflict do nothing`
+            return False
         self.grants[(membership_id, shop_id)] = grant_id
+        return True
 
     def delete_grant(self, grant_id: uuid.UUID) -> None:
         self.grants = {k: v for k, v in self.grants.items() if v != grant_id}
 
     def append_audit(self, record: AuditRecord) -> None:
+        # RLS on the audit log: the actor must still be a member of the organization.
+        actor = uuid.UUID(record.actor.id)
+        assert any(
+            row.user_id == actor and row.organization_id == record.organization_id
+            for row in self.members.values()
+        ), "the actor is no longer a member: the database would refuse the audit record"
         self.audit.append(record)
 
 
