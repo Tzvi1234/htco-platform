@@ -142,3 +142,16 @@ def test_deploy__a_rollback_tag_must_be_a_full_commit_sha() -> None:
     [job] = DEPLOY["jobs"].values()
     [choose] = [step for step in job["steps"] if step.get("name") == "Choose the image tag"]
     assert '"${#REQUESTED_TAG}" -ne 40' in choose["run"]
+
+
+def test_spec__the_api_answers_on_its_own_domain() -> None:
+    assert SPEC["domains"] == [{"domain": "api.ht-co.app", "type": "PRIMARY"}]
+
+
+def test_deploy__checks_health_on_the_default_ingress() -> None:
+    """A new custom domain takes minutes to get its certificate; the platform URL works at once."""
+    [job] = DEPLOY["jobs"].values()
+    [check] = [
+        s for s in job["steps"] if s.get("name") == "The deployed API answers its health checks"
+    ]
+    assert ".default_ingress" in check["run"]

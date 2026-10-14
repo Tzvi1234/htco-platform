@@ -6,6 +6,11 @@
 # hand), so the bill cannot grow by itself. Frankfurt, next to the Supabase project.
 name: htco
 region: fra
+# DNS: Cloudflare `api CNAME htco-s4o93.ondigitalocean.app`, DNS only (not proxied), so App Platform
+# issues and renews the certificate itself.
+domains:
+  - domain: api.ht-co.app
+    type: PRIMARY
 alerts:
   - rule: DEPLOYMENT_FAILED
   - rule: DOMAIN_FAILED
