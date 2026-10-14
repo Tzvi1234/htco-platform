@@ -60,7 +60,7 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         for path_item in contract["paths"].values()
         for operation in path_item.values()
     }
-    assert operation_ids == {"healthz", "readyz"}
+    assert operation_ids == {"healthz", "readyz", "me", "shops"}
 
 
 def test_contract__every_response__documents_the_request_id_header() -> None:

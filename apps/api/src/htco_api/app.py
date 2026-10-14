@@ -4,6 +4,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, override
 
 from fastapi import FastAPI
@@ -12,8 +13,10 @@ from opentelemetry.sdk.trace import TracerProvider
 
 from htco_api.diagnostics import diagnostics_router
 from htco_api.health import health_router
+from htco_api.identity import identity_router
 from htco_api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from htco_api.problems import PROBLEM_MEDIA_TYPE, UNEXPECTED_ERROR_RESPONSES, add_problem_handlers
+from htco_application.shops import ShopReader
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter
 from htco_platform.readiness import ReadinessCheck
 
@@ -83,6 +86,9 @@ class AppOptions:
     authenticator: Authenticator | None = None
     # Started in order with the app, stopped in reverse order.
     resources: Sequence[Resource] = ()
+    # Reads the caller's shops for `/v1/shops`; without it, that route answers 503.
+    shops: ShopReader | None = None
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
 def _lifespan(resources: Sequence[Resource]) -> Callable[[FastAPI], Any]:
@@ -116,6 +122,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
         lifespan=_lifespan(options.resources),
     )
     app.state.authenticator = options.authenticator
+    app.state.shops = options.shops
     app.include_router(
         health_router(
             readiness_checks=options.readiness_checks,
@@ -123,6 +130,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
         ),
         responses=UNEXPECTED_ERROR_RESPONSES,
     )
+    app.include_router(identity_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     if options.diagnostics:
         app.include_router(diagnostics_router(), responses=UNEXPECTED_ERROR_RESPONSES)
     add_problem_handlers(app)

@@ -46,6 +46,8 @@ class AuthContext:
     assurance: AssuranceLevel
     session_id: str | None
     memberships: tuple[Membership, ...]
+    # The verified token claims, for repositories that query as this user (RLS).
+    claims: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def principal_for(self, organization_id: uuid.UUID) -> Principal:
         """The user acting in one organization; refused when they are not a member of it."""
@@ -78,4 +80,5 @@ async def authenticate(user: AuthenticatedUser, memberships: MembershipReader) -
         assurance=user.assurance,
         session_id=user.session_id,
         memberships=found,
+        claims=user.claims,
     )
