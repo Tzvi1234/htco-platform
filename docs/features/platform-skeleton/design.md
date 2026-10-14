@@ -87,6 +87,16 @@ flowchart LR
 - `HtcoAPI` (a `FastAPI` subclass) adjusts the generated document to what the app really sends: every response documents the required `X-Request-Id` header (UUID), and error responses carry their schema under `application/problem+json`. Operation IDs are the route function names (`healthz`, `readyz`).
 - Three guards: `test_contract__committed_file__matches_the_app` fails on any drift (with a diff and the command to run); Schemathesis generates requests from the committed file, including methods the contract does not allow, and validates every response; the CI `contract` job runs `oasdiff breaking` against the pull request's base.
 
+## Container image (slice 1.5, part 1)
+
+| Stage | From | Does |
+|---|---|---|
+| `uv` | `ghcr.io/astral-sh/uv:0.13.0@sha256:…` | Provides the uv binary |
+| `build` | `python:3.14.8-slim-trixie@sha256:…` | `uv sync --locked --no-dev --no-editable --package htco-api` into `/app/.venv` with bytecode compiled; the build context is an allow-list (`pyproject.toml`, `uv.lock`, `.python-version`, `apps/`, `packages/`) |
+| `runtime` | same Python image | Copies only `/app/.venv` (owned by root); runs `python -m htco_api` as user `10001` on port 8080 (`HTCO_HOST=0.0.0.0`, `HTCO_PORT=8080`) |
+
+`HTCO_ENVIRONMENT` is deliberately not set in the image: the platform must say which environment it runs, and the image refuses to start (exit 78) until it does.
+
 ## Continuous integration (slice 1.4)
 
 `.github/workflows/ci.yml` runs on every pull request (opened, updated, reopened or edited) and on every push to `main`.
@@ -97,10 +107,11 @@ flowchart LR
   pr --> tests[tests<br/>coverage floors]
   pr --> security[security<br/>gitleaks · osv-scanner]
   pr --> workflows[workflows<br/>actionlint · zizmor · SHA pins]
+  pr --> image[image<br/>build · non-root · run read-only · Grype]
   pr --> contract[contract<br/>oasdiff, pull requests only]
   pr --> integrity[test-integrity<br/>pull requests only]
   pr --> title[pr-title<br/>pull requests only]
-  checks & tests & security & workflows & contract & integrity & title --> gate{ci-gate}
+  checks & tests & security & workflows & image & contract & integrity & title --> gate{ci-gate}
 ```
 
 - **One required status.** `ci-gate` runs even when a job fails (`if: always()`) and passes only if every job succeeded; on pushes to `main` the pull-request-only jobs (`contract`, `test-integrity`, `pr-title`) may be skipped. Branch rules will require only `ci-gate` (slice 1.6), so adding a job never needs a settings change.
@@ -126,6 +137,8 @@ flowchart LR
 | Exit code 78 (`EX_CONFIG`) on bad settings, no traceback | Let uvicorn crash | A clear one-line reason per variable, and a code that tells a crash loop apart from a configuration error. |
 | Contract generated from code and committed | Hand-written OpenAPI first, code generated from it | FastAPI's schema always matches the code; committing it makes every contract change a reviewed diff, and oasdiff guards compatibility. |
 | Committed-file comparison for the contract | syrupy snapshot | The contract must live at a fixed path that clients and oasdiff read; a snapshot file would duplicate it. |
+| Non-editable install into a venv copied to a clean stage | Install into the system interpreter; ship the source tree | The runtime has no uv, compilers, tests or sources (ASVS 15.2.3), and the venv is immutable (root-owned, read-only file system in CI). |
+| Grype fails only on fixable high or critical findings | Fail on every finding | Unfixable base-image findings would block every build with nothing to do; they are reviewed with each base-image update. |
 | One `ci-gate` job as the required status | Requiring every job in the branch rules | New jobs are protected automatically; the rules never drift from the workflow. |
 | Our own test-integrity and SHA-pin scripts | Marketplace actions | Small, tested, no extra third-party code with access to the workflow. |
 | Scanner binaries with pinned checksums | gitleaks and osv-scanner GitHub Actions | The gitleaks action needs write access to comment on pull requests; a checksum-verified binary needs none. |

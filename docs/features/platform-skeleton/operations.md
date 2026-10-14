@@ -23,6 +23,16 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 3. **Fix:** stage the reformatted files; fix lint errors; remove the secret and rotate it if it was real; reword the message as `type(scope): subject`.
 4. **Verify:** commit again. Never bypass hooks with `--no-verify`; CI runs the same checks.
 
+### Run the production image locally
+1. `docker build -t htco-api .`
+2. `docker run --rm -p 8080:8080 --read-only --env HTCO_ENVIRONMENT=local htco-api`
+3. `curl http://127.0.0.1:8080/healthz`
+
+### The `image` job fails on the vulnerability scan
+1. **Check:** the Grype table names the package, the installed version and the fixed version.
+2. **Fix:** a Python package: raise its lock (`uv lock --upgrade-package <name>`, respecting the release age); an OS package: take the new base-image digest (Renovate proposes it).
+3. **Never** lower the severity cutoff to get green; an exception needs the owner's agreement, an issue and an expiry date.
+
 ### The API exits immediately with code 78
 1. **Check:** the last stderr lines: `htco-api: invalid configuration` followed by one line per variable.
 2. **Fix:** set or correct the named variables (values are never printed; check them in the secret store).

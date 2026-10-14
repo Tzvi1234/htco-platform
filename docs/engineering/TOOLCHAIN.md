@@ -16,7 +16,7 @@
 | Packages and workspace | uv, one workspace with a virtual root and one `uv.lock` | 0.13.0, enforced with `required-version = ">=0.13,<0.14"` | Fast, reproducible, workspace-aware; `--package` builds one deployable. Plain `uv sync` installs every member. |
 | Build backend | `uv_build` | `>=0.13,<0.14` | Needed for non-editable installs in images |
 | Task runner | just (`rust-just` from PyPI, in the `dev` group) | 1.58.0 | Comes from `uv.lock` like every other tool, so contributors only install uv |
-| Images | Multi-stage Dockerfile, non-root user, bytecode compiled, built with Buildx in GitHub Actions | | Built once, deployed by digest (slice 1.5) |
+| Images | Multi-stage `Dockerfile` from `python:3.14.8-slim-trixie` and `ghcr.io/astral-sh/uv:0.13.0`, both pinned by digest; non-root user 10001; bytecode compiled; built with Buildx in GitHub Actions | | Built once, deployed by digest. CPython patch releases are taken when published (security fixes) and pinned by digest. |
 
 ## Application libraries
 
@@ -61,7 +61,7 @@
 | Secrets | gitleaks v8.30.1 (feature-frozen; Betterleaks is the successor to evaluate) | Pre-commit hook pinned by commit SHA (built with Go by prek); CI downloads the release binary and checks its SHA-256, then scans the full history |
 | Dependencies | osv-scanner 2.6.0 (reads `uv.lock`), `uv audit` when stable | Every pull request; release binary checked by SHA-256 in CI. Binary versions and checksums in `ci.yml` are updated by hand (Renovate cannot update the checksum). |
 | Static analysis | Ruff `S` rules on every pull request; Semgrep CE weekly | Semgrep registry rules are licensed for internal use |
-| Container | Grype, or Trivy pinned by full commit SHA | Trivy's GitHub Action tags were compromised in March 2026 |
+| Container | Grype v0.120.1 through `anchore/scan-action` v7.4.2 (pinned by SHA) | Fails on fixable high or critical findings (`only-fixed`); unfixable base-image findings are reviewed when Renovate updates the base. Trivy's GitHub Action tags were compromised in March 2026. |
 | Workflows | zizmor 1.30.1, actionlint 1.7.12 (`actionlint-py`, which verifies the binary against pinned checksums), `tools/check_action_pins.py`, `permissions: {}` by default | Installed on demand from the `ci` dependency group (`just workflows`). Actions in use: `actions/checkout` v7.0.1, `astral-sh/setup-uv` v10.2.0 (newest release older than seven days). |
 | CI gate | `.github/workflows/ci.yml` with one required status, `ci-gate` | Jobs: checks, tests, security, workflows, contract (oasdiff), test-integrity (`tools/test_integrity.py`), pr-title (`tools/conventional_commit.py`); the `image` job arrives with slice 1.5 |
 | Updates | Renovate (`.github/renovate.json5`: seven-day minimum release age, weekly schedule, lock-file maintenance, Actions pinned by digest); Dependabot alerts on | Needs the Renovate GitHub App installed by the owner |

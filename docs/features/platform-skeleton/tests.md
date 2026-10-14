@@ -12,6 +12,8 @@
 | Platform | Settings loading and errors; JSON logging (structlog and standard-library lines, request ID, exceptions, levels, quiet HTTP clients); readiness checks (pass, fail, timeout) | `tests/platform/` |
 | API | Health and readiness, problem responses (404, 405, TRACE, 500, 422, streaming failure, property test over unknown paths), request IDs and access log, security headers, entry point and process exit | `tests/api/` |
 | Contract | The committed contract matches the app, drift and missing-file reports, OpenAPI 3.1 with stable operation IDs, the request-ID header and problem+json on every response, deterministic rendering; Schemathesis on every operation | `tests/contract/` |
+| Image policy | Base images pinned by digest, non-root runtime user, locked API-only install, allow-list build context | `tests/infra/test_dockerfile.py` |
+| Image (CI) | Build, user, exit 78 without settings, read-only run answering `/healthz` and `/readyz`, Grype scan | CI `image` job |
 | CI | The pipeline itself, on GitHub | `.github/workflows/ci.yml` (verification below) |
 
 ## Acceptance criteria coverage
@@ -31,6 +33,7 @@
 | AC-1.3.1 | `test_contract__committed_file__matches_the_app`, `test_contract_drift__endpoint_changed_without_updating_the_file__is_reported` |
 | AC-1.3.2 | The CI `contract` job (oasdiff); verified with the same binary locally (below) |
 | AC-1.3.3 | `test_api__every_operation__conforms_to_the_contract` (Schemathesis) |
+| AC-1.5.2 | `test_dockerfile__runtime_stage__runs_as_a_non_root_user`; CI `image` job "Runs as a non-root user" |
 | AC-1.4.1 | The `ci-gate` job (verified on GitHub, below) |
 | AC-1.4.2 | `test_main__skip_added_without_explanation__fails`, `test_main__skip_added_with_explanation__passes`, `test_diff_findings__skip_or_xfail_added_in_tests__is_reported` |
 | AC-1.4.3 | `test_unpinned_uses__*`, `test_main__workflow_with_unpinned_action__fails_naming_file_and_line`; runs in the `workflows` job |
@@ -49,6 +52,16 @@
 - Not applicable yet: time, money, tenancy, concurrency (no business code).
 
 ## Verification evidence
+
+### Verification — 1.5 (part 1) — 2026-10-14
+
+| Acceptance criterion | Covered by tests | Verified for real | Result |
+|---|---|---|---|
+| AC-1.5.2 | `tests/infra/test_dockerfile.py` | CI run 38495521534, job `image`: `Image user: 10001:10001`; without `HTCO_ENVIRONMENT` the container exited 78; with `--read-only --cap-drop ALL --security-opt no-new-privileges` it answered `{"status":"ok"}` and `{"status":"ready","checks":{"configuration":"ok"}}` and logged `api.starting` as JSON on `0.0.0.0:8080` | Pass |
+
+**Adversarial checks run:** the first run failed because Docker's port proxy resets connections until the app listens (`curl: (56) Recv failure`); the probe now retries on any error. Grype v0.120.1: no high or critical findings; two medium findings in CPython 3.14.8 (CVE-2025-15367, CVE-2026-12345), fixed only in 3.15 pre-releases.
+**Deployed check:** part 2.
+**Open issues:** AC-1.5.1, AC-1.5.3, AC-1.5.4 (part 2).
 
 ### Verification — 1.3 — 2026-10-14
 

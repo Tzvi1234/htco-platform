@@ -72,6 +72,7 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 | `just openapi` | Regenerate `packages/contracts/openapi.yaml` from the API (review the diff before committing) | Slice 1.3 |
 | `just contract` | The committed OpenAPI matches the API; Schemathesis against it (the `oasdiff` breaking-change check runs in CI) | Slice 1.3 |
 | `just up` | Local API on http://127.0.0.1:8000 with `.env.example` settings (the worker joins in Phase 5) | Slice 1.2 |
+| `docker build -t htco-api .` | The production API image (CI also runs it read-only and scans it) | Slice 1.5 |
 | `just db-start`, `just db-reset`, `just db-test` | Local Supabase stack, migrations, pgTAP tests | Slice 2.1 |
 | `just seed` | Two organizations, their shops, one user per role | Slice 2.1 |
 

@@ -35,6 +35,10 @@ The frame every later feature is built inside: a uv workspace whose packages fol
 | AC-1.3.1 | Changing an endpoint without updating `openapi.yaml` fails the contract test. | 1.3 | Pass |
 | AC-1.3.2 | A breaking change (for example removing a response field) fails the `oasdiff` job unless the version path changes. | 1.3 | Pass |
 | AC-1.3.3 | Schemathesis finds no server errors or schema violations on all endpoints. | 1.3 | Pass |
+| AC-1.5.1 | The deployed `/healthz` answers 200 over HTTPS on the app's default domain. | 1.5 (part 2) | Open |
+| AC-1.5.2 | The container runs as a non-root user (verified in CI by inspecting the image). | 1.5 | Pass |
+| AC-1.5.3 | A rollback to the previous deployment is performed once and documented in `operations.md`. | 1.5 (part 2) | Open |
+| AC-1.5.4 | No secret value appears in the app spec in git; secrets are injected at deploy time. | 1.5 (part 2) | Open |
 | AC-1.4.1 | A pull request with a failing test, lint error, type error, forbidden import, secret-like string or vulnerable pinned dependency cannot merge (`ci-gate` red). | 1.4 | Open |
 | AC-1.4.2 | A pull request that adds `@pytest.mark.skip` without a "Test changes" section fails `test-integrity`. | 1.4 | Open |
 | AC-1.4.3 | Every `uses:` line references a full commit SHA (checked by a script). | 1.4 | Open |
@@ -46,8 +50,9 @@ Slices 1.2 to 1.7 add their criteria here as they start; the full list is in the
 - **In (1.1):** workspace and packages, Ruff, mypy, import-linter and the layer purity test, pytest with AnyIO and Hypothesis, coverage floors, `just` recipes, prek Git hooks (ruff, gitleaks, file hygiene, Conventional Commits).
 - **In (1.2):** the FastAPI app factory, `/healthz` and `/readyz`, settings validated at startup, request IDs, JSON logging, RFC 9457 problem responses, security headers, `just up`.
 - **In (1.3):** `packages/contracts/openapi.yaml` generated from the API and committed, a drift test, Schemathesis against the contract, and the `oasdiff` breaking-change job.
+- **In (1.5, part 1):** the production image (`Dockerfile`, `.dockerignore`) and the CI `image` job.
 - **In (1.4):** the CI workflow with one required status (`ci-gate`), secret and dependency scans, workflow linting, the test-weakening check, the pull request title check, and the Renovate configuration.
-- **Out (so far):** the container, its CI job and deployment (1.5), agent hooks and the branch ruleset (1.6), monitoring (1.7).
+- **Out (so far):** the app spec, registry and deployment (1.5, part 2), agent hooks and the branch ruleset (1.6), monitoring (1.7).
 
 ## External facts learned
 
