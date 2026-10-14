@@ -97,10 +97,11 @@ You need [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.13 (and
 ```bash
 uv run just setup   # install the workspace and the Git hooks
 uv run just check   # formatting, lint, types, architecture contracts, tests and coverage
+uv run just up      # run the API on http://127.0.0.1:8000 (try /healthz and /readyz)
 uv run just         # list every recipe
 ```
 
-All dependencies respect a seven-day minimum release age (`exclude-newer` in `pyproject.toml`). Running the API locally arrives with [slice 1.2](docs/plan/phases/phase-01-walking-skeleton.md).
+All dependencies respect a seven-day minimum release age (`exclude-newer` in `pyproject.toml`). Local settings live in [`.env.example`](.env.example); the API logs one JSON object per line.
 
 ## Security
 

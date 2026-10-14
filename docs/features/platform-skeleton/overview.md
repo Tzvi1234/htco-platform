@@ -26,6 +26,12 @@ The frame every later feature is built inside: a uv workspace whose packages fol
 | AC-1.1.2 | Given `htco_domain` imports `fastapi`, when `just arch` runs, then it fails naming the contract. | 1.1 | Pass |
 | AC-1.1.3 | Given Python 3.14 and the pinned LangGraph version, when the smoke test builds and runs a two-node graph with an in-memory checkpointer, then it passes. | 1.1 | Pass |
 | AC-1.1.4 | Coverage below the floors (domain 95%, application 90%) fails the run. | 1.1 | Pass |
+| AC-1.2.1 | `GET /healthz` returns 200 `{"status":"ok"}` with an `X-Request-Id` header, without touching any dependency. | 1.2 | Pass |
+| AC-1.2.2 | `GET /readyz` returns 200 when configuration is valid and 503 with a problem body when a required dependency check fails (Phase 1 checks configuration only). | 1.2 | Pass |
+| AC-1.2.3 | An unknown route returns a problem+json 404 containing `request_id` and no stack trace. | 1.2 | Pass |
+| AC-1.2.4 | An unhandled exception returns a problem+json 500 with `request_id`; the log line contains the stack trace and the same `request_id`; the response does not. | 1.2 | Pass |
+| AC-1.2.5 | Starting the app with a missing required setting exits non-zero with a clear message naming the setting. | 1.2 | Pass |
+| AC-1.2.6 | Every log line is JSON with `timestamp`, `level`, `event`, `request_id`. | 1.2 | Pass |
 | AC-1.4.1 | A pull request with a failing test, lint error, type error, forbidden import, secret-like string or vulnerable pinned dependency cannot merge (`ci-gate` red). | 1.4 | Open |
 | AC-1.4.2 | A pull request that adds `@pytest.mark.skip` without a "Test changes" section fails `test-integrity`. | 1.4 | Open |
 | AC-1.4.3 | Every `uses:` line references a full commit SHA (checked by a script). | 1.4 | Open |
@@ -35,14 +41,17 @@ Slices 1.2 to 1.7 add their criteria here as they start; the full list is in the
 ## Scope
 
 - **In (1.1):** workspace and packages, Ruff, mypy, import-linter and the layer purity test, pytest with AnyIO and Hypothesis, coverage floors, `just` recipes, prek Git hooks (ruff, gitleaks, file hygiene, Conventional Commits).
+- **In (1.2):** the FastAPI app factory, `/healthz` and `/readyz`, settings validated at startup, request IDs, JSON logging, RFC 9457 problem responses, security headers, `just up`.
 - **In (1.4):** the CI workflow with one required status (`ci-gate`), secret and dependency scans, workflow linting, the test-weakening check, the pull request title check, and the Renovate configuration.
-- **Out (1.1 and 1.4):** the API itself (1.2), the OpenAPI contract and its CI job (1.3), the container, its CI job and deployment (1.5), agent hooks and the branch ruleset (1.6), monitoring (1.7).
+- **Out (so far):** the OpenAPI contract and its CI job (1.3), the container, its CI job and deployment (1.5), agent hooks and the branch ruleset (1.6), monitoring (1.7).
 
 ## External facts learned
 
 - 2026-10-14: LangGraph 1.2.14 with langgraph-checkpoint 4.2.0 runs a checkpointed two-node graph on CPython 3.14.8, although its package metadata only declares up to 3.13 (assumption A-10 verified).
 - 2026-10-14: `langsmith`, which LangGraph pulls in through `langchain-core`, calls `asyncio.iscoroutinefunction`, deprecated in Python 3.14 and due for removal in 3.16. It is silenced by one targeted warning filter; the dependency must be fixed upstream before we move to Python 3.16.
 - 2026-10-14: `langsmith` registers a pytest plugin through entry points. Our pytest run loads only allow-listed plugins.
+- 2026-10-14: httpx logs every request URL, query string included, at INFO. Query strings can carry API keys or OAuth codes, so `configure_logging` keeps the `httpx` and `httpcore` loggers at WARNING.
+- 2026-10-14: uvicorn sends a `server: uvicorn` header unless started with `server_header=False`.
 - 2026-10-14: uv records a relative `exclude-newer` as a span in `uv.lock` (`exclude-newer-span = "P7D"`), so the release-age rule does not make the lock stale.
 
 ## Known limits

@@ -45,6 +45,10 @@ test:
     uv run coverage report --include="*/htco_domain/*" --fail-under=95
     uv run coverage report --include="*/htco_application/*" --fail-under=90
 
+# Run the API locally on http://127.0.0.1:8000 with the settings in .env.example
+up:
+    uv run --env-file .env.example python -m htco_api
+
 # Fast feedback for agent hooks: lint, types and tests (no coverage)
 check-fast: lint types
     uv run pytest -q -x

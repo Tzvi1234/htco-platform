@@ -1,11 +1,14 @@
 # Platform skeleton — Operations
 
-Until slice 1.5 deploys the API, "operations" means keeping the development toolchain healthy.
+Until slice 1.5 deploys the API, operations means running it locally and keeping the toolchain healthy.
 
 ## Configuration
 
 | Setting | Where | Effect |
 |---|---|---|
+| `HTCO_ENVIRONMENT` | Required: `local`, `test`, `staging`, `production` | Names the environment in logs; later slices switch behaviour on it |
+| `HTCO_LOG_LEVEL` | `INFO` (`DEBUG`, `WARNING`, `ERROR`) | Minimum level for every logger; HTTP client loggers stay at WARNING |
+| `HTCO_HOST`, `HTCO_PORT` | `127.0.0.1`, `8000` | Listen address |
 | Python version | `.python-version` (3.14.8) | uv installs and uses exactly this interpreter |
 | uv version | `[tool.uv] required-version` | Any other uv version refuses to run on the workspace |
 | Release age | `[tool.uv] exclude-newer = "7 days"` | Resolution ignores versions younger than seven days |
@@ -19,6 +22,15 @@ Until slice 1.5 deploys the API, "operations" means keeping the development tool
 2. **Likely cause:** formatting (`ruff format` already rewrote the file: stage it again), a lint error, a secret-like string, or a non-conventional commit message.
 3. **Fix:** stage the reformatted files; fix lint errors; remove the secret and rotate it if it was real; reword the message as `type(scope): subject`.
 4. **Verify:** commit again. Never bypass hooks with `--no-verify`; CI runs the same checks.
+
+### The API exits immediately with code 78
+1. **Check:** the last stderr lines: `htco-api: invalid configuration` followed by one line per variable.
+2. **Fix:** set or correct the named variables (values are never printed; check them in the secret store).
+3. **Verify:** the first log line is `api.starting` with the environment.
+
+### `/readyz` returns 503
+1. **Check:** the response's `checks` map names the failing dependency; the `readiness.check_failed` log line has its error type.
+2. **Fix:** restore the dependency; the probe recovers by itself on the next call.
 
 ### `ci-gate` is red on a pull request
 1. **Check:** open the run; `ci-gate` lists each job that did not succeed (`::error::<job>: failure`).

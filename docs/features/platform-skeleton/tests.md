@@ -9,6 +9,8 @@
 | Tooling | Conventional Commits checker (headers, Git-generated messages, message files, titles) | `tests/tools/test_conventional_commit.py` |
 | Tooling | SHA-pin checker (pinned, local and digest references pass; tags, branches, short SHAs and image tags fail) | `tests/tools/test_check_action_pins.py` |
 | Tooling | Test-integrity checker (diff parsing, skip markers, removed tests, changed assertions, thresholds, quality-gate settings, the "Test changes" section) | `tests/tools/test_test_integrity.py` |
+| Platform | Settings loading and errors; JSON logging (structlog and standard-library lines, request ID, exceptions, levels, quiet HTTP clients); readiness checks (pass, fail, timeout) | `tests/platform/` |
+| API | Health and readiness, problem responses (404, 405, TRACE, 500, 422, streaming failure, property test over unknown paths), request IDs and access log, security headers, entry point and process exit | `tests/api/` |
 | CI | The pipeline itself, on GitHub | `.github/workflows/ci.yml` (verification below) |
 
 ## Acceptance criteria coverage
@@ -19,6 +21,12 @@
 | AC-1.1.2 | `test_domain__imports__only_the_standard_library`, `test_application__imports__only_the_standard_library_and_the_domain`, `test_find_forbidden_imports__module_importing_fastapi__is_reported`; import-linter `dependency-rule` |
 | AC-1.1.3 | `test_runtime__python_version__is_3_14`, `test_langgraph__two_node_graph_with_memory_checkpointer__runs_and_checkpoints` |
 | AC-1.1.4 | The `test` recipe's per-layer `coverage report --fail-under` lines (manual run below) |
+| AC-1.2.1 | `test_healthz__get__returns_ok_with_a_request_id`, `test_healthz__dependency_down__still_ok_and_never_calls_checks` |
+| AC-1.2.2 | `test_readyz__configuration_valid__returns_ready`, `test_readyz__all_checks_pass__lists_each_check`, `test_readyz__check_fails__returns_503_problem_without_internals`, `test_readyz__check_hangs__fails_within_the_timeout` |
+| AC-1.2.3 | `test_unknown_route__returns_404_problem_with_request_id`, `test_any_unknown_path__is_a_404_problem_never_a_500` (Hypothesis) |
+| AC-1.2.4 | `test_unhandled_exception__returns_generic_500_problem`, `test_unhandled_exception__is_logged_with_stack_trace_and_the_same_request_id` |
+| AC-1.2.5 | `test_load_settings__missing_required_setting__names_the_variable`, `test_main__missing_environment__exits_with_configuration_error`, `test_process__started_without_required_setting__exits_non_zero_with_a_clear_message` |
+| AC-1.2.6 | `tests/platform/test_logs.py`, `test_access_log__one_json_line_per_request_with_request_id` |
 | AC-1.4.1 | The `ci-gate` job (verified on GitHub, below) |
 | AC-1.4.2 | `test_main__skip_added_without_explanation__fails`, `test_main__skip_added_with_explanation__passes`, `test_diff_findings__skip_or_xfail_added_in_tests__is_reported` |
 | AC-1.4.3 | `test_unpinned_uses__*`, `test_main__workflow_with_unpinned_action__fails_naming_file_and_line`; runs in the `workflows` job |
@@ -31,9 +39,28 @@
 - Diff parsing: removed lines that start with `--` are not mistaken for file headers; tests moved between files and assertions moved unchanged are not findings; deleted test files report each test.
 - "Test changes" section: missing, template comment only, `None`, `None.`, `N/A`, Windows line endings, level-3 heading.
 - Action references: quoted values, reusable workflows, local actions, Docker digests vs tags, upper-case SHAs, commented-out lines.
+- API input: arbitrary unknown paths (letters, digits, reserved URL characters, percent signs; property test), `TRACE`, wrong method, invalid query values (never echoed), CR/LF in an incoming `X-Request-Id` (ignored), query strings with secrets (never logged), an exception after the response started streaming (logged once, connection fails).
+- Settings: missing, invalid (value never echoed), several problems at once.
+- Readiness: failing, hanging (timeout) and absent checks; failures never leak the error text.
 - Not applicable yet: time, money, tenancy, concurrency (no business code).
 
 ## Verification evidence
+
+### Verification — 1.2 — 2026-10-14
+
+| Acceptance criterion | Covered by tests | Verified for real | Result |
+|---|---|---|---|
+| AC-1.2.1 | `tests/api/test_health.py` | `uv run just up`, `curl -i http://127.0.0.1:8000/healthz` gave 200 `{"status":"ok"}`, `x-request-id: 01a137eb-814e-7243-…` (UUIDv7), all security headers, no `server` header | Pass |
+| AC-1.2.2 | same | `curl /readyz` gave 200 `{"status":"ready","checks":{"configuration":"ok"}}`; the 503 path is covered by tests with an injected failing check (no real dependency exists yet) | Pass |
+| AC-1.2.3 | `tests/api/test_errors.py` | `curl /no/such/route` gave 404 `application/problem+json` with `type …/not-found` and the request ID | Pass |
+| AC-1.2.4 | same | Tests only (no failing route exists in the real app) | Pass |
+| AC-1.2.5 | `tests/api/test_main.py` | `python -m htco_api` without `HTCO_ENVIRONMENT`: exit 78, `HTCO_ENVIRONMENT is required`, no traceback (subprocess test) | Pass |
+| AC-1.2.6 | `tests/platform/test_logs.py` | Server output: every line JSON with `timestamp`, `level`, `event`, `request_id` (null for uvicorn startup lines, the request ID on `request.completed`) | Pass |
+
+**Adversarial checks run:** `POST /healthz` with a forged `X-Request-Id` gave a 405 problem, `allow: GET` and a fresh server ID; `GET /healthz?token=supersecret` left no trace of the secret in the log; mutation check: removing the re-raise for failures after streaming started makes `test_exception_after_streaming_started__…` fail.
+**Observed:** request `01a137eb-832a-741b-aaed-b8fda5490646` produced one `request.completed` line with method, path, status 404 and duration; no PII or secrets in the log.
+**Deployed check:** not applicable (slice 1.5).
+**Open issues:** none.
 
 ### Verification — 1.1 — 2026-10-14
 

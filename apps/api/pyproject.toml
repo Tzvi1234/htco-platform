@@ -4,9 +4,11 @@ version = "0.0.0"
 description = "HTCO HTTP API: routes, request and response schemas, and the composition root."
 requires-python = "==3.14.*"
 dependencies = [
+  "fastapi>=0.142,<0.144",
   "htco-application",
   "htco-domain",
   "htco-platform",
+  "uvicorn>=0.54,<0.55",
 ]
 
 [tool.uv.sources]
