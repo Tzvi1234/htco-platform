@@ -5,6 +5,8 @@
 | Level | What is covered | Location |
 |---|---|---|
 | Database (pgTAP) | Base schemas exist; `anon` and `authenticated` cannot use `private` or create in `app` and `audit` | `supabase/tests/database/00_schemas.test.sql` |
+| Database (pgTAP) | Identity tables exist; RLS inventory; two-tenant isolation in every table; Support limited to its granted shop; append-only audit for `authenticated`, `service_role` and the owner; `aal2` required for writes to owner-administered tables; closed role and actor lists; cross-organization grants rejected; `anon` and direct helper calls refused (49 assertions) | `supabase/tests/database/01_identity_access.test.sql` |
+| Persistence | The SQL check constraints list exactly the domain's `Role` and `ActorKind` values | `tests/persistence/test_schema_mirrors_domain.py` |
 | Persistence | The database check fails fast on a closed port, is named `database`, hides its connection string | `tests/persistence/test_database_check.py` |
 | API | Deployed environments refuse to start without `HTCO_DATABASE_URL`; with it, `/readyz` reports the database; without it locally, configuration only | `tests/api/test_main.py` |
 | Integration (`-m db`) | `/readyz` against real Postgres through a TCP relay: 200, 503 when the relay closes, 200 again without a restart | `tests/integration/test_database_readiness.py` |
@@ -18,6 +20,11 @@
 | AC-2.1.2 | CI `database` job: `supabase test db` |
 | AC-2.1.3 | `test_readyz__database_down_then_back__503_then_200_without_restart`, `test_main__database_url__readyz_checks_the_database` |
 | AC-2.1.4 | `.github/workflows/migrate.yml` (`workflow_dispatch` only, dry run first, `migration list` in the summary) |
+| AC-2.2.1 | `01_identity_access.test.sql`: "every table in app and audit has row-level security enabled" |
+| AC-2.2.2 | `01_identity_access.test.sql`: owner A and owner B blocks (reads, writes into the other organization) |
+| AC-2.2.3 | `01_identity_access.test.sql`: "Support A sees shop A1 and not shop A2" |
+| AC-2.2.4 | `01_identity_access.test.sql`: AC-2.2.4 block |
+| AC-2.2.5 | `01_identity_access.test.sql`: AC-2.2.5 block |
 | AC-2.4.1 | `test_permissions__match_the_documented_matrix` (20 cases), `test_decide__fully_assured_principal__gets_exactly_the_documented_answer` (140 cases) |
 | AC-2.4.2, AC-2.4.3 | Part 2 |
 

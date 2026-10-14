@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Logical model 2.0 (the living office, [ADR-0012](../adr/0012-living-office-organization.md)). No migrations exist yet; physical tables are created phase by phase, and this page is updated in the same pull request as each migration. |
+| **Status** | Logical model 2.0 (the living office, [ADR-0012](../adr/0012-living-office-organization.md)). Physical tables are created phase by phase, and this page is updated in the same pull request as each migration. Created so far: the base schemas (slice 2.1); `organizations`, `user_profiles`, `memberships`, `shops` (shell), `shop_access` and `audit.audit_log` (slice 2.2, `supabase/migrations/20261014160000_identity_access.sql`). |
 | **Last updated** | 2026-10-14 |
 | **Rules** | [ER-DATA](../engineering/ENGINEERING_RULES.md#5-data-er-data), [ADR-0011](../adr/0011-data-access-and-migrations.md) |
 
@@ -221,6 +221,8 @@ create policy orders_select on app.orders
   for select to authenticated
   using (shop_id = any (array(select private.user_shop_ids())));
 ```
+
+The migration of slice 2.2 implements this pattern with the helpers `private.user_org_ids()`, `private.user_admin_org_ids()`, `private.user_membership_ids()`, `private.user_shop_ids()`, `private.coworker_user_ids()` and `private.session_is_aal2()`; `authenticated` may execute them but cannot use the `private` schema, so only policies reach them. `audit.audit_log` stores the actor as `actor_kind` (check constraint over the five kinds) and `actor_id`, and a trigger rejects update, delete and truncate even for the table owner.
 
 Rules: every table has RLS enabled (tested by an inventory test); policies call helpers inside `(select …)`; owner-only tables add a restrictive policy requiring `aal2`; writes from user requests go through use cases, so most tables grant clients no direct insert, update or delete.
 
