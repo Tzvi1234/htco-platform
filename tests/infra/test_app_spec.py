@@ -115,10 +115,17 @@ def test_deploy__secrets_reach_only_the_deploy_step() -> None:
             uses = str(step.get("uses", ""))
             if uses.startswith(("digitalocean/app_action/deploy@", "docker/login-action@")):
                 continue
+            if step.get("name") == BUDGET_STEP:
+                # Reads the proposed monthly cost; needs only the DigitalOcean token.
+                assert set(re.findall(r"secrets\.([A-Z_]+)", yaml.safe_dump(step))) == {
+                    "DIGITALOCEAN_ACCESS_TOKEN"
+                }
+                continue
             assert "secrets." not in yaml.safe_dump(step), step.get("name")
 
 
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+BUDGET_STEP = "The monthly cost stays within the budget"
 
 
 def _workflow(name: str) -> dict[Any, Any]:
@@ -149,8 +156,50 @@ def test_deploy__a_rollback_tag_must_be_a_full_commit_sha() -> None:
     assert '"${#REQUESTED_TAG}" -ne 40' in choose["run"]
 
 
-def test_spec__the_api_answers_on_its_own_domain() -> None:
-    assert SPEC["domains"] == [{"domain": "api.ht-co.app", "type": "PRIMARY"}]
+def test_spec__the_api_and_the_web_app_answer_on_their_domains() -> None:
+    assert SPEC["domains"] == [
+        {"domain": "api.ht-co.app", "type": "PRIMARY"},
+        {"domain": "dash.ht-co.app", "type": "ALIAS"},
+    ]
+
+
+def _web() -> dict[str, Any]:
+    [site] = SPEC["static_sites"]
+    assert site["name"] == "web"
+    web: dict[str, Any] = site
+    return web
+
+
+def test_spec__the_web_app_is_a_static_site_built_from_the_clients_main() -> None:
+    """Client ADR-0006: a static site costs nothing inside an app with a paid service."""
+    web = _web()
+    assert web["github"] == {
+        "repo": "Tzvi1234/htco-clients",
+        "branch": "main",
+        "deploy_on_push": True,
+    }
+    assert web["dockerfile_path"] == "apps/web/Dockerfile"
+    assert web["output_dir"] == "/src/apps/web/dist"
+    # Client routes such as /settings/security load directly.
+    assert web["catchall_document"] == "index.html"
+
+
+def test_spec__the_web_origin_sends_api_to_the_api_and_the_rest_to_the_web_app() -> None:
+    """Platform ADR-0006: the API on the page's own origin, so no CORS and a first-party cookie."""
+    rules = [
+        (
+            rule["match"].get("authority", {}).get("exact"),
+            rule["match"]["path"]["prefix"],
+            rule["component"]["name"],
+            rule["component"].get("preserve_path_prefix", False),
+        )
+        for rule in SPEC["ingress"]["rules"]
+    ]
+    assert rules == [
+        ("dash.ht-co.app", "/api", "api", False),  # /api/v1/me reaches the API as /v1/me
+        ("dash.ht-co.app", "/", "web", False),
+        (None, "/", "api", False),  # api.ht-co.app and the platform URL
+    ]
 
 
 def test_deploy__checks_health_on_the_default_ingress() -> None:
@@ -160,3 +209,14 @@ def test_deploy__checks_health_on_the_default_ingress() -> None:
         s for s in job["steps"] if s.get("name") == "The deployed API answers its health checks"
     ]
     assert ".default_ingress" in check["run"]
+
+
+def test_deploy__refuses_a_spec_that_costs_more_than_the_budget() -> None:
+    """The owner's limit: nothing may make the bill grow unnoticed (a static site is free today)."""
+    [job] = DEPLOY["jobs"].values()
+    names = [step.get("name") for step in job["steps"]]
+    assert names.index(BUDGET_STEP) < names.index("Deploy")
+    [budget] = [step for step in job["steps"] if step.get("name") == BUDGET_STEP]
+    assert budget["env"]["BUDGET_USD"] == "5"
+    assert "/v2/apps/propose" in budget["run"]
+    assert ".app_cost" in budget["run"]
