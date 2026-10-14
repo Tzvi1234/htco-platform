@@ -1,0 +1,64 @@
+# Apply database migrations to a Supabase project. Started only by the owner (AC-2.1.4): it never
+# runs on push or pull request. Every run shows a dry run first; applying needs `apply: true` and
+# then records the applied versions in the run summary.
+#
+# Repository configuration (Settings → Secrets and variables → Actions):
+#   variable SUPABASE_PROJECT_REF   the project's reference ID
+#   secret   SUPABASE_ACCESS_TOKEN  a personal access token of the owner's Supabase account
+#   secret   SUPABASE_DB_PASSWORD   the project's database password
+name: Migrate database
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply the migrations (false = dry run only)"
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: migrate-database
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: migrate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      SUPABASE_CLI_VERSION: "2.120.0"
+      SUPABASE_CLI_SHA256: 7074584113aa00495beeac661c41fb09f1ddd0a483cd7333894b0d080086dc6e
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      APPLY: ${{ inputs.apply }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the Supabase CLI
+        run: |
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/supabase.tar.gz" \
+            "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_${SUPABASE_CLI_VERSION}_linux_amd64.tar.gz"
+          echo "${SUPABASE_CLI_SHA256}  $RUNNER_TEMP/supabase.tar.gz" | sha256sum --check --strict -
+          tar --extract --gzip --file "$RUNNER_TEMP/supabase.tar.gz" --directory "$RUNNER_TEMP" supabase
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Link the project
+        run: supabase link --project-ref "$PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+      - name: Dry run (what would be applied)
+        run: supabase db push --dry-run --password "$SUPABASE_DB_PASSWORD"
+      - name: Apply the migrations
+        if: ${{ inputs.apply }}
+        run: supabase db push --password "$SUPABASE_DB_PASSWORD"
+      - name: Record the applied versions
+        run: |
+          {
+            echo "## Migrations on project ${PROJECT_REF} (apply: ${APPLY})"
+            echo '```'
+            supabase migration list --password "$SUPABASE_DB_PASSWORD"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

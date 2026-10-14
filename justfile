@@ -3,6 +3,9 @@
 
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
+# The local Supabase database (`just db-start`); CI and other setups override it.
+export HTCO_TEST_DATABASE_URL := env_var_or_default("HTCO_TEST_DATABASE_URL", "postgresql://postgres:postgres@127.0.0.1:54322/postgres")
+
 # List the recipes
 default:
     @just --list --unsorted
@@ -58,6 +61,26 @@ test:
     uv run coverage report
     uv run coverage report --include="*/htco_domain/*" --fail-under=95
     uv run coverage report --include="*/htco_application/*" --fail-under=90
+
+# Local database (needs Docker and the Supabase CLI): start Postgres and apply every migration
+db-start:
+    supabase db start
+
+# Stop the local Supabase stack
+db-stop:
+    supabase stop
+
+# Drop the local database and re-apply every migration (and the seed, once it exists)
+db-reset:
+    supabase db reset
+
+# Database tests (pgTAP in supabase/tests)
+db-test:
+    supabase test db
+
+# Integration tests against the local database (after `just db-start`)
+test-db:
+    uv run pytest -m db tests/integration
 
 # Run the API locally on http://127.0.0.1:8000 with the settings in .env.example
 up:

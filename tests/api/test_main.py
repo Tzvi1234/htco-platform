@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import socket
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -128,6 +129,7 @@ def test_main__diagnostic_endpoint__exists_only_outside_production(
     environment: pytest.MonkeyPatch, environment_name: str, status: int
 ) -> None:
     environment.setenv("HTCO_ENVIRONMENT", environment_name)
+    environment.setenv("HTCO_DATABASE_URL", "postgresql://htco@db.invalid/htco")
     serve = _FakeServer()
 
     main(serve=serve)
@@ -175,3 +177,51 @@ def test_main__blank_sentry_dsn__leaves_error_monitoring_off(
 
     [line] = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert line["error_monitoring"] == "off"
+
+
+@pytest.mark.usefixtures("restore_logging")
+@pytest.mark.parametrize("environment_name", ["staging", "production"])
+def test_main__deployed_without_database_url__exits_with_configuration_error(
+    environment: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], environment_name: str
+) -> None:
+    environment.setenv("HTCO_ENVIRONMENT", environment_name)
+    serve = _FakeServer()
+
+    assert main(serve=serve) == EXIT_CONFIGURATION_ERROR
+    assert "HTCO_DATABASE_URL" in capsys.readouterr().err
+    assert serve.calls == []
+
+
+@pytest.mark.usefixtures("restore_logging")
+@pytest.mark.ac("AC-2.1.3")
+def test_main__database_url__readyz_checks_the_database(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = int(probe.getsockname()[1])
+    environment.setenv("HTCO_ENVIRONMENT", "local")
+    environment.setenv("HTCO_DATABASE_URL", f"postgresql://htco@127.0.0.1:{closed_port}/htco")
+    serve = _FakeServer()
+
+    main(serve=serve)
+
+    [(app, _)] = serve.calls
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["checks"]["database"] == "failed"
+
+
+@pytest.mark.usefixtures("restore_logging")
+def test_main__no_database_url_locally__readyz_checks_configuration_only(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    environment.setenv("HTCO_ENVIRONMENT", "local")
+    serve = _FakeServer()
+
+    main(serve=serve)
+
+    [(app, _)] = serve.calls
+    with TestClient(app) as client:
+        assert client.get("/readyz").json()["checks"] == {"configuration": "ok"}

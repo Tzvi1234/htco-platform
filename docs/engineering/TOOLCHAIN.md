@@ -25,7 +25,7 @@
 | HTTP API | FastAPI on Starlette, served by uvicorn | Locked FastAPI 0.142.2, Starlette 1.7.0, uvicorn 0.54.0 (no extras) | OpenAPI 3.1 output. Plain uvicorn (h11, asyncio) until measurements justify `httptools`/`uvloop`. |
 | Models and validation | Pydantic | Locked 2.13.5 | Boundaries only (API, contracts, tool schemas); domain stays plain Python. mypy runs with the Pydantic plugin. |
 | Settings | pydantic-settings | Locked 2.15.0 | Loaded only in composition roots through `htco_platform.settings.load_settings`; `SecretStr`; fail fast with exit code 78 and messages that never echo values |
-| Database driver | psycopg 3 with `psycopg_pool` | Planned 3.3.x (Phase 2) | One driver, shared with the LangGraph checkpointer |
+| Database driver | psycopg 3 (binary) | Locked 3.3.6 (`htco-persistence`); `psycopg_pool` joins with the first repository (slice 2.2) | One driver, shared with the LangGraph checkpointer; only `htco_persistence` may import it (import-linter) |
 | SQL composition | Explicit SQL; SQLAlchemy 2.1 Core optional | | No ORM |
 | HTTP client | httpx | Locked 0.28.1 | Created only through `htco_platform.http.new_async_http_client`: 10-second timeout, no redirects, trace propagation. Its INFO request lines are silenced because URLs can carry credentials. |
 | Logging | structlog | Locked 26.1.0 | JSON to stdout, one object per line, standard-library loggers rendered the same way; trace IDs join in slice 1.7 |
@@ -52,7 +52,7 @@
 | Contract diff | oasdiff 1.33.0 (release binary, SHA-256 pinned in `ci.yml`) | | `oasdiff breaking` against the pull request's base; any error-level change fails the `contract` job |
 | YAML | PyYAML 6.0.3 (with `types-pyyaml`) | | Renders the contract without anchors or aliases |
 | HTTP mocks | respx | Planned 0.23.x | |
-| Database | Supabase CLI | Planned 2.120.x (slice 2.1) | Local stack, migrations, pgTAP |
+| Database | Supabase CLI | 2.120.0 (CI downloads the release and checks its SHA-256; locally from the GitHub release) | Local Postgres (Docker), migrations, pgTAP (`supabase test db`); the owner-started `migrate.yml` workflow for deployed projects |
 
 ## Security and supply chain
 
