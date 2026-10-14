@@ -61,7 +61,9 @@ Every phase file has the same structure: goal, why now, scope in and out, prereq
 
 Sizes are relative effort for one developer working with AI agents: S ≈ under a week, M ≈ 1–2 weeks, L ≈ 2–4 weeks. They are planning aids, not commitments; actual durations are recorded at each gate. Version 2.0 adds three M phases (9, 10, 18) and one L phase (19) and removes work that version 1.0 assigned to agents but is deterministic (publishing, routine inspection, ledger recording); the net is roughly four to six weeks more, mostly in supervision and engineering, which version 1.0 left implicit.
 
-**Parallel tracks.** Phase 16 (Android) may start any time after Phase 7, and Phase 17 (Windows) after Phase 15, if the owner wants them earlier; they consume the same API. Phase 3's design system work can overlap the end of Phase 2. Phase 18 can start once Phase 13 has produced real cost data.
+**Web first ([ADR-0016](../adr/0016-web-first.md)).** Every feature ships on the web first and completely; the native apps implement features the web already has, against the same API, and never lead.
+
+**Parallel tracks.** Phase 16 (Android) may start any time after Phase 7, and Phase 17 (Windows) after Phase 15, if the owner wants them earlier; they consume the same API and implement only features the web already has. Phase 3's design system work can overlap the end of Phase 2. Phase 18 can start once Phase 13 has produced real cost data.
 
 ## 3. Dependency map
 
