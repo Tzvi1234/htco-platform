@@ -7,18 +7,18 @@
 | **Size** | M |
 | **Depends on** | Phase 1 |
 | **Requirements** | FR-ADM-01, FR-AUD-01, FR-IAM-01, FR-IAM-02, FR-IAM-03, FR-IAM-04 |
-| **Status** | In progress: 2.1 (database workflow) and 2.4 part 1 (policy engine) merged |
+| **Status** | In progress: 2.1, 2.2 and 2.4 part 1 merged |
 
 ## Progress
 
 - [x] 2.1 Database workflow
-- [ ] 2.2 Identity and access schema with RLS
+- [x] 2.2 Identity and access schema with RLS
 - [ ] 2.3 Authentication in the API
 - [ ] 2.4 Policy engine v0 and first endpoints
 - [ ] 2.5 Audit writer and bootstrap
 - [ ] 2.6 User and shop-access management (API)
 
-Slice 2.1 is built without the Supabase project and without local Docker on the owner's computer (WSL2 needs Windows' Virtual Machine Platform): CI runs Postgres from the Supabase CLI in the `database` job. The seed (`just seed`) needs the identity tables and moves to slice 2.2.
+Slice 2.1 is built without the Supabase project and without local Docker on the owner's computer (WSL2 needs Windows' Virtual Machine Platform): CI runs Postgres from the Supabase CLI in the `database` job. The seed (`just seed`) needs the identity tables and arrived with slice 2.2.
 
 Slice 2.4 started early with its pure part: policy engine v0 (`htco_application.access.policy`), which needs no database. Its endpoints (`/v1/me`, `/v1/shops`) follow slices 2.1 to 2.3.
 

@@ -119,6 +119,8 @@ jobs:
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Start Postgres and apply every migration
         run: supabase db start
+      - name: Re-apply every migration and the seed
+        run: supabase db reset
       - name: Database tests (pgTAP)
         run: supabase test db
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0

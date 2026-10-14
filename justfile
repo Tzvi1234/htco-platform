@@ -70,9 +70,12 @@ db-start:
 db-stop:
     supabase stop
 
-# Drop the local database and re-apply every migration (and the seed, once it exists)
+# Drop the local database and re-apply every migration and the seed
 db-reset:
     supabase db reset
+
+# Local data: two organizations, their shops, one user per role (supabase/seed.sql, via a reset)
+seed: db-reset
 
 # Database tests (pgTAP in supabase/tests)
 db-test:
