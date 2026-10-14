@@ -33,3 +33,14 @@
 | AC-2.4.1 | 177 tests in `tests/application/test_access_policy.py` | Red first: 113 failing against a deny-everything stub. Drift checks: granting the Viewer buyer contact in code failed 2 tests; granting the Viewer the audit log in the doc failed 2 tests; both reverted. `uv run just check`: domain and application at 100% branch coverage. | Pass |
 
 **Open issues:** AC-2.4.2 and AC-2.4.3 (endpoints, part 2).
+
+### Verification — 2.1 — 2026-10-14
+
+| AC | Evidence | Result |
+|---|---|---|
+| AC-2.1.1 | CI run 38573775759, job `database`: `supabase db start` on a fresh runner applied every migration | Pass |
+| AC-2.1.2 | CI run 38574471491: a deliberately failing assertion (`99_red_demo.test.sql`) failed the `database` job (`Failed test 1 … Looks like you failed 1 test of 1`) and therefore `ci-gate`; reverted in the next commit | Pass |
+| AC-2.1.3 | CI run 38573775759, job `database`: `test_readyz__database_goes_away_and_comes_back__503_then_200` against real Postgres; locally the unit and composition-root tests (714 passed) | Pass |
+| AC-2.1.4 | `migrate.yml` reviewed and linted (actionlint, zizmor); not run, because no deployed project exists yet | Open until the development project exists |
+
+Local note: Docker Desktop's engine did not start on the development machine during this slice, so the database tests ran only in CI.

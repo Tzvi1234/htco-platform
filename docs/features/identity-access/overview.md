@@ -17,7 +17,7 @@ The security spine: who belongs to which organization, with which role, on which
 | ID | Criterion | Slice | Status |
 |---|---|---|---|
 | AC-2.1.1 | A fresh clone can start the local stack and apply all migrations with one command (`just db-start`). | 2.1 | Pass in CI (database job); not yet run on the owner's machine (Docker) |
-| AC-2.1.2 | A failing pgTAP test fails CI. | 2.1 | Pass (CI `database` job runs `supabase test db`; demonstrated in the pull request) |
+| AC-2.1.2 | A failing pgTAP test fails CI. | 2.1 | Pass (demonstrated in CI run 38574471491) |
 | AC-2.1.3 | `/readyz` returns 503 when the database is unreachable and 200 when it is back, without restarting the app. | 2.1 | Pass in CI (database job) |
 | AC-2.1.4 | The production migration workflow runs only when the owner starts it, shows a dry-run first, and records the applied version. | 2.1 | Written; first real run when the development project exists |
 | AC-2.4.1 | For every role in the matrix, a parametrized test asserts allowed and denied capabilities. | 2.4 | Pass |
