@@ -53,6 +53,16 @@
 
 ## Verification evidence
 
+### Verification — 1.5 (part 1) — 2026-10-14
+
+| Acceptance criterion | Covered by tests | Verified for real | Result |
+|---|---|---|---|
+| AC-1.5.2 | `tests/infra/test_dockerfile.py` | CI run 38495521534, job `image`: `Image user: 10001:10001`; without `HTCO_ENVIRONMENT` the container exited 78; with `--read-only --cap-drop ALL --security-opt no-new-privileges` it answered `{"status":"ok"}` and `{"status":"ready","checks":{"configuration":"ok"}}` and logged `api.starting` as JSON on `0.0.0.0:8080` | Pass |
+
+**Adversarial checks run:** the first run failed because Docker's port proxy resets connections until the app listens (`curl: (56) Recv failure`); the probe now retries on any error. Grype v0.120.1: no high or critical findings; two medium findings in CPython 3.14.8 (CVE-2025-15367, CVE-2026-12345), fixed only in 3.15 pre-releases.
+**Deployed check:** part 2.
+**Open issues:** AC-1.5.1, AC-1.5.3, AC-1.5.4 (part 2).
+
 ### Verification — 1.3 — 2026-10-14
 
 | Acceptance criterion | Covered by tests | Verified for real | Result |
