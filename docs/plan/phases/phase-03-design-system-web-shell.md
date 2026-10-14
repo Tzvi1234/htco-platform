@@ -7,7 +7,7 @@
 | **Size** | L |
 | **Depends on** | Phase 2 |
 | **Requirements** | FR-ADM-01, FR-IAM-01, FR-IAM-02, FR-IAM-05, FR-IAM-06 |
-| **Status** | In progress: 3.1, 3.2 and 3.3 (part 1) in htco-clients pull requests #1–#4 |
+| **Status** | In progress: 3.1, 3.2 and 3.3 (part 1) merged in htco-clients; 3.5 part 1 (BFF sign-in, sessions, CSRF) in htco-platform |
 
 ## Progress
 
@@ -21,7 +21,7 @@
 - [ ] 3.8 Web deployment
 - [ ] 3.9 Administration screens
 
-Slices 3.1 to 3.3 need no backend, so they started early (the plan lets design-system work overlap Phase 2). Slice 3.1 ships in two parts: workspace tooling and CI first; the logical-CSS lint rule with the web app (3.3), and Storybook with axe with the core components (3.4). Slice 3.3 ships in two parts: the shell, languages, themes and states first ([htco-clients#4](https://github.com/Tzvi1234/htco-clients/pull/4)); the Playwright journeys with axe and screenshots second. The token pipeline's `HighContrast` XAML dictionary moves to Phase 17, with the Windows app ([client ADR-0003](https://github.com/Tzvi1234/htco-clients/blob/main/docs/adr/0003-design-token-pipeline.md)).
+Slices 3.1 to 3.3 need no backend, so they started early (the plan lets design-system work overlap Phase 2). Slice 3.1 ships in two parts: workspace tooling and CI first; the logical-CSS lint rule with the web app (3.3), and Storybook with axe with the core components (3.4). Slice 3.3 ships in two parts: the shell, languages, themes and states first ([htco-clients#4](https://github.com/Tzvi1234/htco-clients/pull/4)); the Playwright journeys with axe and screenshots second. Slice 3.5 ships in three parts: sign-in, sessions and CSRF first; MFA enrollment and verification, step-up, recovery and the session list second; password reset and email verification third, once an email provider sends the Auth emails ([docs/features/auth-bff](../../features/auth-bff/overview.md)). The token pipeline's `HighContrast` XAML dictionary moves to Phase 17, with the Windows app ([client ADR-0003](https://github.com/Tzvi1234/htco-clients/blob/main/docs/adr/0003-design-token-pipeline.md)).
 
 ## Goal
 

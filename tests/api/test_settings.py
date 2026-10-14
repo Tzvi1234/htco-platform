@@ -53,3 +53,25 @@ def test_blank_database_url__is_refused_when_deployed() -> None:
         ApiSettings.model_validate(
             {"environment": "production", "database_url": " ", "supabase_url": "https://a.b"}
         )
+
+
+def test_web_sign_in_settings__origins_and_keys() -> None:
+    import base64  # noqa: PLC0415 - local to this test
+
+    key = base64.b64encode(b"k" * 32).decode()
+    settings = ApiSettings.model_validate(
+        {
+            "environment": "local",
+            "session_key": key,
+            "supabase_publishable_key": "sb_publishable_x",
+            "web_origins": "https://app.ht-co.app, http://localhost:5173",
+        }
+    )
+    assert settings.web_origin_list == ("https://app.ht-co.app", "http://localhost:5173")
+    assert settings.session_key is not None
+
+
+@pytest.mark.parametrize("key", ["not-base64!", "c2hvcnQ="])
+def test_session_key__must_be_a_32_byte_base64_key(key: str) -> None:
+    with pytest.raises(ValidationError, match="HTCO_SESSION_KEY"):
+        ApiSettings.model_validate({"environment": "local", "session_key": key})

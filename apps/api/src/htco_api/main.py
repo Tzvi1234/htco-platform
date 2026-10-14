@@ -1,8 +1,9 @@
 """Process entry point and composition root: `python -m htco_api`."""
 
+import contextlib
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import httpx
@@ -13,15 +14,24 @@ from opentelemetry.sdk.trace import TracerProvider
 
 from htco_api.access import InvitationFailedError
 from htco_api.app import AppOptions, Resource, create_app
-from htco_api.auth import Authenticator
+from htco_api.auth import Authenticator, VerifiedTokenReader
+from htco_api.problems import AUTH_UNAVAILABLE, ProblemError
 from htco_api.settings import ApiSettings, Environment
+from htco_api.web_auth import WebAuth
 from htco_application.access.management import AccessStore, InviteeAlreadyRegisteredError
 from htco_application.shops import ShopReader
+from htco_application.web_sessions import (
+    CredentialsRefusedError,
+    IssuedTokens,
+    TooManyAttemptsError,
+)
 from htco_persistence.access import PostgresAccessStore
 from htco_persistence.database import Database
 from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.readiness import DatabaseCheck
 from htco_persistence.shops import PostgresShopReader
+from htco_persistence.web_sessions import PostgresSessionStore
+from htco_platform.crypto import Sealer
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter, SentryErrorReporter
 from htco_platform.http import new_async_http_client
 from htco_platform.jwt import HttpJwksSource, JwtVerifier
@@ -32,6 +42,13 @@ from htco_platform.supabase_admin import (
     SupabaseInviter,
 )
 from htco_platform.supabase_admin import InvitationFailedError as SupabaseInvitationError
+from htco_platform.supabase_auth import (
+    AuthServiceError,
+    AuthTokens,
+    InvalidCredentialsError,
+    RateLimitedError,
+    SupabaseAuth,
+)
 from htco_platform.tracing import new_tracer_provider
 
 # Supabase access tokens for signed-in users carry this audience.
@@ -83,6 +100,7 @@ def main(
         # Off locally without HTCO_SUPABASE_URL and HTCO_DATABASE_URL: authenticated routes 503.
         authentication="on" if wiring.authenticator is not None else "off",
         invitations="on" if wiring.inviter is not None else "off",
+        web_sign_in="on" if wiring.web_auth is not None else "off",
     )
     readiness_checks = (
         [DatabaseCheck(settings.database_url.get_secret_value())]
@@ -98,6 +116,7 @@ def main(
         shops=wiring.shops,
         access=wiring.access,
         inviter=wiring.inviter,
+        web_auth=wiring.web_auth,
         resources=wiring.resources,
     )
     try:
@@ -135,12 +154,42 @@ class _Inviter:
             raise InvitationFailedError(str(error)) from None
 
 
+class _AuthProvider:
+    """Supabase Auth, speaking the application's and the API's error types."""
+
+    def __init__(self, auth: SupabaseAuth) -> None:
+        self._auth = auth
+
+    async def sign_in_with_password(self, email: str, password: str) -> IssuedTokens:
+        return await self._call(self._auth.sign_in_with_password(email, password))
+
+    async def refresh(self, refresh_token: str) -> IssuedTokens:
+        return await self._call(self._auth.refresh(refresh_token))
+
+    async def sign_out(self, access_token: str) -> None:
+        with contextlib.suppress(AuthServiceError):  # best effort: our session is already gone
+            await self._auth.sign_out(access_token)
+
+    @staticmethod
+    async def _call(pending: Awaitable[AuthTokens]) -> IssuedTokens:
+        try:
+            tokens = await pending
+        except InvalidCredentialsError:
+            raise CredentialsRefusedError from None
+        except RateLimitedError:
+            raise TooManyAttemptsError("the sign-in service is rate limiting") from None
+        except AuthServiceError:
+            raise ProblemError(AUTH_UNAVAILABLE) from None
+        return IssuedTokens(tokens.access_token, tokens.refresh_token, tokens.expires_at)
+
+
 @dataclass(frozen=True)
 class _Wiring:
     authenticator: Authenticator | None = None
     shops: ShopReader | None = None
     access: AccessStore | None = None
     inviter: _Inviter | None = None
+    web_auth: WebAuth | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -172,7 +221,24 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
                 else str(settings.invite_redirect_url),
             )
         )
+    web_auth = None
+    if settings.session_key is not None and settings.supabase_publishable_key is not None:
+        web_auth = WebAuth(
+            auth=_AuthProvider(
+                SupabaseAuth(
+                    http,
+                    supabase_url=str(settings.supabase_url),
+                    publishable_key=settings.supabase_publishable_key,
+                )
+            ),
+            tokens=VerifiedTokenReader(verifier),
+            store=PostgresSessionStore(
+                database, Sealer.from_base64(settings.session_key.get_secret_value())
+            ),
+            allowed_origins=settings.web_origin_list,
+        )
     return _Wiring(
+        web_auth=web_auth,
         authenticator=Authenticator(verifier, PostgresMembershipReader(database)),
         shops=PostgresShopReader(database),
         access=PostgresAccessStore(database),

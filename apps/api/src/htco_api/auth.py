@@ -24,6 +24,7 @@ from htco_api.problems import (
     ProblemError,
     ProblemType,
 )
+from htco_api.web_auth import SESSION_COOKIE, WebAuth, resume
 from htco_application.access.authentication import (
     AuthContext,
     AuthenticatedUser,
@@ -31,6 +32,7 @@ from htco_application.access.authentication import (
     NoMembershipError,
     authenticate,
 )
+from htco_application.web_sessions import SessionEndedError
 from htco_domain.identity import AssuranceLevel
 from htco_platform.jwt import InvalidTokenError, KeySetUnavailableError, TokenProblem, VerifiedToken
 
@@ -69,16 +71,38 @@ class Authenticator:
         except KeySetUnavailableError:
             _log.warning("auth.unavailable", reason="key set unavailable")
             raise ProblemError(AUTH_UNAVAILABLE) from None
-        user = AuthenticatedUser(
-            user_id=verified.subject,
-            assurance=AssuranceLevel(verified.assurance),
-            session_id=verified.session_id,
-            claims=verified.claims,
-        )
+        return await self.authenticate_user(_user_of(verified))
+
+    async def authenticate_user(self, user: AuthenticatedUser) -> AuthContext:
+        """The auth context of a user already verified (a bearer token, or a web session)."""
         try:
             return await authenticate(user, self._memberships)
         except NoMembershipError:
             raise _rejected(NO_MEMBERSHIP) from None
+
+
+def _user_of(verified: VerifiedToken) -> AuthenticatedUser:
+    return AuthenticatedUser(
+        user_id=verified.subject,
+        assurance=AssuranceLevel(verified.assurance),
+        session_id=verified.session_id,
+        claims=verified.claims,
+    )
+
+
+class VerifiedTokenReader:
+    """Reads the user out of a web session's access token, verifying it like a bearer token."""
+
+    def __init__(self, verifier: TokenVerifier) -> None:
+        self._verifier = verifier
+
+    async def read(self, access_token: str) -> AuthenticatedUser:
+        try:
+            return _user_of(await self._verifier.verify(access_token))
+        except InvalidTokenError:
+            raise SessionEndedError("the session's access token is not valid") from None
+        except KeySetUnavailableError:
+            raise ProblemError(AUTH_UNAVAILABLE) from None
 
 
 def _bearer_token(authorization: str | None) -> str | None:
@@ -103,13 +127,21 @@ async def require_auth(
     _credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_BEARER)],
 ) -> AuthContext:
     authorization = request.headers.get("authorization")
-    if _bearer_token(authorization) is None:  # no token: 401 even when sign-in is unavailable
+    web = getattr(request.app.state, "web_auth", None)
+    has_bearer = _bearer_token(authorization) is not None
+    has_cookie = isinstance(web, WebAuth) and bool(request.cookies.get(SESSION_COOKIE))
+    if not has_bearer and not has_cookie:  # no credentials: 401 even when sign-in is unavailable
         raise _rejected(UNAUTHENTICATED, _CHALLENGE)
     authenticator = getattr(request.app.state, "authenticator", None)
     if not isinstance(authenticator, Authenticator):
         _log.warning("auth.unavailable", reason="no authenticator configured")
         raise ProblemError(AUTH_UNAVAILABLE)
-    return await authenticator.authenticate(authorization)
+    if has_bearer:
+        return await authenticator.authenticate(authorization)
+    if not isinstance(web, WebAuth):  # pragma: no cover - has_cookie implies it
+        raise ProblemError(AUTH_UNAVAILABLE)
+    active = await resume(request, web, request.app.state.clock())
+    return await authenticator.authenticate_user(active.user)
 
 
 CurrentAuth = Annotated[AuthContext, Depends(require_auth)]

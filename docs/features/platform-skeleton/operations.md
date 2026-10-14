@@ -13,6 +13,9 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 | `HTCO_DATABASE_URL` | unset locally; **required** in staging and production (secret) | Postgres connection string; `/readyz` checks it with a one-second connect timeout |
 | `HTCO_SUPABASE_URL` | unset locally; **required** (HTTPS) in staging and production | Supabase project URL; the API verifies access tokens against `<url>/auth/v1/.well-known/jwks.json` with issuer `<url>/auth/v1`. Authentication is on only when this and `HTCO_DATABASE_URL` are set (`authentication` in `api.starting`); otherwise authenticated routes answer 503 |
 | `HTCO_SUPABASE_SECRET_KEY` | unset (secret) | Supabase secret key, used only for the Auth admin `invite` call (slice 2.6), never for database queries; without it invitations answer 503 (`invitations` in `api.starting`) |
+| `HTCO_SESSION_KEY` | unset (secret) | Seals web sessions' Supabase tokens (32 random bytes, base64); with `HTCO_SUPABASE_PUBLISHABLE_KEY` it turns web sign-in on (`web_sign_in` in `api.starting`) |
+| `HTCO_SUPABASE_PUBLISHABLE_KEY` | unset | The project's publishable key for Supabase Auth calls (not secret) |
+| `HTCO_WEB_ORIGINS` | empty | Comma-separated web app origins allowed to send cookie requests (CSRF check) |
 | `HTCO_INVITE_REDIRECT_URL` | unset | Where the invitation email's link lands (the web app's welcome page) |
 | `HTCO_RELEASE` | unset | Build identifier (git SHA) attached to error reports and the `api.starting` line |
 | Python version | `.python-version` (3.14.8) | uv installs and uses exactly this interpreter |

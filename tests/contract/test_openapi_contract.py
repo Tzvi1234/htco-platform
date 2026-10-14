@@ -71,6 +71,9 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "remove_organization_member",
         "grant_member_shop",
         "revoke_member_shop",
+        "sign_in_web",
+        "current_session",
+        "sign_out_web",
     }
 
 
