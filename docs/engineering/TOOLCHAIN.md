@@ -45,10 +45,12 @@
 | Git hooks | prek (pre-commit compatible), in the `dev` group | 0.5.5 | Ruff, gitleaks, file hygiene and the commit-message check; CI re-runs every check |
 | Tests | pytest + AnyIO plugin | 9.1.1 / 4.15.1 | No pytest-asyncio. Third-party plugins load only from an allow-list (`--disable-plugin-autoload -p anyio -p hypothesispytest`); warnings are errors. |
 | Property-based | Hypothesis | 6.168.5 | |
-| Snapshots | syrupy | Planned 6.x (slice 1.3) | |
+| Snapshots | syrupy | Planned 6.x (Phase 8, prompt templates) | The OpenAPI contract is compared as a committed file instead (`tools/openapi.py`), so reviewers see a plain YAML diff |
 | Coverage | coverage.py (`coverage run -m pytest`) | 7.16.2 | Branch coverage; floors per layer in the `test` recipe. pytest-cov is not used. |
 | Mutation | mutmut | Planned 3.x (Phase 5) | Linux CI only (needs `fork`) |
-| API fuzzing | Schemathesis | Planned 4.x (slice 1.3) | In-process on pull requests |
+| API fuzzing | Schemathesis | Locked 4.29.4 | Cases generated from the committed contract, sent in-process through Starlette's TestClient, checked with `case.validate_response` |
+| Contract diff | oasdiff 1.33.0 (release binary, SHA-256 pinned in `ci.yml`) | | `oasdiff breaking` against the pull request's base; any error-level change fails the `contract` job |
+| YAML | PyYAML 6.0.3 (with `types-pyyaml`) | | Renders the contract without anchors or aliases |
 | HTTP mocks | respx | Planned 0.23.x | |
 | Database | Supabase CLI | Planned 2.120.x (slice 2.1) | Local stack, migrations, pgTAP |
 
@@ -61,7 +63,7 @@
 | Static analysis | Ruff `S` rules on every pull request; Semgrep CE weekly | Semgrep registry rules are licensed for internal use |
 | Container | Grype, or Trivy pinned by full commit SHA | Trivy's GitHub Action tags were compromised in March 2026 |
 | Workflows | zizmor 1.30.1, actionlint 1.7.12 (`actionlint-py`, which verifies the binary against pinned checksums), `tools/check_action_pins.py`, `permissions: {}` by default | Installed on demand from the `ci` dependency group (`just workflows`). Actions in use: `actions/checkout` v7.0.1, `astral-sh/setup-uv` v10.2.0 (newest release older than seven days). |
-| CI gate | `.github/workflows/ci.yml` with one required status, `ci-gate` | Jobs: checks, tests, security, workflows, test-integrity (`tools/test_integrity.py`), pr-title (`tools/conventional_commit.py`); `contract` and `image` jobs arrive with slices 1.3 and 1.5 |
+| CI gate | `.github/workflows/ci.yml` with one required status, `ci-gate` | Jobs: checks, tests, security, workflows, contract (oasdiff), test-integrity (`tools/test_integrity.py`), pr-title (`tools/conventional_commit.py`); the `image` job arrives with slice 1.5 |
 | Updates | Renovate (`.github/renovate.json5`: seven-day minimum release age, weekly schedule, lock-file maintenance, Actions pinned by digest); Dependabot alerts on | Needs the Renovate GitHub App installed by the owner |
 | SBOM | Syft (CycloneDX) attached to releases | |
 

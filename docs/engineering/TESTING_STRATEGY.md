@@ -89,7 +89,7 @@ Exact versions are pinned in `uv.lock` when Phase 1 creates it; [TOOLCHAIN.md](T
 | Property-based | Hypothesis | Money and state-machine invariants |
 | HTTP fixtures | respx | For httpx-based adapters (Etsy, Resend, providers) |
 | Time control | Injected `Clock` port; time-machine where a library reads the clock | |
-| Snapshots | syrupy | OpenAPI output and prompt templates only; never auto-updated in CI |
+| Snapshots | syrupy for prompt templates (Phase 8); the OpenAPI contract is a committed file compared by `tools/openapi.py` | Never auto-updated in CI |
 | Database | Supabase CLI local stack (`supabase db start`), pgTAP via `supabase test db`, basejump test helpers | Each test isolated in a rolled-back transaction |
 | API contract | Schemathesis in-process on every pull request; oasdiff breaking-change check | Never pointed at production |
 | Coverage | coverage.py with branch coverage | |

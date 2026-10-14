@@ -37,6 +37,16 @@ workflows:
     uv run --group ci zizmor --min-severity low .github
     uv run python -m tools.check_action_pins
 
+# Regenerate packages/contracts/openapi.yaml from the API; review the diff before committing
+openapi:
+    uv run python -m tools.openapi --write
+
+# Contract checks: the committed OpenAPI matches the API and Schemathesis finds no violations
+# (the breaking-change check, oasdiff, runs in CI against the pull request's base)
+contract:
+    uv run python -m tools.openapi --check
+    uv run pytest tests/contract -q
+
 # Run all tests with branch coverage and the per-layer coverage floors
 test:
     uv run coverage erase

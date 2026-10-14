@@ -8,6 +8,8 @@ exclude-newer = "7 days"
 
 [tool.uv.workspace]
 members = ["packages/*", "apps/*"]
+# Contracts are language-neutral files (OpenAPI, event schemas), not a Python package.
+exclude = ["packages/contracts"]
 
 [dependency-groups]
 dev = [
@@ -19,8 +21,11 @@ dev = [
   "mypy>=2.4,<3",
   "prek>=0.5,<0.6",
   "pytest>=9.1,<10",
+  "pyyaml>=6.0,<7",
   "ruff>=0.16,<0.18",
   "rust-just>=1.58,<2",
+  "schemathesis>=4.20,<5",
+  "types-pyyaml>=6.0,<7",
 ]
 # Workflow linters, installed only when used: `uv run --group ci …` (`just workflows`).
 ci = [
@@ -99,6 +104,7 @@ addopts = [
   "--disable-plugin-autoload",
   "-p", "anyio",
   "-p", "hypothesispytest",
+  "-p", "schemathesis",
 ]
 strict = true
 filterwarnings = [
