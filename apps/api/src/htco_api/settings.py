@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Literal, Self
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +29,20 @@ class ApiSettings(BaseSettings):
     release: str | None = None
     # Postgres connection string (a secret). Optional locally; required when deployed.
     database_url: SecretStr | None = None
+    # The Supabase project (`https://<ref>.supabase.co`; locally `http://127.0.0.1:54321`). Its
+    # sign-in service issues the access tokens the API verifies. Required when deployed.
+    supabase_url: AnyHttpUrl | None = None
+
+    @property
+    def auth_issuer(self) -> str | None:
+        if self.supabase_url is None:
+            return None
+        return str(self.supabase_url).rstrip("/") + "/auth/v1"
+
+    @property
+    def auth_jwks_url(self) -> str | None:
+        issuer = self.auth_issuer
+        return None if issuer is None else issuer + "/.well-known/jwks.json"
 
     @field_validator("sentry_dsn", mode="before")
     @classmethod
@@ -44,4 +58,14 @@ class ApiSettings(BaseSettings):
             self.database_url is None
         ):
             raise ValueError("HTCO_DATABASE_URL is required in staging and production")
+        return self
+
+    @model_validator(mode="after")
+    def _deployed_needs_sign_in(self) -> Self:
+        if self.environment not in {Environment.STAGING, Environment.PRODUCTION}:
+            return self
+        if self.supabase_url is None:
+            raise ValueError("HTCO_SUPABASE_URL is required in staging and production")
+        if self.supabase_url.scheme != "https":
+            raise ValueError("HTCO_SUPABASE_URL must use HTTPS in staging and production")
         return self

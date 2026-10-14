@@ -131,7 +131,7 @@ Status words: **COMPLETE** (merged, verified), **PARTIAL** (some slices or parts
 |---|---|---|---|---|
 | 0 | PARTIAL | 2026-10-14 | | Docs, repositories and design system created; owner prerequisites open ([issue #8](https://github.com/Tzvi1234/htco-platform/issues/8)) |
 | 1 | PARTIAL | 2026-10-14 | | 1.1–1.4 and 1.6 complete (rulesets active 2026-10-14); 1.5 and 1.7 complete except deploy and real Sentry and alerts (BLOCKED: DigitalOcean API token and Sentry DSN as secrets; accounts exist). PRs #1–#7, #11 |
-| 2 | PARTIAL | 2026-10-14 | | Policy engine v0 for human roles (2.4 part 1, PR #10); living-office domain foundation (PR for ADR-0012); 2.1 database workflow (PR #16); 2.2 identity schema with RLS (PR #21); Supabase project `htco` created (Frankfurt, Free plan) |
+| 2 | PARTIAL | 2026-10-14 | | Policy engine v0 for human roles (2.4 part 1, PR #10); living-office domain foundation (PR for ADR-0012); 2.1 database workflow (PR #16); 2.2 identity schema with RLS (PR #21); 2.3 authentication in the API; Supabase project `htco` created (Frankfurt, Free plan) |
 | 3 | PARTIAL | 2026-10-14 | | 3.1, 3.2 and 3.3 part 1 in clients PRs #1–#4 |
 | 4–21 | PLANNED | | | Foundations for 5, 7, 8, 9, 10 and 18 exist as tested domain code (ADR-0012 validation log) |
 

@@ -10,6 +10,7 @@ dependencies = [
   "opentelemetry-instrumentation-httpx>=0.66b0,<0.67",
   "opentelemetry-sdk>=1.45,<2",
   "pydantic-settings>=2.15,<3",
+  "pyjwt[crypto]>=2.10,<3",
   "sentry-sdk>=2.70,<3",
   "structlog>=26.1,<27",
 ]
