@@ -97,6 +97,17 @@ flowchart LR
 
 `HTCO_ENVIRONMENT` is deliberately not set in the image: the platform must say which environment it runs, and the image refuses to start (exit 78) until it does.
 
+## Agent guardrails (slice 1.6, part 1)
+
+`.claude/settings.json` wires two hooks to `tools/claude_hooks.py` (run with `uv run --directory "$CLAUDE_PROJECT_DIR"`):
+
+| Event | Hook | Effect |
+|---|---|---|
+| `PostToolUse` on `Edit` or `Write` | `format` | A Python file inside the project is formatted (`ruff format`) and safe fixes are applied (`ruff check --fix`). Never blocks. |
+| `Stop` | `stop` | If `git status` shows changed Python, TOML, `uv.lock` or `justfile` files, runs `just check-fast`. On failure: exit 2 with the last 60 lines of output, so the agent must keep working. If it still fails on the next attempt (`stop_hook_active`), the turn may end, but the user sees a warning (`systemMessage`), never silence. |
+
+Documentation-only turns skip the check, so the hook costs nothing when no code changed. Claude Code also caps consecutive stop-hook continuations (8 by default).
+
 ## Continuous integration (slice 1.4)
 
 `.github/workflows/ci.yml` runs on every pull request (opened, updated, reopened or edited) and on every push to `main`.
@@ -139,6 +150,7 @@ flowchart LR
 | Committed-file comparison for the contract | syrupy snapshot | The contract must live at a fixed path that clients and oasdiff read; a snapshot file would duplicate it. |
 | Non-editable install into a venv copied to a clean stage | Install into the system interpreter; ship the source tree | The runtime has no uv, compilers, tests or sources (ASVS 15.2.3), and the venv is immutable (root-owned, read-only file system in CI). |
 | Grype fails only on fixable high or critical findings | Fail on every finding | Unfixable base-image findings would block every build with nothing to do; they are reviewed with each base-image update. |
+| Stop hook blocks once, then warns | Block until green | An environment problem (for example no network for uv) would otherwise trap the agent; the warning keeps the failure visible. |
 | One `ci-gate` job as the required status | Requiring every job in the branch rules | New jobs are protected automatically; the rules never drift from the workflow. |
 | Our own test-integrity and SHA-pin scripts | Marketplace actions | Small, tested, no extra third-party code with access to the workflow. |
 | Scanner binaries with pinned checksums | gitleaks and osv-scanner GitHub Actions | The gitleaks action needs write access to comment on pull requests; a checksum-verified binary needs none. |

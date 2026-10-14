@@ -14,6 +14,7 @@
 | Contract | The committed contract matches the app, drift and missing-file reports, OpenAPI 3.1 with stable operation IDs, the request-ID header and problem+json on every response, deterministic rendering; Schemathesis on every operation | `tests/contract/` |
 | Image policy | Base images pinned by digest, non-root runtime user, locked API-only install, allow-list build context | `tests/infra/test_dockerfile.py` |
 | Image (CI) | Build, user, exit 78 without settings, read-only run answering `/healthz` and `/readyz`, Grype scan | CI `image` job |
+| Agent hooks | Format hook (Python in and outside the project, other files, missing path); stop hook (pass, fail, retry with warning, skipped without code changes, output tail); `git status -z` parsing with renames; command line; settings wiring | `tests/tools/test_claude_hooks.py` |
 | CI | The pipeline itself, on GitHub | `.github/workflows/ci.yml` (verification below) |
 
 ## Acceptance criteria coverage
@@ -34,6 +35,7 @@
 | AC-1.3.2 | The CI `contract` job (oasdiff); verified with the same binary locally (below) |
 | AC-1.3.3 | `test_api__every_operation__conforms_to_the_contract` (Schemathesis) |
 | AC-1.5.2 | `test_dockerfile__runtime_stage__runs_as_a_non_root_user`; CI `image` job "Runs as a non-root user" |
+| AC-1.6.1 | `test_stop__checks_fail__blocks_and_tells_the_agent_why`, `test_stop__still_failing_after_one_retry__lets_go_but_warns_the_user`, `test_main__stop_with_failing_checks__exits_2_with_the_reason_on_stderr`, `test_settings__the_end_of_a_turn_triggers_the_check_hook` |
 | AC-1.4.1 | The `ci-gate` job (verified on GitHub, below) |
 | AC-1.4.2 | `test_main__skip_added_without_explanation__fails`, `test_main__skip_added_with_explanation__passes`, `test_diff_findings__skip_or_xfail_added_in_tests__is_reported` |
 | AC-1.4.3 | `test_unpinned_uses__*`, `test_main__workflow_with_unpinned_action__fails_naming_file_and_line`; runs in the `workflows` job |
@@ -52,6 +54,16 @@
 - Not applicable yet: time, money, tenancy, concurrency (no business code).
 
 ## Verification evidence
+
+### Verification — 1.6 (part 1) — 2026-10-14
+
+| Acceptance criterion | Covered by tests | Verified for real | Result |
+|---|---|---|---|
+| AC-1.6.1 | `tests/tools/test_claude_hooks.py` | With a lint-clean failing test in the tree, the exact `Stop` command from `.claude/settings.json` exited 2 with `FAILED tests/tools/test_zz_red.py::test_deliberately_failing - assert 1 == 2`; repeated with `stop_hook_active: true` it exited 0 and printed the `systemMessage` warning; after removing the test it exited 0. The `PostToolUse` command reformatted a messy file and removed its unused import. | Pass |
+| AC-1.6.2 | — | Needs GitHub Pro (owner task) | Open |
+
+**Deployed check:** not applicable.
+**Open issues:** the `main` ruleset (part 2).
 
 ### Verification — 1.5 (part 1) — 2026-10-14
 

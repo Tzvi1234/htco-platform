@@ -33,6 +33,11 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 2. **Fix:** a Python package: raise its lock (`uv lock --upgrade-package <name>`, respecting the release age); an OS package: take the new base-image digest (Renovate proposes it).
 3. **Never** lower the severity cutoff to get green; an exception needs the owner's agreement, an issue and an expiry date.
 
+### The Claude Code stop hook keeps refusing to end a turn
+1. **Check:** the hook's message names the failing recipe step and shows the last 60 lines of `just check-fast`.
+2. **Fix:** fix the code or the test that is wrong; never weaken a test (ER-TEST-02).
+3. **If the failure is environmental** (for example uv cannot reach PyPI): the hook lets the turn end on the next attempt with a visible warning; report it to the owner instead of committing.
+
 ### The API exits immediately with code 78
 1. **Check:** the last stderr lines: `htco-api: invalid configuration` followed by one line per variable.
 2. **Fix:** set or correct the named variables (values are never printed; check them in the secret store).
