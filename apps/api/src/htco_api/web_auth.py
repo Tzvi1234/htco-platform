@@ -7,6 +7,7 @@ unsafe request that relies on the cookie, and the sign-in itself (login CSRF), m
 `Sec-Fetch-Site` (AC-3.5.2). Bearer requests from native apps carry no cookie and skip this.
 """
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any
@@ -17,10 +18,25 @@ from pydantic import BaseModel, Field
 
 from htco_api.problems import (
     AUTH_UNAVAILABLE,
+    NOT_FOUND,
     PROBLEM_MEDIA_TYPE,
     Problem,
     ProblemError,
     ProblemType,
+    ValidationProblem,
+)
+from htco_application.mfa import (
+    MfaCodeRefusedError,
+    MfaNotEnrolledError,
+    MfaProvider,
+    SessionDirectory,
+    SessionNotFoundError,
+    list_sessions,
+    mfa_status,
+    revoke_session,
+    start_enrollment,
+    step_up,
+    verify_enrollment,
 )
 from htco_application.web_sessions import (
     ABSOLUTE_LIFETIME,
@@ -29,7 +45,6 @@ from htco_application.web_sessions import (
     AuthProvider,
     ClientInfo,
     SessionEndedError,
-    SessionStore,
     SignInRefusedError,
     TokenReader,
     TooManyAttemptsError,
@@ -65,9 +80,73 @@ SESSION_ENDED = ProblemType(
 class WebAuth:
     auth: AuthProvider
     tokens: TokenReader
-    store: SessionStore
+    store: SessionDirectory
     # The web app's origins, e.g. ("https://app.ht-co.app",).
     allowed_origins: tuple[str, ...]
+    # Authenticator-app enrollment and verification; without it, the MFA routes answer 503.
+    mfa: MfaProvider | None = None
+
+
+MFA_CODE_REFUSED = ProblemType(
+    "mfa-code-refused",
+    "Wrong code",
+    401,
+    "The code from your authenticator app is wrong or expired.",
+)
+MFA_NOT_ENROLLED = ProblemType(
+    "mfa-not-enrolled",
+    "No authenticator app",
+    409,
+    "Set up an authenticator app before confirming with a code.",
+)
+
+
+class EnrollRequest(BaseModel):
+    name: str = Field(default="Authenticator app", min_length=1, max_length=60)
+
+
+class EnrollmentView(BaseModel):
+    factor_id: str
+    qr_code: str
+    secret: str
+    uri: str
+
+
+class VerifyRequest(BaseModel):
+    factor_id: str = Field(min_length=1, max_length=100)
+    code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class StepUpRequest(BaseModel):
+    code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class FactorView(BaseModel):
+    id: str
+    name: str | None
+    verified: bool
+
+
+class MfaView(BaseModel):
+    assurance: str
+    enrolled: bool
+    factors: list[FactorView]
+
+
+class AssuranceView(BaseModel):
+    assurance: str
+
+
+class SessionItem(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    last_seen_at: datetime
+    user_agent: str | None
+    current: bool
+
+
+class SessionList(BaseModel):
+    items: list[SessionItem]
 
 
 class SignInRequest(BaseModel):
@@ -149,7 +228,15 @@ def _problem(description: str) -> dict[str, Any]:
     return {"model": Problem, "content": {PROBLEM_MEDIA_TYPE: {}}, "description": description}
 
 
-def web_auth_router(*, clock: Any) -> APIRouter:
+def _validation(description: str) -> dict[str, Any]:
+    return {
+        "model": ValidationProblem,
+        "content": {PROBLEM_MEDIA_TYPE: {}},
+        "description": description,
+    }
+
+
+def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested function per route
     router = APIRouter(prefix="/v1/auth", tags=["auth"])
     Web = Annotated[WebAuth, Depends(web_auth_of)]  # noqa: N806 - a type alias
 
@@ -160,7 +247,7 @@ def web_auth_router(*, clock: Any) -> APIRouter:
             400: _problem("The body is not valid JSON"),
             401: _problem("Wrong email or password"),
             403: _problem("The request did not come from the web app"),
-            422: _problem("Missing email or password"),
+            422: _validation("Missing email or password"),
             429: _problem("Too many failed sign-ins; see Retry-After"),
             503: _problem("Sign-in is unavailable"),
         },
@@ -183,8 +270,7 @@ def web_auth_router(*, clock: Any) -> APIRouter:
         except SignInRefusedError:
             raise ProblemError(SIGN_IN_REFUSED) from None
         except TooManyAttemptsError:
-            retry = str(int(THROTTLE_WINDOW.total_seconds()))
-            raise ProblemError(TOO_MANY_ATTEMPTS, headers={"Retry-After": retry}) from None
+            raise _too_many() from None
         _set_cookie(response, signed_in.cookie_value)
         response.headers["Cache-Control"] = "no-store"
         return SessionView(
@@ -218,4 +304,153 @@ def web_auth_router(*, clock: Any) -> APIRouter:
         clear_cookie(response)
         return response
 
+    def mfa_of(web: WebAuth) -> MfaProvider:
+        if web.mfa is None:
+            raise ProblemError(AUTH_UNAVAILABLE)
+        return web.mfa
+
+    @router.get(
+        "/mfa",
+        summary="Two-factor status of this session",
+        responses={401: _problem("Not signed in"), 503: _problem("Sign-in is unavailable")},
+    )
+    async def get_mfa_status(request: Request, web: Web) -> MfaView:
+        """The session's assurance and the user's authenticator apps."""
+        active = await resume(request, web, clock())
+        status_ = await mfa_status(active, mfa_of(web))
+        return MfaView(
+            assurance=status_.assurance.value,
+            enrolled=status_.enrolled,
+            factors=[
+                FactorView(id=f.id, name=f.name, verified=f.verified) for f in status_.factors
+            ],
+        )
+
+    @router.post(
+        "/mfa/enroll",
+        summary="Start setting up an authenticator app",
+        responses={
+            400: _problem("The body is not valid JSON"),
+            422: _validation("Invalid name or code"),
+            401: _problem("Not signed in"),
+            403: _problem("The request did not come from the web app"),
+            503: _problem("Sign-in is unavailable"),
+        },
+    )
+    async def start_mfa_enrollment(
+        body: EnrollRequest, request: Request, response: Response, web: Web
+    ) -> EnrollmentView:
+        """Returns the QR code (and the secret, for typing it in) to add to the app."""
+        active = await resume(request, web, clock())
+        enrollment = await start_enrollment(active, mfa_of(web), friendly_name=body.name)
+        response.headers["Cache-Control"] = "no-store"
+        return EnrollmentView(
+            factor_id=enrollment.factor_id,
+            qr_code=enrollment.qr_code,
+            secret=enrollment.secret,
+            uri=enrollment.uri,
+        )
+
+    @router.post(
+        "/mfa/verify",
+        summary="Finish setting up the authenticator app",
+        responses={
+            400: _problem("The body is not valid JSON"),
+            422: _validation("Invalid name or code"),
+            401: _problem("Not signed in, or the code is wrong"),
+            403: _problem("The request did not come from the web app"),
+            429: _problem("Too many wrong codes; see Retry-After"),
+            503: _problem("Sign-in is unavailable"),
+        },
+    )
+    async def verify_mfa_enrollment(
+        body: VerifyRequest, request: Request, web: Web
+    ) -> AssuranceView:
+        """Checks the first code; the session is then signed in with two factors."""
+        active = await resume(request, web, clock())
+        try:
+            await verify_enrollment(
+                active,
+                mfa_of(web),
+                web.store,
+                body.factor_id,
+                body.code,
+                client=client_info(request),
+                now=clock(),
+            )
+        except MfaCodeRefusedError:
+            raise ProblemError(MFA_CODE_REFUSED) from None
+        except TooManyAttemptsError:
+            raise _too_many() from None
+        return AssuranceView(assurance="aal2")
+
+    @router.post(
+        "/step-up",
+        status_code=status.HTTP_204_NO_CONTENT,
+        response_class=Response,
+        summary="Confirm it is you with a code",
+        responses={
+            400: _problem("The body is not valid JSON"),
+            422: _validation("Invalid name or code"),
+            401: _problem("Not signed in, or the code is wrong"),
+            403: _problem("The request did not come from the web app"),
+            409: _problem("No authenticator app is set up"),
+            429: _problem("Too many wrong codes; see Retry-After"),
+            503: _problem("Sign-in is unavailable"),
+        },
+    )
+    async def confirm_step_up(body: StepUpRequest, request: Request, web: Web) -> Response:
+        """Re-entering a code allows sensitive actions for the next ten minutes."""
+        active = await resume(request, web, clock())
+        try:
+            await step_up(
+                active, mfa_of(web), web.store, body.code, client=client_info(request), now=clock()
+            )
+        except MfaCodeRefusedError:
+            raise ProblemError(MFA_CODE_REFUSED) from None
+        except MfaNotEnrolledError:
+            raise ProblemError(MFA_NOT_ENROLLED) from None
+        except TooManyAttemptsError:
+            raise _too_many() from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @router.get(
+        "/sessions",
+        summary="This user's signed-in devices",
+        responses={401: _problem("Not signed in"), 503: _problem("Sign-in is unavailable")},
+    )
+    async def list_web_sessions(request: Request, web: Web) -> SessionList:
+        """Active sessions, newest activity first; `current` marks this browser."""
+        active = await resume(request, web, clock())
+        found = await list_sessions(active, web.store, now=clock())
+        return SessionList(items=[SessionItem(**vars(item)) for item in found])
+
+    @router.delete(
+        "/sessions/{session_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        response_class=Response,
+        summary="Sign out another device",
+        responses={
+            401: _problem("Not signed in"),
+            403: _problem("The request did not come from the web app"),
+            404: _problem("No such session of this user"),
+            422: _problem("Invalid session ID"),
+            503: _problem("Sign-in is unavailable"),
+        },
+    )
+    async def revoke_web_session(session_id: uuid.UUID, request: Request, web: Web) -> Response:
+        """Ends that session here and at Supabase; the device is signed out on its next request."""
+        active = await resume(request, web, clock())
+        try:
+            await revoke_session(active, web.store, web.auth, session_id, now=clock())
+        except SessionNotFoundError:
+            raise ProblemError(NOT_FOUND) from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     return router
+
+
+def _too_many() -> ProblemError:
+    return ProblemError(
+        TOO_MANY_ATTEMPTS, headers={"Retry-After": str(int(THROTTLE_WINDOW.total_seconds()))}
+    )

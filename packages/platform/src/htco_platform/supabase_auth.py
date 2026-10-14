@@ -17,6 +17,9 @@ _REJECTED = frozenset(
         "invalid_grant",
         "refresh_token_not_found",
         "refresh_token_already_used",
+        "mfa_verification_failed",
+        "mfa_challenge_expired",
+        "mfa_factor_not_found",
     }
 )
 
@@ -31,6 +34,23 @@ class RateLimitedError(Exception):
 
 class AuthServiceError(Exception):
     """Supabase Auth could not be reached or answered unexpectedly."""
+
+
+@dataclass(frozen=True)
+class TotpEnrollment:
+    factor_id: str
+    # The QR code to scan (an SVG data URI), and the same secret for typing it in by hand.
+    qr_code: str = field(repr=False)
+    secret: str = field(repr=False)
+    uri: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class Factor:
+    id: str
+    factor_type: str
+    verified: bool
+    friendly_name: str | None
 
 
 @dataclass(frozen=True)
@@ -64,6 +84,80 @@ class SupabaseAuth:
             )
         except httpx.HTTPError as error:
             raise AuthServiceError("Supabase Auth is unreachable") from error
+
+    # MFA (slice 3.5 part 2): every call acts as the user, with their access token.
+
+    async def enroll_totp(self, access_token: str, *, friendly_name: str) -> TotpEnrollment:
+        body = await self._as_user(
+            "POST",
+            "/factors",
+            access_token,
+            {"factor_type": "totp", "friendly_name": friendly_name},
+        )
+        try:
+            totp = body["totp"]
+            return TotpEnrollment(
+                factor_id=str(body["id"]),
+                qr_code=str(totp["qr_code"]),
+                secret=str(totp["secret"]),
+                uri=str(totp["uri"]),
+            )
+        except (KeyError, TypeError) as error:
+            raise AuthServiceError("Supabase Auth answered without the enrollment") from error
+
+    async def verify_totp(self, access_token: str, factor_id: str, code: str) -> AuthTokens:
+        challenge = await self._as_user("POST", f"/factors/{factor_id}/challenge", access_token, {})
+        body = await self._as_user(
+            "POST",
+            f"/factors/{factor_id}/verify",
+            access_token,
+            {"challenge_id": str(challenge.get("id", "")), "code": code},
+        )
+        try:
+            return _tokens(body)
+        except (ValueError, KeyError, TypeError) as error:
+            raise AuthServiceError("Supabase Auth answered without tokens") from error
+
+    async def factors(self, access_token: str) -> list[Factor]:
+        body = await self._as_user("GET", "/user", access_token, None)
+        entries = body.get("factors") or []
+        return [
+            Factor(
+                id=str(entry["id"]),
+                factor_type=str(entry.get("factor_type", "")),
+                verified=entry.get("status") == "verified",
+                friendly_name=entry.get("friendly_name"),
+            )
+            for entry in entries
+            if isinstance(entry, dict) and "id" in entry
+        ]
+
+    async def unenroll(self, access_token: str, factor_id: str) -> None:
+        await self._as_user("DELETE", f"/factors/{factor_id}", access_token, None)
+
+    async def _as_user(
+        self, method: str, path: str, access_token: str, body: dict[str, str] | None
+    ) -> dict[str, Any]:
+        try:
+            response = await self._client.request(
+                method,
+                f"{self._base}{path}",
+                json=body,
+                headers=self._headers | {"Authorization": f"Bearer {access_token}"},
+            )
+        except httpx.HTTPError as error:
+            raise AuthServiceError("Supabase Auth is unreachable") from error
+        if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
+            raise RateLimitedError("Supabase Auth rate limit")
+        if response.is_client_error and _error_code(response) in _REJECTED:
+            raise InvalidCredentialsError("refused")
+        if response.is_error:
+            raise AuthServiceError(f"Supabase Auth answered {response.status_code}")
+        try:
+            parsed = response.json()
+        except ValueError as error:
+            raise AuthServiceError("Supabase Auth answered without JSON") from error
+        return parsed if isinstance(parsed, dict) else {}
 
     async def _token(self, grant: str, body: dict[str, str]) -> AuthTokens:
         try:

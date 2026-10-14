@@ -9,6 +9,7 @@ request, so a revoked membership stops working on the next request (AC-2.6.3).
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 
 from htco_application.access.policy import Principal
@@ -27,6 +28,8 @@ class AuthenticatedUser:
     assurance: AssuranceLevel
     session_id: str | None
     claims: Mapping[str, Any] = field(repr=False)
+    # When the session last re-entered its second factor (web sessions; step-up, AC-3.5.7).
+    reauthenticated_at: datetime | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,7 @@ class AuthContext:
     memberships: tuple[Membership, ...]
     # The verified token claims, for repositories that query as this user (RLS).
     claims: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    reauthenticated_at: datetime | None = None
 
     def principal_for(self, organization_id: uuid.UUID) -> Principal:
         """The user acting in one organization; refused when they are not a member of it."""
@@ -57,8 +61,7 @@ class AuthContext:
                     organization_id=organization_id,
                     role=membership.role,
                     assurance=self.assurance,
-                    # Step-up re-authentication arrives with the web sessions (slice 3.5).
-                    reauthenticated_at=None,
+                    reauthenticated_at=self.reauthenticated_at,
                     granted_shops=membership.granted_shops,
                 )
         raise NoMembershipError("not a member of this organization")
@@ -81,4 +84,5 @@ async def authenticate(user: AuthenticatedUser, memberships: MembershipReader) -
         session_id=user.session_id,
         memberships=found,
         claims=user.claims,
+        reauthenticated_at=user.reauthenticated_at,
     )

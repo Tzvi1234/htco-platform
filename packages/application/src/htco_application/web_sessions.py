@@ -15,7 +15,7 @@ import base64
 import hashlib
 import secrets
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Protocol
 
@@ -84,6 +84,7 @@ class StoredSession:
     absolute_expires_at: datetime
     revoked_at: datetime | None
     user_agent: str | None
+    reauthenticated_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,8 @@ class SignedIn:
 class ActiveSession:
     session_id: uuid.UUID
     user: AuthenticatedUser
+    # The session's current tokens, for calls made as the user (MFA).
+    tokens: IssuedTokens = field(repr=False)
 
 
 class AuthProvider(Protocol):
@@ -126,6 +129,8 @@ class SessionStore(Protocol):
     ) -> None: ...
 
     async def revoke(self, session_id: uuid.UUID, at: datetime) -> None: ...
+
+    async def set_reauthenticated(self, session_id: uuid.UUID, at: datetime) -> None: ...
 
     async def record_attempt(
         self, email_hash: bytes, ip_hash: bytes | None, *, succeeded: bool, at: datetime
@@ -212,7 +217,12 @@ async def resume_session(
     if now - session.last_seen_at >= TOUCH_INTERVAL:
         idle_expires_at = min(now + IDLE_LIFETIME, session.absolute_expires_at)
         await store.touch(session.id, now, idle_expires_at)
-    return ActiveSession(session_id=session.id, user=await tokens.read(issued.access_token))
+    user = await tokens.read(issued.access_token)
+    return ActiveSession(
+        session_id=session.id,
+        user=replace(user, reauthenticated_at=session.reauthenticated_at),
+        tokens=issued,
+    )
 
 
 async def sign_out(
