@@ -38,7 +38,7 @@ The frame every later feature is built inside: a uv workspace whose packages fol
 | AC-1.5.1 | The deployed `/healthz` answers 200 over HTTPS on the app's default domain. | 1.5 (part 2) | Open |
 | AC-1.5.2 | The container runs as a non-root user (verified in CI by inspecting the image). | 1.5 | Pass |
 | AC-1.5.3 | A rollback to the previous deployment is performed once and documented in `operations.md`. | 1.5 (part 2) | Open |
-| AC-1.5.4 | No secret value appears in the app spec in git; secrets are injected at deploy time. | 1.5 (part 2) | Open |
+| AC-1.5.4 | No secret value appears in the app spec in git; secrets are injected at deploy time. | 1.5 (part 2) | Pass (`tests/infra/test_app_spec.py`) |
 | AC-1.6.1 | An agent session that leaves a failing unit test is told by the hook and cannot finish silently. | 1.6 | Pass |
 | AC-1.6.2 | A direct push to `main` is rejected by GitHub. | 1.6 (part 2, needs GitHub Pro) | Open |
 | AC-1.7.1 | An error raised by a diagnostic endpoint (enabled only outside production) appears in error monitoring with `request_id` and `trace_id`, and without request bodies, cookies or secret headers. | 1.7 | Pass in tests with a capturing transport; the real Sentry project is part 2 |
