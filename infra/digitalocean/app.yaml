@@ -1,0 +1,76 @@
+# DigitalOcean App Platform spec for the HTCO API (slice 1.5 part 2).
+#
+# Deployed only by the owner-started `.github/workflows/deploy.yml`, which fills every ${…} from
+# GitHub secrets and variables at deploy time: no secret value is committed (AC-1.5.4).
+# Cost: one fixed-size instance, $5 per month, that cannot scale (neither automatically nor by
+# hand), so the bill cannot grow by itself. Frankfurt, next to the Supabase project.
+name: htco
+region: fra
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+services:
+  - name: api
+    image:
+      registry_type: GHCR
+      registry: tzvi1234
+      repository: htco-api
+      tag: ${IMAGE_TAG}
+      registry_credentials: ${GHCR_PULL_CREDENTIALS}
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    instance_count: 1
+    http_port: 8080
+    health_check:
+      http_path: /readyz
+      initial_delay_seconds: 10
+      period_seconds: 10
+      timeout_seconds: 3
+      success_threshold: 1
+      failure_threshold: 3
+    liveness_health_check:
+      http_path: /healthz
+      initial_delay_seconds: 10
+      period_seconds: 10
+      timeout_seconds: 3
+      success_threshold: 1
+      failure_threshold: 6
+    alerts:
+      - rule: CPU_UTILIZATION
+        operator: GREATER_THAN
+        value: 80
+        window: FIVE_MINUTES
+      - rule: MEM_UTILIZATION
+        operator: GREATER_THAN
+        value: 80
+        window: FIVE_MINUTES
+      - rule: RESTART_COUNT
+        operator: GREATER_THAN
+        value: 3
+        window: FIVE_MINUTES
+    envs:
+      - key: HTCO_ENVIRONMENT
+        scope: RUN_TIME
+        value: production
+      - key: HTCO_RELEASE
+        scope: RUN_TIME
+        value: ${IMAGE_TAG}
+      - key: HTCO_SUPABASE_URL
+        scope: RUN_TIME
+        value: ${HTCO_SUPABASE_URL}
+      # Supabase's session pooler (IPv4, free). The password is not in the URL: libpq reads it
+      # from PGPASSWORD, so it never needs URL encoding and never appears in a connection string.
+      - key: HTCO_DATABASE_URL
+        scope: RUN_TIME
+        value: postgresql://postgres.${SUPABASE_PROJECT_REF}@${SUPABASE_POOLER_HOST}:5432/postgres?sslmode=require
+      - key: PGPASSWORD
+        scope: RUN_TIME
+        type: SECRET
+        value: ${PGPASSWORD}
+      - key: HTCO_SENTRY_DSN
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_SENTRY_DSN}
+      - key: HTCO_SUPABASE_SECRET_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_SUPABASE_SECRET_KEY}

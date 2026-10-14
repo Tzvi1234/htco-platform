@@ -79,9 +79,19 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 1. **Likely cause:** it is younger than seven days.
 2. **Fix:** wait; for an urgent security fix, add a per-package `exclude-newer-package` entry with a comment and an issue link.
 
+## Deploying
+
+The API runs on DigitalOcean App Platform as the app `htco` (Frankfurt), defined in `infra/digitalocean/app.yaml`: one `apps-s-1vcpu-0.5gb` instance at $5 per month that cannot scale, readiness on `/readyz`, liveness on `/healthz`, alerts for failed deployments, CPU and memory above 80 % and more than three restarts in five minutes.
+
+1. Actions → **Deploy API** → **Run workflow** on `main` with `image_tag` empty.
+2. The workflow builds the image, checks it runs as non-root, scans it, pushes `ghcr.io/tzvi1234/htco-api:<commit SHA>`, deploys it with the spec (secrets filled in at deploy time from GitHub secrets, never committed) and calls `/healthz` and `/readyz` on the app's URL. The run summary shows the tag and URL.
+3. The database connection uses Supabase's session pooler (IPv4) as `postgres.<project ref>`; the password reaches the app only as the `PGPASSWORD` secret, which libpq reads, so it never appears in a connection string.
+
+Configuration: variables `SUPABASE_PROJECT_REF`, `SUPABASE_POOLER_HOST`, `HTCO_SUPABASE_URL`; secrets `DIGITALOCEAN_ACCESS_TOKEN`, `GHCR_PULL_TOKEN` (`read:packages`, lets DigitalOcean pull the private image), `SUPABASE_DB_PASSWORD`, `HTCO_SENTRY_DSN`, `HTCO_SUPABASE_SECRET_KEY`.
+
 ## Rollback
 
-Revert the pull request; there is no runtime state.
+Code: revert the pull request. Deployment: run **Deploy API** with `image_tag` set to the commit SHA of the last good deployment (from that run's summary); the image is already in GHCR, so nothing is rebuilt.
 
 ## Drills
 
