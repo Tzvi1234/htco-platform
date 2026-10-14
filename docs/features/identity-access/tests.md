@@ -18,6 +18,10 @@
 | API (CLI) | `htco admin bootstrap`: JSON output, idempotent, unknown and invalid email (65), missing database URL (78), usage errors (2) | `tests/api/test_cli.py` |
 | Database (pgTAP) | The five actor kinds are accepted; `agent` and an empty actor ID are rejected | `supabase/tests/database/02_audit_actors.test.sql` |
 | Integration (`-m db`) | Bootstrap twice on Postgres: one organization, one owner membership; audit rows as `system:bootstrap` with correlation ID; two concurrent runs still create one organization | `tests/integration/test_bootstrap.py` |
+| Application | Access management: every non-admin role denied every operation, MFA, other organization, invitations (audit, existing member, registered elsewhere, invalid email), Owner rules, role change, removal, grants (idempotent, audited), not-found cases, member list | `tests/application/test_access_management.py` (fakes in `tests/access_fakes.py`) |
+| API | Management endpoints: bodies, 201/204, 403 `forbidden` and `mfa-required`, 404, 409, 422, 503, AC-2.6.3 with the same token, `Allow` on 405 | `tests/api/test_access_routes.py`, `tests/api/test_invitation_wiring.py` |
+| Platform | Supabase invite call: request shape, key headers (new and legacy), redirect, existing account, failures, hidden key | `tests/platform/test_supabase_admin.py` |
+| Integration (`-m db`) | Invite, change role, grant, revoke and remove on Postgres as the seed's owner: effective on the next membership read, five audit records by the user; member list with names and grants; RLS refuses an `aal1` membership write even past the application | `tests/integration/test_access_management.py` |
 | Persistence | The database check fails fast on a closed port, is named `database`, hides its connection string | `tests/persistence/test_database_check.py` |
 | API | Deployed environments refuse to start without `HTCO_DATABASE_URL`; with it, `/readyz` reports the database; without it locally, configuration only | `tests/api/test_main.py` |
 | Integration (`-m db`) | `/readyz` against real Postgres through a TCP relay: 200, 503 when the relay closes, 200 again without a restart | `tests/integration/test_database_readiness.py` |
@@ -43,6 +47,10 @@
 | AC-2.5.1 | `test_bootstrap__twice__one_organization_and_one_membership`, `test_bootstrap_twice__one_organization_one_membership` (integration), `test_bootstrap__started_twice_at_once__still_one_organization` (integration) |
 | AC-2.5.2 | `test_bootstrap__audits_each_change_as_the_system_actor`, `test_bootstrap__audit_records__system_actor_entity_after_and_correlation` (integration) |
 | AC-2.5.3 | `02_audit_actors.test.sql`, `01_identity_access.test.sql` (unknown kind, blank actor), the integration audit test (`system`) |
+| AC-2.6.1 | `test_every_other_role__is_denied_every_change`, `test_owner_and_admin_with_aal1__need_mfa`, `test_every_other_role__403_forbidden`, `test_owner_with_aal1__403_mfa_required`, `test_rls__rejects_membership_writes_from_an_aal1_session_even_past_the_app` (integration) |
+| AC-2.6.2 | `test_admin__cannot_invite_an_owner`, `test_admin__cannot_make_anyone_owner`, `test_nobody__can_remove_or_demote_the_owner`, `test_admin__cannot_grant_owner_or_remove_the_owner` |
+| AC-2.6.3 | `test_revoked_member__is_refused_on_the_next_request_with_the_same_token`, `test_invite_change_grant_revoke_remove__audited_and_effective_at_once` (integration) |
+| AC-2.6.4 | `test_change_role__audits_before_and_after`, `test_remove_member__revokes_and_audits`, `test_grant_and_revoke_shop__audited_once_each_and_idempotent`, `test_invite__creates_the_membership_and_audits_it`, the integration audit check |
 | AC-2.4.1 | `test_permissions__match_the_documented_matrix` (20 cases), `test_decide__fully_assured_principal__gets_exactly_the_documented_answer` (140 cases) |
 | AC-2.4.2 | `test_shops__filter_naming_a_shop_the_user_cannot_see__404` (not granted, other tenant, unknown), `test_shops__owner_naming_another_tenants_shop__404`, `test_shop_filter__a_shop_the_user_cannot_see__is_not_found`, `test_another_tenants_shop__is_never_returned` (integration) |
 | AC-2.4.3 | `test_shops__pages_are_stable_and_do_not_overlap`, `test_shops__limit_outside_1_to_100__422`, `test_pages__are_stable_and_do_not_overlap`, `test_after_and_limit__page_through_the_shops` (integration) |

@@ -55,6 +55,8 @@ def test_api__every_operation__conforms_to_the_contract(
     # lifespan running until the interpreter exits, which leaks streams between tests.
     request = case.as_transport_kwargs(base_url=BASE_URL)
     cookies = request.pop("cookies", None) or {}  # httpx takes cookies on the client only
+    if isinstance(request.get("data"), str | bytes):  # raw bodies are `content` in httpx
+        request["content"] = request.pop("data")
     with TestClient(_app(), base_url=BASE_URL, cookies=cookies) as client:
         response = client.request(**request)
 

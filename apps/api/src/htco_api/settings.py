@@ -32,6 +32,11 @@ class ApiSettings(BaseSettings):
     # The Supabase project (`https://<ref>.supabase.co`; locally `http://127.0.0.1:54321`). Its
     # sign-in service issues the access tokens the API verifies. Required when deployed.
     supabase_url: AnyHttpUrl | None = None
+    # Supabase secret key (`sb_secret_…`), used only to send invitations (slice 2.6), never for
+    # database queries. Without it, invitations answer 503.
+    supabase_secret_key: SecretStr | None = None
+    # Where the invitation email's link lands (the web app's welcome page).
+    invite_redirect_url: AnyHttpUrl | None = None
 
     @property
     def auth_issuer(self) -> str | None:
