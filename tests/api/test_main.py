@@ -13,6 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from htco_api.auth import Authenticator
 from htco_api.main import EXIT_CONFIGURATION_ERROR, main
 from htco_api.settings import ApiSettings, Environment
 from htco_platform.error_reporting import ErrorReporter
@@ -130,6 +131,7 @@ def test_main__diagnostic_endpoint__exists_only_outside_production(
 ) -> None:
     environment.setenv("HTCO_ENVIRONMENT", environment_name)
     environment.setenv("HTCO_DATABASE_URL", "postgresql://htco@db.invalid/htco")
+    environment.setenv("HTCO_SUPABASE_URL", "https://project.supabase.invalid")
     serve = _FakeServer()
 
     main(serve=serve)
@@ -190,6 +192,54 @@ def test_main__deployed_without_database_url__exits_with_configuration_error(
     assert main(serve=serve) == EXIT_CONFIGURATION_ERROR
     assert "HTCO_DATABASE_URL" in capsys.readouterr().err
     assert serve.calls == []
+
+
+@pytest.mark.usefixtures("restore_logging")
+@pytest.mark.parametrize("environment_name", ["staging", "production"])
+def test_main__deployed_without_supabase_url__exits_with_configuration_error(
+    environment: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], environment_name: str
+) -> None:
+    environment.setenv("HTCO_ENVIRONMENT", environment_name)
+    environment.setenv("HTCO_DATABASE_URL", "postgresql://htco@db.invalid/htco")
+    serve = _FakeServer()
+
+    assert main(serve=serve) == EXIT_CONFIGURATION_ERROR
+    assert "HTCO_SUPABASE_URL" in capsys.readouterr().err
+    assert serve.calls == []
+
+
+@pytest.mark.usefixtures("restore_logging")
+def test_main__supabase_and_database__authenticates_requests(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = int(probe.getsockname()[1])
+    environment.setenv("HTCO_ENVIRONMENT", "local")
+    environment.setenv("HTCO_DATABASE_URL", f"postgresql://htco@127.0.0.1:{closed_port}/htco")
+    environment.setenv("HTCO_SUPABASE_URL", "http://127.0.0.1:54321")
+    serve = _FakeServer()
+
+    main(serve=serve)
+
+    [(app, _)] = serve.calls
+    assert isinstance(app.state.authenticator, Authenticator)
+    with TestClient(app):  # the database pool and the HTTP client start and stop with the app
+        pass
+
+
+@pytest.mark.usefixtures("restore_logging")
+def test_main__without_supabase_locally__has_no_authenticator(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    environment.setenv("HTCO_ENVIRONMENT", "local")
+    environment.setenv("HTCO_DATABASE_URL", "postgresql://htco@db.invalid/htco")
+    serve = _FakeServer()
+
+    main(serve=serve)
+
+    [(app, _)] = serve.calls
+    assert app.state.authenticator is None
 
 
 @pytest.mark.usefixtures("restore_logging")
