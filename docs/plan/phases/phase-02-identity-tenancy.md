@@ -5,8 +5,9 @@
 | **Milestone** | — |
 | **Repositories** | `htco-platform` |
 | **Size** | M |
-| **Depends on** | Phase 1 |
+| **Depends on** | [Phase 1](phase-01-walking-skeleton.md); the Supabase Pro development project ([Phase 0](phase-00-groundwork.md) O-13) |
 | **Requirements** | FR-ADM-01, FR-AUD-01, FR-IAM-01, FR-IAM-02, FR-IAM-03, FR-IAM-04 |
+| **Mandatory tests owned** ([PLAN §5](../PLAN.md#5-mandatory-tests-of-the-master-plan)) | None. The two-tenant RLS checks built here are reused by Test 4 (nothing leaks across shops, [Phases 6](phase-06-workforce-claude-runtime.md) and [7](phase-07-pilot-office.md)) and Test 13 ([Phase 4](phase-04-durable-core-order-intake.md)) |
 | **Status** | In progress (policy engine ahead of the database slices) |
 
 ## Progress
@@ -20,7 +21,7 @@
 
 Slice 2.4 started early with its pure part: policy engine v0 (`htco_application.access.policy`), which needs no database. Its endpoints (`/v1/me`, `/v1/shops`) follow slices 2.1 to 2.3.
 
-The living-office foundation of [ADR-0012](../../adr/0012-living-office-organization.md) is also in place as tested domain code with no database: `htco_domain.actors` (`ActorKind`, `ActorRef`), `htco_domain.workforce`, `htco_domain.tasks`, `htco_domain.automation`, `htco_domain.activity` and `htco_domain.improvement` (tests in `tests/domain/` and `tests/application/`). This phase uses `ActorRef` for the actor of every audit record. The employee registry tables (departments, employees, profile versions, tools, automations) arrive in [Phase 8](phase-08-workforce-runtime.md); the activity record store in [Phase 7](phase-07-tasks-approvals.md).
+The living-office foundation of [ADR-0012](../../adr/0012-living-office-organization.md) is also in place as tested domain code with no database: `htco_domain.actors` (`ActorKind`, `ActorRef`), `htco_domain.workforce`, `htco_domain.tasks`, `htco_domain.automation`, `htco_domain.activity` and `htco_domain.improvement` (tests in `tests/domain/` and `tests/application/`). This phase uses `ActorRef` for the actor of every audit record. The employee registry tables (departments, employees, profile versions, tools, automations) arrive in [Phase 6](phase-06-workforce-claude-runtime.md); the activity record store in [Phase 5](phase-05-tasks-messages-approvals.md).
 
 ## Goal
 
@@ -28,18 +29,28 @@ The security spine of the system: organizations, users, roles and per-shop acces
 
 ## Why now
 
-Tenant isolation and audit cannot be bolted on later without rewriting every query. They must exist before the first real business data (Phase 4).
+Tenant isolation and audit cannot be bolted on later without rewriting every query. They must exist before the first business data: the order tables of [Phase 4](phase-04-durable-core-order-intake.md) (recorded fixtures) and the real shop of [Phase 9](phase-09-etsy-connection.md).
 
 ## Scope
 
 **In:** Supabase project and local development flow, migrations pipeline, identity and access tables, RLS with helpers in a private schema, pgTAP tests, JWT verification against JWKS, `AuthContext`, policy engine v0 (role × capability), `GET /v1/me`, `GET /v1/shops`, audit writer with actor kinds (`user`, `employee`, `automation`, `advisor`, `system`), owner bootstrap command, `/readyz` database check.
 
-**Out:** web sign-in screens (Phase 3), Etsy connection (Phase 4), approvals (Phase 7).
+**Out:** web sign-in screens ([Phase 3](phase-03-design-system-web-shell.md)), Etsy connection ([Phase 9](phase-09-etsy-connection.md)), approvals ([Phase 5](phase-05-tasks-messages-approvals.md)), the production Supabase project (only after the RTO and RPO are decided and the restore drill of [Phase 4](phase-04-durable-core-order-intake.md) passes).
 
 ## Owner prerequisites
 
-- Supabase Pro project created in the chosen region with the IPv4 add-on; asymmetric JWT signing keys enabled; legacy keys disabled; custom SMTP configured for Auth emails (Resend's SMTP or another provider); leaked-password protection on; TOTP MFA on.
+- Supabase Pro **development** project created in the chosen region ([Phase 0](phase-00-groundwork.md) O-13; no production project yet) with the IPv4 add-on; asymmetric JWT signing keys enabled; legacy keys disabled; custom SMTP configured for Auth emails (Resend's SMTP or another provider); leaked-password protection on; TOTP MFA on.
 - Owner's own user account created through Supabase Auth with MFA enrolled.
+
+## Instructions for the agent
+
+1. Load the skills `software-engineering`, `tdd`, `testing`, `feature-verification` and `feature-docs`.
+2. Read this file, [PLAN.md](../PLAN.md) §1 and §6, [ADR-0005](../../adr/0005-hosting-digitalocean-supabase.md), [ADR-0011](../../adr/0011-data-access-and-migrations.md), [ADR-0012](../../adr/0012-living-office-organization.md), [DATA_MODEL](../../architecture/DATA_MODEL.md) (identity, audit, RLS pattern), [PERMISSION_MATRIX](../../architecture/PERMISSION_MATRIX.md), [THREAT_MODEL](../../architecture/THREAT_MODEL.md) T1, T14, T15, and `docs/features/identity-access/`.
+3. The pure part of slice 2.4 (policy engine v0) is done; keep its tests passing. When the development project exists, build in order: 2.1, 2.2, 2.3, 2.4 (endpoints), 2.5, 2.6. One pull request per slice; acceptance criteria first as failing pgTAP or pytest tests marked with their AC ID.
+4. Every table gets RLS in the same migration that creates it; tenant context is set with `set local` in every transaction; missing context fails closed.
+5. Never in this phase: use the `service_role` or secret key in the request path; trust `user_metadata` for authorization; create a production Supabase project; edit a migration that has been applied; create tables that belong to later phases (orders, tasks, registry, agent runs).
+6. Stop and ask the owner when: a Supabase setting in the prerequisites is missing or behaves differently from its documentation; the RLS design would need a security-definer function outside `private`; connection limits or pool sizes do not fit the plan (assumption A-13).
+7. Finish with the feature-verification run against the deployed API with the owner's real account, the feature docs and the PLAN status table.
 
 ## Slices
 
@@ -129,7 +140,7 @@ Show `GET /v1/me` for the owner; invite a Support user and grant one shop; show 
 
 ## Exit gate
 
-- [ ] All AC-2.x pass; production database migrated through the owner-started workflow.
+- [ ] All AC-2.x pass; the development database (`htco-dev`) migrated through the owner-started workflow. The production project is created and migrated only after the [Phase 4](phase-04-durable-core-order-intake.md) restore drill and the owner's RTO and RPO decision.
 - [ ] Connection from DigitalOcean to Supabase verified over IPv4 with the planned pool sizes.
 
 ## Rollback

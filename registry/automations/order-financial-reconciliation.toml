@@ -10,7 +10,7 @@ side_effect = "internal"
 approval_required = false
 ai_steps = []
 readiness = "draft"
-activation_phase = 10
+activation_phase = 13
 
 [retry]
 max_attempts = 5
@@ -31,7 +31,7 @@ text = "Primary: schedule. Also callable from: schedule, user_action, agent_tool
 
 [specification.input_schema]
 status = "draft"
-text = "DRAFT: JSON Schema in packages/contracts/automations/order-financial-reconciliation.json, written in Phase 10."
+text = "DRAFT: JSON Schema in packages/contracts/automations/order-financial-reconciliation.json, written in Phase 13."
 
 [specification.preconditions]
 status = "draft"
@@ -43,7 +43,7 @@ text = "Compare internal orders, shipments and ledger entries with Etsy (and Aut
 
 [specification.output_schema]
 status = "draft"
-text = "DRAFT: defined with the input schema in Phase 10."
+text = "DRAFT: defined with the input schema in Phase 13."
 
 [specification.dependencies]
 status = "draft"
@@ -75,11 +75,11 @@ text = "One activity record per execution and per external side effect, with cor
 
 [specification.tests]
 status = "draft"
-text = "DRAFT: replay, failure and recovery tests in Phase 10 (Scenario G pattern)."
+text = "DRAFT: replay, failure and recovery tests in Phase 13 (Scenario G pattern)."
 
 [specification.recovery]
 status = "draft"
-text = "DRAFT: compensation or manual recovery runbook written in Phase 10."
+text = "DRAFT: compensation or manual recovery runbook written in Phase 13."
 
 [specification.approvals]
 status = "draft"

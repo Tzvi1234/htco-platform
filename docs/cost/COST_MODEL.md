@@ -13,7 +13,7 @@
 | **Growing store** | 1–2 | 300 | 50 | 200 | 100 |
 | **Multi-store** | 5 | 1,500 | 200 | 800 | 500 |
 
-## 2. Fixed infrastructure (Pilot, from Phase 5)
+## 2. Fixed infrastructure (Pilot, from Phase 4)
 
 This is the only place infrastructure prices are kept; other documents link here.
 
@@ -22,16 +22,16 @@ This is the only place infrastructure prices are kept; other documents link here
 | Supabase Pro (Micro compute included) | 25 | 25 | 8 GB disk, 250 GB egress, 100 GB storage, 100k MAU included |
 | Supabase IPv4 add-on | 4 | 4 | Required for direct connections from DigitalOcean |
 | DigitalOcean `api` | 5 | 12 | 0.5 GB → 1 GB shared CPU |
-| DigitalOcean `agent-worker` | 5 | 12 | From Phase 5: automations, then AI employees (no container per employee) |
+| DigitalOcean `agent-worker` | 5 | 12 | From Phase 4: automations, then AI employees (no container per employee) |
 | DigitalOcean `web` | 5 | 5 | Caddy service for security headers (Phase 3) |
 | Container registry | 0 | 5 | DigitalOcean Starter or GHCR within GitHub Pro storage |
-| Resend | 0 | 20 | Free until inbound mail (Phase 14) |
+| Resend | 0 | 20 | Free until inbound mail (Phase 15) |
 | GitHub Pro | 4 | 4 | Rulesets on private repositories |
 | Error monitoring | 0 | 0 | Free developer tier |
 | **Total before AI** | **48** | **87** | |
 | Staging (when created) | +15 | +25 | Second Supabase project (Micro, about $10) plus a small app |
 
-Before Phase 5 the bill is smaller (no worker; Supabase from Phase 2). A separate `automation-worker` (+5 to +12) is added only when measured load or isolation justifies it. Optional later: point-in-time recovery from about $100/month (needs larger compute), dedicated egress IP up to $25, log drains $60, Windows code signing about $10/month, Google Play developer account $25 one-time.
+Before Phase 4 the bill is smaller (no worker; Supabase from Phase 2). A separate `automation-worker` (+5 to +12) is added only when measured load or isolation justifies it. Optional later: point-in-time recovery from about $100/month (needs larger compute), dedicated egress IP up to $25, log drains $60, Windows code signing about $10/month, Google Play developer account $25 one-time.
 
 ## 3. Variable AI cost (planning method)
 
@@ -55,9 +55,9 @@ cost_per_unit = Σ over model calls ( input_tokens × input_price
 | Support draft (Dana) | economy to balanced | $0.01–0.05 | |
 | Engineering work (Alex, Amir, Iris) | advanced | $0.50–3.00 per merged change | Capped per task by each routing policy; Phase 19 |
 
-Prices per model live in the model catalog with an as-of date (Phase 9), not in this document. Every employee's routing policy carries a per-task cap (see `registry/employees/*.toml`), so the worst case per unit is bounded. Pilot AI spend is expected to stay under the cap the owner sets (decision D-06).
+Prices per model live in the model catalog with an as-of date (Phase 8), not in this document. Every employee's routing policy carries a per-task cap (see `registry/employees/*.toml`), so the worst case per unit is bounded. Pilot AI spend is expected to stay under the cap the owner sets (decision D-06).
 
-## 4. Unit economics to report (from Phase 13; analysed by Omer from Phase 18)
+## 4. Unit economics to report (from Phase 13; analysed by Omer from Phase 14)
 
 `cost_per_product_researched`, `cost_per_approved_listing`, `cost_per_audited_listing`, `cost_per_completed_order`, `cost_per_inspected_order`, `cost_per_resolved_ticket`, `cost_per_repair`, `cost_per_shop`, `cost_per_employee`, `cost_per_department`, `cost_per_automation_execution`, all split into AI, infrastructure and marketplace fees.
 

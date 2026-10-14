@@ -110,56 +110,56 @@ Priority says how essential a requirement is to its own capability: **P0** must 
 | FR-IAM-03 | Role-based access control with roles Owner, Admin, Operations, Finance, Support, Developer, Viewer, scoped per organization and per shop. Deny by default. | P0 | 2 |
 | FR-IAM-04 | Authorization is decided on the server from the authenticated context. Client-supplied `user_id`, `organization_id` or `shop_id` are never trusted as authority. | P0 | 2 |
 | FR-IAM-05 | Users can list and revoke their active sessions and devices. | P1 | 3 |
-| FR-IAM-06 | Recent re-authentication (step-up) is required for high-risk actions and approvals (money, publishing, permissions). On Android and Windows this can use a biometric-protected device key whose signature the server verifies. | P1 | 3, 7, 16–17 |
-| FR-IAM-07 | Users, AI employees, automations, the Decision Advisor and system components have separate identities and separate permission sets. An employee can never approve its own request. | P0 | 7–8 |
+| FR-IAM-06 | Recent re-authentication (step-up) is required for high-risk actions and approvals (money, publishing, permissions). On Android and Windows this can use a biometric-protected device key whose signature the server verifies. | P1 | 3, 5, 17–18 |
+| FR-IAM-07 | Users, AI employees, automations, the Decision Advisor and system components have separate identities and separate permission sets. An employee can never approve its own request. | P0 | 5–6 |
 
 ### 7.2 Shops and integrations (SHOP)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-SHOP-01 | The owner connects an Etsy shop through OAuth 2.0 with PKCE, using an Etsy **Seller App** registered to that shop (one app per shop account). Tokens are stored encrypted on the server only and refreshed automatically (access token 1 hour, refresh token 90 days, with an alert before refresh expiry). | P0 | 4 |
-| FR-SHOP-02 | A shop card shows connection status, granted scopes, last successful sync, and verified capabilities (for example, whether shipment updates are permitted for this app). | P0 | 4 |
-| FR-SHOP-03 | Connecting a shop does not grant every user or agent access to it. Access is granted per shop. | P0 | 4 |
-| FR-SHOP-04 | Disconnecting a shop deletes its tokens from our storage (and revokes them at Etsy where Etsy supports it; the owner can also remove the app in Etsy's settings), stops sync, and starts the retention timer for that shop's data. | P0 | 4–5 |
-| FR-SHOP-05 | Marketplace access goes through a `MarketplacePort` adapter from the first integration, so Shopify or another platform can be added later without changing domain code (the Shopify adapter itself is P2). | P1 | 4, 17 |
+| FR-SHOP-01 | The owner connects an Etsy shop through OAuth 2.0 with PKCE, using an Etsy **Seller App** registered to that shop (one app per shop account). Tokens are stored encrypted on the server only and refreshed automatically (access token 1 hour, refresh token 90 days, with an alert before refresh expiry). | P0 | 9 |
+| FR-SHOP-02 | A shop card shows connection status, granted scopes, last successful sync, and verified capabilities (for example, whether shipment updates are permitted for this app). | P0 | 9 |
+| FR-SHOP-03 | Connecting a shop does not grant every user or agent access to it. Access is granted per shop. | P0 | 9 |
+| FR-SHOP-04 | Disconnecting a shop deletes its tokens from our storage (and revokes them at Etsy where Etsy supports it; the owner can also remove the app in Etsy's settings), stops sync, and starts the retention timer for that shop's data. | P0 | 9 |
+| FR-SHOP-05 | Marketplace access goes through a `MarketplacePort` adapter from the first integration, so Shopify or another platform can be added later without changing domain code (the Shopify adapter itself is P2). | P1 | 9, 21 |
 
 ### 7.3 Orders and fulfillment (ORD)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-ORD-01 | Paid Etsy orders are ingested into `orders` and `order_items` by deterministic code, with no LLM involved. Etsy order webhooks (`order.paid`, `order.canceled`, `order.shipped`, `order.delivered`) trigger ingest when they are available to our app type; a reconciliation poller runs regardless, so a missed webhook never means a missed order. | P0 | 5 |
-| FR-ORD-02 | Ingestion is idempotent: duplicate, replayed or out-of-order events never create duplicate orders or inflate sales counts. | P0 | 5 |
-| FR-ORD-03 | Orders follow a state machine derived only from observable facts: `PAID → INGESTED → AWAITING_SHIPMENT → SHIPPED → DELIVERED`, plus `CANCELLED` and `REFUNDED`. `SHIPPED` means a shipment record exists on the marketplace; its tracking code is recorded when present. `SUPPLIER_ORDERED` is added once supplier-side evidence is available (Phase 13). Problems are incidents linked to the order, not order states. Each transition records its source of proof. | P0 | 5–6 |
-| FR-ORD-04 | Orders list with search, sort, filters (shop, status, date, tracking state) and safe bulk actions. | P0 | 5 |
-| FR-ORD-05 | Order detail shows items, SKUs, payment event, tracking carrier and code, timeline with who did what and when, incidents, and audit; supplier mapping and AutoVA data appear once available (Phase 13). | P0 | 5–6, 13 |
-| FR-ORD-06 | Tracking numbers are detected from the marketplace: AutoVA writes them to Etsy, and we read them from the receipt's shipment records (and the `order.shipped` webhook). The system never writes a second shipment update if one already exists. | P0 | 6 |
-| FR-ORD-07 | Writing a shipment to Etsy is a guarded, human-confirmed fallback only. Etsy restricts this endpoint for new apps in several regions (including the US and Israel), every successful call emails the buyer, and the endpoint has no idempotency. The capability is probed, never assumed; before any write the receipt is re-read and the write is skipped if that tracking code is already present. A 403 shows "capability blocked" with the allowed alternative, never a retry loop. | P1 | 6 |
-| FR-ORD-08 | Units sold are counted from `order_items.quantity`, separately from order count, net of cancellations and refunds. | P0 | 5 |
-| FR-ORD-09 | A reconciliation job detects drift between our records and the marketplace and opens an incident when they disagree. | P1 | 5 |
+| FR-ORD-01 | Paid Etsy orders are ingested into `orders` and `order_items` by deterministic code, with no LLM involved. Etsy order webhooks (`order.paid`, `order.canceled`, `order.shipped`, `order.delivered`) trigger ingest when they are available to our app type; a reconciliation poller runs regardless, so a missed webhook never means a missed order. | P0 | 4 |
+| FR-ORD-02 | Ingestion is idempotent: duplicate, replayed or out-of-order events never create duplicate orders or inflate sales counts. | P0 | 4, 9 |
+| FR-ORD-03 | Orders follow a state machine derived only from observable facts: `PAID → INGESTED → AWAITING_SHIPMENT → SHIPPED → DELIVERED`, plus `CANCELLED` and `REFUNDED`. `SHIPPED` means a shipment record exists on the marketplace; its tracking code is recorded when present. `SUPPLIER_ORDERED` is added once supplier-side evidence is available (Phase 13). Problems are incidents linked to the order, not order states. Each transition records its source of proof. | P0 | 4, 10 |
+| FR-ORD-04 | Orders list with search, sort, filters (shop, status, date, tracking state) and safe bulk actions. | P0 | 4 |
+| FR-ORD-05 | Order detail shows items, SKUs, payment event, tracking carrier and code, timeline with who did what and when, incidents, and audit; supplier mapping and AutoVA data appear once available (Phase 13). | P0 | 4, 10, 13 |
+| FR-ORD-06 | Tracking numbers are detected from the marketplace: AutoVA writes them to Etsy, and we read them from the receipt's shipment records (and the `order.shipped` webhook). The system never writes a second shipment update if one already exists. | P0 | 10 |
+| FR-ORD-07 | Writing a shipment to Etsy is a guarded, human-confirmed fallback only. Etsy restricts this endpoint for new apps in several regions (including the US and Israel), every successful call emails the buyer, and the endpoint has no idempotency. The capability is probed, never assumed; before any write the receipt is re-read and the write is skipped if that tracking code is already present. A 403 shows "capability blocked" with the allowed alternative, never a retry loop. | P1 | 10 |
+| FR-ORD-08 | Units sold are counted from `order_items.quantity`, separately from order count, net of cancellations and refunds. | P0 | 4 |
+| FR-ORD-09 | A reconciliation job detects drift between our records and the marketplace and opens an incident when they disagree. | P1 | 9 |
 
 ### 7.4 Incidents and debugging (INC)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-INC-01 | Fulfillment SLA rules per shop, supplier and shipping method open an incident when an order has no tracking after its window. A late order is not an incident until its window passes. | P0 | 6 |
-| FR-INC-02 | Incidents follow a state machine: `DETECTED → TRIAGED → INVESTIGATING → REMEDIATION_PROPOSED → (AUTO_REMEDIATING │ APPROVAL_REQUIRED │ DEVELOPER_REQUIRED) → VERIFYING → RESOLVED`, or `ESCALATED`. An unhandled incident is never marked resolved. | P0 | 6 |
-| FR-INC-03 | Exactly one open incident exists per root cause and resource (deduplication). | P0 | 6 |
-| FR-INC-04 | Amir (Debugger & Reliability Engineer) may only run remediations from an allowlist that are reversible and idempotent. Anything touching money, permissions, production code or customers needs approval or a developer. Until Amir is active, remediation is allowlisted code or a person. | P0 | 6, 19 |
-| FR-INC-05 | An incident is resolved only on verified evidence (for example, tracking now present in Etsy), never on an agent's statement. | P0 | 6 |
-| FR-INC-06 | Incident center: severity, impacted shops, reproduction steps, masked traces, proposed fix, verification and rollback. | P1 | 6 |
+| FR-INC-01 | Fulfillment SLA rules per shop, supplier and shipping method open an incident when an order has no tracking after its window. A late order is not an incident until its window passes. | P0 | 10 |
+| FR-INC-02 | Incidents follow a state machine: `DETECTED → TRIAGED → INVESTIGATING → REMEDIATION_PROPOSED → (AUTO_REMEDIATING │ APPROVAL_REQUIRED │ DEVELOPER_REQUIRED) → VERIFYING → RESOLVED`, or `ESCALATED`. An unhandled incident is never marked resolved. | P0 | 10 |
+| FR-INC-03 | Exactly one open incident exists per root cause and resource (deduplication). | P0 | 10 |
+| FR-INC-04 | Amir (Debugger & Reliability Engineer) may only run remediations from an allowlist that are reversible and idempotent. Anything touching money, permissions, production code or customers needs approval or a developer. Until Amir is active, remediation is allowlisted code or a person. | P0 | 10, 19 |
+| FR-INC-05 | An incident is resolved only on verified evidence (for example, tracking now present in Etsy), never on an agent's statement. | P0 | 10 |
+| FR-INC-06 | Incident center: severity, impacted shops, reproduction steps, masked traces, proposed fix, verification and rollback. | P1 | 10 |
 
 ### 7.5 Tasks and approvals (TASK, APR)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-TASK-01 | Every unit of work is a task record with queue, SLA, assignee (a person, an employee or an automation), idempotency key and trace ID. A finished conversation is never proof that a task completed. | P0 | 7 |
-| FR-TASK-02 | Task states: `CREATED, QUEUED, CLAIMED, RUNNING, WAITING_FOR_EXTERNAL, WAITING_FOR_AGENT, WAITING_FOR_APPROVAL, RETRY_SCHEDULED, BLOCKED, COMPLETED, FAILED, ESCALATED, CANCELLED`. | P0 | 7 |
-| FR-TASK-03 | Tasks survive restarts. Two workers can never run the same task at once (atomic claim with lease and heartbeat). Failures retry with backoff and land in a dead-letter queue. | P0 | 5, 7 |
-| FR-TASK-04 | Task views: board by state, list with SLA, and a timeline or dependency view. | P1 | 7 |
-| FR-APR-01 | An approval shows the action, its impact, a cost range, risk level, reason, rollback plan and expiry. | P0 | 7 |
-| FR-APR-02 | Approve and reject are re-authorized on the server at decision time and store the approver identity and `policy_version`. The UI alone never grants approval. | P0 | 7 |
-| FR-APR-03 | Expired approvals cannot be executed. Deciding twice is idempotent. | P0 | 7 |
-| FR-APR-04 | Approval policy defines, per capability and risk level, whether an action is automatic, needs one approver, or needs re-authentication. | P0 | 7 |
+| FR-TASK-01 | Every unit of work is a task record with queue, SLA, assignee (a person, an employee or an automation), idempotency key and trace ID. A finished conversation is never proof that a task completed. | P0 | 5 |
+| FR-TASK-02 | Task states: `CREATED, QUEUED, CLAIMED, RUNNING, WAITING_FOR_EXTERNAL, WAITING_FOR_AGENT, WAITING_FOR_APPROVAL, RETRY_SCHEDULED, BLOCKED, COMPLETED, FAILED, ESCALATED, CANCELLED`. | P0 | 5 |
+| FR-TASK-03 | Tasks survive restarts. Two workers can never run the same task at once (atomic claim with lease and heartbeat). Failures retry with backoff and land in a dead-letter queue. | P0 | 4, 5 |
+| FR-TASK-04 | Task views: board by state, list with SLA, and a timeline or dependency view. | P1 | 5 |
+| FR-APR-01 | An approval shows the action, its impact, a cost range, risk level, reason, rollback plan and expiry. | P0 | 5 |
+| FR-APR-02 | Approve and reject are re-authorized on the server at decision time and store the approver identity and `policy_version`. The UI alone never grants approval. | P0 | 5 |
+| FR-APR-03 | Expired approvals cannot be executed. Deciding twice is idempotent. | P0 | 5 |
+| FR-APR-04 | Approval policy defines, per capability and risk level, whether an action is automatic, needs one approver, or needs re-authentication. | P0 | 5 |
 
 ### 7.6 AI workforce (AGT)
 
@@ -167,30 +167,30 @@ See §8 for the organization and [ADR-0012](../adr/0012-living-office-organizati
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-AGT-01 | Each employee has a permanent identity (ID, name, title, department) and a versioned profile with a 22-section Agent Specification Sheet: mission, goals, responsibilities, non-responsibilities, input and output schemas, triggers, tools, automations, skills, knowledge, memory, communication, model routing, Decision Advisor use, budgets, risk and approvals, evaluation, failure handling, versioning and metrics. Each run records the profile version it used. | P0 | 8 |
-| FR-AGT-02 | Agents are not always-on processes. Runs start from queued tasks, events or schedules, and a run that waits (for a supplier quote, an approval, an external event) is checkpointed and resumed later instead of polling. | P0 | 8 |
-| FR-AGT-03 | Agent tools are typed capabilities (for example `catalog.classify`, `commerce.create_draft`, `incidents.open`) with validation, timeout, retry limit, side-effect level and audit. Creating a draft and publishing live are different capabilities. | P0 | 8 |
-| FR-AGT-04 | The backend policy engine decides whether a tool call is allowed. If a model asks for a tool it is not permitted to use, the call is denied and recorded. | P0 | 8 |
-| FR-AGT-05 | Content from the web, supplier pages, emails and marketplace messages is untrusted data. It can never change an agent's permissions, instructions or tools. | P0 | 8 |
-| FR-AGT-06 | Four memory layers are kept separate: working memory (checkpoints), professional memory per agent, organizational memory (policies, runbooks), and business state in Postgres. Every memory item has a source, date, shop, version, confidence and expiry. | P1 | 8–15 |
-| FR-AGT-07 | Agents hand off work through events and resource references stored in the database, not by passing whole conversation state. | P0 | 8 |
-| FR-AGT-08 | Agent conversations show business messages and action receipts, never hidden model reasoning. | P1 | 15 |
-| FR-AGT-09 | An employee or automation is production-ready only with every specification section defined and a passed evaluation; a configuration file existing is never enough. The owner approves each autonomy level. | P0 | 8+ |
-| FR-AGT-10 | The organization is framework-independent: employees, tasks, automations, tools and records are defined and inspected without importing the agent runtime; runtimes implement `invoke`, `resume`, `interrupt`, `cancel` and `inspect`. Runtime state is never the source of truth for business records. | P0 | 8 |
+| FR-AGT-01 | Each employee has a permanent identity (ID, name, title, department) and a versioned profile with a 22-section Agent Specification Sheet: mission, goals, responsibilities, non-responsibilities, input and output schemas, triggers, tools, automations, skills, knowledge, memory, communication, model routing, Decision Advisor use, budgets, risk and approvals, evaluation, failure handling, versioning and metrics. Each run records the profile version it used. | P0 | 6 |
+| FR-AGT-02 | Agents are not always-on processes. Runs start from queued tasks, events or schedules, and a run that waits (for a supplier quote, an approval, an external event) is checkpointed and resumed later instead of polling. | P0 | 6 |
+| FR-AGT-03 | Agent tools are typed capabilities (for example `catalog.classify`, `commerce.create_draft`, `incidents.open`) with validation, timeout, retry limit, side-effect level and audit. Creating a draft and publishing live are different capabilities. | P0 | 6 |
+| FR-AGT-04 | The backend policy engine decides whether a tool call is allowed. If a model asks for a tool it is not permitted to use, the call is denied and recorded. | P0 | 6 |
+| FR-AGT-05 | Content from the web, supplier pages, emails and marketplace messages is untrusted data. It can never change an agent's permissions, instructions or tools. | P0 | 6 |
+| FR-AGT-06 | Four memory layers are kept separate: working memory (checkpoints), professional memory per agent, organizational memory (policies, runbooks), and business state in Postgres. Every memory item has a source, date, shop, version, confidence and expiry. | P1 | 6–16 |
+| FR-AGT-07 | Agents hand off work through events and resource references stored in the database, not by passing whole conversation state. | P0 | 6 |
+| FR-AGT-08 | Agent conversations show business messages and action receipts, never hidden model reasoning. | P1 | 16 |
+| FR-AGT-09 | An employee or automation is production-ready only with every specification section defined and a passed evaluation; a configuration file existing is never enough. The owner approves each autonomy level. | P0 | 6+ |
+| FR-AGT-10 | The organization is framework-independent: employees, tasks, automations, tools and records are defined and inspected without importing the agent runtime; runtimes implement `invoke`, `resume`, `interrupt`, `cancel` and `inspect`. Runtime state is never the source of truth for business records. | P0 | 6 |
 
 ### 7.7 Model routing and cost control (MDL)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-MDL-01 | All model calls go through the Model Gateway. No employee or package calls a provider SDK directly. | P0 | 9 |
-| FR-MDL-02 | One central router serves every employee, each with its own versioned routing policy (allowed providers, required capabilities, default and maximum tier, per-task budget, maximum data class, fallback tiers, advisor use). Deterministic tasks route to `NO_AI`. | P0 | 9 |
-| FR-MDL-03 | A model catalog stores verified provider model IDs, API version, class (economy, balanced, advanced, critical, vision, image), context size, prices with an as-of date, health, and eval scores. Model names are never hard-coded in agent code. | P0 | 9 |
-| FR-MDL-04 | A budget ledger reserves cost before a call and settles the actual cost after, per organization, shop, agent, task, day and month. Alerts fire at 70%, 90% and 100%. New work stops at the cap, with a reserved budget kept for safety-critical tasks. | P0 | 9 |
-| FR-MDL-05 | Every routing decision is recorded in `routing_decisions` with employee, trace ID, policy version, cost and quality outcome. | P0 | 9 |
-| FR-MDL-06 | Fallback chains, a circuit breaker per provider and a kill switch per provider. | P1 | 9 |
-| FR-MDL-07 | Customer PII is not sent to a model unless the task needs it and the employee's policy allows that data class; PII is masked by default. | P0 | 9 |
-| FR-MDL-08 | Before relying on a decision provider (such as Jev) or a cheaper model for a decision, it is benchmarked on at least 200 labeled examples against rules-only and an economy model (accuracy per group, false-approve rate, schema validity, p95 latency, cost per decision). | P1 | 9 |
-| FR-MDL-09 | A shared Decision Advisor answers typed questions (choice or score) through a provider-independent port: deterministic rules first, then providers in order, with schema validation and a record of every attempt. It never authorizes; security, payment and permission policies stay with the policy engine. | P0 | 9 |
+| FR-MDL-01 | All model calls go through the Model Gateway. No employee or package calls a provider SDK directly. Claude Agent SDK sessions are the one structural case: confined to the Claude runtime adapter, routed, budgeted and settled through the same router and ledger ([ADR-0016](../adr/0016-claude-native-agent-runtime.md)). | P0 | 8 |
+| FR-MDL-02 | One central router serves every employee, each with its own versioned routing policy (allowed providers, required capabilities, default and maximum tier, per-task budget, maximum data class, fallback tiers, advisor use). Deterministic tasks route to `NO_AI`. | P0 | 8 |
+| FR-MDL-03 | A model catalog stores verified provider model IDs, API version, class (economy, balanced, advanced, critical, vision, image), context size, prices with an as-of date, health, and eval scores. Model names are never hard-coded in agent code. | P0 | 8 |
+| FR-MDL-04 | A budget ledger reserves cost before a call and settles the actual cost after, per organization, shop, agent, task, day and month. Alerts fire at 70%, 90% and 100%. New work stops at the cap, with a reserved budget kept for safety-critical tasks. | P0 | 8 |
+| FR-MDL-05 | Every routing decision is recorded in `routing_decisions` with employee, trace ID, policy version, cost and quality outcome. | P0 | 8 |
+| FR-MDL-06 | Fallback chains, a circuit breaker per provider and a kill switch per provider. | P1 | 8 |
+| FR-MDL-07 | Customer PII is not sent to a model unless the task needs it and the employee's policy allows that data class; PII is masked by default. | P0 | 8 |
+| FR-MDL-08 | Before relying on a decision provider (such as Jev) or a cheaper model for a decision, it is benchmarked on at least 200 labeled examples against rules-only and an economy model (accuracy per group, false-approve rate, schema validity, p95 latency, cost per decision). | P1 | 8 |
+| FR-MDL-09 | A shared Decision Advisor answers typed questions (choice or score) through a provider-independent port: deterministic rules first, then providers in order, with schema validation and a record of every attempt. It never authorizes; security, payment and permission policies stay with the policy engine. | P0 | 8 |
 
 ### 7.8 Catalog and Product Studio (CAT)
 
@@ -225,64 +225,64 @@ See §8 for the organization and [ADR-0012](../adr/0012-living-office-organizati
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-FIN-01 | Financial entries (revenue, marketplace fees, supplier cost, shipping, refunds, payouts, AI and infrastructure cost) are recorded from events by code (Finance Ledger Ingestion automation; Roni reviews). | P0 | 5, 13 |
+| FR-FIN-01 | Financial entries (revenue, marketplace fees, supplier cost, shipping, refunds, payouts, AI and infrastructure cost) are recorded from events by code (Finance Ledger Ingestion automation; Roni reviews). | P0 | 4, 13 |
 | FR-FIN-02 | P&L per shop, product, order and platform. Every figure is marked `ESTIMATED` or `VERIFIED`, with the exchange-rate source and payout lag. | P1 | 13 |
-| FR-FIN-03 | Unit costs: cost per listing, per resolved ticket, per inspected order, per repair, per shop, per employee and department. | P1 | 13, 18 |
+| FR-FIN-03 | Unit costs: cost per listing, per resolved ticket, per inspected order, per repair, per shop, per employee and department. | P1 | 13, 14 |
 | FR-FIN-04 | CSV export requires permission and writes an audit record. | P1 | 13 |
 
 ### 7.12 Customer service (SVC)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-SVC-01 | Ticket queue with conversation timeline, SLA and order context, limited to shops the user may access. | P1 | 14 |
-| FR-SVC-02 | Agents draft replies; sending requires approval according to risk, and only through channels the marketplace allows. Etsy's API has no buyer-messaging endpoint and usually no buyer email, so Etsy conversations are handled as *assisted replies*: the agent drafts, a person sends it in Etsy, and the system records it as sent manually. Email replies go only to people who contacted `support@` or `info@` directly (Dana). | P1 | 14 |
-| FR-SVC-03 | Customer data is minimized and masked by default; deletion and export follow the retention policy. | P0 | 14 |
+| FR-SVC-01 | Ticket queue with conversation timeline, SLA and order context, limited to shops the user may access. | P1 | 15 |
+| FR-SVC-02 | Agents draft replies; sending requires approval according to risk, and only through channels the marketplace allows. Etsy's API has no buyer-messaging endpoint and usually no buyer email, so Etsy conversations are handled as *assisted replies*: the agent drafts, a person sends it in Etsy, and the system records it as sent manually. Email replies go only to people who contacted `support@` or `info@` directly (Dana). | P1 | 15 |
+| FR-SVC-03 | Customer data is minimized and masked by default; deletion and export follow the retention policy. | P0 | 15 |
 
 ### 7.13 Marketing (MKT)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
 | FR-MKT-01 | Listing performance analytics, SEO improvements, sales and coupons through the marketplace's own tools. Etsy's API exposes only basic listing stats (views, favourites) and no traffic analytics, so performance metrics combine those with our own order data (Gal). | P2 | 21 |
-| FR-MKT-02 | Buyer data from Etsy is never turned into a marketing list. Consent is tracked in a consent ledger for any channel that needs it. | P0 | 14+ |
+| FR-MKT-02 | Buyer data from Etsy is never turned into a marketing list. Consent is tracked in a consent ledger for any channel that needs it. | P0 | 15+ |
 
 ### 7.14 Email (EML)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-EML-01 | Phase A: branded transactional email and internal alerts from `noreply@office.ht-co.app` through one provider adapter. | P0 | 6 |
-| FR-EML-02 | Phase B: shared inbound for `support@` and `info@` creates CRM threads and tickets through signed, idempotent webhooks (Email Intake & Routing automation). | P1 | 14 |
-| FR-EML-03 | Inbound mail is untrusted: spam and attachment policy, HTML sandboxing, no remote content by default, and no instructions executed from email content. | P0 | 14 |
+| FR-EML-01 | Phase A: branded transactional email and internal alerts from `noreply@office.ht-co.app` through one provider adapter. | P0 | 10 |
+| FR-EML-02 | Phase B: shared inbound for `support@` and `info@` creates CRM threads and tickets through signed, idempotent webhooks (Email Intake & Routing automation). | P1 | 15 |
+| FR-EML-03 | Inbound mail is untrusted: spam and attachment policy, HTML sandboxing, no remote content by default, and no instructions executed from email content. | P0 | 15 |
 | FR-EML-04 | Phase C and D: drafting with approval, then per-agent aliases (`<slug>@agents.ht-co.app`) with scoped send rights after abuse tests pass. Names are not authority; only an authorized service identity can send as an employee. | P2 | 15+ |
 
 ### 7.15 Notifications (NTF)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-NTF-01 | In-app notifications for incidents, approvals, budget thresholds, stuck tasks and completed repairs. | P0 | 6–7 |
-| FR-NTF-02 | Push on Android (FCM), Windows notifications, and web push with consent; deep links open the exact item. | P1 | 15–17 |
-| FR-NTF-03 | Preferences per severity and per shop. | P1 | 7 |
+| FR-NTF-01 | In-app notifications for incidents, approvals, budget thresholds, stuck tasks and completed repairs. | P0 | 5, 10 |
+| FR-NTF-02 | Push on Android (FCM), Windows notifications, and web push with consent; deep links open the exact item. | P1 | 16–18 |
+| FR-NTF-03 | Preferences per severity and per shop. | P1 | 5 |
 
 ### 7.16 Office and conversations (OFC)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-OFC-01 | The office shows departments and employees with states `IDLE, RUNNING, WAITING, NEEDS_APPROVAL, BLOCKED, OFFLINE`, driven only by recorded activity, never inferred or fabricated. | P1 | 15 |
-| FR-OFC-02 | When the agent worker is offline, the office opens read-only and never shows an employee as running. | P0 | 15 |
-| FR-OFC-03 | An accessible list view carries the same information as the visual office; animation respects reduced motion. | P0 | 15 |
-| FR-OFC-04 | An employee profile shows name, role, goals, activity, tools, skills, permissions, automations, sessions, memory summaries, model policy, evaluations and costs. | P1 | 15 |
-| FR-OFC-05 | Office Communication: conversations with Lia, Maya, one employee or a department; internal employee-to-employee messages; task threads and handoff history; searchable; approval cards inline. | P1 | 15 |
-| FR-OFC-06 | The Executive Office shows the manager overview, Noa's findings, Omer's proposals, approvals and business health. | P1 | 15 |
-| FR-OFC-07 | The Automation Center shows workflow definitions, triggers, executions, failures, retries and metrics, and allows authorized manual runs; the AI Tools Center shows tools, versions, status, capabilities, access and tests. | P1 | 15 |
-| FR-OFC-08 | The Decision & Model Observatory shows the Decision Advisor's status, routing policies, model usage, costs, routing history and evaluation results. | P1 | 15 |
+| FR-OFC-01 | The office shows departments and employees with states `IDLE, QUEUED, RUNNING, WAITING_EXTERNAL, WAITING_APPROVAL, BLOCKED, FAILED, OFFLINE` (derived on the server from task states and runs: `WAITING_FOR_EXTERNAL` → `WAITING_EXTERNAL`, `WAITING_FOR_APPROVAL` → `WAITING_APPROVAL`), driven only by recorded activity, never inferred or fabricated. | P1 | 7, 16 |
+| FR-OFC-02 | When the agent worker is offline, the office opens read-only and never shows an employee as running. | P0 | 7, 16 |
+| FR-OFC-03 | An accessible list view carries the same information as the visual office; animation respects reduced motion. | P0 | 16 |
+| FR-OFC-04 | An employee profile shows name, role, goals, activity, tools, skills, permissions, automations, sessions, memory summaries, model policy, evaluations and costs. | P1 | 16 |
+| FR-OFC-05 | Office Communication: conversations with Lia, Maya, one employee or a department; internal employee-to-employee messages; task threads and handoff history; searchable; approval cards inline. | P1 | 16 |
+| FR-OFC-06 | The Executive Office shows the manager overview, Noa's findings, Omer's proposals, approvals and business health. | P1 | 7, 16 |
+| FR-OFC-07 | The Automation Center shows workflow definitions, triggers, executions, failures, retries and metrics, and allows authorized manual runs; the AI Tools Center shows tools, versions, status, capabilities, access and tests. | P1 | 16 |
+| FR-OFC-08 | The Decision & Model Observatory shows the Decision Advisor's status, routing policies, model usage, costs, routing history and evaluation results. | P1 | 16 |
 
 ### 7.17 Administration and developer console (ADM)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
 | FR-ADM-01 | Manage users, roles, shop permissions and MFA enforcement. | P0 | 2–3 |
-| FR-ADM-02 | Secret references, token rotation status and provider key metadata, never secret values. | P1 | 4 |
-| FR-ADM-03 | Feature flags, per-employee model routing policies, budgets, kill switches per employee and automation, and notification policies. | P1 | 8–9 |
-| FR-ADM-04 | Engineering Console: engineering requests, incidents, optimization proposals, pull requests, deployments, releases and infrastructure health; safe actions in staging, by role. | P1 | 15, 17, 19 |
+| FR-ADM-02 | Secret references, token rotation status and provider key metadata, never secret values. | P1 | 9 |
+| FR-ADM-03 | Feature flags, per-employee model routing policies, budgets, kill switches per employee and automation, and notification policies. | P1 | 6–8 |
+| FR-ADM-04 | Engineering Console: engineering requests, incidents, optimization proposals, pull requests, deployments, releases and infrastructure health; safe actions in staging, by role. | P1 | 16, 18, 19 |
 
 ### 7.18 Audit and observability (AUD)
 
@@ -291,43 +291,43 @@ See §8 for the organization and [ADR-0012](../adr/0012-living-office-organizati
 | FR-AUD-01 | Every money, permission, publishing and approval action writes an append-only audit record: actor, role, organization, shop, entity, correlation ID, time, outcome. The UI cannot edit audit records. | P0 | 2+ |
 | FR-AUD-02 | Structured logs with `trace_id`, `shop_id` and no PII or secrets; error monitoring; worker heartbeats; queue age, backlog and retries; budget metrics. | P0 | 1+ |
 | FR-AUD-03 | Health endpoints `/healthz` (process alive) and `/readyz` (dependencies ready). | P0 | 1 |
-| FR-AUD-04 | Every meaningful operation (task step, automation execution, business event, tool invocation, message, decision, approval, incident, routing decision, engineering change, reconciliation, quality finding) writes an activity record with actor kind and ID, organization, shop, task, correlation and causation IDs, timestamps and outcome. Records hold business summaries, never private model reasoning, secrets or unnecessary PII. | P0 | 2, 7 |
-| FR-AUD-05 | Activity is queryable by actor, department, shop, task, kind and time, answering questions such as "what did Shon do today", "which automations failed", "did every Etsy order reach the CRM", "why did an employee choose a model". | P1 | 7, 15 |
+| FR-AUD-04 | Every meaningful operation (task step, automation execution, business event, tool invocation, message, decision, approval, incident, routing decision, engineering change, reconciliation, quality finding) writes an activity record with actor kind and ID, organization, shop, task, correlation and causation IDs, timestamps and outcome. Records hold business summaries, never private model reasoning, secrets or unnecessary PII. | P0 | 2, 5 |
+| FR-AUD-05 | Activity is queryable by actor, department, shop, task, kind and time, answering questions such as "what did Shon do today", "which automations failed", "did every Etsy order reach the CRM", "why did an employee choose a model". | P1 | 5, 16 |
 
 ### 7.19 Automation Department (AUT)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-AUT-01 | Every automation is a versioned definition with an 18-section specification (owner, trigger, schemas, preconditions, steps, dependencies, errors, retries, idempotency, timeouts and SLA, permissions, audit, tests, recovery, approvals, metrics) ([ADR-0013](../adr/0013-automation-engine.md)). | P0 | 5 |
-| FR-AUT-02 | One entry point serves every trigger kind (event, schedule, authorized agent tool, user action, workflow), each through the API with authorization. Employees trigger only automations granted to them, through the `automation.trigger` tool. | P0 | 5, 8 |
-| FR-AUT-03 | Executions are unique per automation and idempotency key; replays never repeat a business effect; failures retry with backoff and end in a dead-letter state with an incident. | P0 | 5 |
-| FR-AUT-04 | Automations call no model unless a named step needs reasoning, and that step goes through the router like any employee call. | P0 | 5+ |
-| FR-AUT-05 | The 15 initial workflows are those in `registry/automations/`; each is activated in its phase after its tests pass. | P0 | 5–18 |
+| FR-AUT-01 | Every automation is a versioned definition with an 18-section specification (owner, trigger, schemas, preconditions, steps, dependencies, errors, retries, idempotency, timeouts and SLA, permissions, audit, tests, recovery, approvals, metrics) ([ADR-0013](../adr/0013-automation-engine.md)). | P0 | 4 |
+| FR-AUT-02 | One entry point serves every trigger kind (event, schedule, authorized agent tool, user action, workflow), each through the API with authorization. Employees trigger only automations granted to them, through the `automation.trigger` tool. | P0 | 4, 6 |
+| FR-AUT-03 | Executions are unique per automation and idempotency key; replays never repeat a business effect; failures retry with backoff and end in a dead-letter state with an incident. | P0 | 4 |
+| FR-AUT-04 | Automations call no model unless a named step needs reasoning, and that step goes through the router like any employee call. | P0 | 4+ |
+| FR-AUT-05 | The 15 initial workflows are those in `registry/automations/`; each is activated in its phase after its tests pass. | P0 | 4–15 |
 
 ### 7.20 AI Tools Department (TOOL)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-TOOL-01 | Every tool is a versioned definition with owner, family, side-effect class, risk, data scope, audit requirement, readiness and contracts ([ADR-0014](../adr/0014-tool-registry.md)). | P0 | 8 |
-| FR-TOOL-02 | Employees receive least-privilege grants; read-only and mutating tools are separate; external and financial tools need approval below autonomy L3 and critical tools always. | P0 | 8 |
-| FR-TOOL-03 | Every tool invocation is recorded with employee, profile version, tool version, decision and outcome. | P0 | 8 |
+| FR-TOOL-01 | Every tool is a versioned definition with owner, family, side-effect class, risk, data scope, audit requirement, readiness and contracts ([ADR-0014](../adr/0014-tool-registry.md)). | P0 | 6 |
+| FR-TOOL-02 | Employees receive least-privilege grants; read-only and mutating tools are separate; external and financial tools need approval below autonomy L3 and critical tools always. | P0 | 6 |
+| FR-TOOL-03 | Every tool invocation is recorded with employee, profile version, tool version, decision and outcome. | P0 | 6 |
 
 ### 7.21 Quality and operations supervision (QOS)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-QOS-01 | Deterministic monitors verify event completeness, state transitions, deadlines, worker heartbeats and leases, queue health and required audit records, without model calls. | P0 | 10 |
-| FR-QOS-02 | Noa receives actionable exceptions, samples completed work by risk, reviews high-risk operations and checks results against business requirements and external evidence; findings carry evidence and a follow-up owner. | P0 | 10 |
-| FR-QOS-03 | A nightly supervisor finds unresolved, stalled and overdue tasks and expired sessions or leases, reconciles business status with external evidence, resumes or reassigns safely restartable work, opens incidents, requests approval for risky repairs and produces the daily operations report. | P0 | 10 |
-| FR-QOS-04 | Corrections are verified by follow-up; a finding closes only on evidence. | P0 | 10 |
+| FR-QOS-01 | Deterministic monitors verify event completeness, state transitions, deadlines, worker heartbeats and leases, queue health and required audit records, without model calls. | P0 | 14 |
+| FR-QOS-02 | Noa receives actionable exceptions, samples completed work by risk, reviews high-risk operations and checks results against business requirements and external evidence; findings carry evidence and a follow-up owner. | P0 | 7, 14 |
+| FR-QOS-03 | A nightly supervisor finds unresolved, stalled and overdue tasks and expired sessions or leases, reconciles business status with external evidence, resumes or reassigns safely restartable work, opens incidents, requests approval for risky repairs and produces the daily operations report. | P0 | 14 |
+| FR-QOS-04 | Corrections are verified by follow-up; a finding closes only on evidence. | P0 | 7, 14 |
 
 ### 7.22 Continuous optimization (OPT)
 
 | ID | Requirement | Pri | Phase |
 |---|---|---|---|
-| FR-OPT-01 | Cost, latency, failure, retry, tool-use and quality metrics are collected per employee, department, workflow and unit of work. | P1 | 13, 18 |
-| FR-OPT-02 | Optimization proposals follow `DETECTED → PROPOSED → EVALUATING → APPROVED / REJECTED → DEVELOPMENT → TESTING → DEPLOYED → MEASURING → VERIFIED / ROLLED_BACK`, each with baseline, evidence, affected tasks, proposed change, whether it can become deterministic, effort, expected benefit, risk, rollback plan and acceptance criteria. | P1 | 18 |
-| FR-OPT-03 | Omer proposes and measures; he never implements, approves his own proposals or changes policies directly. | P0 | 18 |
+| FR-OPT-01 | Cost, latency, failure, retry, tool-use and quality metrics are collected per employee, department, workflow and unit of work. | P1 | 13, 14 |
+| FR-OPT-02 | Optimization proposals follow `DETECTED → PROPOSED → EVALUATING → APPROVED / REJECTED → DEVELOPMENT → TESTING → DEPLOYED → MEASURING → VERIFIED / ROLLED_BACK`, each with baseline, evidence, affected tasks, proposed change, whether it can become deterministic, effort, expected benefit, risk, rollback plan and acceptance criteria. | P1 | 7, 14 |
+| FR-OPT-03 | Omer proposes and measures; he never implements, approves his own proposals or changes policies directly. | P0 | 7 |
 
 ### 7.23 Engineering and self-improvement (ENG)
 
@@ -347,19 +347,19 @@ Autonomy levels: **L0** read-only and suggestions, **L1** reversible actions ins
 
 | Department | Employee | Core responsibility | Start level | Phase |
 |---|---|---|---|---|
-| Executive Office | **Maya** — General Manager | Turns the owner's objectives into plans and tasks across departments; tracks progress and exceptions; escalates owner decisions; runs daily and weekly reviews | L1 | 15 |
-| Executive Office | **Noa** — Quality & Operations Supervisor | Independently verifies work against evidence: exceptions from monitors, risk-based sampling, high-risk review, handoffs, corrective tasks, the nightly review | L1 | 10 |
-| Executive Office | **Omer** — Continuous Optimization Officer | Measures cost, speed and quality; turns waste (often AI that could be code) into proposals with baselines; measures results | L0 | 18 |
+| Executive Office | **Maya** — General Manager | Turns the owner's objectives into plans and tasks across departments; tracks progress and exceptions; escalates owner decisions; runs daily and weekly reviews | L1 | 7, 16 |
+| Executive Office | **Noa** — Quality & Operations Supervisor | Independently verifies work against evidence: exceptions from monitors, risk-based sampling, high-risk review, handoffs, corrective tasks, the nightly review | L1 | 7, 14 |
+| Executive Office | **Omer** — Continuous Optimization Officer | Measures cost, speed and quality; turns waste (often AI that could be code) into proposals with baselines; measures results | L0 | 7, 14 |
 | Executive Office | **Lia** — Owner Assistant | The owner's interface: conversations, reports, alerts, approval requests, task tracking | L1 | 15 |
-| Product Research, Content & Catalog | **Shon** — Product Intelligence | Competitor research, sourcing, supplier and variation discovery, opportunity analysis, policy and IP screening → APPROVED / REVIEW / REJECTED | L0 | 12 |
+| Product Research, Content & Catalog | **Shon** — Product Intelligence | Competitor research, sourcing, supplier and variation discovery, opportunity analysis, policy and IP screening → APPROVED / REVIEW / REJECTED | L0 | 7, 12 |
 | Product Research, Content & Catalog | **Noam** — SEO & Copywriting | Titles, descriptions, tags, FAQs from verified facts, per store | L1 | 11 |
 | Product Research, Content & Catalog | **Nika** — Creative & Media | Authorized images and media with provenance and usage rights | L1 | 12 |
 | Product Research, Content & Catalog | **Daniel** — Catalog & Pricing Architect | Listings, SKUs, variations, consistency checks, Decimal pricing; the publish-ready specification; the Listing Health audit | L1 | 11 |
 | Procurement & Finance | **Tom** — Procurement & Supplier Quotes | Initial quotes and supplier mappings, exceptions, commercial recommendations | L2 | 13 |
 | Procurement & Finance | **Roni** — Finance Controller | Revenue, costs, fees, refunds, profitability and AI cost; verifies reconciliation discrepancies; forecasts | L0 | 13 |
-| Order Assurance | **Eitan** — Fulfillment Inspector | Investigates fulfillment exceptions and discrepancies between Etsy, AutoVA and the CRM; verifies recovery | L1 | 9 |
+| Order Assurance | **Eitan** — Fulfillment Inspector | Investigates fulfillment exceptions and discrepancies between Etsy, AutoVA and the CRM; verifies recovery | L1 | 10 |
 | Marketing | **Gal** — Marketing & Growth | Performance analysis, growth opportunities, compliant campaigns and experiments | L0 | 21 |
-| Customer Service | **Dana** — Customer Service | Inquiries through authorized channels, order lookup, drafted or permitted replies, escalation | L2 | 14 |
+| Customer Service | **Dana** — Customer Service | Inquiries through authorized channels, order lookup, drafted or permitted replies, escalation | L2 | 15 |
 | Engineering & Development | **Alex** — Lead Software & Platform Engineer | Features, automations, infrastructure, APIs; implements approved proposals; tests, migrations, docs, pull requests | L1 | 19 |
 | Engineering & Development | **Amir** — Debugger & Reliability Engineer | Incidents, logs and traces, root causes, allowlisted reversible repairs, regression tests, verified recovery | L1 | 19 |
 | Engineering & Development | **Iris** — Agent Systems & Experience Engineer | Agent definitions, skills, tools, prompts, memory and evaluations; the office experience; prototypes and pull requests, never unreviewed production changes | L1 | 19 |
@@ -437,7 +437,7 @@ Request in AutoVA → task waits `WAITING_FOR_QUOTES` (no model calls while wait
 | Web | TypeScript, React, design tokens as CSS variables | DigitalOcean App Platform static site at `app.ht-co.app` |
 | Windows | C#/.NET, WinUI 3, Windows App SDK | Signed MSIX through GitHub Releases (later WinGet) |
 | Android | Kotlin, Jetpack Compose | Google Play internal testing, then production |
-| API and workers | Python, FastAPI, LangGraph (behind a port) | DigitalOcean App Platform: `api` web service and one `agent-worker` (employees and automations); an `automation-worker` splits out only when isolation or measured load justifies it; later an isolated `browser-runner`. No container per employee. |
+| API and workers | Python, FastAPI, Claude Agent SDK runtime (behind a port; LangGraph the alternative adapter) | DigitalOcean App Platform: `api` web service and one `agent-worker` (employees and automations); an `automation-worker` splits out only when isolation or measured load justifies it; later an isolated `browser-runner`. No container per employee. |
 | Data | Supabase Pro (Postgres, Auth, Storage, Queues) | Managed |
 
 ## 12. Success metrics
@@ -459,7 +459,7 @@ The system is ready for limited autonomous operation when all of these hold:
 11. Every active employee and automation passed its evaluation and readiness gate; scenarios A–J of the testing strategy pass.
 12. The office has improved at least one workflow with savings measured after deployment and no quality loss.
 
-### 12.2 Business KPIs (baselined in Phase 5, tracked monthly)
+### 12.2 Business KPIs (baselined in Phase 9, tracked monthly)
 
 - Late or missing tracking rate, and share detected before the buyer asks.
 - "Not as described" reviews and refund rate (target: clear decline after Listing Health).
@@ -471,7 +471,7 @@ The system is ready for limited autonomous operation when all of these hold:
 ## 13. Constraints and assumptions
 
 - Hosting is DigitalOcean App Platform; data, auth and queues are Supabase Pro. No self-managed VPS.
-- The agent runtime is LangGraph behind an adapter port; the decision is confirmed by the Phase 8 proof-of-concept gates. The organization (employees, automations, tools, records) never depends on it (FR-AGT-10).
+- The agent runtime is the Claude Agent SDK behind an adapter port, with API-key billing for every hosted run; LangGraph stays as the alternative adapter ([ADR-0016](../adr/0016-claude-native-agent-runtime.md), [ADR-0017](../adr/0017-auth-and-billing-policy.md)). The decision is confirmed by the Phase 6 proof-of-concept gates. The organization (employees, automations, tools, records) never depends on it (FR-AGT-10).
 - Model names, IDs and prices are never fixed in documents or code; they live in the verified model catalog.
 - Etsy API capabilities depend on the app's access level and must be verified with the owner's real account.
 - AutoVA has no public API documented as of 2026-10-14; integration depends on what AutoVA can provide.

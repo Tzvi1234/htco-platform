@@ -9,17 +9,19 @@ This folder is the system's source of truth: what we are building, in what order
 | Understand the product | [Product requirements (PRD)](product/PRD.md) |
 | Know what the MVP is | [MVP definition](product/MVP.md) |
 | See the build order and current phase | [Master plan](plan/PLAN.md) |
+| See the whole system on one page | [Spec sheet](product/SPEC_SHEET.md) |
 | Understand how the system is built | [Software design](architecture/SOFTWARE_DESIGN.md) |
+| Know where code goes | [Code design](architecture/CODE_DESIGN.md) |
 | Know the rules for any change | [Engineering rules](engineering/ENGINEERING_RULES.md) |
-| Write or review tests | [Testing strategy](engineering/TESTING_STRATEGY.md) |
+| Write or review tests | [Testing strategy](engineering/TESTING_STRATEGY.md) and the [`testing` skill](../.claude/skills/testing/SKILL.md) |
 
 ## Map
 
 | Area | Documents |
 |---|---|
-| **Product** | [PRD](product/PRD.md) · [MVP](product/MVP.md) · [Glossary](product/GLOSSARY.md) · [Assumptions and open decisions](product/ASSUMPTIONS.md) |
-| **Plan** | [Master plan](plan/PLAN.md) · [Phases 0–17](plan/phases/) |
-| **Architecture** | [Software design](architecture/SOFTWARE_DESIGN.md) · [Data model](architecture/DATA_MODEL.md) · [Event catalog](architecture/EVENT_CATALOG.md) · [Permission matrix](architecture/PERMISSION_MATRIX.md) · [Threat model](architecture/THREAT_MODEL.md) |
+| **Product** | [Spec sheet](product/SPEC_SHEET.md) · [PRD](product/PRD.md) · [MVP](product/MVP.md) · [Glossary](product/GLOSSARY.md) · [Assumptions and open decisions](product/ASSUMPTIONS.md) |
+| **Plan** | [Master plan](plan/PLAN.md) · [Phases 0–21](plan/phases/) |
+| **Architecture** | [Software design](architecture/SOFTWARE_DESIGN.md) · [Code design](architecture/CODE_DESIGN.md) · [Data model](architecture/DATA_MODEL.md) · [Event catalog](architecture/EVENT_CATALOG.md) · [Permission matrix](architecture/PERMISSION_MATRIX.md) · [Threat model](architecture/THREAT_MODEL.md) |
 | **Decisions** | [Architecture decision records](adr/README.md) |
 | **Engineering** | [Engineering rules](engineering/ENGINEERING_RULES.md) · [Testing strategy](engineering/TESTING_STRATEGY.md) · [Toolchain](engineering/TOOLCHAIN.md) |
 | **Features** | [Feature docs and template](features/README.md) |
@@ -30,8 +32,8 @@ This folder is the system's source of truth: what we are building, in what order
 | Document | Phase |
 |---|---|
 | `packages/contracts/openapi.yaml` | 1 |
-| Event JSON Schemas in `packages/contracts/events/` | 5 |
-| `docs/operations/RUNBOOK.md`, `docs/operations/SLO.md` | 16 (entries start in feature `operations.md` files from Phase 1) |
+| Event JSON Schemas in `packages/contracts/events/` | 4 |
+| `docs/operations/RUNBOOK.md`, `docs/operations/SLO.md` | 20 (entries start in feature `operations.md` files from Phase 1) |
 | Model catalog verification record | 8 |
 
 ## How these documents stay correct

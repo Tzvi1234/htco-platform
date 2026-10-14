@@ -5,11 +5,11 @@ description: Test-driven development protocol for htco-platform. Use whenever wr
 
 # Test-driven development in htco-platform
 
-Reference: `docs/engineering/TESTING_STRATEGY.md`. This skill is the procedure.
+Reference: `docs/engineering/TESTING_STRATEGY.md`. This skill is the procedure; the [`testing`](../testing/SKILL.md) skill says how to write each kind of test correctly. Load both.
 
 ## The loop
 
-1. **Pick one acceptance criterion** from the slice (for example `AC-5.4.1`). Write it as Given / When / Then if it is not already.
+1. **Pick one acceptance criterion** from the slice (for example `AC-4.4.1`). Write it as Given / When / Then if it is not already.
 2. **Choose the test level** (table below). Prefer the lowest level that can prove the behaviour, plus one test at the boundary where it is exposed.
 3. **RED:** write the test. Run only that test. Confirm it fails, and fails for the expected reason (an assertion about the behaviour, not an import error or typo). If it passes immediately, the test is wrong or the behaviour already exists: find out which.
 4. **GREEN:** write the simplest production code that makes it pass. Run the test, then the package's suite.
@@ -29,14 +29,15 @@ Reference: `docs/engineering/TESTING_STRATEGY.md`. This skill is the procedure.
 | Endpoint | API tests with `httpx.AsyncClient(transport=ASGITransport(app))` under the AnyIO plugin | Fakes at the port level |
 | Webhook | Signature, timestamp, replay and duplicate tests on the raw body | — |
 | Worker | Duplicate message, crash before and after commit, lease expiry, dead-letter | Real Postgres |
-| Agent graph or node | Graph tests with a fake model gateway and scripted outputs; interrupt and resume; denied tools; injection fixtures | `FakeModelGateway`, in-memory or Postgres saver |
+| Claude runtime adapter | Options checks; scripted SDK message streams through the transport seam; bridge denials; crash mid-step resumes from the task brief; injection fixtures | Scripted streams, fake gateway; never the network |
+| LangGraph adapter (alternative) | Graph tests with a fake model gateway and scripted outputs; interrupt and resume; denied tools | `FakeModelGateway`, in-memory or Postgres saver |
 | Agent quality | Evals on a gold dataset (not unit tests) | Real models, nightly |
 
 ## Naming and structure
 
 - `test_<unit>__<scenario>__<expected>()`, for example `test_ingest_receipt__same_event_twice__creates_one_order`.
 - Arrange, Act, Assert, separated by blank lines. One behaviour per test.
-- Reference the acceptance criterion: `@pytest.mark.ac("AC-5.4.1")`.
+- Reference the acceptance criterion: `@pytest.mark.ac("AC-4.4.1")`.
 - Builders for test data (`an_order().with_items(2).paid()`), never long literal dictionaries repeated across tests.
 - No sleeps. Inject the clock; wait on conditions with timeouts.
 

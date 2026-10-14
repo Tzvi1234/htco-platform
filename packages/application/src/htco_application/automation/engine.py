@@ -6,7 +6,7 @@ trigger kind and, for employees, the employee's automation grants. An execution 
 `(automation_id, idempotency_key)`: a replayed trigger returns the existing execution and never
 runs the business action again. Failures follow the automation's retry policy and end in the
 dead-letter state. This version runs a handler in-process against an `ExecutionStore` port;
-durable queuing (inbox, outbox, leases) arrives with the job queue in Phase 5.
+durable queuing (inbox, outbox, leases) arrives with the job queue in Phase 4.
 """
 
 import uuid

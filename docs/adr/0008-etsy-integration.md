@@ -1,6 +1,6 @@
 # ADR-0008: Etsy integration — Seller App, webhooks plus reconciliation, read-first tracking
 
-- **Status:** Accepted; access details to be validated in Phase 0 (spike) and Phase 4 (capability probes) with the owner's account
+- **Status:** Accepted; access details to be validated in Phase 0 (spike) and Phase 9 (capability probes) with the owner's account
 - **Date:** 2026-10-14
 - **Deciders:** Owner, engineering
 
@@ -44,11 +44,11 @@ Address and email scopes are not requested unless a later feature proves it need
 
 - Positive: no single point of failure for ingest; no accidental duplicate shipment emails to buyers; works under the strictest access tier.
 - Negative: some automation (tracking writes, buyer messaging) may stay manual depending on Etsy's rules.
-- Follow-ups: Phase 0 spike with the owner's account (Seller App registration, webhook portal access, rate limits, region of the shop); Phase 4 capability probes.
+- Follow-ups: Phase 0 spike with the owner's account (Seller App registration, webhook portal access, rate limits, region of the shop); Phase 9 capability probes.
 
 ## Validation
 
-Phase 5 tests: duplicate and replayed webhooks, missed webhook recovered by reconciliation, out-of-order updates, 429 handling. Phase 6: no shipment write ever happens without a capability, a fresh re-read and a human confirmation.
+Phase 4 and Phase 9 tests: duplicate and replayed webhooks, missed webhook recovered by reconciliation, out-of-order updates, 429 handling. Phase 10: no shipment write ever happens without a capability, a fresh re-read and a human confirmation.
 
 ## Validation log
 
