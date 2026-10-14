@@ -44,9 +44,9 @@ The frame every later feature is built inside: a uv workspace whose packages fol
 | AC-1.7.1 | An error raised by a diagnostic endpoint (enabled only outside production) appears in error monitoring with `request_id` and `trace_id`, and without request bodies, cookies or secret headers. | 1.7 | Pass in tests with a capturing transport; the real Sentry project is part 2 |
 | AC-1.7.2 | A request's `trace_id` appears in all its log lines and is propagated to outgoing HTTP calls (checked against a recorded request). | 1.7 | Pass |
 | AC-1.7.3 | A failed deployment and a crash-looping container each send one alert to the owner. | 1.7 (part 2, with the deployment) | Open |
-| AC-1.4.1 | A pull request with a failing test, lint error, type error, forbidden import, secret-like string or vulnerable pinned dependency cannot merge (`ci-gate` red). | 1.4 | Open |
-| AC-1.4.2 | A pull request that adds `@pytest.mark.skip` without a "Test changes" section fails `test-integrity`. | 1.4 | Open |
-| AC-1.4.3 | Every `uses:` line references a full commit SHA (checked by a script). | 1.4 | Open |
+| AC-1.4.1 | A pull request with a failing test, lint error, type error, forbidden import, secret-like string or vulnerable pinned dependency cannot merge (`ci-gate` red). | 1.4 | Pass |
+| AC-1.4.2 | A pull request that adds `@pytest.mark.skip` without a "Test changes" section fails `test-integrity`. | 1.4 | Pass |
+| AC-1.4.3 | Every `uses:` line references a full commit SHA (checked by a script). | 1.4 | Pass |
 
 Slices 1.2 to 1.7 add their criteria here as they start; the full list is in the [phase plan](../../plan/phases/phase-01-walking-skeleton.md).
 

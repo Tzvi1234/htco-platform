@@ -14,7 +14,7 @@
 - [x] 1.1 Workspace and tooling
 - [x] 1.2 API skeleton
 - [x] 1.3 Contract-first OpenAPI
-- [ ] 1.4 Continuous integration
+- [x] 1.4 Continuous integration
 - [ ] 1.5 Container and deployment
 - [ ] 1.6 Agent guardrails and repository rules
 - [ ] 1.7 Error monitoring, tracing and alerts

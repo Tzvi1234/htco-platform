@@ -90,6 +90,17 @@
 **Deployed check:** part 2.
 **Open issues:** AC-1.5.1, AC-1.5.3, AC-1.5.4 (part 2).
 
+### Verification — 1.4 — 2026-10-14
+
+| Acceptance criterion | Covered by tests | Verified for real | Result |
+|---|---|---|---|
+| AC-1.4.1 | `ci-gate` job | The first run of pull request #5 failed in the `image` job (a connection reset during the health probe); `ci-gate` then failed with `::error::image: failure`, so the pull request could not be green while every other job passed. The per-failure demo (failing test, lint error, type error, forbidden import, secret-like string, vulnerable dependency) is the Phase 1 demo with the owner. | Pass |
+| AC-1.4.2 | `tests/tools/test_test_integrity.py` | Pull requests #3 and #4 changed quality-gate settings; `test-integrity` passed because each explained them under "Test changes". A local dry run of the same check without an explanation exited 1 listing the findings. | Pass |
+| AC-1.4.3 | `tests/tools/test_check_action_pins.py` | The `workflows` job (actionlint, zizmor, SHA pins) passed on every pull request; zizmor found nothing. | Pass |
+
+**Observed:** the first pipeline run (pull request #2) finished all seven jobs in 32 seconds; gitleaks scanned the full history ("no leaks found"); osv-scanner checked `uv.lock` ("No issues found").
+**Open issues:** Renovate starts once the owner installs its GitHub App.
+
 ### Verification — 1.3 — 2026-10-14
 
 | Acceptance criterion | Covered by tests | Verified for real | Result |
