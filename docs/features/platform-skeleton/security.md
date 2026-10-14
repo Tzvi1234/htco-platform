@@ -27,6 +27,7 @@ flowchart LR
 | CI workflow | Elevation of privilege: a job token used to push or approve | `permissions: {}` at the top, `contents: read` per job, no persisted checkout credentials; zizmor audits the workflow | `workflows` job |
 | CI workflow | Tampering: script injection through the pull request title or body | Title, body and base SHA passed as environment variables, never interpolated into scripts | zizmor `template-injection` audit |
 | CI scanners | Tampering: a swapped scanner binary | Release binaries verified against pinned SHA-256 sums before use | `security` job |
+| Agent sessions | Repudiation: an agent ends its turn claiming success while checks fail | Stop hook runs `just check-fast` and refuses the stop; a second failure is shown to the user | `tests/tools/test_claude_hooks.py` |
 | Tests | Repudiation: a test silently weakened to get green | `test-integrity` requires a written "Test changes" explanation | `tests/tools/test_test_integrity.py` |
 
 ### API (slice 1.2)

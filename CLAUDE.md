@@ -17,6 +17,8 @@ The owner writes in Hebrew. Answer in Hebrew in conversation. Everything committ
 3. Find the current phase in [`docs/plan/PLAN.md`](docs/plan/PLAN.md) and the slice you are working on in `docs/plan/phases/`. Work only on planned slices or issues.
 4. Before calling anything done: load `feature-verification`, verify for real, and record the evidence. Then load `feature-docs` and update the documentation in the same pull request.
 
+Project hooks in `.claude/settings.json` back this up: every Python file you edit is formatted, and when code or configuration changed, the end of your turn runs `just check-fast` and is refused while it fails. Fix the reported problem; never weaken a test to get past the hook.
+
 ## Sources of truth
 
 | Topic | Document |
