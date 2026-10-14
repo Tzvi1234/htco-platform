@@ -1,0 +1,41 @@
+# Git hooks, run by prek (`just setup` installs them). CI re-runs the same checks, so hooks are a
+# fast local safety net, not the gate. Tools run through `uv run`, so versions come from uv.lock.
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  - repo: builtin
+    hooks:
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace
+        exclude: \.md$
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+      - id: conventional-commit
+        name: Conventional Commits message
+        entry: uv run python -m tools.conventional_commit
+        language: system
+        stages: [commit-msg]

@@ -19,7 +19,7 @@
 
 ---
 
-> **Status:** Phase 0 — planning complete, awaiting approval. Application code starts in Phase 1. See the [master plan](docs/plan/PLAN.md).
+> **Status:** Phase 1 — building the walking skeleton (workspace, quality gates, API skeleton, CI). See the [master plan](docs/plan/PLAN.md).
 
 ## What HTCO OS does
 
@@ -67,6 +67,8 @@ packages/platform/      Settings, logging, tracing, crypto
 packages/contracts/     OpenAPI and event schemas
 supabase/               Migrations and database tests
 infra/digitalocean/     App spec
+tests/                  Tests, one folder per package, plus architecture and end-to-end
+tools/                  Scripts used by Git hooks and CI
 docs/                   Product, plan, architecture, decisions, engineering
 ```
 
@@ -90,7 +92,15 @@ Every change starts from a planned slice with acceptance criteria, is written **
 
 ## Getting started
 
-Local development setup arrives with the walking skeleton in [Phase 1](docs/plan/phases/phase-01-walking-skeleton.md); this section will then describe how to run the stack.
+You need [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.13 (and Go, which the gitleaks hook builds with). uv installs the pinned Python, `just` and every tool from `uv.lock`.
+
+```bash
+uv run just setup   # install the workspace and the Git hooks
+uv run just check   # formatting, lint, types, architecture contracts, tests and coverage
+uv run just         # list every recipe
+```
+
+All dependencies respect a seven-day minimum release age (`exclude-newer` in `pyproject.toml`). Running the API locally arrives with [slice 1.2](docs/plan/phases/phase-01-walking-skeleton.md).
 
 ## Security
 

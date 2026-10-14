@@ -33,4 +33,3 @@ Phase 0: owner's answer from AutoVA recorded in [ASSUMPTIONS.md](../product/ASSU
 ## Validation log
 
 No entries yet.
-

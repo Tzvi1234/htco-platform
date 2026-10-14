@@ -47,20 +47,27 @@ packages/platform/        Settings, logging, tracing, crypto, clock, IDs
 packages/contracts/       openapi.yaml, event schemas
 supabase/                 Migrations and pgTAP tests (single schema source)
 infra/digitalocean/       App spec
+tests/                    All Python tests, one folder per package (tests/api, tests/domain…) plus architecture and e2e
+tools/                    Repository scripts used by hooks and CI (with tests in tests/tools)
 docs/                     Product, plan, architecture, ADRs, engineering, features, cost
 ```
+
+Folders appear when their first slice needs them; each `packages/<name>` is a uv workspace member whose Python package is `htco_<name>` (for example `packages/agent-runtime` → `htco_agent_runtime`).
 
 Dependency rule (enforced in CI): `domain` ← `application` ← adapters ← `apps`/`workers`. Only the model router (`htco_model_router`) imports model SDKs; only the agent runtime (`htco_agent_runtime`) imports LangGraph; only persistence imports the database driver.
 
 ## Commands
 
-There is no code yet (Phase 0). Each command is created by the slice listed below, which must also update this table. If a command does not exist yet, say so; never claim it ran.
+The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `just` and every tool at the versions in `uv.lock`. Run recipes as `uv run just <recipe>` (or plain `just <recipe>` with the virtual environment active). Each command is created by the slice listed below, which must also update this table. If a command does not exist yet, say so; never claim it ran.
 
 | Command | What it runs | Created in |
 |---|---|---|
-| `just check` | Format, lint, types, architecture contracts, tests | Slice 1.1 |
-| `just check-fast` | Lint, types, unit tests (used by the agent hooks) | Slice 1.1 |
-| `just test` | Tests only | Slice 1.1 |
+| `just setup` | Install the workspace and the Git hooks (prek: ruff, gitleaks, file hygiene, Conventional Commits) | Slice 1.1 |
+| `just check` | Formatting, lint, types, architecture contracts, tests with coverage floors (what CI runs) | Slice 1.1 |
+| `just check-fast` | Lint, types and tests without coverage (used by the agent hooks) | Slice 1.1 |
+| `just test` | Tests with branch coverage; fails below the floors (domain 95%, application 90%, total 80%) | Slice 1.1 |
+| `just fmt` | Format and apply safe lint fixes | Slice 1.1 |
+| `just lint`, `just types`, `just arch` | Ruff, mypy (strict), architecture contracts (import-linter and layer purity tests) | Slice 1.1 |
 | `just contract` | OpenAPI snapshot, breaking-change check, Schemathesis | Slice 1.3 |
 | `just up` | Local API (the worker joins in Phase 5) | Slice 1.2 |
 | `just db-start`, `just db-reset`, `just db-test` | Local Supabase stack, migrations, pgTAP tests | Slice 2.1 |

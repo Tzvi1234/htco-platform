@@ -4,13 +4,13 @@
 
 | Level | What is covered | Location |
 |---|---|---|
-| Domain unit / property | … | `packages/domain/tests/…` |
-| Application | … | `packages/application/tests/…` |
-| Integration (Postgres) | … | `packages/persistence/tests/…` |
+| Domain unit / property | … | `tests/domain/…` |
+| Application | … | `tests/application/…` |
+| Integration (Postgres) | … | `tests/persistence/…` |
 | Database (pgTAP) | … | `supabase/tests/…` |
-| Adapter contract | … | `packages/integrations/tests/…` |
-| API | … | `apps/api/tests/…` |
-| Agent graph / evals | … | `packages/agent-runtime/tests/…`, `evals/…` |
+| Adapter contract | … | `tests/integrations/…` |
+| API | … | `tests/api/…` |
+| Agent graph / evals | … | `tests/agent_runtime/…`, `evals/…` |
 | End to end | … | `tests/e2e/…` |
 
 ## Acceptance criteria coverage

@@ -37,7 +37,7 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 | A-07 | AutoVA's automatic supplier ordering is active for the shop (their site calls it a concept demonstration) | Owner's AutoVA account | Owner | Phase 0 | Open |
 | A-08 | Etsy rate limits for our key are enough for polling every few minutes | Developer portal numbers | Owner | Phase 0 | Open |
 | A-09 | Etsy's current API Terms allow storing order data for our retention periods and sending buyer data to AI models when needed | Owner reads the live terms | Owner | Phase 4 | Open |
-| A-10 | LangGraph works on Python 3.14 in our setup | Smoke test in Phase 1 CI | Platform | Phase 1 | Open |
+| A-10 | LangGraph works on Python 3.14 in our setup | Smoke test in Phase 1 CI | Platform | Phase 1 | Verified 2026-10-14 (langgraph 1.2.14 on CPython 3.14.8, `tests/agent_runtime`) |
 | A-11 | The Python Supabase client supports a server-side PKCE exchange (or the Auth REST API is used directly) | Spike | Platform | Phase 2 | Open |
 | A-12 | Server-sent events survive DigitalOcean's request timeout with reconnects, or Supabase Realtime is needed | Spike | Platform | Phase 13 | Open |
 | A-13 | Supabase Micro compute (60 direct connections) is enough for API, worker and agent pools | Load test | Platform | Phase 8 | Open |

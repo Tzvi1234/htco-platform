@@ -53,4 +53,3 @@ Phase 5 tests: duplicate and replayed webhooks, missed webhook recovered by reco
 ## Validation log
 
 No entries yet.
-

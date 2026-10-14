@@ -157,7 +157,8 @@ Before a slice is done, consider each item and either test it or note why it doe
 
 ## 9. Conventions
 
-- Tests live next to the package they test (`packages/<pkg>/tests/…`), with cross-package end-to-end tests under `tests/e2e/`.
+- Tests live in one tree, `tests/`, with one folder per package (`tests/domain`, `tests/application`, `tests/api`, `tests/agent_runtime`, …) plus `tests/architecture`, `tests/tools` and `tests/e2e`. One tree keeps test module names unique, so a single mypy run type-checks every test.
+- Warnings are errors (`filterwarnings = error`); a third-party warning is silenced only by a targeted filter with a comment. Third-party pytest plugins load only from the allow-list in `pyproject.toml`.
 - Test names describe behaviour: `test_ingest_receipt__duplicate_event__is_a_no_op`.
 - Acceptance criterion IDs from the feature's `overview.md` appear in test docstrings or markers (for example `@pytest.mark.ac("AC-5.4.1")`), so `tests.md` can list coverage per criterion.
 - One logical assertion per test; use helpers for complex comparisons.

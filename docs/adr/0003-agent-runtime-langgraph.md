@@ -46,4 +46,3 @@ Six gates (defined in Phase 8) must pass before any agent gains autonomy: a dupl
 ## Validation log
 
 No entries yet.
-

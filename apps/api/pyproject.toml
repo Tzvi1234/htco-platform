@@ -1,0 +1,19 @@
+[project]
+name = "htco-api"
+version = "0.0.0"
+description = "HTCO HTTP API: routes, request and response schemas, and the composition root."
+requires-python = "==3.14.*"
+dependencies = [
+  "htco-application",
+  "htco-domain",
+  "htco-platform",
+]
+
+[tool.uv.sources]
+htco-application = { workspace = true }
+htco-domain = { workspace = true }
+htco-platform = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"

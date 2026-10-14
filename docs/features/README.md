@@ -14,4 +14,4 @@ Every feature has its own folder here, created from [`_template/`](_template/) a
 
 | Feature | Phase | Status |
 |---|---|---|
-| — | — | Features are added from Phase 1 onward |
+| [platform-skeleton](platform-skeleton/overview.md) | 1 | In progress |

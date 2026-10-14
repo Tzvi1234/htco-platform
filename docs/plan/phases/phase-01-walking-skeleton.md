@@ -7,11 +7,11 @@
 | **Size** | M |
 | **Depends on** | Phase 0 (GitHub Pro, region, DigitalOcean team) |
 | **Requirements** | FR-AUD-02, FR-AUD-03 |
-| **Status** | Not started |
+| **Status** | In progress |
 
 ## Progress
 
-- [ ] 1.1 Workspace and tooling
+- [x] 1.1 Workspace and tooling
 - [ ] 1.2 API skeleton
 - [ ] 1.3 Contract-first OpenAPI
 - [ ] 1.4 Continuous integration
