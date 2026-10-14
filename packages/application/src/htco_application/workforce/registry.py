@@ -1,7 +1,7 @@
 """The workforce registry: employees, tools, automations and advisors as reviewed data.
 
 The office is configuration, not code: each employee, tool and automation is a versioned
-document under `registry/` (TOML in the repository; database rows from Phase 6). This module
+document under `registry/` (TOML in the repository; database rows from Phase 8). This module
 turns parsed documents into validated domain objects and checks that they fit together (every
 granted tool exists, every owner is an employee, an advisor never takes an employee's place).
 It reports every problem at once, so a review sees the whole picture.

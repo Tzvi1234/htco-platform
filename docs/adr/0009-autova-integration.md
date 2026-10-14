@@ -28,7 +28,7 @@ The original planning brief assumes AutoVA places supplier orders automatically 
 
 ## Validation
 
-Phase 0: owner's answer from AutoVA recorded in [ASSUMPTIONS.md](../product/ASSUMPTIONS.md). Phase 10: tracking detection works with no AutoVA credentials at all.
+Phase 0: owner's answer from AutoVA recorded in [ASSUMPTIONS.md](../product/ASSUMPTIONS.md). Phase 6: tracking detection works with no AutoVA credentials at all.
 
 ## Validation log
 

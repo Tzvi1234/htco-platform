@@ -72,7 +72,7 @@ Plus **Jev**, a shared Decision Advisor service with an identity and activity hi
 |---|---|
 | 01 General Manager / Orchestrator | Maya |
 | 02 Quality Supervisor | Noa, now with deterministic monitors, the nightly supervisor and follow-up verification |
-| 03 Optimization Officer | Omer, active from Phase 7 (pilot scope; full scope in Phase 14) with a measured proposal lifecycle |
+| 03 Optimization Officer | Omer, active from Phase 18 with a measured proposal lifecycle |
 | 04 Debugger | Amir (Engineering) |
 | 05 Owner Assistant | Lia |
 | 06 Competitor Research, 07 Product Sourcer, 08 Product Classifier | Shon (merged) |
@@ -89,7 +89,7 @@ Plus **Jev**, a shared Decision Advisor service with an identity and activity hi
 
 ### Rules
 
-1. **Configuration is data, versioned and reviewed.** Each employee, automation, tool and advisor is a document in `registry/` (database rows with versions from Phase 6). Every employee has an Agent Specification Sheet of 22 sections (`EMPLOYEE_SPEC_SECTIONS`); every automation a specification of 18 (`AUTOMATION_SPEC_SECTIONS`). Sections still being designed are marked `draft`.
+1. **Configuration is data, versioned and reviewed.** Each employee, automation, tool and advisor is a document in `registry/` (database rows with versions from Phase 8). Every employee has an Agent Specification Sheet of 22 sections (`EMPLOYEE_SPEC_SECTIONS`); every automation a specification of 18 (`AUTOMATION_SPEC_SECTIONS`). Sections still being designed are marked `draft`.
 2. **Configuration is not readiness.** An employee or automation becomes `ready` only with every section defined and a passed evaluation; the domain refuses anything else. Today all 16 employees, 15 automations and 40 tools are `draft`.
 3. **Framework independence.** `EmployeeIdentity`, `EmployeeProfile`, `BusinessTask`, `AutomationDefinition`, `AutomationExecution`, `ToolDefinition`, `ModelRoutingPolicy`, `ActivityRecord` and `OptimizationProposal` are plain domain types. Runtimes implement the `AgentRuntime` port (`invoke`, `resume`, `interrupt`, `cancel`, `inspect`). LangGraph state and checkpoints are runtime concerns, never the source of truth for orders, money, products or identities. LangGraph orchestrates reasoning, not deterministic actions.
 4. **The CRM is the single source of business truth.** Every meaningful action produces an activity record with organization, shop, actor (`user`, `employee`, `automation`, `advisor`, `system`), task, correlation and causation IDs and an outcome: business summaries, never private model reasoning.
@@ -105,14 +105,14 @@ Plus **Jev**, a shared Decision Advisor service with an identity and activity hi
 | **Extend** | Policy engine (human roles today; employee and automation actors join through `ActorRef` and tool access); Model Gateway (per-employee policies); `DecisionPort` → `DecisionAdvisor`; PERMISSION_MATRIX §2; event catalog; data model; Phase 2 (actors in audit, employee registry tables) |
 | **Refactor** | PRD §1, §4, §6–§9, §11–§12; SOFTWARE_DESIGN §3, §4, §9, §12; MVP; phases 5–7 (automation engine, activity records); clients brand book on agent names; office UX |
 | **Replace** | Phase files 8–17 by phases 8–21 of the new plan; PRD §8 role table |
-| **Defer** | Storage and APIs for the registry (Phase 6), the durable automation engine (Phase 4), supervision (Phases 7 and 14), optimization (Phases 7 and 14), engineering requests (Phase 19) |
+| **Defer** | Storage and APIs for the registry (Phase 8), the durable automation engine (Phase 5), supervision (Phase 10), optimization (Phase 18), engineering requests (Phase 19) |
 | **Remove after compatibility verification** | Nothing in code; the 18-role table stays in this ADR as history |
 
 ## Consequences
 
 - Positive: AI cost and risk concentrate where judgment is needed; every concept has one owner and one test strategy; the organization survives a runtime change; supervision and optimization become measurable functions instead of prompts.
 - Negative: more concepts and registry documents to maintain; employee names must be consistent across both repositories and the design system.
-- Follow-ups: database tables and APIs for the registry (Phase 6); the activity record store (Phases 2 and 5); agent-by-agent design and evaluation before each activation; the clients' office information architecture (Phase 16).
+- Follow-ups: database tables and APIs for the registry (Phase 8); the activity record store (Phases 2 and 7); agent-by-agent design and evaluation before each activation; the clients' office information architecture (Phase 15).
 
 ## Validation
 

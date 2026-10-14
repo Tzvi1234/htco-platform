@@ -2,12 +2,11 @@
 
 | | |
 |---|---|
-| **Milestone** | — (M1 Foundation closes at the end of [Phase 5](phase-05-tasks-messages-approvals.md)) |
+| **Milestone** | M1 — Skeleton live |
 | **Repositories** | `htco-platform` |
 | **Size** | M |
-| **Depends on** | [Phase 0](phase-00-groundwork.md) (GitHub Pro, region, DigitalOcean team, the `htco-dev` app) |
+| **Depends on** | Phase 0 (GitHub Pro, region, DigitalOcean team) |
 | **Requirements** | FR-AUD-02, FR-AUD-03 |
-| **Mandatory tests owned** ([PLAN §5](../PLAN.md#5-mandatory-tests-of-the-master-plan)) | None. The stateless container of slice 1.5 is the base for Test 15 ([Phases 6](phase-06-workforce-claude-runtime.md) and [20](phase-20-hardening-release.md)) |
 | **Status** | In progress |
 
 ## Progress
@@ -34,23 +33,12 @@ Quality gates are cheapest to add before there is code to retrofit. A walking sk
 
 **In:** `uv` workspace and packages, tooling (Ruff, mypy, import-linter, pytest with AnyIO, Hypothesis, coverage), FastAPI app with health, request IDs, structured logs and problem+json errors, OpenAPI contract file, CI, Dockerfile, DigitalOcean app spec with the `api` component, owner-triggered deploy workflow, Claude Code hooks, branch ruleset.
 
-**Out:** database ([Phase 2](phase-02-identity-tenancy.md)), authentication (Phases 2–3), any business endpoint, any worker ([Phase 4](phase-04-durable-core-order-intake.md)), any agent runtime code ([Phase 6](phase-06-workforce-claude-runtime.md)).
+**Out:** database (Phase 2), authentication (Phase 2–3), any business endpoint.
 
 ## Owner prerequisites
 
 - GitHub Pro active; DigitalOcean team created; region chosen.
-- The DigitalOcean app is `htco-dev` with the `api` component first ([Phase 0](phase-00-groundwork.md) O-14); `htco-prod` waits for [Phase 20](phase-20-hardening-release.md).
 - A DigitalOcean API token scoped for App Platform, stored as a GitHub secret by the owner.
-
-## Instructions for the agent
-
-1. Load the skills `software-engineering`, `tdd`, `testing`, `feature-verification` and `feature-docs`.
-2. Read this file, [PLAN.md](../PLAN.md) §1 and §6, [ENGINEERING_RULES](../../engineering/ENGINEERING_RULES.md), [TESTING_STRATEGY](../../engineering/TESTING_STRATEGY.md), [TOOLCHAIN](../../engineering/TOOLCHAIN.md), [ADR-0002](../../adr/0002-modular-monolith-hexagonal.md) and [ADR-0005](../../adr/0005-hosting-digitalocean-supabase.md), and `docs/features/platform-skeleton/`.
-3. Slices 1.1–1.4 are done; do not reopen them. Finish the blocked parts in this order as the owner's accounts arrive: 1.5 part 2 (app spec in `infra/digitalocean/` for `htco-dev`, registry push, owner-started deploy, rollback drill), 1.7 part 2 (Sentry project, DSN secret, DigitalOcean alerts), 1.6 part 2 (the `main` ruleset).
-4. One pull request per slice part; acceptance criteria first as failing tests marked `@pytest.mark.ac("AC-1.x.y")`.
-5. Never in this phase: put a secret value in the app spec or the repository; deploy without the owner starting the workflow; create `htco-prod`; add a database, a worker or agent runtime code; remove the LangGraph compatibility test (it is kept until [Phase 6](phase-06-workforce-claude-runtime.md) moves the package).
-6. Stop and ask the owner when: a DigitalOcean size or price differs from the plan; an account or token is missing; the deployment needs a setting that only the owner can change.
-7. Finish with the feature-verification run against the deployed `htco-dev` app, the feature docs and the PLAN status table.
 
 ## Slices
 
@@ -120,7 +108,7 @@ Multi-stage Dockerfile (pinned base image by digest, non-root, bytecode compiled
 
 ### 1.7 — Error monitoring, tracing and alerts
 
-Error monitoring (Sentry or equivalent) with PII scrubbing; OpenTelemetry tracing for FastAPI and outgoing HTTP, with `trace_id` in every log line; DigitalOcean alerts (deployment failed, restarts, CPU, memory) sent to the owner. Until HTCO's own email notifications exist ([Phase 10](phase-10-fulfillment-incidents.md)), application alerts use the error-monitoring service's alert rules.
+Error monitoring (Sentry or equivalent) with PII scrubbing; OpenTelemetry tracing for FastAPI and outgoing HTTP, with `trace_id` in every log line; DigitalOcean alerts (deployment failed, restarts, CPU, memory) sent to the owner. Until HTCO's own email notifications exist (Phase 6), application alerts use the error-monitoring service's alert rules.
 
 | ID | Acceptance criterion |
 |---|---|

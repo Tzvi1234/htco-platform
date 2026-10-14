@@ -131,7 +131,7 @@ Tests prove the code does what we expected. Verification proves the feature does
 
 | Acceptance criterion | Covered by tests | Verified for real | Result |
 |---|---|---|---|
-| AC-4.4.1 | test_ingest_receipt__same_event_twice__creates_one_order | Replayed webhook 10× on local stack; 1 row in app.orders | Pass |
+| AC-5.4.1 | test_ingest_receipt__same_event_twice__creates_one_order | Replayed webhook 10× on local stack; 1 row in app.orders | Pass |
 
 **Adversarial checks run:** <list>
 **Observed:** request_id <id> traced through logs, audit row <id>, job <id>; no PII in logs (grep run).

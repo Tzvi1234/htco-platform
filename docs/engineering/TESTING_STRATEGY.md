@@ -57,7 +57,7 @@ The shape is a pyramid with a thick middle: many unit tests, a solid layer of in
 | **API contract** | The OpenAPI document matches the implementation; no unintended breaking change; property-based fuzzing of endpoints | Schemathesis, oasdiff | Every pull request |
 | **Worker and queue** | At-least-once delivery, duplicate messages, lease expiry, retries and DLQ, crash in the middle, graceful shutdown | pytest + local Postgres/pgmq | Every pull request |
 | **Agent graphs** | Nodes with a fake model gateway; graph paths; interrupt and resume after restart; policy denials; injection fixtures; old-checkpoint compatibility | pytest, LangGraph in-memory and Postgres savers | Every pull request |
-| **Evals** | Quality of agent outputs on gold datasets (accuracy, false-approve rate, cost, latency) | Eval harness (Phase 6) | Nightly and before promoting an agent |
+| **Evals** | Quality of agent outputs on gold datasets (accuracy, false-approve rate, cost, latency) | Eval harness (Phase 8) | Nightly and before promoting an agent |
 | **End to end** | Critical journeys through web, API and local stack | Playwright | Every pull request for critical paths; full suite nightly |
 | **Security** | Cross-tenant access, authz matrix, webhook signature and replay, secrets, dependencies, static analysis, container scan | pytest, Ruff `S` rules, gitleaks, osv-scanner, Grype; Semgrep CE weekly | Every pull request (Semgrep weekly) |
 | **Resilience drills** | Kill a worker mid-task, restore a backup, provider outage | Scripts + runbooks | Before relying on production data, then quarterly |
@@ -89,7 +89,7 @@ Exact versions are pinned in `uv.lock` when Phase 1 creates it; [TOOLCHAIN.md](T
 | Property-based | Hypothesis | Money and state-machine invariants |
 | HTTP fixtures | respx | For httpx-based adapters (Etsy, Resend, providers) |
 | Time control | Injected `Clock` port; time-machine where a library reads the clock | |
-| Snapshots | syrupy for prompt templates (Phase 6); the OpenAPI contract is a committed file compared by `tools/openapi.py` | Never auto-updated in CI |
+| Snapshots | syrupy for prompt templates (Phase 8); the OpenAPI contract is a committed file compared by `tools/openapi.py` | Never auto-updated in CI |
 | Database | Supabase CLI local stack (`supabase db start`), pgTAP via `supabase test db`, basejump test helpers | Each test isolated in a rolled-back transaction |
 | API contract | Schemathesis in-process on every pull request; oasdiff breaking-change check | Never pointed at production |
 | Coverage | coverage.py with branch coverage | |
@@ -150,17 +150,17 @@ Before a slice is done, consider each item and either test it or note why it doe
 | Database tests (pgTAP) | 2 | All pass; every exposed table has RLS tests |
 | OpenAPI breaking-change check | 1 | No breaking change without a version bump |
 | Schemathesis | 1 | No server errors or schema violations |
-| Mutation score, money and authorization code | 4 | Nightly; must not drop below the last accepted score |
+| Mutation score, money and authorization code | 5 | Nightly; must not drop below the last accepted score |
 | Accessibility (web) | 3 | Zero critical or serious axe violations |
-| Evals | 6 | Thresholds per agent capability, agreed in the feature's `tests.md` |
-| Restore and kill-worker drills | 4 | Documented and passed before production data is relied on |
+| Evals | 9 | Thresholds per agent capability, agreed in the feature's `tests.md` |
+| Restore and kill-worker drills | 5 | Documented and passed before production data is relied on |
 
 ## 9. Conventions
 
 - Tests live in one tree, `tests/`, with one folder per package (`tests/domain`, `tests/application`, `tests/api`, `tests/agent_runtime`, …) plus `tests/architecture`, `tests/tools` and `tests/e2e`. One tree keeps test module names unique, so a single mypy run type-checks every test.
 - Warnings are errors (`filterwarnings = error`); a third-party warning is silenced only by a targeted filter with a comment. Third-party pytest plugins load only from the allow-list in `pyproject.toml`.
 - Test names describe behaviour: `test_ingest_receipt__duplicate_event__is_a_no_op`.
-- Acceptance criterion IDs from the feature's `overview.md` appear in test docstrings or markers (for example `@pytest.mark.ac("AC-4.4.1")`), so `tests.md` can list coverage per criterion.
+- Acceptance criterion IDs from the feature's `overview.md` appear in test docstrings or markers (for example `@pytest.mark.ac("AC-5.4.1")`), so `tests.md` can list coverage per criterion.
 - One logical assertion per test; use helpers for complex comparisons.
 - No sleeping in tests; wait on conditions with timeouts.
 
@@ -170,14 +170,14 @@ The living office ([ADR-0012](../adr/0012-living-office-organization.md)) is acc
 
 | ID | Scenario | Proves | Status and location |
 |---|---|---|---|
-| SCN-A | **CRM observability.** An employee completes a task; identity, task, actions, costs, timestamps, outcomes and the required audit records are stored and queryable. | FR-AUD-04, FR-AUD-05 | Domain record model tested (`tests/domain/test_lifecycles.py`); end to end PLANNED for Phase 7 (stores from Phases 5–6) |
-| SCN-B | **Missing business record.** An Etsy order arrives but the CRM write fails; the event stays recoverable, retries are idempotent, a discrepancy is detected, Noa receives an actionable finding and the corrected state is verified. | FR-ORD-02, FR-QOS-02 | Retry and dead-letter behaviour tested in memory (`tests/application/test_automation_engine.py`); end to end PLANNED for Phases 4 and 14 |
-| SCN-C | **Nightly supervision.** A task stalls after a worker crash; monitoring detects it, the supervisor picks the right recovery and work resumes without duplicate business actions. | FR-QOS-03 | PLANNED for Phase 14 |
-| SCN-D | **Optimization to automation.** Omer detects a repetitive expensive AI operation; the proposal is created, reviewed, assigned to engineering, implemented and tested, deployed in stages, and its cost and quality are measured. | FR-OPT-02 | Proposal lifecycle tested (`tests/domain/test_lifecycles.py`); end to end PLANNED for Phase 19 (proposal in Phase 7, measurement in Phase 14) |
-| SCN-E | **Employee-specific routing.** Two employees ask for different capabilities; both use the central router with their own policies, tool requirements, privacy rules and budgets. | FR-MDL-02 | Tested with a fake catalog (`tests/application/test_model_router.py`); with real providers PLANNED for Phase 8 |
-| SCN-F | **Decision Advisor.** Rules, Jev and a fallback provider answer a structured triage task; schema validity, decision logging, quality, provider failure and the security boundary are checked. | FR-MDL-08, FR-MDL-09 | Tested with fakes (`tests/application/test_decision_advisor.py`); benchmark with real providers PLANNED for Phase 8 |
-| SCN-G | **Deterministic order workflow.** The same paid order event replayed many times yields exactly one logical order, correct counters and no duplicate downstream effects. | FR-ORD-02, FR-AUT-03 | Tested in memory (`tests/application/test_automation_engine.py`); against Postgres PLANNED for Phase 4 |
-| SCN-H | **Unauthorized agent action.** An employee tries a tool or automation outside its policy; the backend refuses even when the employee insists. | FR-AGT-04, FR-TOOL-02 | Tested (`tests/application/test_tool_access.py`, `test_automation_engine.py`); through the tool bridge PLANNED for Phase 6 |
+| SCN-A | **CRM observability.** An employee completes a task; identity, task, actions, costs, timestamps, outcomes and the required audit records are stored and queryable. | FR-AUD-04, FR-AUD-05 | Domain record model tested (`tests/domain/test_lifecycles.py`); end to end PLANNED for Phase 10 (stores from Phases 7–9) |
+| SCN-B | **Missing business record.** An Etsy order arrives but the CRM write fails; the event stays recoverable, retries are idempotent, a discrepancy is detected, Noa receives an actionable finding and the corrected state is verified. | FR-ORD-02, FR-QOS-02 | Retry and dead-letter behaviour tested in memory (`tests/application/test_automation_engine.py`); end to end PLANNED for Phases 5 and 10 |
+| SCN-C | **Nightly supervision.** A task stalls after a worker crash; monitoring detects it, the supervisor picks the right recovery and work resumes without duplicate business actions. | FR-QOS-03 | PLANNED for Phase 10 |
+| SCN-D | **Optimization to automation.** Omer detects a repetitive expensive AI operation; the proposal is created, reviewed, assigned to engineering, implemented and tested, deployed in stages, and its cost and quality are measured. | FR-OPT-02 | Proposal lifecycle tested (`tests/domain/test_lifecycles.py`); end to end PLANNED for Phase 18 |
+| SCN-E | **Employee-specific routing.** Two employees ask for different capabilities; both use the central router with their own policies, tool requirements, privacy rules and budgets. | FR-MDL-02 | Tested with a fake catalog (`tests/application/test_model_router.py`); with real providers PLANNED for Phase 9 |
+| SCN-F | **Decision Advisor.** Rules, Jev and a fallback provider answer a structured triage task; schema validity, decision logging, quality, provider failure and the security boundary are checked. | FR-MDL-08, FR-MDL-09 | Tested with fakes (`tests/application/test_decision_advisor.py`); benchmark with real providers PLANNED for Phase 9 |
+| SCN-G | **Deterministic order workflow.** The same paid order event replayed many times yields exactly one logical order, correct counters and no duplicate downstream effects. | FR-ORD-02, FR-AUT-03 | Tested in memory (`tests/application/test_automation_engine.py`); against Postgres PLANNED for Phase 5 |
+| SCN-H | **Unauthorized agent action.** An employee tries a tool or automation outside its policy; the backend refuses even when the employee insists. | FR-AGT-04, FR-TOOL-02 | Tested (`tests/application/test_tool_access.py`, `test_automation_engine.py`); through the tool bridge PLANNED for Phase 8 |
 | SCN-I | **Engineering safety.** An engineering employee proposes a production-changing fix; CI, permissions, review and deployment gates cannot be bypassed. | FR-ENG-03 | PLANNED for Phase 19 |
 | SCN-J | **Framework independence.** An employee profile, a business task, an automation and a CRM record are defined and inspected without importing LangGraph. | FR-AGT-10 | Tested (`tests/application/test_framework_independence.py`) |
 

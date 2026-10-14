@@ -8,30 +8,7 @@
 
 These are the rules we keep for the whole life of the project. Each rule has an ID so reviews and commits can cite it ("violates ER-SEC-04"). A rule changes only through a pull request that updates this file and, for anything structural, an ADR.
 
-Client-specific rules (MVVM, Compose, WinUI, web) live in `htco-clients/docs/architecture/CLIENT_ARCHITECTURE.md` and extend this document; they never contradict it. Where each piece of code goes is in [CODE_DESIGN.md](../architecture/CODE_DESIGN.md).
-
----
-
-## 0. Red lines
-
-These rules are never broken: not for a deadline, not for a demo, not because a test is "obviously wrong", not because the owner seems to want speed. If following one blocks you, stop and ask the owner ([§16](#16-when-to-stop-and-ask-the-owner)). Each red line names the full rule and what enforces it, so breaking it fails a machine check or a review, not just good intentions.
-
-| # | Red line | Rule | Enforced by |
-|---|---|---|---|
-| RL-01 | Tests come first, and a test is never weakened, skipped or deleted to get green | ER-TEST-01, ER-TEST-02, ER-TEST-07 | `test-integrity` CI check; "Test changes" section in the PR template; review |
-| RL-02 | Inner layers never depend on outer ones: domain imports only the standard library; application only the domain; adapters never import each other | ER-ARCH-01, ER-ARCH-02 | import-linter contracts and layer purity tests ([CODE_DESIGN §9](../architecture/CODE_DESIGN.md#9-enforcement-import-linter-and-tests)) |
-| RL-03 | No business rule in a router, consumer, SQL, adapter, view model or screen | ER-ARCH-04 | Review; tests live where the rule lives |
-| RL-04 | Every business row is tenant-scoped, and authorization is decided on the server from the verified identity | ER-DATA-01, ER-SEC-03 | pgTAP RLS tests with two tenants; API authorization matrix tests |
-| RL-05 | Money is `Decimal`/`NUMERIC(14,4)` with a currency; never a float; never calculated by a model | ER-DATA-04, ER-AI-01 | Property tests; Ruff rules; review |
-| RL-06 | Every handler, job and webhook is idempotent; external side effects go only through the outbox | ER-REL-01, ER-REL-02 | Duplicate and crash tests per handler |
-| RL-07 | No secret in the repository, a client, a log, a prompt, a tool result, agent memory or a fixture | ER-SEC-01, ER-SEC-08 | gitleaks in pre-commit and CI; fixture secret scan |
-| RL-08 | Model calls only through the gateway and the employee's routing policy; tools only through the tool bridge; automations only through the engine | ER-AI-02, ER-AI-03, ER-AI-13 | import-linter (SDKs confined); tool bridge tests over every registered tool |
-| RL-09 | Hosted agent runs authenticate with API keys only; a personal subscription, its login or its tokens never power the product | ER-AI-19 | AuthAndBillingPolicy tests; runtime option checks in CI ([ADR-0017](../adr/0017-auth-and-billing-policy.md)) |
-| RL-10 | No employee or automation is activated without a complete specification, a passed evaluation and the owner's approval | ER-AI-08, ER-AI-14 | Domain readiness gate; registry tests |
-| RL-11 | Nobody approves their own action; an agent never widens its own permissions, merges its own pull request or deploys | ER-AI-05, ER-AI-18 | Policy engine tests; branch rules; the owner is the release gate |
-| RL-12 | Migrations are forward-only, tested, and never applied to production by an agent | ER-DATA-05, ER-OPS-03 | pgTAP; the owner-started migration workflow |
-| RL-13 | Never claim success that was not verified, in code, UI or reports | ER-UX-06, ER-REL-07 | `feature-verification` evidence in `tests.md`; review |
-| RL-14 | Docs change in the same pull request as the code | ER-DOC-01 | PR template; review |
+Client-specific rules (MVVM, Compose, WinUI, web) live in `htco-clients/docs/architecture/CLIENT_ARCHITECTURE.md` and extend this document; they never contradict it.
 
 ---
 
@@ -77,8 +54,6 @@ We use these as tools for judgment, not as goals in themselves.
 - **ER-ARCH-06 No persistence models across boundaries.** Database rows, ORM models and provider payloads never leave their adapter. Map them to domain types or contract DTOs.
 - **ER-ARCH-07 Modular monolith first.** One deployable API and a small number of workers. A new service needs an ADR showing why a module is not enough.
 - **ER-ARCH-08 Agents are clients of the domain.** An agent never gets database credentials, the Supabase service role key or raw HTTP access. It asks for tools; domain services execute them after a policy check.
-- **ER-ARCH-09 Code goes where [CODE_DESIGN.md](../architecture/CODE_DESIGN.md) says.** A capability is a bounded context with a sub-package in each layer it needs (domain, application, adapters), not a package with its own private layers. A new package, layer or adapter kind updates that document in the same pull request, and needs an ADR if it changes a boundary.
-- **ER-ARCH-10 Use cases are the only way in.** HTTP routes, job handlers, tools and schedules call one use case each. They never call repositories, adapters or other routes directly, so every path gets the same authorization, idempotency and activity record.
 
 ## 4. Code (ER-CODE)
 
@@ -133,7 +108,7 @@ We use these as tools for judgment, not as goals in themselves.
 ## 8. AI employees, automations and tools (ER-AI)
 
 - **ER-AI-01 Zero-AI first.** If a rule, a query or arithmetic can do it, an LLM does not.
-- **ER-AI-02 One gateway.** Every model call goes through the Model Gateway (routing, budget, masking, logging). Importing a provider SDK anywhere else fails the architecture tests. The one exception is structural, not a bypass: inside the Claude runtime adapter the Agent SDK session makes the model calls, so `claude-agent-sdk` is confined to `htco_agent_runtime_claude`, and every session takes its model, fallback, budget reservation and billing mode from a routing decision before it starts and settles its usage after it ([ADR-0016](../adr/0016-claude-native-agent-runtime.md)).
+- **ER-AI-02 One gateway.** Every model call goes through the Model Gateway (routing, budget, masking, logging). Importing a provider SDK anywhere else fails the architecture tests.
 - **ER-AI-03 Tools are typed capabilities** with input and output schemas, timeouts, retry limits, a side-effect level and an audit record. Drafting and publishing are different tools.
 - **ER-AI-04 Side effects outside HTCO need approval** unless a written, versioned policy pre-approves that exact capability, scope and limit.
 - **ER-AI-05 No self-approval.** The identity that requests an action can never approve it.
@@ -150,13 +125,6 @@ We use these as tools for judgment, not as goals in themselves.
 - **ER-AI-16 Every operation leaves a record.** A use case that changes state or calls outside HTCO writes an activity record with actor kind, organization, shop, task, correlation and causation IDs and an outcome.
 - **ER-AI-17 Advisors advise.** The Decision Advisor's answers never enter authorization, approval, payment or security decisions; rules run before any advisor call.
 - **ER-AI-18 Engineering employees follow the human rules, and more.** Alex, Amir and Iris work only through branches and pull requests, never merge or release, never weaken tests (ER-TEST-02), remove logging, widen their own permissions or bypass branch protection.
-- **ER-AI-19 API keys for hosted runs.** Every hosted agent run uses the `API_PRODUCTION` billing mode with a service-account key ([ADR-0017](../adr/0017-auth-and-billing-policy.md)). Personal subscriptions are for developers' own interactive sessions only. Never extract, share or proxy a subscription login, OAuth token or session cookie, and never try to get around a rate limit.
-- **ER-AI-20 Sessions are disposable.** A Claude session runs one bounded step of one task and is then discarded. Business state, task state summaries, messages and costs live in Postgres; nothing that matters is stored on the worker's disk or only in a session ([ADR-0016](../adr/0016-claude-native-agent-runtime.md)). Waiting never keeps a session open.
-- **ER-AI-21 Locked-down sessions.** Business employees get only their granted HTCO tools (an in-process MCP server built per step), no built-in file, shell or web tools, no filesystem settings (`setting_sources=[]`), and never `bypassPermissions`. CI checks the adapter's options.
-- **ER-AI-22 The tool bridge is the authority.** Hooks and option lists are a second gate. Every tool call is decided by the server-side bridge (`decide_tool_access` plus the policy engine) and recorded as a `tool_invocations` row and an activity record.
-- **ER-AI-23 Quota is a normal state.** A 429, an exhausted budget or an unavailable runtime moves the task to waiting or to an approved fallback. It never stops automations, order intake, the ledger or the deterministic monitors, and it never fails silently.
-- **ER-AI-24 Business messaging through HTCO.** Employees communicate through `employee_messages` and task handoffs in Postgres. Claude Code features for cross-session messaging or agent teams are never part of the product's business path.
-- **ER-AI-25 Every run records its billing mode and real cost.** `agent_runs.billing_mode` is always set; cost comes from the provider's usage data and the price catalog. No invented per-token cost for usage the provider does not bill.
 
 ## 9. Testing (ER-TEST)
 
@@ -164,12 +132,10 @@ We use these as tools for judgment, not as goals in themselves.
 - **ER-TEST-02 Never weaken a test to make it pass.** Changing an assertion requires stating in the pull request why the old expectation was wrong.
 - **ER-TEST-03 No real external services in CI.** Etsy, AutoVA, email and model providers are replaced by fakes, recorded fixtures or contract stubs. Live smoke tests run separately and never write.
 - **ER-TEST-04 Flaky tests are bugs.** A flaky test is quarantined with an issue the same day and fixed or deleted within a week.
-- **ER-TEST-05 Coverage is a floor, not a goal.** Branch coverage of at least 95% for the domain layer and 90% for the application layer; the overall floor rises per phase. Mutation testing runs nightly on money and authorization code from Phase 4.
+- **ER-TEST-05 Coverage is a floor, not a goal.** Branch coverage of at least 95% for the domain layer and 90% for the application layer; the overall floor rises per phase. Mutation testing runs nightly on money and authorization code from Phase 5.
 - **ER-TEST-06 Bugs start with a failing test** that reproduces them; the test stays forever.
 - **ER-TEST-07 Test weakening is detected by CI.** New skip or expected-failure markers, deleted tests, lowered coverage or eval thresholds, and changed expected values fail the check unless the pull request has a "Test changes" section explaining why.
 - **ER-TEST-08 Security and tenant-isolation tests are never quarantined.** If one fails, the change does not merge.
-- **ER-TEST-09 Each layer is tested at its own level.** Domain rules with unit and property tests, use cases with fakes of their ports, adapters with contract tests against recorded fixtures, persistence against real Postgres, endpoints through the ASGI app. A rule tested only through the HTTP layer is a review finding ([`testing` skill](../../.claude/skills/testing/SKILL.md)).
-- **ER-TEST-10 Agents are tested without the network.** The Claude runtime adapter is tested with scripted message streams; employee behaviour with evaluation datasets. CI never calls a real model.
 
 ## 10. Documentation (ER-DOC)
 

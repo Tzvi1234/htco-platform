@@ -1,6 +1,6 @@
 # ADR-0003: LangGraph agent runtime behind a port
 
-- **Status:** Accepted; since 2026-10-14 the **alternative** adapter: [ADR-0016](0016-claude-native-agent-runtime.md) makes the Claude Agent SDK adapter the default, and this adapter moves to `packages/agent-runtime/langgraph/` unchanged. Scope narrowed on 2026-10-14 by [ADR-0012](0012-living-office-organization.md) and [ADR-0013](0013-automation-engine.md): LangGraph orchestrates employees' reasoning only; deterministic workflows run in the automation engine, and the organization's model never imports it.
+- **Status:** Accepted; to be validated by the Phase 8 proof-of-concept gates. Scope narrowed on 2026-10-14 by [ADR-0012](0012-living-office-organization.md) and [ADR-0013](0013-automation-engine.md): LangGraph orchestrates employees' reasoning only; deterministic workflows run in the automation engine, and the organization's model never imports it.
 - **Date:** 2026-10-14
 - **Deciders:** Owner, engineering
 
@@ -37,11 +37,11 @@ Option 1, behind an `AgentRuntime` port in `htco_application`, implemented in `h
 
 - Positive: durable waits and approvals without polling loops; full control of data and costs; the port keeps the option to swap runtimes.
 - Negative: we operate workers, checkpoints and upgrades ourselves; LangGraph releases are frequent and need upgrade testing.
-- Follow-ups: Phase 1 runs a LangGraph smoke test on our Python version; Phase 6 runs the proof-of-concept gates (for both adapters where they apply).
+- Follow-ups: Phase 1 runs a LangGraph smoke test on our Python version; Phase 8 runs the six proof-of-concept gates.
 
 ## Validation
 
-Six gates (defined in Phase 6) must pass before any agent gains autonomy: a duplicate `order.paid` handled once; an approved external write delivered exactly once despite a worker crash; an interrupt resumed a day later; unauthorized tools denied; a three-agent handoff with cost analysis; prompt injection in a supplier page has no effect on tools.
+Six gates (defined in Phase 8) must pass before any agent gains autonomy: a duplicate `order.paid` handled once; an approved external write delivered exactly once despite a worker crash; an interrupt resumed a day later; unauthorized tools denied; a three-agent handoff with cost analysis; prompt injection in a supplier page has no effect on tools.
 
 ## Validation log
 

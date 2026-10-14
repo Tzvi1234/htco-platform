@@ -30,11 +30,11 @@ The original planning brief fixes hosting on DigitalOcean App Platform (managed 
 
 - Positive: managed infrastructure, small fixed cost (see [COST_MODEL.md](../cost/COST_MODEL.md)), clear upgrade paths.
 - Negative: two providers to monitor; App Platform limits (request timeout around 100 seconds for long-lived connections, no configurable WAF) shape the design of live updates; console users can read secrets, so DigitalOcean team roles must stay tight.
-- Follow-ups: connection pool budgets per component in Phase 2; live-update transport decided in Phase 16. Components: `api`, `agent-worker` (automations and AI employees; an `automation-worker` splits out only when measured load or isolation justifies it, [ADR-0012](0012-living-office-organization.md)) and `web`.
+- Follow-ups: connection pool budgets per component in Phase 2; live-update transport decided in Phase 15. Components: `api`, `agent-worker` (automations and AI employees; an `automation-worker` splits out only when measured load or isolation justifies it, [ADR-0012](0012-living-office-organization.md)) and `web`.
 
 ## Validation
 
-Phase 1 deploys `/healthz` and `/readyz`; Phase 2 proves the database connection from App Platform; restore and kill-worker drills run before production data is relied on (Phase 4).
+Phase 1 deploys `/healthz` and `/readyz`; Phase 2 proves the database connection from App Platform; restore and kill-worker drills run before production data is relied on (Phase 5).
 
 ## Validation log
 

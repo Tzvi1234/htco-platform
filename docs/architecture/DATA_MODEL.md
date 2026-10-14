@@ -69,30 +69,30 @@ The phase column says when a table first appears.
 | `users` (Supabase `auth.users`) + `user_profiles` | Identity managed by Supabase Auth; profile data in `app` | 2 |
 | `memberships` | User ↔ organization with role | 2 |
 | `shop_access` | Membership ↔ shop grants | 2 |
-| `service_identities` | Automations, employees and system components as authenticated actors | 5–6 |
+| `service_identities` | Automations, employees and system components as authenticated actors | 7–8 |
 | `web_sessions` | BFF sessions (hashed session ID, encrypted Supabase tokens, expiry, device, last step-up time) | 3 |
-| `device_keys` | Public keys of native devices for biometric step-up (Android, Windows) | 17 |
+| `device_keys` | Public keys of native devices for biometric step-up (Android, Windows) | 16 |
 
 ### Shops
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `shops` | Shop per marketplace account | 2 (shell), 9 |
-| `shop_integrations` | Encrypted tokens, scopes, token expiry, status | 9 |
-| `shop_capabilities` | Probe results with `checked_at` | 9 |
-| `sync_cursors` | Reconciliation cursors per shop and resource | 9 |
-| `sync_drifts` | Differences found by reconciliation between our records and the marketplace | 9 |
+| `shops` | Shop per marketplace account | 2 (shell), 4 |
+| `shop_integrations` | Encrypted tokens, scopes, token expiry, status | 4 |
+| `shop_capabilities` | Probe results with `checked_at` | 4 |
+| `sync_cursors` | Reconciliation cursors per shop and resource | 5 |
+| `sync_drifts` | Differences found by reconciliation between our records and the marketplace | 5 |
 
 ### Orders & Fulfillment
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `orders` | One per receipt; status, totals, `external_updated_at`, raw payload hash | 4 |
-| `order_items` | One per transaction; quantity, SKU, price; `variant_id` nullable until the catalog maps it (Phases 11–12) | 4 |
-| `order_status_events` | Every order state transition with source and proof | 4 |
-| `shipments` | Shipment records from the marketplace (carrier, tracking code) | 4 |
-| `tracking_events` | Tracking facts with source and `observed_at` | 10 |
-| `sla_policies` | SLA windows per shop, supplier and shipping method | 10 |
+| `orders` | One per receipt; status, totals, `external_updated_at`, raw payload hash | 5 |
+| `order_items` | One per transaction; quantity, SKU, price; `variant_id` nullable until the catalog maps it (Phases 11–12) | 5 |
+| `order_status_events` | Every order state transition with source and proof | 5 |
+| `shipments` | Shipment records from the marketplace (carrier, tracking code) | 5 |
+| `tracking_events` | Tracking facts with source and `observed_at` | 6 |
+| `sla_policies` | SLA windows per shop, supplier and shipping method | 6 |
 
 ### Catalog, Sourcing, Media
 
@@ -100,7 +100,7 @@ The phase column says when a table first appears.
 |---|---|---|
 | `products`, `variants` | Internal catalog | 11–12 |
 | `product_facts` | Verified attributes (dimensions, material, contents) with source | 11 |
-| `product_sales_counters` | Units and orders per product, net of cancellations and refunds (Product Sales Counters automation) | 4 |
+| `product_sales_counters` | Units and orders per product, net of cancellations and refunds (Product Sales Counters automation) | 5 |
 | `listings`, `listing_variants`, `listing_metrics` | Per-shop publication and stats | 11–12 |
 | `listing_audits`, `listing_findings` | Listing Health results and evidence | 11 |
 | `product_candidates` | Shon's candidates with APPROVED / REVIEW / REJECTED, reasons, sources and confidence | 12 |
@@ -111,27 +111,27 @@ The phase column says when a table first appears.
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `financial_entries` | Ledger lines (revenue, fees, refunds, costs) with source and `ESTIMATED`/`VERIFIED` | 4 (basic), 13 |
+| `financial_entries` | Ledger lines (revenue, fees, refunds, costs) with source and `ESTIMATED`/`VERIFIED` | 5 (basic), 13 |
 | `payouts`, `fees`, `refunds`, `cost_snapshots` | Marketplace and supplier finance detail | 13 |
-| `budgets`, `budget_ledger` | AI and infrastructure budgets, reserved and actual, per organization, shop, employee, task, day and month | 8 |
+| `budgets`, `budget_ledger` | AI and infrastructure budgets, reserved and actual, per organization, shop, employee, task, day and month | 9 |
 
 ### Support and Email
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `customers`, `customer_consents` | Minimal buyer records per shop; consent ledger | 15 |
-| `support_tickets`, `customer_messages` | Tickets and messages | 15 |
-| `email_domains`, `email_identities`, `mailboxes` | Sending and receiving identities | 10, 15 |
-| `email_threads`, `email_messages`, `email_attachments` | Mail content (untrusted) | 15 |
-| `email_delivery_events`, `email_sender_grants`, `email_template_versions`, `email_approvals` | Delivery, permissions, templates, approvals | 10, 15 |
+| `customers`, `customer_consents` | Minimal buyer records per shop; consent ledger | 14 |
+| `support_tickets`, `customer_messages` | Tickets and messages | 14 |
+| `email_domains`, `email_identities`, `mailboxes` | Sending and receiving identities | 6, 14 |
+| `email_threads`, `email_messages`, `email_attachments` | Mail content (untrusted) | 14 |
+| `email_delivery_events`, `email_sender_grants`, `email_template_versions`, `email_approvals` | Delivery, permissions, templates, approvals | 6, 14 |
 
 ### Work and approvals
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `business_tasks`, `task_executions`, `task_events` | Business tasks (assignee: user, employee or automation), their executions (one per step, with the versioned `state_summary` an agent step starts from, lease and attempt) and their history | 5 |
-| `approvals` | Approval requests and decisions | 5 |
-| `policies` | Versioned policy documents for the policy engine | 5 |
+| `tasks`, `task_events` | Business tasks (assignee: user, employee or automation) and their history | 7 |
+| `approvals` | Approval requests and decisions | 7 |
+| `policies` | Versioned policy documents for the policy engine | 7 |
 
 ### Workforce (the office)
 
@@ -139,63 +139,63 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `departments` | The seven employee departments | 6 |
-| `employees` | Permanent identities: id, name, title, department, current profile version, kill switch | 6 |
-| `employee_profile_versions` | Versioned profiles: autonomy, readiness, tools, automations, routing policy, the 22-section specification, evaluation result | 6 |
-| `decision_advisors` | Shared advisors (Jev): providers, readiness | 8 |
-| `agent_runs` | One row per agent step: employee, profile version, task and execution, runtime (`claude` or `langgraph`), model and fallback, `billing_mode`, opaque session reference, status, turns, duration, correlation ID ([ADR-0016](../adr/0016-claude-native-agent-runtime.md)) | 6 |
-| `agent_threads` | LangGraph thread registry with lock, graph version, status; only for profiles on the alternative runtime (checkpoints in `agent_runtime`) | 6, if used |
-| `employee_messages`, `conversations` | Business-level messages between the owner, employees and departments, task threads and handoffs | 5, 16 |
-| `agent_memory` | Professional memory items with source and expiry | 6+ |
-| `evaluation_runs` | Evaluation suites, versions, scores and pass/fail per employee and automation | 6+ |
+| `departments` | The seven employee departments | 8 |
+| `employees` | Permanent identities: id, name, title, department, current profile version, kill switch | 8 |
+| `employee_profile_versions` | Versioned profiles: autonomy, readiness, tools, automations, routing policy, the 22-section specification, evaluation result | 8 |
+| `decision_advisors` | Shared advisors (Jev): providers, readiness | 9 |
+| `agent_sessions` | Runtime sessions: employee, profile version, task, runtime name, status, correlation ID (the runtime's own checkpoints stay in `agent_runtime`) | 8 |
+| `agent_threads` | Thread registry with lock, graph version, status | 8 |
+| `office_messages`, `conversations` | Business-level messages between the owner, employees and departments, task threads and handoffs | 8, 15 |
+| `agent_memory` | Professional memory items with source and expiry | 8+ |
+| `evaluation_runs` | Evaluation suites, versions, scores and pass/fail per employee and automation | 8+ |
 
 ### Automation and tools
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `automation_definitions` | Versioned automation definitions with their 18-section specification | 4 |
-| `automation_executions` | One per `(automation_id, idempotency_key)`: state, attempts, trigger, actor, correlation ID | 4 |
-| `tool_definitions` | Versioned tool definitions: family, owner, side effect, risk, data scope, readiness | 6 |
-| `tool_invocations` | Every tool call: employee, profile and tool versions, access decision, outcome, cost | 6 |
+| `automation_definitions` | Versioned automation definitions with their 18-section specification | 5 |
+| `automation_executions` | One per `(automation_id, idempotency_key)`: state, attempts, trigger, actor, correlation ID | 5 |
+| `tool_definitions` | Versioned tool definitions: family, owner, side effect, risk, data scope, readiness | 8 |
+| `tool_invocations` | Every tool call: employee, profile and tool versions, access decision, outcome, cost | 8 |
 
 ### Decisions and routing
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `model_catalog` | Verified models, prices with as-of dates, health, eval scores | 8 |
-| `routing_decisions`, `model_usage` | Routing decisions (employee, policy version, runtime, tier, model, reason) and token and cost entries per call or agent step, with `billing_mode` (the master plan's `cost_entries`) | 7, 8 |
-| `decision_records` | Decision Advisor attempts: question, provider, outcome, value, latency, cost | 8 |
+| `model_catalog` | Verified models, prices with as-of dates, health, eval scores | 9 |
+| `routing_decisions`, `model_usage` | Routing decisions (employee, policy version, tier, model, reason) and token and cost logs | 9 |
+| `decision_records` | Decision Advisor attempts: question, provider, outcome, value, latency, cost | 9 |
 
 ### Activity, supervision and improvement
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `activity_records` | One per meaningful operation of any actor: kind, action, outcome, business summary, organization, shop, task, correlation and causation IDs; append-only | 5 |
-| `quality_findings` | Noa's and the monitors' findings with evidence, severity, follow-up task and verification | 7 |
-| `reconciliation_runs` | Evidence of comparisons with external systems | 13 |
-| `daily_operations_reports` | The nightly supervisor's report | 14 |
-| `optimization_proposals`, `optimization_measurements` | Omer's proposals with lifecycle, baseline and post-deployment measurements | 7, 14 |
+| `activity_records` | One per meaningful operation of any actor: kind, action, outcome, business summary, organization, shop, task, correlation and causation IDs; append-only | 7 |
+| `quality_findings` | Noa's and the monitors' findings with evidence, severity, follow-up task and verification | 10 |
+| `reconciliation_runs` | Evidence of comparisons with external systems | 10 |
+| `daily_operations_reports` | The nightly supervisor's report | 10 |
+| `optimization_proposals`, `optimization_measurements` | Omer's proposals with lifecycle, baseline and post-deployment measurements | 18 |
 | `engineering_requests`, `engineering_changes` | Requests and their links to issues, pull requests, tests and deployments | 19 |
 
 ### Observability & Incidents
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `incidents`, `incident_events`, `remediations` | Incident lifecycle and fixes | 10 |
+| `incidents`, `incident_events`, `remediations` | Incident lifecycle and fixes | 6 |
 | `debug_reports` | Amir's diagnoses | 19 |
 | `audit.audit_log` | Append-only audit of sensitive actions | 2 |
-| `system_alerts`, `notifications`, `notification_preferences` | Alerts and user notifications | 5, 10 |
-| `worker_heartbeats` | Liveness of workers | 4 |
+| `system_alerts`, `notifications`, `notification_preferences` | Alerts and user notifications | 6–7 |
+| `worker_heartbeats` | Liveness of workers | 5 |
 
 ### Infrastructure tables
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `inbox` | External events, unique by `(source, event_id)` | 4 |
-| `idempotency_keys` | Stored request hash and response for unsafe API requests with an `Idempotency-Key` (24 h) | 4 |
-| `outbox` | Pending external side effects, unique by idempotency key | 4 |
-| `jobs.*` | Technical job queue (implementation per ADR-0007) | 4 |
-| `agent_runtime.*` | LangGraph checkpoints, writes, blobs, store | 6 |
+| `inbox` | External events, unique by `(source, event_id)` | 5 |
+| `idempotency_keys` | Stored request hash and response for unsafe API requests with an `Idempotency-Key` (24 h) | 5 |
+| `outbox` | Pending external side effects, unique by idempotency key | 5 |
+| `jobs.*` | Technical job queue (implementation per ADR-0007) | 5 |
+| `agent_runtime.*` | LangGraph checkpoints, writes, blobs, store | 8 |
 
 ## 4. Row-level security pattern
 
@@ -238,7 +238,7 @@ Data classes are written DC0–DC4 so they are never confused with requirement p
 
 ## 6. Retention
 
-Proposed defaults, confirmed with the owner before Phase 4 and checked against Etsy's current API terms:
+Proposed defaults, confirmed with the owner before Phase 5 and checked against Etsy's current API terms:
 
 | Data | Retention |
 |---|---|

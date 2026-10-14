@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Slug** | `living-office` |
-| **Phase / slices** | Foundation with Phase 2 (pure domain and application code); stores, runtimes and activations in Phases 4–21 ([PLAN §2](../../plan/PLAN.md#2-phases-and-milestones)) |
+| **Phase / slices** | Foundation with Phase 2 (pure domain and application code); stores, runtimes and activations in Phases 5–19 ([PLAN §4](../../plan/PLAN.md#4-coverage-of-the-living-office-capabilities)) |
 | **Requirements** | FR-AGT-01, 04, 09, 10; FR-AUT-01..05; FR-TOOL-01..02; FR-MDL-02, 09; FR-AUD-04; FR-OPT-02 ([PRD](../../product/PRD.md)) |
 | **Decisions** | [ADR-0012](../../adr/0012-living-office-organization.md), [0013](../../adr/0013-automation-engine.md), [0014](../../adr/0014-tool-registry.md), [0015](../../adr/0015-decision-advisor-and-routing.md) |
 | **Status** | Foundation complete; no employee, automation or tool is production-ready |
@@ -28,9 +28,9 @@ HTCO is a living office: 16 AI employees, deterministic automations, versioned t
 ## Scope
 
 - **In:** `htco_domain` actors, workforce, routing, tooling, automation, tasks, activity, improvement, state machines; `htco_application` registry, tool access, automation engine (in memory), router, decision advisor, runtime port; `registry/`; `tools/registry.py`.
-- **Out (planned):** database tables and APIs (Phases 4, 5, 6, 7, 8, 14, 19), the runtime adapter and tool bridge (6), the gateway and providers (8), supervision (7 and 14), every employee's completed specification and evaluation (its activation phase).
+- **Out (planned):** database tables and APIs (Phases 5, 7, 8, 9, 10, 18, 19), the LangGraph adapter and tool bridge (8), the gateway and providers (9), supervision (10), every employee's completed specification and evaluation (its activation phase).
 
 ## Known limits
 
-- The automation engine keeps executions and payloads in memory behind the `ExecutionStore` port until Phase 4.
+- The automation engine keeps executions and payloads in memory behind the `ExecutionStore` port until Phase 5.
 - Specification sections are drafts; their text says what is still open.
