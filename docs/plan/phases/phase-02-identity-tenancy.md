@@ -7,7 +7,7 @@
 | **Size** | M |
 | **Depends on** | Phase 1 |
 | **Requirements** | FR-ADM-01, FR-AUD-01, FR-IAM-01, FR-IAM-02, FR-IAM-03, FR-IAM-04 |
-| **Status** | In progress: 2.1 to 2.4 merged; 2.5 and 2.6 open |
+| **Status** | In progress: 2.1 to 2.5 merged; 2.6 open |
 
 ## Progress
 
@@ -15,7 +15,7 @@
 - [x] 2.2 Identity and access schema with RLS
 - [x] 2.3 Authentication in the API
 - [x] 2.4 Policy engine v0 and first endpoints
-- [ ] 2.5 Audit writer and bootstrap
+- [x] 2.5 Audit writer and bootstrap
 - [ ] 2.6 User and shop-access management (API)
 
 Slice 2.1 is built without the Supabase project and without local Docker on the owner's computer (WSL2 needs Windows' Virtual Machine Platform): CI runs Postgres from the Supabase CLI in the `database` job. The seed (`just seed`) needs the identity tables and arrived with slice 2.2.

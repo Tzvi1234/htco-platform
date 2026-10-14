@@ -80,6 +80,7 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 | `just db-start`, `just db-stop`, `just db-reset`, `just db-test` | Local Postgres from the Supabase CLI (needs Docker), all migrations applied, pgTAP tests | Slice 2.1 |
 | `just test-db` | Integration tests (`-m db`, `tests/integration`) against the local database; CI runs them in the `database` job | Slice 2.1 |
 | `just seed` | Two organizations, their shops, one user per role | Slice 2.2 |
+| `uv run htco admin bootstrap --email … --organization … --display-name …` | Create the owner's organization and owner membership after the owner signs up (idempotent; needs `HTCO_DATABASE_URL`) | Slice 2.5 |
 
 ## Golden rules
 
