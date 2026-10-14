@@ -59,3 +59,15 @@ data_scope = "internal"
 audit_required = true
 readiness = "draft"
 description = "Update draft titles, descriptions and tags."
+
+[[tools]]
+name = "listings.apply_approved_fix"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "high"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Apply one approved Listing Health fix to the Etsy listing through the outbox, then re-read and verify it. Runs only with a decided approval; granted in Phase 11."

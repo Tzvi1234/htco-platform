@@ -24,7 +24,7 @@ The original planning brief assumes AutoVA places supplier orders automatically 
 ## Consequences
 
 - Positive: the order and tracking core works without any AutoVA integration; supplier workflows can start manually and become automatic later.
-- Negative: supplier quote onboarding (Phase 11) stays semi-manual until AutoVA offers an integration.
+- Negative: supplier quote onboarding (Phase 13, phases renumbered by PLAN 2.0) stays semi-manual until AutoVA offers an integration.
 
 ## Validation
 

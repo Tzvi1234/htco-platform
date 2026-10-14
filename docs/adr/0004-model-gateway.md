@@ -45,4 +45,4 @@ Phase 8 tests: budget cap refuses calls, fallback chain works when a provider fa
 
 ## Validation log
 
-No entries yet.
+- 2026-10-14 — Amended by [ADR-0015](0015-decision-advisor-and-routing.md): the routing policy is versioned per employee and applied by one central router (`htco_application.routing.router`); budgets are kept per employee as well as per organization, shop, task, day and month.

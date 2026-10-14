@@ -1,6 +1,6 @@
 # ADR-0005: DigitalOcean App Platform and Supabase Pro
 
-- **Status:** Proposed; accepted when the owner chooses the region (decision D-02)
+- **Status:** Accepted on 2026-10-14: region Frankfurt (DigitalOcean `fra`, Supabase `eu-central-1`); images in GitHub Container Registry (GHCR)
 - **Date:** 2026-10-14
 - **Deciders:** Owner, engineering
 
@@ -24,13 +24,13 @@ The original planning brief fixes hosting on DigitalOcean App Platform (managed 
 - **Supabase Pro** with the **IPv4 add-on**, so the API and workers use direct connections with their own pools; the agent runtime uses a direct connection for checkpoints. Without the add-on: session mode for workers and checkpoints, transaction mode with prepared statements off for the API.
 - **Images are built once in GitHub Actions**, scanned, pushed to a registry and deployed by digest.
 - **Migrations run from CI before deploy**, owner-triggered for production, always backward compatible.
-- **Staging** (`htco-staging` app plus a separate Supabase project) is created when integration testing against real accounts needs it, and no later than Phase 16.
+- **Staging** (`htco-staging` app plus a separate Supabase project) is created when integration testing against real accounts needs it, and no later than Phase 20.
 
 ## Consequences
 
 - Positive: managed infrastructure, small fixed cost (see [COST_MODEL.md](../cost/COST_MODEL.md)), clear upgrade paths.
 - Negative: two providers to monitor; App Platform limits (request timeout around 100 seconds for long-lived connections, no configurable WAF) shape the design of live updates; console users can read secrets, so DigitalOcean team roles must stay tight.
-- Follow-ups: region decision in Phase 0; connection pool budgets per component in Phase 2; live-update transport decided in Phase 13.
+- Follow-ups: connection pool budgets per component in Phase 2; live-update transport decided in Phase 15. Components: `api`, `agent-worker` (automations and AI employees; an `automation-worker` splits out only when measured load or isolation justifies it, [ADR-0012](0012-living-office-organization.md)) and `web`.
 
 ## Validation
 
@@ -38,4 +38,4 @@ Phase 1 deploys `/healthz` and `/readyz`; Phase 2 proves the database connection
 
 ## Validation log
 
-No entries yet.
+- 2026-10-14 — The owner chose Frankfurt and GHCR (decision D-02). Accounts: DigitalOcean team created, payment method pending; Supabase organization exists.

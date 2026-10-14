@@ -36,4 +36,4 @@ The Phase 5 spike result is recorded in the validation log below and the status 
 
 ## Validation log
 
-No entries yet.
+- 2026-10-14 — The automation engine ([ADR-0013](0013-automation-engine.md)) is the queue's main consumer; its `ExecutionStore` port moves onto the queue in Phase 5.

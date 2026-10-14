@@ -26,13 +26,14 @@ You are working on a production system that handles money, buyer data, marketpla
 | Etsy, AutoVA, email code | `packages/integrations` | application, domain, platform, httpx, that provider's SDK |
 | Model calls, routing, prices, budgets | `packages/model-router` (`htco_model_router`) | application, domain, platform, model SDKs |
 | LangGraph graphs and the tool bridge | `packages/agent-runtime` (`htco_agent_runtime`) | application, domain, platform, LangGraph |
+| An employee, automation, tool or advisor definition | `registry/` (TOML), checked by `just registry` | — (data, reviewed like code) |
 | Settings, logging, tracing, crypto, clock | `packages/platform` | infrastructure libraries |
 | HTTP routes and schemas, DI wiring | `apps/api` | everything above |
 | Job consumers and schedules | `workers/` | everything above |
 | Schema changes | `supabase/migrations` (+ pgTAP in `supabase/tests`) | — |
 | API and event contracts | `packages/contracts` | — |
 
-Never put business logic in routers, consumers or SQL. Never return database rows or provider payloads across a boundary.
+Never put business logic in routers, consumers or SQL. Never return database rows or provider payloads across a boundary. Keep the four office concepts apart ([ADR-0012](../../../docs/adr/0012-living-office-organization.md)): judgment in employees, repeatable actions in automations, capabilities in tools, system changes through engineering.
 
 ## 3. Non-negotiables
 

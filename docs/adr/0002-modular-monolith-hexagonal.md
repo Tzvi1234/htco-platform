@@ -45,4 +45,4 @@ The original brief's folder list (`apps/api`, `packages/domain`, `packages/contr
 
 ## Validation
 
-Architecture tests fail the build on any forbidden import. Review after Phase 9 whether any module boundary is causing repeated friction.
+Architecture tests fail the build on any forbidden import. Review after Phase 11 whether any module boundary is causing repeated friction (phases renumbered by PLAN 2.0 on 2026-10-14).
