@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | 1.0 — enforced by the policy engine (Phase 7) and RLS (Phase 2); extended per phase |
+| **Status** | 1.0 — section 1 is enforced in code by policy engine v0 (`htco_application.access.policy`, slice 2.4), whose test parses this table so the two cannot drift; RLS adds tenant isolation in the database (Phase 2); workers and agents are enforced from Phases 5 and 8. Extended per phase. |
 | **Principle** | Deny by default. A permission not listed here does not exist. |
 
 Legend: **✓** allowed · **S** allowed for shops granted to the user · **MFA** requires an `aal2` session · **RA** requires recent re-authentication (step-up, default 10 minutes) · **A** creates an approval instead of acting · **—** denied.

@@ -104,7 +104,9 @@ A phase is complete only when all of these hold:
 |---|---|---|---|---|
 | 0 | In progress | 2026-10-14 | | Docs, repositories and design system created; owner prerequisites pending |
 | 1 | In progress | 2026-10-14 | | Slices that need no owner accounts first; deploy (1.5), ruleset (1.6) and alerts (1.7) wait for Phase 0 tasks |
-| 2–17 | Not started | | | |
+| 2 | In progress | 2026-10-14 | | Policy engine v0 (part of 2.4) ahead of the database slices, which need the Supabase project |
+| 3 | In progress | 2026-10-14 | | Clients tooling (3.1 part 1) and the token pipeline (3.2) ahead of Phase 2 |
+| 4–17 | Not started | | | |
 
 Update this table in the pull request that completes each phase.
 

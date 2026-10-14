@@ -7,7 +7,7 @@
 | **Size** | M |
 | **Depends on** | Phase 1 |
 | **Requirements** | FR-ADM-01, FR-AUD-01, FR-IAM-01, FR-IAM-02, FR-IAM-03, FR-IAM-04 |
-| **Status** | Not started |
+| **Status** | In progress (policy engine ahead of the database slices) |
 
 ## Progress
 
@@ -17,6 +17,8 @@
 - [ ] 2.4 Policy engine v0 and first endpoints
 - [ ] 2.5 Audit writer and bootstrap
 - [ ] 2.6 User and shop-access management (API)
+
+Slice 2.4 started early with its pure part: policy engine v0 (`htco_application.access.policy`), which needs no database. Its endpoints (`/v1/me`, `/v1/shops`) follow slices 2.1 to 2.3.
 
 ## Goal
 
