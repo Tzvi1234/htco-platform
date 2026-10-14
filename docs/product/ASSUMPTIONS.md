@@ -11,7 +11,7 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 
 | ID | Decision | Recommendation | Needed by | Status |
 |---|---|---|---|---|
-| D-01 | Upgrade GitHub to Pro (about $4/month) for branch rulesets and required checks on private repositories | Yes | Phase 1 | Open |
+| D-01 | Upgrade GitHub to Pro (about $4/month) for branch rulesets and required checks on private repositories | Yes | Phase 1 | Decided 2026-10-14: Pro active; `main` rulesets on both repositories |
 | D-02 | Region for DigitalOcean and Supabase | Frankfurt (`fra` + `eu-central-1`) | Phase 2 | Decided 2026-10-14: Frankfurt; container registry GHCR |
 | D-03 | Start the first content workflow with Listing Health instead of Product Studio | Yes ([MVP.md](MVP.md)) | Phase 11 | Open |
 | D-04 | Catalog model on Etsy, given Etsy's reselling and production-partner rules | Owner review with Etsy's current Seller Policy before Phase 12 | Phase 12 | Open |
