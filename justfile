@@ -31,6 +31,12 @@ arch:
     uv run lint-imports
     uv run pytest tests/architecture -q
 
+# Lint the GitHub workflows: actionlint, zizmor and SHA-pinned actions
+workflows:
+    uv run --group ci actionlint
+    uv run --group ci zizmor --min-severity low .github
+    uv run python -m tools.check_action_pins
+
 # Run all tests with branch coverage and the per-layer coverage floors
 test:
     uv run coverage erase
@@ -43,5 +49,5 @@ test:
 check-fast: lint types
     uv run pytest -q -x
 
-# Everything CI checks: formatting, lint, types, architecture, tests and coverage
-check: lint types arch test
+# What CI checks, minus the secret and vulnerability scans: format, lint, types, contracts, workflows, tests
+check: lint types arch workflows test

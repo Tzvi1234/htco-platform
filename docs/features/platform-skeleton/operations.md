@@ -20,6 +20,15 @@ Until slice 1.5 deploys the API, "operations" means keeping the development tool
 3. **Fix:** stage the reformatted files; fix lint errors; remove the secret and rotate it if it was real; reword the message as `type(scope): subject`.
 4. **Verify:** commit again. Never bypass hooks with `--no-verify`; CI runs the same checks.
 
+### `ci-gate` is red on a pull request
+1. **Check:** open the run; `ci-gate` lists each job that did not succeed (`::error::<job>: failure`).
+2. **Fix by job:** `checks` → run `uv run just lint types arch` locally; `tests` → `uv run just test`; `security` → remove the secret (and rotate it if it was ever real) or upgrade the vulnerable package; `workflows` → `uv run just workflows`; `test-integrity` → explain the change in the pull request's "Test changes" section (editing the description re-runs CI); `pr-title` → rename the pull request as `type(scope): subject`.
+3. **Never** weaken a check to get green (ER-TEST-02); a red security job blocks the merge until fixed.
+
+### A scanner binary needs updating
+1. Pick the newest release that is at least seven days old.
+2. Update the version and the SHA-256 from the release's published checksum file in `.github/workflows/ci.yml`, and the version in [TOOLCHAIN.md](../../engineering/TOOLCHAIN.md).
+
 ### `uv` refuses to run ("required version")
 1. **Check:** `uv --version`.
 2. **Fix:** `uv self update 0.13.0` (or the version in `pyproject.toml`).

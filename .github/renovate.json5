@@ -1,0 +1,35 @@
+// Dependency updates (ER-SEC-09). Needs the Renovate GitHub App installed on this repository.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests",
+    ":semanticCommits",
+  ],
+  // New versions wait a week after publication; uv's `exclude-newer` applies the same rule.
+  minimumReleaseAge: "7 days",
+  internalChecksFilter: "strict",
+  // Keep the ranges in pyproject.toml; update the exact versions in uv.lock.
+  rangeStrategy: "update-lockfile",
+  timezone: "Asia/Jerusalem",
+  schedule: ["before 6am on monday"],
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ["before 6am on monday"],
+  },
+  labels: ["dependencies"],
+  packageRules: [
+    {
+      description: "One weekly pull request for development tools",
+      matchManagers: ["pep621"],
+      matchDepTypes: ["dependency-groups"],
+      groupName: "development tools",
+    },
+    {
+      description: "One weekly pull request for GitHub Actions",
+      matchManagers: ["github-actions"],
+      groupName: "GitHub Actions",
+    },
+  ],
+}

@@ -23,6 +23,11 @@ flowchart LR
 | Repository | Information disclosure: secrets committed | gitleaks and private-key detection on every commit; CI scan from slice 1.4 | `prek run --all-files` |
 | Architecture | Elevation of privilege: inner layers gaining I/O or SDK access over time | Layer purity test, import-linter contracts | `tests/architecture/` |
 | Hooks | Tampering: a moved Git tag changes hook code | gitleaks hook pinned by full commit SHA | Config review |
+| CI workflow | Tampering: a compromised or moved action tag runs in CI | Every action pinned to a full commit SHA; actions limited to `actions/checkout` and `astral-sh/setup-uv` | `tools/check_action_pins.py` in the `workflows` job |
+| CI workflow | Elevation of privilege: a job token used to push or approve | `permissions: {}` at the top, `contents: read` per job, no persisted checkout credentials; zizmor audits the workflow | `workflows` job |
+| CI workflow | Tampering: script injection through the pull request title or body | Title, body and base SHA passed as environment variables, never interpolated into scripts | zizmor `template-injection` audit |
+| CI scanners | Tampering: a swapped scanner binary | Release binaries verified against pinned SHA-256 sums before use | `security` job |
+| Tests | Repudiation: a test silently weakened to get green | `test-integrity` requires a written "Test changes" explanation | `tests/tools/test_test_integrity.py` |
 
 ## Personal data
 
@@ -35,4 +40,5 @@ None.
 | v5.0.0-15.1.1 | Update time frames documented: seven-day release age for every dependency; remediation through Renovate (slice 1.4) | [TOOLCHAIN.md](../../engineering/TOOLCHAIN.md) |
 | v5.0.0-15.1.2 | `uv.lock` is the inventory of every third-party package, including transitive ones; a CycloneDX SBOM is attached to releases later | `uv.lock` |
 | v5.0.0-15.2.4 | Third-party packages resolve only from PyPI; internal packages only from the workspace, so they cannot be confused with a public package | `pyproject.toml` sources, workspace test |
-| v5.0.0-13.3.1 (partial) | No secrets in the repository: gitleaks and private-key detection on commit; secret stores arrive with deployment (slice 1.5) | `.pre-commit-config.yaml` |
+| v5.0.0-13.3.1 (partial) | No secrets in the repository: gitleaks and private-key detection on commit and in CI over the full history; secret stores arrive with deployment (slice 1.5) | `.pre-commit-config.yaml`, `security` job |
+| v5.0.0-15.2.1 | Known-vulnerable locked versions fail the pull request (osv-scanner on `uv.lock`) | `security` job |
