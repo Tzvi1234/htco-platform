@@ -70,7 +70,7 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 | `just lint`, `just types`, `just arch` | Ruff, mypy (strict), architecture contracts (import-linter and layer purity tests) | Slice 1.1 |
 | `just workflows` | actionlint, zizmor and the SHA-pin check on `.github/` | Slice 1.4 |
 | `just contract` | OpenAPI snapshot, breaking-change check, Schemathesis | Slice 1.3 |
-| `just up` | Local API (the worker joins in Phase 5) | Slice 1.2 |
+| `just up` | Local API on http://127.0.0.1:8000 with `.env.example` settings (the worker joins in Phase 5) | Slice 1.2 |
 | `just db-start`, `just db-reset`, `just db-test` | Local Supabase stack, migrations, pgTAP tests | Slice 2.1 |
 | `just seed` | Two organizations, their shops, one user per role | Slice 2.1 |
 

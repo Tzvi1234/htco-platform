@@ -13,6 +13,7 @@ members = ["packages/*", "apps/*"]
 dev = [
   "anyio>=4.12,<5",
   "coverage>=7.10,<8",
+  "httpx>=0.28,<0.29",
   "hypothesis>=6.140,<7",
   "import-linter>=2.15,<3",
   "mypy>=2.4,<3",
@@ -78,6 +79,12 @@ enable_error_code = [
   "explicit-override",
 ]
 files = ["packages", "apps", "tests", "tools"]
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
 
 # --- pytest and coverage ---------------------------------------------------------------------
 
@@ -129,10 +136,13 @@ layers = ["htco_api", "htco_agent_runtime", "htco_application", "htco_domain"]
 
 [[tool.importlinter.contracts]]
 id = "platform-is-infrastructure"
-name = "Platform holds infrastructure only and never imports business or adapter code"
+name = "Platform holds infrastructure only: no business, adapter or web framework code"
 type = "forbidden"
 source_modules = ["htco_platform"]
-forbidden_modules = ["htco_domain", "htco_application", "htco_agent_runtime", "htco_api"]
+forbidden_modules = [
+  "htco_domain", "htco_application", "htco_agent_runtime", "htco_api",
+  "fastapi", "starlette", "uvicorn",
+]
 
 [[tool.importlinter.contracts]]
 id = "inner-layers-without-platform"

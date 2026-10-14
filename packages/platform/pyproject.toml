@@ -3,7 +3,11 @@ name = "htco-platform"
 version = "0.0.0"
 description = "HTCO cross-cutting infrastructure: settings, logging, tracing, crypto, clock and IDs."
 requires-python = "==3.14.*"
-dependencies = []
+dependencies = [
+  "anyio>=4.12,<5",
+  "pydantic-settings>=2.15,<3",
+  "structlog>=26.1,<27",
+]
 
 [build-system]
 requires = ["uv_build>=0.13,<0.14"]

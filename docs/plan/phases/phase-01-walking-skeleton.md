@@ -12,7 +12,7 @@
 ## Progress
 
 - [x] 1.1 Workspace and tooling
-- [ ] 1.2 API skeleton
+- [x] 1.2 API skeleton
 - [ ] 1.3 Contract-first OpenAPI
 - [ ] 1.4 Continuous integration
 - [ ] 1.5 Container and deployment
