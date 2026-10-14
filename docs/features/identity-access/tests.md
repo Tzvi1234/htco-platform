@@ -71,3 +71,9 @@
 | AC-2.4.1 | 177 tests in `tests/application/test_access_policy.py` | Red first: 113 failing against a deny-everything stub. Drift checks: granting the Viewer buyer contact in code failed 2 tests; granting the Viewer the audit log in the doc failed 2 tests; both reverted. `uv run just check`: domain and application at 100% branch coverage. | Pass |
 
 **Open issues:** none for 2.4 (part 2 merged with the endpoints).
+
+### Verification — production migration — 2026-10-14
+
+| Acceptance criterion | Verified for real | Result |
+|---|---|---|
+| AC-2.1.4 | `migrate.yml` with `apply: false` (run 38609354185): dry run listed `base_schemas` and `identity_access`, nothing changed. The owner then started it with `apply: true`: both applied. The Supabase project lists both migrations; the six tables in `app` and `audit` have RLS enabled and no rows; the security advisor reports no findings. | Pass |
