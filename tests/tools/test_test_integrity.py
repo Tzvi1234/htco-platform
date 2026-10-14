@@ -6,7 +6,10 @@ from textwrap import dedent
 import pytest
 
 from tools.test_integrity import (
+    CHANGED_GATE_RECIPE,
     Finding,
+    GitError,
+    _run_git,
     config_findings,
     diff_findings,
     explains_test_changes,
@@ -120,6 +123,16 @@ def test_diff_findings__coverage_threshold_changed__is_reported(path: str) -> No
     )
 
     assert diff_findings(diff) == [Finding(path, "changes a coverage threshold")]
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["-    uv run coverage run -m pytest", "+    true", '+    uv run pytest -k "not slow"'],
+)
+def test_diff_findings__justfile_recipe_changed__is_reported(line: str) -> None:
+    diff = a_diff("justfile", line)
+
+    assert diff_findings(diff) == [Finding("justfile", CHANGED_GATE_RECIPE)]
 
 
 def test_diff_findings__new_tests_only__are_not_reported() -> None:
@@ -281,3 +294,16 @@ def test_main__config_weakened_without_explanation__fails() -> None:
     git = a_git("", head_config=head)
 
     assert main(["--base", "BASE"], git=git, environ={}) == 1
+
+
+def test_main__git_fails__fails_closed(capsys: pytest.CaptureFixture[str]) -> None:
+    def git(*args: str) -> str:
+        raise GitError(args, "fatal: no merge base")
+
+    assert main(["--base", "BASE"], git=git, environ={}) == 2
+    assert "no merge base" in capsys.readouterr().err
+
+
+def test_run_git__failing_command__raises() -> None:
+    with pytest.raises(GitError, match="rev-parse"):
+        _run_git("rev-parse", "--verify", "refs/heads/no-such-branch-for-this-test")

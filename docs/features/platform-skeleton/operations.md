@@ -9,7 +9,7 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 | `HTCO_ENVIRONMENT` | Required: `local`, `test`, `staging`, `production` | Names the environment in logs; later slices switch behaviour on it |
 | `HTCO_LOG_LEVEL` | `INFO` (`DEBUG`, `WARNING`, `ERROR`) | Minimum level for every logger; HTTP client loggers stay at WARNING |
 | `HTCO_HOST`, `HTCO_PORT` | `127.0.0.1`, `8000` | Listen address |
-| `HTCO_SENTRY_DSN` | unset (secret) | Turns error monitoring on; never logged |
+| `HTCO_SENTRY_DSN` | unset (secret) | Turns error monitoring on; blank means off; never logged |
 | `HTCO_RELEASE` | unset | Build identifier (git SHA) attached to error reports and the `api.starting` line |
 | Python version | `.python-version` (3.14.8) | uv installs and uses exactly this interpreter |
 | uv version | `[tool.uv] required-version` | Any other uv version refuses to run on the workspace |

@@ -93,5 +93,15 @@ def test_contract__error_responses__are_problem_json_with_a_schema() -> None:
         assert "$ref" in response["content"]["application/problem+json"]["schema"]
 
 
+def test_contract__every_operation__documents_the_500_problem() -> None:
+    """The middleware answers any unexpected error with a 500 problem, on every route."""
+    contract = _contract()
+    for path_item in contract["paths"].values():
+        for operation in path_item.values():
+            response = operation["responses"]["500"]
+            schema = response["content"]["application/problem+json"]["schema"]
+            assert schema == {"$ref": "#/components/schemas/Problem"}
+
+
 def test_render__is_deterministic() -> None:
     assert render(create_app()) == render(create_app())

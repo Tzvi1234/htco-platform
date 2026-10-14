@@ -29,8 +29,15 @@ def _serve(app: FastAPI, settings: ApiSettings) -> None:
     )
 
 
-def main(*, serve: Callable[[FastAPI, ApiSettings], None] = _serve) -> int:
-    """Load and validate settings, configure logging, then serve. Bad settings exit with 78."""
+def main(
+    *,
+    serve: Callable[[FastAPI, ApiSettings], None] = _serve,
+    new_error_reporter: Callable[[ApiSettings], ErrorReporter] | None = None,
+) -> int:
+    """Load and validate settings, configure logging, then serve. Bad settings exit with 78.
+
+    After the server stops, the error reporter is closed so queued reports are delivered.
+    """
     try:
         settings = load_settings(ApiSettings)
     except ConfigurationError as error:
@@ -38,7 +45,7 @@ def main(*, serve: Callable[[FastAPI, ApiSettings], None] = _serve) -> int:
         return EXIT_CONFIGURATION_ERROR
 
     configure_logging(level=settings.log_level)
-    reporter = _error_reporter(settings)
+    reporter = (new_error_reporter or _error_reporter)(settings)
     structlog.get_logger(__name__).info(
         "api.starting",
         environment=settings.environment.value,
@@ -54,7 +61,10 @@ def main(*, serve: Callable[[FastAPI, ApiSettings], None] = _serve) -> int:
             service_name="htco-api", environment=settings.environment.value
         ),
     )
-    serve(create_app(options), settings)
+    try:
+        serve(create_app(options), settings)
+    finally:
+        reporter.close()
     return 0
 
 

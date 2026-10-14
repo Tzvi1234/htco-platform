@@ -67,6 +67,9 @@ def configure_logging(*, level: str, stream: TextIO | None = None) -> None:
     )
     handler = logging.StreamHandler(stream or sys.stdout)
     handler.setFormatter(formatter)
+    # Library loggers with their own, lower level still propagate here; the handler enforces
+    # the configured minimum for every record.
+    handler.setLevel(level)
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)

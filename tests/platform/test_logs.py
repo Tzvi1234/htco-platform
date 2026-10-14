@@ -8,7 +8,7 @@ import pytest
 import structlog
 from opentelemetry.sdk.trace import TracerProvider
 
-from tests.log_capture import LogCapture
+from tests.log_capture import LogCapture, capture_logs
 
 
 @pytest.mark.ac("AC-1.2.6")
@@ -70,6 +70,15 @@ def test_http_client_warnings__are_still_logged(logs: LogCapture) -> None:
     logging.getLogger("httpx").warning("connection pool is full")
 
     assert [line["event"] for line in logs.lines()] == ["connection pool is full"]
+
+
+@pytest.mark.parametrize("library", ["httpx", "httpcore", "uvicorn.error"])
+def test_level__library_warnings__are_dropped_at_error(library: str) -> None:
+    with capture_logs(level="ERROR") as logs:
+        logging.getLogger(library).warning("connection pool is full")
+        logging.getLogger(library).error("connection refused")
+
+    assert [line["event"] for line in logs.lines()] == ["connection refused"]
 
 
 def test_level__debug_lines__are_dropped_at_info(logs: LogCapture) -> None:

@@ -8,13 +8,13 @@
 | Compatibility | LangGraph two-node graph with an in-memory checkpointer on Python 3.14 | `tests/agent_runtime/test_langgraph_compat.py` |
 | Tooling | Conventional Commits checker (headers, Git-generated messages, message files, titles) | `tests/tools/test_conventional_commit.py` |
 | Tooling | SHA-pin checker (pinned, local and digest references pass; tags, branches, short SHAs and image tags fail) | `tests/tools/test_check_action_pins.py` |
-| Tooling | Test-integrity checker (diff parsing, skip markers, removed tests, changed assertions, thresholds, quality-gate settings, the "Test changes" section) | `tests/tools/test_test_integrity.py` |
+| Tooling | Test-integrity checker (diff parsing, skip markers, removed tests, changed assertions, thresholds, justfile recipes, quality-gate settings, the "Test changes" section, failing git commands) | `tests/tools/test_test_integrity.py` |
 | Platform | Settings loading and errors; JSON logging (structlog and standard-library lines, request ID, exceptions, levels, quiet HTTP clients); readiness checks (pass, fail, timeout) | `tests/platform/` |
 | API | Health and readiness, problem responses (404, 405, TRACE, 500, 422, streaming failure, property test over unknown paths), request IDs and access log, security headers, entry point and process exit | `tests/api/` |
 | Contract | The committed contract matches the app, drift and missing-file reports, OpenAPI 3.1 with stable operation IDs, the request-ID header and problem+json on every response, deterministic rendering; Schemathesis on every operation | `tests/contract/` |
 | Image policy | Base images pinned by digest, non-root runtime user, locked API-only install, allow-list build context | `tests/infra/test_dockerfile.py` |
 | Image (CI) | Build, user, exit 78 without settings, read-only run answering `/healthz` and `/readyz`, Grype scan | CI `image` job |
-| Agent hooks | Format hook (Python in and outside the project, other files, missing path); stop hook (pass, fail, retry with warning, skipped without code changes, output tail); `git status -z` parsing with renames; command line; settings wiring | `tests/tools/test_claude_hooks.py` |
+| Agent hooks | Format hook (Python in and outside the project, other files, missing path); stop hook (pass, fail, retry with warning, skipped without changes, any file type, output tail); changes committed during the turn; turn-start recording; `git status -z` parsing with renames; command line; settings wiring | `tests/tools/test_claude_hooks.py` |
 | Observability | Trace IDs (`current_trace_id`), trace and span IDs in log lines, HTTP client defaults and `traceparent`, Sentry adapter (tags, no local variables, global client untouched, scrubbing), API end to end (one trace per request across logs and the outgoing call, forged `traceparent` ignored, diagnostic error reported without secrets, diagnostics off by default and in production, failing reporter) | `tests/platform/test_tracing.py`, `test_http.py`, `test_error_reporting.py`, `tests/api/test_observability.py`, `tests/api/test_main.py` |
 | CI | The pipeline itself, on GitHub | `.github/workflows/ci.yml` (verification below) |
 

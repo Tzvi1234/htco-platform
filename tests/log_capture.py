@@ -24,12 +24,12 @@ class LogCapture:
 
 
 @contextmanager
-def capture_logs() -> Iterator[LogCapture]:
-    """Route all logging to a buffer at INFO, then restore the previous root handlers."""
+def capture_logs(level: str = "INFO") -> Iterator[LogCapture]:
+    """Route all logging to a buffer at `level`, then restore the previous root handlers."""
     root = logging.getLogger()
     saved_handlers, saved_level = root.handlers[:], root.level
     stream = io.StringIO()
-    configure_logging(level="INFO", stream=stream)
+    configure_logging(level=level, stream=stream)
     try:
         yield LogCapture(stream)
     finally:

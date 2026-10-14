@@ -1,9 +1,11 @@
 """Flag pull requests that weaken tests without a "Test changes" explanation (ER-TEST-07).
 
 Findings: skip or expected-failure markers added to tests, test functions removed, assertions
-changed or removed, coverage thresholds changed, and any change to the quality-gate settings in
-`pyproject.toml`. A finding fails the check unless the pull request body has a "Test changes"
-section that explains it. Run in CI as:
+changed or removed, coverage thresholds changed, any change to the `justfile` (its recipes are
+the gates CI runs) and any change to the quality-gate settings in `pyproject.toml`. A finding
+fails the check unless the pull request body has a "Test changes" section that explains it. When
+git cannot produce the diff, the check fails rather than pass a pull request it never examined.
+Run in CI as:
 
     PR_BODY=… python -m tools.test_integrity --base <base commit>
 """
@@ -28,6 +30,15 @@ class Finding:
 SKIP_MARKER = "adds a skip or expected-failure marker"
 CHANGED_ASSERTION = "changes or removes an assertion"
 CHANGED_THRESHOLD = "changes a coverage threshold"
+CHANGED_GATE_RECIPE = "changes the justfile recipes that CI runs as quality gates"
+
+
+class GitError(Exception):
+    """A git command failed, so the pull request cannot be verified."""
+
+    def __init__(self, args: tuple[str, ...], output: str) -> None:
+        super().__init__(f"git {' '.join(args)} failed: {output.strip()}")
+
 
 _SKIP = re.compile(r"pytest\.mark\.(?:skip|skipif|xfail)\b|pytest\.(?:skip|xfail|importorskip)\(")
 _TEST_FUNCTION = re.compile(r"^\s*(?:async\s+)?def\s+(test_\w+)")
@@ -108,6 +119,11 @@ def diff_findings(diff: str) -> list[Finding]:
         and line.path in {"justfile", "pyproject.toml"}
         and _THRESHOLD.search(line.text)
     ]
+    findings += [
+        Finding(line.path, CHANGED_GATE_RECIPE)
+        for line in lines
+        if line.path == "justfile" and not _THRESHOLD.search(line.text)
+    ]
     return list(dict.fromkeys(findings))
 
 
@@ -151,7 +167,9 @@ def explains_test_changes(body: str | None) -> bool:
 
 def _run_git(*args: str) -> str:
     result = subprocess.run(["git", *args], capture_output=True, text=True, check=False)  # noqa: S603, S607
-    return result.stdout if result.returncode == 0 else ""
+    if result.returncode != 0:
+        raise GitError(args, result.stderr)
+    return result.stdout
 
 
 def main(
@@ -164,17 +182,21 @@ def main(
     parser.add_argument("--base", required=True, help="base commit of the pull request")
     args = parser.parse_args(argv)
 
-    diff = git(
-        "diff",
-        "--unified=0",
-        "--no-color",
-        "--no-ext-diff",
-        "--find-renames",
-        f"{args.base}...HEAD",
-    )
-    findings = diff_findings(diff) + config_findings(
-        git("show", f"{args.base}:pyproject.toml"), git("show", "HEAD:pyproject.toml")
-    )
+    try:
+        diff = git(
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--no-ext-diff",
+            "--find-renames",
+            f"{args.base}...HEAD",
+        )
+        base_config = git("show", f"{args.base}:pyproject.toml")
+        head_config = git("show", "HEAD:pyproject.toml")
+    except GitError as error:
+        sys.stderr.write(f"Cannot verify the pull request: {error}\n")
+        return 2
+    findings = diff_findings(diff) + config_findings(base_config, head_config)
     if not findings:
         return 0
 

@@ -37,6 +37,16 @@ def test_sentry_reporter__exception__is_sent_with_request_and_trace_ids() -> Non
     assert event["exception"]["values"][0]["type"] == "RuntimeError"
 
 
+def test_sentry_reporter__close__delivers_pending_reports() -> None:
+    transport = CapturingTransport()
+    reporter = _reporter(transport)
+
+    reporter.report(RuntimeError("at shutdown"), request_id=None, trace_id=None)
+    reporter.close()
+
+    assert len(transport.events) == 1
+
+
 def test_sentry_reporter__frames__carry_no_local_variables() -> None:
     transport = CapturingTransport()
     reporter = _reporter(transport)
@@ -73,6 +83,10 @@ def test_scrub_event__removes_request_user_and_breadcrumbs() -> None:
     }
 
     assert scrub_event(cast(Event, event), {}) == {"message": "boom"}
+
+
+def test_no_error_reporter__close__does_nothing() -> None:
+    NoErrorReporter().close()
 
 
 def test_no_error_reporter__accepts_reports_and_does_nothing() -> None:

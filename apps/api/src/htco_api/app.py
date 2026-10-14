@@ -12,7 +12,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from htco_api.diagnostics import diagnostics_router
 from htco_api.health import health_router
 from htco_api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
-from htco_api.problems import PROBLEM_MEDIA_TYPE, add_problem_handlers
+from htco_api.problems import PROBLEM_MEDIA_TYPE, UNEXPECTED_ERROR_RESPONSES, add_problem_handlers
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter
 from htco_platform.readiness import ReadinessCheck
 
@@ -86,10 +86,11 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
         health_router(
             readiness_checks=options.readiness_checks,
             timeout_seconds=options.readiness_timeout_seconds,
-        )
+        ),
+        responses=UNEXPECTED_ERROR_RESPONSES,
     )
     if options.diagnostics:
-        app.include_router(diagnostics_router())
+        app.include_router(diagnostics_router(), responses=UNEXPECTED_ERROR_RESPONSES)
     add_problem_handlers(app)
     tracer_provider = options.tracer_provider or TracerProvider()
     # The last middleware added runs first: security headers wrap everything, including the

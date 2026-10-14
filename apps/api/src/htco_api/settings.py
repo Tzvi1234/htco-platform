@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,3 +27,11 @@ class ApiSettings(BaseSettings):
     sentry_dsn: SecretStr | None = None
     # The deployed build (a git commit SHA), attached to error reports.
     release: str | None = None
+
+    @field_validator("sentry_dsn", mode="before")
+    @classmethod
+    def _blank_dsn_is_none(cls, value: object) -> object:
+        """An empty `HTCO_SENTRY_DSN` means "off", never a reporter that silently drops events."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
