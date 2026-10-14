@@ -8,6 +8,7 @@ Details are written here, never copied from exceptions, so internals cannot leak
 from collections.abc import Mapping
 from dataclasses import dataclass
 from http import HTTPStatus
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -74,6 +75,14 @@ INTERNAL_ERROR = ProblemType(
     500,
     "Something went wrong on our side. Quote the request ID if you report it.",
 )
+# Every route can fail unexpectedly; the middleware then answers with this problem.
+UNEXPECTED_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    500: {
+        "model": Problem,
+        "content": {PROBLEM_MEDIA_TYPE: {}},
+        "description": "Unexpected error. Quote the request ID when reporting it",
+    }
+}
 NOT_READY = ProblemType("not-ready", "Not ready", 503, "A required dependency is not available.")
 
 _BY_STATUS = {kind.status: kind for kind in (NOT_FOUND, METHOD_NOT_ALLOWED, INTERNAL_ERROR)}

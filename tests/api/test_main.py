@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Iterator
+from typing import override
 
 import pytest
 from fastapi import FastAPI
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from htco_api.main import EXIT_CONFIGURATION_ERROR, main
 from htco_api.settings import ApiSettings, Environment
+from htco_platform.error_reporting import ErrorReporter
 
 
 class _FakeServer:
@@ -21,6 +23,19 @@ class _FakeServer:
 
     def __call__(self, app: FastAPI, settings: ApiSettings) -> None:
         self.calls.append((app, settings))
+
+
+class _RecordingReporter(ErrorReporter):
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    @override
+    def report(self, error: BaseException, *, request_id: str | None, trace_id: str | None) -> None:
+        self._events.append("report")
+
+    @override
+    def close(self) -> None:
+        self._events.append("close")
 
 
 @pytest.fixture
@@ -120,3 +135,43 @@ def test_main__diagnostic_endpoint__exists_only_outside_production(
     [(app, _)] = serve.calls
     with TestClient(app) as client:
         assert client.post("/_diagnostics/error").status_code == status
+
+
+@pytest.mark.usefixtures("restore_logging")
+@pytest.mark.parametrize("serve_fails", [False, True])
+def test_main__shutdown__closes_the_error_reporter_after_serving(
+    environment: pytest.MonkeyPatch, *, serve_fails: bool
+) -> None:
+    """Reports queued during shutdown are delivered before the process exits."""
+    environment.setenv("HTCO_ENVIRONMENT", "local")
+    events: list[str] = []
+
+    def serve(_app: FastAPI, _settings: ApiSettings) -> None:
+        events.append("serve")
+        if serve_fails:
+            raise OSError("address already in use")
+
+    def new_reporter(_settings: ApiSettings) -> ErrorReporter:
+        return _RecordingReporter(events)
+
+    if serve_fails:
+        with pytest.raises(OSError, match="address"):
+            main(serve=serve, new_error_reporter=new_reporter)
+    else:
+        main(serve=serve, new_error_reporter=new_reporter)
+
+    assert events == ["serve", "close"]
+
+
+@pytest.mark.usefixtures("restore_logging")
+@pytest.mark.parametrize("dsn", ["", "   "])
+def test_main__blank_sentry_dsn__leaves_error_monitoring_off(
+    environment: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], dsn: str
+) -> None:
+    environment.setenv("HTCO_ENVIRONMENT", "local")
+    environment.setenv("HTCO_SENTRY_DSN", dsn)
+
+    main(serve=_FakeServer())
+
+    [line] = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert line["error_monitoring"] == "off"

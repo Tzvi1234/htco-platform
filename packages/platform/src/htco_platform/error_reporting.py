@@ -19,6 +19,10 @@ class ErrorReporter(Protocol):
         self, error: BaseException, *, request_id: str | None, trace_id: str | None
     ) -> None: ...
 
+    def close(self) -> None:
+        """Deliver pending reports before the process exits; called once, at shutdown."""
+        return
+
 
 class NoErrorReporter(ErrorReporter):
     """Used when error monitoring is not configured."""
@@ -27,6 +31,9 @@ class NoErrorReporter(ErrorReporter):
     def report(self, error: BaseException, *, request_id: str | None, trace_id: str | None) -> None:
         return None
 
+
+# How long shutdown waits for queued reports to be sent.
+_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 
 # Event fields that can hold request bodies, cookies, headers, IP addresses or URLs.
 _SCRUBBED_FIELDS = ("request", "user", "breadcrumbs")
@@ -79,3 +86,9 @@ class SentryErrorReporter(ErrorReporter):
 
     def flush(self, timeout_seconds: float = 2.0) -> None:
         self._client.flush(timeout=timeout_seconds)
+
+    @override
+    def close(self) -> None:
+        # The transport sends from a background worker; without this, reports queued just
+        # before a deploy or restart would be lost.
+        self._client.close(timeout=_SHUTDOWN_TIMEOUT_SECONDS)

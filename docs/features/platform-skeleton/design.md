@@ -104,7 +104,8 @@ flowchart LR
 | Event | Hook | Effect |
 |---|---|---|
 | `PostToolUse` on `Edit` or `Write` | `format` | A Python file inside the project is formatted (`ruff format`) and safe fixes are applied (`ruff check --fix`). Never blocks. |
-| `Stop` | `stop` | If `git status` shows changed Python, TOML, `uv.lock` or `justfile` files, runs `just check-fast`. On failure: exit 2 with the last 60 lines of output, so the agent must keep working. If it still fails on the next attempt (`stop_hook_active`), the turn may end, but the user sees a warning (`systemMessage`), never silence. |
+| `UserPromptSubmit` | `turn-start` | Records the commit the turn starts from (in the git directory, per worktree). |
+| `Stop` | `stop` | If any file changed during the turn (uncommitted, or committed since the recorded start; an unreachable start counts as a change), runs `just check-fast`. On failure: exit 2 with the last 60 lines of output, so the agent must keep working. If it still fails on the next attempt (`stop_hook_active`), the turn may end, but the user sees a warning (`systemMessage`), never silence. |
 
 Documentation-only turns skip the check, so the hook costs nothing when no code changed. Claude Code also caps consecutive stop-hook continuations (8 by default).
 
@@ -131,7 +132,7 @@ sequenceDiagram
 - **Spans:** the middleware starts one `SERVER` span per request with an empty parent context (`http.request.method`, `url.path`, `htco.request_id`, then `http.response.status_code`), records exceptions on it and sets an error status. Spans are not exported yet.
 - **Logs:** a structlog processor adds `trace_id` (null outside a trace) and `span_id` from the active span to every line, including library lines.
 - **Outgoing calls:** `new_async_http_client(tracer_provider=…)` wraps the transport with `AsyncOpenTelemetryTransport`, so each call is a child span and carries `traceparent`; 10-second timeout; redirects are never followed.
-- **Errors:** the middleware reports every unhandled exception to the injected `ErrorReporter`; a failing reporter is logged (`error_reporting.failed`) and never changes the response. `main` uses `SentryErrorReporter` when `HTCO_SENTRY_DSN` is set, otherwise `NoErrorReporter`.
+- **Errors:** the middleware reports every unhandled exception to the injected `ErrorReporter`; a failing reporter is logged (`error_reporting.failed`) and never changes the response. `main` uses `SentryErrorReporter` when `HTCO_SENTRY_DSN` is set and not blank, otherwise `NoErrorReporter`, and closes the reporter after the server stops so reports queued during shutdown are delivered. Every operation in the contract documents the 500 problem the middleware can send.
 - **Diagnostics:** `POST /_diagnostics/error` (not in the contract) raises on purpose; `main` registers it in every environment except `production`.
 
 ## Continuous integration (slice 1.4)
@@ -156,7 +157,7 @@ flowchart LR
 - **No template injection.** The pull request title, body and base commit reach scripts only through environment variables.
 - **Same tools as local.** Jobs call `just` recipes through `uv run` with `UV_LOCKED=1`, so CI fails when `uv.lock` is stale and uses exactly the locked versions. gitleaks and osv-scanner are release binaries checked against pinned SHA-256 sums.
 - **Re-run on edit.** Editing the title or the "Test changes" section re-runs the whole workflow instead of only the cheap jobs: a partial run could otherwise replace a red `ci-gate` with a green one for the same commit.
-- **Test integrity.** `tools/test_integrity.py` reads the merge-base diff and the base and head `pyproject.toml`. It flags added skip or expected-failure markers, removed test functions, changed or removed assertions, changed coverage thresholds, and any change to the `pytest`, `coverage`, `importlinter`, `mypy` or `ruff.lint` settings. Any finding fails the job unless the pull request has a non-empty "Test changes" section.
+- **Test integrity.** `tools/test_integrity.py` reads the merge-base diff and the base and head `pyproject.toml`. It flags added skip or expected-failure markers, removed test functions, changed or removed assertions, changed coverage thresholds, any change to the `justfile` (its recipes are the gates CI runs), and any change to the `pytest`, `coverage`, `importlinter`, `mypy` or `ruff.lint` settings. If a git command fails (for example no merge base), the job fails: a pull request it could not examine never passes. Any finding fails the job unless the pull request has a non-empty "Test changes" section.
 
 ## Decisions and alternatives
 

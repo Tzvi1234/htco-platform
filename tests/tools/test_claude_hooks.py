@@ -14,6 +14,8 @@ from tools.claude_hooks import (
     changed_paths,
     format_edited_file,
     main,
+    paths_changed_in_turn,
+    record_turn_start,
     stop_unless_checks_pass,
 )
 
@@ -26,6 +28,19 @@ class _Runner:
     def __call__(self, args: Sequence[str]) -> Completed:
         self.calls.append(list(args))
         return self._result
+
+
+class _Git:
+    """Answers git commands from a table; an unknown command fails like git would (None)."""
+
+    def __init__(self, answers: dict[tuple[str, ...], str]) -> None:
+        self._answers = answers
+
+    def __call__(self, args: Sequence[str]) -> str | None:
+        return self._answers.get(tuple(args))
+
+
+STATUS = ("status", "--porcelain=v1", "-z", "--untracked-files=all")
 
 
 def _edit_event(path: Path) -> dict[str, object]:
@@ -105,20 +120,32 @@ def test_stop__checks_pass__lets_the_agent_finish() -> None:
     assert result == HookResult(0)
 
 
-@pytest.mark.parametrize(
-    "changed", [[], ["README.md"], ["docs/plan/PLAN.md", ".github/workflows/ci.yml"]]
-)
-def test_stop__no_code_or_configuration_changed__skips_the_checks(changed: list[str]) -> None:
+def test_stop__nothing_changed__skips_the_checks() -> None:
     run = _Runner(returncode=1)
 
-    result = stop_unless_checks_pass({}, changed=changed, run=run)
+    result = stop_unless_checks_pass({}, changed=[], run=run)
 
     assert result == HookResult(0)
     assert run.calls == []
 
 
-@pytest.mark.parametrize("path", ["pyproject.toml", "uv.lock", "justfile", "tools/x.py", "a/b.pyi"])
-def test_stop__configuration_or_code_changed__runs_the_checks(path: str) -> None:
+@pytest.mark.parametrize(
+    "path",
+    [
+        "pyproject.toml",
+        "uv.lock",
+        "justfile",
+        "tools/x.py",
+        "a/b.pyi",
+        "Dockerfile",
+        "packages/contracts/openapi.yaml",
+        ".claude/settings.json",
+        "docs/architecture/PERMISSION_MATRIX.md",
+        ".github/workflows/ci.yml",
+    ],
+)
+def test_stop__any_file_changed__runs_the_checks(path: str) -> None:
+    """Tests read code, configuration, the contract and some documents alike."""
     run = _Runner(returncode=0)
 
     stop_unless_checks_pass({}, changed=[path], run=run)
@@ -168,6 +195,54 @@ def test_changed_paths__clean_tree__is_empty() -> None:
     assert changed_paths("") == []
 
 
+# --- what changed during the turn -------------------------------------------------------------
+
+
+def test_record_turn_start__stores_the_head_commit(tmp_path: Path) -> None:
+    state = tmp_path / "turn-base"
+
+    record_turn_start(_Git({("rev-parse", "HEAD"): "abc123\n"}), state)
+
+    assert state.read_text(encoding="utf-8") == "abc123"
+
+
+@pytest.mark.ac("AC-1.6.1")
+def test_paths_changed_in_turn__work_committed_during_the_turn__is_included(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "turn-base"
+    state.write_text("abc123", encoding="utf-8")
+    git = _Git({STATUS: "", ("diff", "--name-only", "-z", "abc123", "HEAD"): "tools/x.py\0"})
+
+    assert paths_changed_in_turn(git, state) == ["tools/x.py"]
+
+
+def test_paths_changed_in_turn__uncommitted_and_committed__are_both_listed(tmp_path: Path) -> None:
+    state = tmp_path / "turn-base"
+    state.write_text("abc123", encoding="utf-8")
+    git = _Git(
+        {STATUS: " M README.md\0", ("diff", "--name-only", "-z", "abc123", "HEAD"): "a.py\0"}
+    )
+
+    assert paths_changed_in_turn(git, state) == ["README.md", "a.py"]
+
+
+def test_paths_changed_in_turn__no_recorded_start__uses_the_working_tree(tmp_path: Path) -> None:
+    git = _Git({STATUS: " M tools/x.py\0"})
+
+    assert paths_changed_in_turn(git, tmp_path / "missing") == ["tools/x.py"]
+
+
+def test_paths_changed_in_turn__recorded_start_unreachable__assumes_a_change(
+    tmp_path: Path,
+) -> None:
+    """A rewritten history must not hide the turn's work: the checks run."""
+    state = tmp_path / "turn-base"
+    state.write_text("gone", encoding="utf-8")
+
+    assert paths_changed_in_turn(_Git({STATUS: ""}), state) != []
+
+
 # --- command line ----------------------------------------------------------------------------
 
 
@@ -175,7 +250,7 @@ def test_main__invalid_json_on_stdin__is_treated_as_an_empty_event(tmp_path: Pat
     run = _Runner()
     stdout, stderr = io.StringIO(), io.StringIO()
 
-    hooks = HookIO(io.StringIO("not json"), stdout, stderr, tmp_path, run, lambda: "")
+    hooks = HookIO(io.StringIO("not json"), stdout, stderr, tmp_path, run, _Git({}), tmp_path / "s")
 
     exit_code = main(["format"], hooks)
 
@@ -189,12 +264,22 @@ def test_main__stop_with_failing_checks__exits_2_with_the_reason_on_stderr(tmp_p
     stdout, stderr = io.StringIO(), io.StringIO()
 
     event = io.StringIO(json.dumps({"stop_hook_active": False}))
-    hooks = HookIO(event, stdout, stderr, tmp_path, run, lambda: " M tools/x.py\0")
+    git = _Git({STATUS: " M tools/x.py\0"})
+    hooks = HookIO(event, stdout, stderr, tmp_path, run, git, tmp_path / "missing")
 
     exit_code = main(["stop"], hooks)
 
     assert exit_code == 2
     assert "AssertionError" in stderr.getvalue()
+
+
+def test_main__turn_start__records_head(tmp_path: Path) -> None:
+    state = tmp_path / "turn-base"
+    git = _Git({("rev-parse", "HEAD"): "def456\n"})
+    hooks = HookIO(io.StringIO("{}"), io.StringIO(), io.StringIO(), tmp_path, _Runner(), git, state)
+
+    assert main(["turn-start"], hooks) == 0
+    assert state.read_text(encoding="utf-8") == "def456"
 
 
 # --- the settings that wire the hooks --------------------------------------------------------
@@ -224,3 +309,10 @@ def test_settings__the_end_of_a_turn_triggers_the_check_hook() -> None:
     [(_, command)] = _hook_commands("Stop")
 
     assert command.endswith("python -m tools.claude_hooks stop")
+
+
+@pytest.mark.ac("AC-1.6.1")
+def test_settings__each_prompt_records_the_start_of_the_turn() -> None:
+    [(_, command)] = _hook_commands("UserPromptSubmit")
+
+    assert command.endswith("python -m tools.claude_hooks turn-start")
