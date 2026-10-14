@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| **Status** | Draft 2.0 — the baseline every phase builds on; the living office of [ADR-0012](../adr/0012-living-office-organization.md) |
+| **Status** | Draft 3.0 — the Claude-Native Hybrid Edition ([ADR-0016](../adr/0016-claude-native-agent-runtime.md), [ADR-0017](../adr/0017-auth-and-billing-policy.md), [ADR-0018](../adr/0018-image-generation-specialist.md)) on the living office of [ADR-0012](../adr/0012-living-office-organization.md) |
 | **Last updated** | 2026-10-14 |
-| **Related** | [PRD](../product/PRD.md) · [Engineering rules](../engineering/ENGINEERING_RULES.md) · [Threat model](THREAT_MODEL.md) · [Data model](DATA_MODEL.md) · [Event catalog](EVENT_CATALOG.md) · [Permission matrix](PERMISSION_MATRIX.md) · [ADRs](../adr/README.md) |
+| **Related** | [PRD](../product/PRD.md) · [Spec sheet](../product/SPEC_SHEET.md) · [Code design](CODE_DESIGN.md) · [Engineering rules](../engineering/ENGINEERING_RULES.md) · [Threat model](THREAT_MODEL.md) · [Data model](DATA_MODEL.md) · [Event catalog](EVENT_CATALOG.md) · [Permission matrix](PERMISSION_MATRIX.md) · [ADRs](../adr/README.md) |
 
-This document describes how HTCO OS is built: its structure, the rules that keep it secure and maintainable for years, and the reasons behind each choice. It is written so that a new developer, or an AI agent starting a fresh session, can understand the system before changing it. Decisions with real trade-offs are recorded as ADRs and linked here.
+This document describes how HTCO OS is built: its structure, the rules that keep it secure and maintainable for years, and the reasons behind each choice. It is written so that a new developer, or an AI agent starting a fresh session, can understand the system before changing it. Decisions with real trade-offs are recorded as ADRs and linked here. Where each piece of code goes, package by package, is in [CODE_DESIGN.md](CODE_DESIGN.md).
 
 ---
 
@@ -34,7 +34,8 @@ flowchart LR
   autova[AutoVA<br/>supplier ordering] -->|writes tracking| etsy
   htco -. port, adapter TBD .-> autova
   htco <-->|send API, inbound webhooks| mail[Resend<br/>email provider]
-  htco -->|model calls via gateway| llm[Model providers<br/>Anthropic · OpenAI · others]
+  htco -->|Claude Agent SDK sessions · API key| claude[Anthropic API<br/>Claude models]
+  htco -->|model and image calls via gateway| llm[Other providers<br/>OpenAI Images · Jev]
   htco <-->|Postgres, Auth, Storage| supa[(Supabase Pro)]
   hermes[Hermes assistant<br/>optional] -. Action API .-> htco
 ```
@@ -49,7 +50,7 @@ flowchart TB
     direction TB
     web[web<br/>SPA served by Caddy<br/>strict security headers]
     api[api<br/>FastAPI · BFF for web · bearer for native<br/>webhook ingress]
-    worker[agent-worker<br/>automations · job consumers · schedulers<br/>AI employees from Phase 8]
+    worker[agent-worker<br/>automations · job consumers · schedulers<br/>AI employees from Phase 6]
   end
   subgraph SB[Supabase Pro · eu-central-1]
     pg[(Postgres<br/>app · private · agent_runtime)]
@@ -73,7 +74,7 @@ flowchart TB
 |---|---|---|---|---|
 | `web` | Service (Caddy serving the built SPA) or static site | `htco-clients/apps/web` | Serves the web app with CSP, HSTS and frame-ancestors headers | Static assets, CDN |
 | `api` | Web service | `htco-platform/apps/api` | HTTP API, BFF session handling for the web, bearer auth for native apps, webhook ingress, health | More instances; dedicated CPU when needed |
-| `agent-worker` | Worker | `htco-platform/workers` | The automation engine (ingest, sync, reconciliation, outbox delivery, schedules) and, from Phase 8, the AI employees through the agent runtime | An `automation-worker` splits out when isolation or measured load requires it (ADR); never one container per employee |
+| `agent-worker` | Worker | `htco-platform/workers` | The automation engine (ingest, sync, reconciliation, outbox delivery, schedules) and, from Phase 6, the AI employees through the agent runtime | An `automation-worker` splits out when isolation or measured load requires it (ADR); never one container per employee |
 | `browser-runner` | Isolated worker or job, later | `htco-platform/workers/browser` | Playwright automation only if an approved AutoVA path needs it | Possibly a separate droplet for sandboxing (ADR) |
 
 Routing: `app.ht-co.app/` goes to `web`, `app.ht-co.app/api` to `api` (same origin, so the web session cookie needs no CORS), and `api.ht-co.app` to `api` for native clients and webhooks. `office.ht-co.app` and `agents.ht-co.app` are **mail domains only** (MX, SPF, DKIM, DMARC) and never get web records.
@@ -104,9 +105,9 @@ htco-platform/
   packages/persistence/     Postgres adapters: repositories, inbox and outbox, job queue, audit writer
   packages/integrations/    Etsy, AutoVA, email adapters implementing application ports
   packages/model-router/    Model gateway: routing policy, provider adapters, price table, budget ledger client
-  packages/agent-runtime/   Agent runtime port implementation (LangGraph), graphs, tool bridge
+  packages/agent-runtime/   Agent runtime adapters: claude/ (default, Claude Agent SDK, MCP tool server, hooks) and langgraph/ (alternative)
   packages/platform/        Cross-cutting infrastructure: settings, logging, tracing, crypto, clock, IDs
-  registry/                 The office as reviewed data: employees, automations, tools, advisors (TOML; database rows from Phase 8)
+  registry/                 The office as reviewed data: employees, automations, tools, advisors (TOML; database rows from Phase 6)
   supabase/migrations/      SQL migrations (single source of truth for the schema)
   supabase/tests/           pgTAP database tests
   infra/digitalocean/       App spec and environment documentation
@@ -139,7 +140,7 @@ Arrows point from the dependent module to its dependency. Enforced by `import-li
 1. `htco_domain` imports only the standard library.
 2. `htco_application` imports only `htco_domain` (and typing helpers).
 3. Adapters never import each other (Etsy code never imports the model gateway); they meet only through ports wired in a composition root.
-4. Only `htco_model_router` may import model provider SDKs; only `htco_agent_runtime` may import LangGraph; only `htco_persistence` may import the database driver.
+4. Only `htco_model_router` may import model provider SDKs; only `htco_agent_runtime_claude` may import `claude-agent-sdk`; only `htco_agent_runtime_langgraph` may import LangGraph; only `htco_persistence` may import the database driver.
 5. Nothing imports from `apps` or `workers`.
 
 ### 4.4 Bounded contexts
@@ -190,7 +191,7 @@ Each context is a sub-package inside `domain`, `application` and the relevant ad
 
 Details: [DATA_MODEL.md](DATA_MODEL.md).
 
-- **One Postgres database** (Supabase) with schemas: `app` (business tables), `private` (security-definer helpers, never exposed), `audit` (append-only), `jobs` (technical queue), `agent_runtime` (LangGraph checkpoints and store, never exposed through the Data API).
+- **One Postgres database** (Supabase) with schemas: `app` (business tables), `private` (security-definer helpers, never exposed), `audit` (append-only), `jobs` (technical queue), `agent_runtime` (LangGraph checkpoints, only for profiles on the alternative runtime; never exposed through the Data API). Claude sessions keep no database state: task state lives in `app`.
 - **Tenancy**: every business row carries `organization_id`; every commercial row also carries `shop_id`. Both are `NOT NULL`, foreign-keyed and indexed as the leading column of the indexes that RLS uses.
 - **Row-level security** on every table, written `TO authenticated` with helper functions wrapped in `(select …)` for performance, and restrictive policies requiring `aal2` where MFA is mandatory.
 - **How the API applies RLS**: user-scoped requests run inside a transaction that sets `role authenticated` and the verified JWT claims (`set local`), so RLS is enforced even if a query forgets a filter. Workers use their own database role, with explicit tenant filters in every query and integration tests that prove it.
@@ -213,9 +214,10 @@ All external systems sit behind ports owned by the application layer.
 | `AutoVaPort` | `ManualAutoVaAdapter` first; API adapter if AutoVA offers one; browser adapter only by ADR | Tracking does not need AutoVA access: AutoVA writes tracking to Etsy and we read it there |
 | `EmailPort` | `ResendAdapter` | Idempotency keys on send; inbound via `email.received` webhook then fetch content; attachments copied within one hour |
 | `ModelGateway` | `AnthropicAdapter`, `OpenAIAdapter` (official SDKs) | Only path to models; see §9 |
-| `DecisionAdvisor` | TypeSafe Jev adapter, economy model through the gateway (Phase 9) | Typed decisions (choice or score) after deterministic rules; schema-validated; benchmarked before use ([ADR-0015](../adr/0015-decision-advisor-and-routing.md)) |
-| `AgentRuntime` | `LangGraphRuntime` (Phase 8) | `invoke`, `resume`, `interrupt`, `cancel`, `inspect`; sessions reference employees and tasks by ID |
-| `ExecutionStore` | Postgres store on the job queue (Phase 5) | Automation executions, unique per idempotency key |
+| `DecisionAdvisor` | TypeSafe Jev adapter, economy model through the gateway (Phase 8) | Typed decisions (choice or score) after deterministic rules; schema-validated; benchmarked before use ([ADR-0015](../adr/0015-decision-advisor-and-routing.md)) |
+| `AgentRuntime` | `ClaudeAgentRuntime` (default) and `LangGraphRuntime` (alternative), Phase 6 | `invoke`, `resume`, `interrupt`, `cancel`, `inspect`; sessions reference employees and tasks by ID |
+| `ExecutionStore` | Postgres store on the job queue (Phase 4) | Automation executions, unique per idempotency key |
+| `ImageGenerationPort` | `OpenAIImageAdapter` (Phase 8) | Used only through Nika's media tools; provenance and `NEEDS_QA` for every asset ([ADR-0018](../adr/0018-image-generation-specialist.md)) |
 | `BlobStore` | Supabase Storage | Product media with provenance metadata |
 | `Clock`, `IdGenerator` | System and test implementations | Determinism in tests |
 
@@ -230,12 +232,12 @@ All external systems sit behind ports owned by the application layer.
 
 ### 8.1 Two levels of work
 
-- **Business tasks** (`app.tasks`) are domain records with business states, owners, SLAs and approvals. Humans see them.
+- **Business tasks** (`app.business_tasks`, with one `task_executions` row per step) are domain records with business states, owners, SLAs and approvals. Humans see them.
 - **Technical jobs** (`jobs` schema) are at-least-once execution units: "ingest receipt 123", "deliver outbox message 456", "resume agent thread 789". Workers claim them.
 
 ### 8.2 Job queue
 
-A Postgres-native queue with atomic claims (`FOR UPDATE SKIP LOCKED`), visibility timeouts or leases, retries with exponential backoff and jitter, a dead-letter state, per-resource locks (for example one sync per shop at a time), and scheduled jobs. Candidates are a small in-house queue, the `procrastinate` library, or Supabase Queues (pgmq, still public alpha in October 2026, with no built-in dead-letter queue). The choice is made by a spike at the start of Phase 5 ([ADR-0007](../adr/0007-job-queue.md)); the application layer only sees a `JobQueue` port either way.
+A Postgres-native queue with atomic claims (`FOR UPDATE SKIP LOCKED`), visibility timeouts or leases, retries with exponential backoff and jitter, a dead-letter state, per-resource locks (for example one sync per shop at a time), and scheduled jobs. Candidates are a small in-house queue, the `procrastinate` library, or Supabase Queues (pgmq, still public alpha in October 2026, with no built-in dead-letter queue). The choice is made by a spike at the start of Phase 4 ([ADR-0007](../adr/0007-job-queue.md)); the application layer only sees a `JobQueue` port either way.
 
 ### 8.3 Inbox and outbox
 
@@ -272,39 +274,52 @@ Recurring work (reconciliation, SLA inspection, token refresh, retention) is enq
 
 | Concept | Domain (pure) | Application (rules, ports) | Data | Status |
 |---|---|---|---|---|
-| AI employees | `htco_domain.workforce` (identity, versioned profile, 22-section sheet, readiness gate) | `htco_application.workforce.registry`, `htco_application.agents.runtime` (port) | `registry/employees/` | Foundation implemented; runtime adapter PLANNED (Phase 8) |
-| Automations | `htco_domain.automation` (definition, 18-section spec, execution state machine) | `htco_application.automation.engine` | `registry/automations/` | In-memory engine implemented; durable store PLANNED (Phase 5) |
-| Tools | `htco_domain.tooling` | `htco_application.workforce.tool_access` | `registry/tools/` | Access rules implemented; tool bridge PLANNED (Phase 8) |
-| Routing and decisions | `htco_domain.routing` | `htco_application.routing.router`, `htco_application.decisions.advisor` | per-employee `[routing]` tables; `registry/advisors/` | Implemented with fakes; gateway and providers PLANNED (Phase 9) |
-| Records | `htco_domain.actors`, `htco_domain.activity`, `htco_domain.tasks`, `htco_domain.improvement` | — | — | Domain implemented; stores PLANNED (Phases 2, 7, 10, 18) |
+| AI employees | `htco_domain.workforce` (identity, versioned profile, 22-section sheet, readiness gate) | `htco_application.workforce.registry`, `htco_application.agents.runtime` (port) | `registry/employees/` | Foundation implemented; runtime adapter PLANNED (Phase 6) |
+| Automations | `htco_domain.automation` (definition, 18-section spec, execution state machine) | `htco_application.automation.engine` | `registry/automations/` | In-memory engine implemented; durable store PLANNED (Phase 4) |
+| Tools | `htco_domain.tooling` | `htco_application.workforce.tool_access` | `registry/tools/` | Access rules implemented; tool bridge PLANNED (Phase 6) |
+| Routing and decisions | `htco_domain.routing` | `htco_application.routing.router`, `htco_application.decisions.advisor` | per-employee `[routing]` tables; `registry/advisors/` | Implemented with fakes; gateway and providers PLANNED (Phase 8) |
+| Records | `htco_domain.actors`, `htco_domain.activity`, `htco_domain.tasks`, `htco_domain.improvement` | — | — | Domain implemented; stores PLANNED (Phases 2, 5, 7, 14) |
 
 Employees reason; automations act deterministically; tools expose capabilities; engineering changes the system through pull requests. An employee never touches the database or an external API directly: it calls tools, which call use cases, which emit activity records and outbox messages.
 
-### 9.1 Agent runtime behind a port
+### 9.1 Agent runtime behind a port (Claude-native)
 
 ```mermaid
 flowchart LR
-  task[Task / event / schedule] --> q[Job queue]
-  q --> rt[AgentRuntime port]
-  rt --> lg[LangGraph adapter<br/>graphs per workflow]
-  lg -->|request tool| tb[Tool bridge]
+  task[Task created · handoff ·<br/>approval decided · event] --> q[Job queue<br/>agent.step]
+  q --> step[RunAgentStep<br/>kill switches · billing policy ·<br/>budget · route]
+  step --> rt[AgentRuntime port]
+  rt --> cl[Claude adapter<br/>Agent SDK session<br/>one bounded step]
+  rt -. alternative .-> lg[LangGraph adapter]
+  cl -->|mcp__htco__* tool call| hook[PreToolUse hook]
+  hook --> tb[Tool bridge]
   tb --> pe{Policy engine<br/>deny by default}
-  pe -->|allowed| ds[Domain service<br/>use case]
-  pe -->|needs approval| ap[Approval + interrupt]
+  pe -->|allowed| ds[Use case]
+  pe -->|needs approval| ap[Approval · task waits]
   pe -->|denied| audit[(Audit)]
   ds --> outbox[(Outbox)]
-  lg -->|model call| gw[Model gateway]
-  gw --> budget[(Budget ledger)]
-  gw --> prov[Provider adapters]
+  cl -->|ResultMessage · model_usage| step
+  step --> db[(Task state · agent_runs ·<br/>cost entries · activity)]
 ```
 
-- **Runtime**: LangGraph 1.2.x with `AsyncPostgresSaver` checkpoints in the `agent_runtime` schema, over a direct (IPv4 add-on) or session-mode connection, because checkpoints need prepared statements. `LANGGRAPH_STRICT_MSGPACK=true` and an encrypted serializer are mandatory. No `langchain` package at first; nodes call our own ports ([ADR-0003](../adr/0003-agent-runtime-langgraph.md)).
-- **Graphs**: one graph per reasoning workflow of an employee (Eitan's exception investigation first, then Noa's reviews, Daniel and Noam's Listing Health, and so on). Deterministic steps are automations, not graph nodes. Graphs exchange events and resource references through the database, never whole state blobs; their state is a runtime concern, never the record of an order, a payment, a product or an employee.
-- **Threads**: one `thread_id` per business resource run (for example `quote:{variant_id}:{request_id}`). A row lock in `app.agent_threads` guarantees that only one run touches a thread at a time (open-source LangGraph does not prevent concurrent runs on a thread).
-- **Waiting**: long waits use `interrupt()` and are resumed by an event or a delayed job. Because a node restarts from the beginning on resume, everything before an interrupt must be idempotent.
-- **Durability**: `durability="sync"` for supplier quotes, inspections and incidents; `"async"` elsewhere.
-- **Graph versioning**: each thread is stamped with `graph_version`. Nodes are renamed by adding the new one and removing the old one later; CI refuses to remove a node while threads are interrupted at it. Old checkpoints are kept as test fixtures.
-- **Recursion limit**: 25–50 per graph, not the default.
+- **Runtime** ([ADR-0016](../adr/0016-claude-native-agent-runtime.md)): the Claude Agent SDK (`claude-agent-sdk`, exact-pinned) in `htco_agent_runtime_claude` is the default; LangGraph in `htco_agent_runtime_langgraph` is the alternative ([ADR-0003](../adr/0003-agent-runtime-langgraph.md)). Each employee profile version names its runtime, and a deployment enables runtimes explicitly. Nothing falls back silently.
+- **Sessions are disposable.** One session runs one bounded step of one business task. It starts from a task brief built from Postgres: the task, inputs, resource references, the versioned `state_summary`, the profile's instructions and the shop scope. The step ends with a terminal HTCO tool (`task.complete`, `task.handoff`, `task.wait_for_approval`, `task.wait_for_event`, `task.escalate`) or at its turn, budget or time limit. The outcome, new state summary, costs and evidence are written in one transaction, then the session is discarded. DigitalOcean wipes local files on every deploy, so correctness never depends on SDK session files.
+- **Waiting** never keeps a session open. The task moves to `WAITING_FOR_APPROVAL` or `WAITING_FOR_EXTERNAL`, and the event or a delayed job enqueues the next step. Everything before a terminal tool call is idempotent.
+- **Locked-down options:**
+  - `setting_sources=[]`.
+  - A per-step in-process MCP server (`htco`) that holds only the granted tools.
+  - Every built-in tool disallowed for business employees.
+  - `permission_mode` never `bypassPermissions`, and `can_use_tool` denies anything that falls through.
+  - `PreToolUse` and `PostToolUse` hooks that delegate to the tool bridge.
+  - An empty temporary `cwd`, and an `env` that holds only the runtime key.
+  - `max_turns` and `max_budget_usd` from the profile; `model` from the routing decision.
+
+  CI checks these options for every employee.
+- **Authentication and billing** ([ADR-0017](../adr/0017-auth-and-billing-policy.md)): hosted runs use `API_PRODUCTION`, with a service-account API key per environment. Personal subscriptions serve developers' own interactive sessions only. `APPROVED_SUBSCRIPTION_RUNTIME` stays off unless Anthropic approves in writing. Quota and budget exhaustion move tasks to waiting while automations keep running.
+- **Records:** `agent_runs` (employee, profile version, task, runtime, model, billing mode, opaque session reference, status, turns, duration), `model_usage` cost rows from the SDK's usage data, `tool_invocations` and activity records. No model reasoning is stored or shown.
+- **Concurrency:** no worker or container per employee. The number of parallel slots per worker is set by account rate limits, budget and the memory each SDK session needs (measured in Phase 6).
+- **Engineering employees** (Phase 19) run in a separate, sandboxed engineering runner: built-in code tools inside an isolated Git worktree, and a GitHub token that can only push branches and open pull requests.
+- **Business messaging** goes through `employee_messages` and task handoffs, never through Claude Code's cross-session messaging or agent teams.
 
 ### 9.2 Tools and the policy engine
 
@@ -327,8 +342,8 @@ flowchart LR
 
 | Layer | Storage | Rules |
 |---|---|---|
-| Working memory | LangGraph checkpoints | Pruned after completion plus a retention period |
-| Professional memory | LangGraph store or `app.agent_memory` | Written only by validated code paths, with source, shop, version, confidence and expiry |
+| Working memory | The step's session (discarded) and the task's versioned `state_summary` in Postgres; LangGraph checkpoints only for profiles on the alternative runtime | State summaries pruned after completion plus a retention period |
+| Professional memory | `app.agent_memory` | Written only by validated code paths, with source, shop, version, confidence and expiry |
 | Organizational memory | Versioned policy and runbook documents | Read-only for agents |
 | Business state | Postgres business tables | The only source of truth for orders, money and customers |
 
@@ -338,7 +353,7 @@ Each employee has a gold dataset, metrics and thresholds (for example precision 
 
 ### 9.6 Automation engine
 
-`AutomationEngine.trigger` is the single entry for events, schedules, user actions, workflows and employees (through `automation.trigger`). It checks readiness, the deployed handler, the trigger kind and the employee's grants; executions are unique per `(automation_id, idempotency_key)`, so a replay returns the existing execution; failures follow the retry policy into the dead-letter state. From Phase 5 executions live on the Postgres job queue with leases and heartbeats, inbox and outbox ([ADR-0013](../adr/0013-automation-engine.md)).
+`AutomationEngine.trigger` is the single entry for events, schedules, user actions, workflows and employees (through `automation.trigger`). It checks readiness, the deployed handler, the trigger kind and the employee's grants; executions are unique per `(automation_id, idempotency_key)`, so a replay returns the existing execution; failures follow the retry policy into the dead-letter state. From Phase 4 executions live on the Postgres job queue with leases and heartbeats, inbox and outbox ([ADR-0013](../adr/0013-automation-engine.md)).
 
 ### 9.7 Tool registry and access
 
@@ -350,11 +365,11 @@ Each employee has a gold dataset, metrics and thresholds (for example precision 
 
 ### 9.9 Supervision
 
-Four layers (Phase 10): deterministic monitors on activity records, tasks, leases and queues; Noa's exception handling and risk-based sampling; scheduled daily and weekly reviews, including the nightly supervisor; follow-up verification of corrections. Critical activity is 100% observable; model review is risk-based, never one call per event.
+Four layers (Phase 14): deterministic monitors on activity records, tasks, leases and queues; Noa's exception handling and risk-based sampling; scheduled daily and weekly reviews, including the nightly supervisor; follow-up verification of corrections. Critical activity is 100% observable; model review is risk-based, never one call per event.
 
 ### 9.10 Optimization and engineering
 
-Omer's proposals (`OptimizationProposal`) carry baselines, evidence, acceptance criteria and a rollback plan (Phase 18). Engineering requests link the source (owner, Maya, Noa, incidents, Omer, monitoring) to GitHub issues, pull requests, tests and releases (Phase 19). Engineering employees work only through pull requests, CI and the owner's release gate; they cannot weaken tests, remove logging, widen their own permissions or bypass branch protection.
+Omer's proposals (`OptimizationProposal`) carry baselines, evidence, acceptance criteria and a rollback plan (Phase 14). Engineering requests link the source (owner, Maya, Noa, incidents, Omer, monitoring) to GitHub issues, pull requests, tests and releases (Phase 19). Engineering employees work only through pull requests, CI and the owner's release gate; they cannot weaken tests, remove logging, widen their own permissions or bypass branch protection.
 
 ## 10. Security architecture
 
@@ -365,7 +380,7 @@ Details and threat analysis: [THREAT_MODEL.md](THREAT_MODEL.md). Permissions: [P
 | Actor | Authentication | Token handling |
 |---|---|---|
 | Web user | Supabase Auth (email and password, TOTP MFA) through the **API acting as a backend-for-frontend** | The API performs the PKCE exchange server-side, keeps Supabase tokens encrypted server-side, and gives the browser only an opaque `__Host-` session cookie (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`). Unsafe methods require a custom CSRF header and a same-site `Sec-Fetch-Site`/`Origin` check ([ADR-0006](../adr/0006-web-auth-bff.md)). |
-| Native user | Supabase Auth through native sign-in screens, or through the HTCO web sign-in page in the system browser with PKCE (Supabase does not host a sign-in page; the choice is made by ADR at the start of Phase 16) | Bearer access token; refresh token in Android Keystore-backed encrypted storage or Windows Credential Locker / DPAPI; step-up through a biometric-protected device key verified by the server |
+| Native user | Supabase Auth through native sign-in screens, or through the HTCO web sign-in page in the system browser with PKCE (Supabase does not host a sign-in page; the choice is made by ADR at the start of Phase 17) | Bearer access token; refresh token in Android Keystore-backed encrypted storage or Windows Credential Locker / DPAPI; step-up through a biometric-protected device key verified by the server |
 | API → database | Dedicated database role; user requests run with `role authenticated` and verified claims | Connection secrets in DigitalOcean encrypted environment variables |
 | Workers | Dedicated database role per worker type | Same |
 | Agents | Service identity per agent profile, checked by the policy engine on every tool call | No credentials in prompts, memory or tool results |
@@ -410,7 +425,7 @@ Mapped to the OWASP Top 10 for Agentic Applications (2026) in the threat model: 
 | Errors | Sentry behind the `ErrorReporter` port (`htco_platform.error_reporting`) | An isolated client with no integrations: only the exception, stack trace (no local variables), environment, release and the `request_id`/`trace_id` tags; request, user and breadcrumb data are dropped |
 | Metrics | Job queue depth and age, retries, DLQ size, webhook lag, sync freshness per shop, budget consumption, agent run outcomes | Alerts link to runbooks |
 | Audit | `audit` schema, append-only | Every money, permission, publishing, approval and external action |
-| Activity | `app.activity_records` (Phase 7) | One record per meaningful operation of any actor (user, employee, automation, advisor, system) with organization, shop, task, correlation and causation IDs and outcome; business summaries only, never private model reasoning |
+| Activity | `app.activity_records` (Phase 5) | One record per meaningful operation of any actor (user, employee, automation, advisor, system) with organization, shop, task, correlation and causation IDs and outcome; business summaries only, never private model reasoning |
 | Health | `/healthz` (process), `/readyz` (database and critical config); worker heartbeat rows | DigitalOcean liveness and readiness checks |
 
 ## 13. Delivery pipeline
@@ -451,12 +466,12 @@ Details: `htco-clients/docs/architecture/CLIENT_ARCHITECTURE.md`.
 |---|---|---|
 | [0001](../adr/0001-two-repositories.md) | Two repositories: platform and clients | Accepted |
 | [0002](../adr/0002-modular-monolith-hexagonal.md) | Modular monolith with hexagonal boundaries, enforced in CI | Accepted |
-| [0003](../adr/0003-agent-runtime-langgraph.md) | LangGraph behind an `AgentRuntime` port; no LangChain package at first | Accepted; validated by the Phase 8 gates |
+| [0003](../adr/0003-agent-runtime-langgraph.md) | LangGraph behind an `AgentRuntime` port; no LangChain package at first | Accepted; the alternative adapter since 0016 |
 | [0004](../adr/0004-model-gateway.md) | Own model gateway on official SDKs; catalog as data; budget ledger | Accepted |
 | [0005](../adr/0005-hosting-digitalocean-supabase.md) | DigitalOcean App Platform and Supabase Pro, IPv4 add-on, same region | Proposed until the owner chooses the region |
 | [0006](../adr/0006-web-auth-bff.md) | Web authentication through a backend-for-frontend with session cookies | Accepted |
-| [0007](../adr/0007-job-queue.md) | Postgres-native job queue behind a port; implementation chosen by spike | Proposed, decided in Phase 5 |
-| [0008](../adr/0008-etsy-integration.md) | Etsy Seller App, webhooks plus reconciliation polling, read-first tracking | Accepted; validated in Phases 0 and 4 |
+| [0007](../adr/0007-job-queue.md) | Postgres-native job queue behind a port; implementation chosen by spike | Proposed, decided in Phase 4 |
+| [0008](../adr/0008-etsy-integration.md) | Etsy Seller App, webhooks plus reconciliation polling, read-first tracking | Accepted; validated in Phases 0 and 9 |
 | [0009](../adr/0009-autova-integration.md) | AutoVA behind a port; read tracking from Etsy; manual adapter first | Accepted |
 | [0010](../adr/0010-test-first-development.md) | Test-first development with enforced quality gates | Accepted |
 | [0011](../adr/0011-data-access-and-migrations.md) | psycopg with explicit SQL; Supabase CLI migrations as the single schema source | Accepted |
@@ -464,17 +479,23 @@ Details: `htco-clients/docs/architecture/CLIENT_ARCHITECTURE.md`.
 | [0013](../adr/0013-automation-engine.md) | Automation registry and workflow engine independent of the agent runtime | Accepted |
 | [0014](../adr/0014-tool-registry.md) | Central tool registry with least-privilege, capability-level access | Accepted |
 | [0015](../adr/0015-decision-advisor-and-routing.md) | Shared Decision Advisor; one router with a policy per employee (amends 0004) | Accepted |
+| [0016](../adr/0016-claude-native-agent-runtime.md) | Claude Agent SDK runtime as the default adapter; LangGraph the alternative (amends 0003) | Accepted; validated by the Phase 6 gates |
+| [0017](../adr/0017-auth-and-billing-policy.md) | AuthAndBillingPolicy: API keys for hosted runs, subscriptions for personal development only | Accepted |
+| [0018](../adr/0018-image-generation-specialist.md) | Image generation as a specialist adapter owned by Nika | Accepted |
 
 ## 16. Known risks and open questions
 
 | Item | Owner | Resolved by |
 |---|---|---|
-| Whether Etsy webhooks and shipment writes are available to a Seller App in the shop's region | Owner + platform | Phase 0 spike, Phase 4 probe |
+| Whether Etsy webhooks and shipment writes are available to a Seller App in the shop's region | Owner + platform | Phase 0 spike, Phase 9 probe |
 | AutoVA integration options (API, export, partner program) | Owner | Phase 0 inquiry |
 | Region choice (Frankfurt vs US East) | Owner | Phase 0 |
-| Job queue implementation | Platform | Phase 5 spike |
-| Server-sent events through DigitalOcean's request timeout vs Supabase Realtime for live updates | Platform | Phase 15 spike |
+| Job queue implementation | Platform | Phase 4 spike |
+| Server-sent events through DigitalOcean's request timeout vs Supabase Realtime for live updates | Platform | Phase 16 spike |
 | Point-in-time recovery cost vs recovery objectives | Owner | Before Phase 20 |
 | Catalog model vs Etsy reselling policy | Owner | Before Phase 12 |
-| Jev's real API, terms, limits and accuracy on our questions | Platform | Phase 9 benchmark |
-| When to split an `automation-worker` from `agent-worker` | Platform | Measured load, Phase 10 onward |
+| Jev's real API, terms, limits and accuracy on our questions | Platform | Phase 8 benchmark |
+| When to split an `automation-worker` from `agent-worker` | Platform | Measured load, Phase 14 onward |
+| Memory and CPU per Claude Agent SDK session, and so the number of parallel slots per worker | Platform | Phase 6 measurement |
+| The SDK's testing seam (custom transport) for scripted message streams in CI | Platform | Phase 6 kickoff |
+| Whether Anthropic ever approves a subscription-based runtime for this office | Owner | Only if pursued; off by default ([ADR-0017](../adr/0017-auth-and-billing-policy.md)) |

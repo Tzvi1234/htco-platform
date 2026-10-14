@@ -6,7 +6,7 @@ body:
     id: phase
     attributes:
       label: Phase and slice
-      placeholder: "Phase 5, slice 5.4"
+      placeholder: "Phase 4, slice 4.4"
   - type: textarea
     id: goal
     attributes:

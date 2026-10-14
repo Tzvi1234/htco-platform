@@ -50,11 +50,11 @@ Option 2, plus per-employee routing policies on the central router.
 
 - Positive: cheap structured decisions where they are safe; every model choice explainable per employee; providers swappable.
 - Negative: two more configuration surfaces (advisor providers, routing policies) to review; benchmark effort before Jev is used.
-- Follow-ups: catalog and gateway adapters with budgets (Phase 9); Jev adapter, benchmark harness and the Decision & Model Observatory (Phases 9 and 15).
+- Follow-ups: catalog and gateway adapters with budgets (Phase 8); Jev adapter, benchmark harness and the Decision & Model Observatory (Phases 8 and 16).
 
 ## Validation
 
-Scenario E (two employees, one router, different policies) and Scenario F (rules versus advisor versus fallback, schema validity, failure handling, no effect on authorization) pass with fakes now; Scenario F is repeated with real providers in the Phase 9 benchmark.
+Scenario E (two employees, one router, different policies) and Scenario F (rules versus advisor versus fallback, schema validity, failure handling, no effect on authorization) pass with fakes now; Scenario F is repeated with real providers in the Phase 8 benchmark.
 
 ## Validation log
 

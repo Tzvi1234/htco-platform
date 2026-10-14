@@ -26,10 +26,10 @@ Most of HTCO's work is repeatable: ingest an order, update counters, sync tracki
 
 Option 3.
 
-- **Definitions** (`AutomationDefinition`): ID, name, version, business owner, primary trigger, `callable_from`, retry policy, timeout, side-effect class, approval requirement, `ai_steps` (empty unless a named step needs reasoning), readiness, activation phase, and an 18-section specification (identity, owner, trigger, input and output schemas, preconditions, steps, dependencies, error handling, retries, idempotency, timeouts and SLA, permissions, audit, tests, recovery, approvals, metrics). Stored in `registry/automations/` and, from Phase 8, in the database with versions.
+- **Definitions** (`AutomationDefinition`): ID, name, version, business owner, primary trigger, `callable_from`, retry policy, timeout, side-effect class, approval requirement, `ai_steps` (empty unless a named step needs reasoning), readiness, activation phase, and an 18-section specification (identity, owner, trigger, input and output schemas, preconditions, steps, dependencies, error handling, retries, idempotency, timeouts and SLA, permissions, audit, tests, recovery, approvals, metrics). Stored in `registry/automations/` and, from Phase 6, in the database with versions.
 - **Executions** (`AutomationExecution`): an explicit state machine `PENDING → RUNNING → SUCCEEDED`, with `FAILED → RETRY_SCHEDULED → RUNNING`, `DEAD_LETTERED`, `COMPENSATED` and `CANCELLED`; unique per `(automation_id, idempotency_key)`.
 - **Engine** (`AutomationEngine`): one `trigger` entry point that checks readiness, the deployed handler, the trigger kind and, for employees, that the trigger is `agent_tool` and the automation is in the employee's grants. A replay returns the existing execution. Handlers call use cases; external effects go through the outbox.
-- **Durability**: Phase 5 puts executions on the job queue (leases, heartbeats, backoff with jitter, dead letters) with inbox and outbox. Until then the engine runs in-process against an `ExecutionStore` port.
+- **Durability**: Phase 4 puts executions on the job queue (leases, heartbeats, backoff with jitter, dead letters) with inbox and outbox. Until then the engine runs in-process against an `ExecutionStore` port.
 - **The 15 initial workflows** are in `registry/automations/`: Etsy Order Intake; Order Deduplication & Verification; Product Sales Counters; Catalog Draft Creation & Publishing; Supplier Quote Request & Follow-up; Tracking Synchronization; Finance Ledger Ingestion; Inventory & Supplier Price Monitoring; Order & Financial Reconciliation; Incident Detection & Escalation; Email Intake & Routing; Scheduled Reporting & Notifications; Agent Task Scheduling & Recovery; Quality Review Scheduling; Optimization Review Scheduling.
 - **Deployment**: automations run in `agent-worker` (renamed from `worker`) until isolation or load justifies a separate `automation-worker`.
 
@@ -37,11 +37,11 @@ Option 3.
 
 - Positive: deterministic work is cheap, testable and runtime-independent; every trigger is authorized the same way; replay safety is structural.
 - Negative: we own the engine's durability features; workflows with long waits need careful state design (they use task states such as `WAITING_FOR_QUOTES`, not open runtime sessions).
-- Follow-ups: job-queue spike and durable store (Phase 5); per-workflow schemas in `packages/contracts/automations/`; the Automation Center in the office UI (Phase 15).
+- Follow-ups: job-queue spike and durable store (Phase 4); per-workflow schemas in `packages/contracts/automations/`; the Automation Center in the office UI (Phase 16).
 
 ## Validation
 
-Scenario G (a paid order replayed many times yields one order and correct counters) passes in memory now and is repeated against Postgres in Phase 5; Scenario B (a failed CRM write stays recoverable and is verified) in Phase 5 and Phase 10.
+Scenario G (a paid order replayed many times yields one order and correct counters) passes in memory now and is repeated against Postgres in Phase 4; Scenario B (a failed CRM write stays recoverable and is verified) in Phase 4 and Phase 14.
 
 ## Validation log
 

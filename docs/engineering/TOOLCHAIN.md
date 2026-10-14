@@ -31,7 +31,7 @@
 | Logging | structlog | Locked 26.1.0 | JSON to stdout, one object per line, standard-library loggers rendered the same way; trace IDs join in slice 1.7 |
 | Tracing | OpenTelemetry API and SDK, `opentelemetry-instrumentation-httpx` transport wrappers | Locked 1.45.1 / 0.66b1 | No FastAPI instrumentation: our request middleware starts the server span itself, so incoming trace headers are never trusted. No exporter yet. |
 | Errors | sentry-sdk | Locked 2.71.0 | Isolated `sentry_sdk.Client` used through an isolation scope; no default or auto-enabled integrations; no local variables; `before_send` scrubbing |
-| Agent runtime | langgraph, langgraph-checkpoint, langgraph-checkpoint-postgres | Locked langgraph 1.2.14, langgraph-checkpoint 4.2.0 (langchain-core 1.6.7) | Only in `htco_agent_runtime`. Checkpoint 4.3.0 (store namespace validation) is inside the release-age window today and is taken before Phase 8 adds agent code. Strict msgpack, encrypted serializer; checkpoint tables created by a migration. |
+| Agent runtime | langgraph, langgraph-checkpoint, langgraph-checkpoint-postgres | Locked langgraph 1.2.14, langgraph-checkpoint 4.2.0 (langchain-core 1.6.7) | Only in `htco_agent_runtime`. Checkpoint 4.3.0 (store namespace validation) is inside the release-age window today and is taken before Phase 6 adds agent code. Strict msgpack, encrypted serializer; checkpoint tables created by a migration. |
 | Model providers | `anthropic`, `openai` official SDKs | | Only inside `htco_model_router` |
 | Email | `resend` | 2.49.x | Only inside `htco_integrations.email` |
 
@@ -45,9 +45,9 @@
 | Git hooks | prek (pre-commit compatible), in the `dev` group | 0.5.5 | Ruff, gitleaks, file hygiene and the commit-message check; CI re-runs every check |
 | Tests | pytest + AnyIO plugin | 9.1.1 / 4.15.1 | No pytest-asyncio. Third-party plugins load only from an allow-list (`--disable-plugin-autoload -p anyio -p hypothesispytest`); warnings are errors. |
 | Property-based | Hypothesis | 6.168.5 | |
-| Snapshots | syrupy | Planned 6.x (Phase 8, prompt templates) | The OpenAPI contract is compared as a committed file instead (`tools/openapi.py`), so reviewers see a plain YAML diff |
+| Snapshots | syrupy | Planned 6.x (Phase 6, prompt templates) | The OpenAPI contract is compared as a committed file instead (`tools/openapi.py`), so reviewers see a plain YAML diff |
 | Coverage | coverage.py (`coverage run -m pytest`) | 7.16.2 | Branch coverage; floors per layer in the `test` recipe. pytest-cov is not used. |
-| Mutation | mutmut | Planned 3.x (Phase 5) | Linux CI only (needs `fork`) |
+| Mutation | mutmut | Planned 3.x (Phase 4) | Linux CI only (needs `fork`) |
 | API fuzzing | Schemathesis | Locked 4.29.4 | Cases generated from the committed contract, sent in-process through Starlette's TestClient, checked with `case.validate_response` |
 | Contract diff | oasdiff 1.33.0 (release binary, SHA-256 pinned in `ci.yml`) | | `oasdiff breaking` against the pull request's base; any error-level change fails the `contract` job |
 | YAML | PyYAML 6.0.3 (with `types-pyyaml`) | | Renders the contract without anchors or aliases |

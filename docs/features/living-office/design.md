@@ -36,7 +36,7 @@ A grant of an automation to an employee means "may trigger it through `automatio
 
 | Decision | Alternatives considered | Why |
 |---|---|---|
-| TOML documents now, database rows from Phase 8 | Database first; YAML | Reviewed in pull requests today; `tomllib` is in the standard library (no new dependency) |
+| TOML documents now, database rows from Phase 6 | Database first; YAML | Reviewed in pull requests today; `tomllib` is in the standard library (no new dependency) |
 | The specification sheet is the configuration file | Separate Markdown sheets | One source of truth per employee; tests check all 22 sections exist |
 | Readiness enforced in the domain constructor | A check in CI only | An invalid production-ready profile cannot exist anywhere, including tests |
 | Router chooses by cost among valid models | Fixed model per employee | Policies name capabilities and limits, not models (ADR-0004, ADR-0015) |

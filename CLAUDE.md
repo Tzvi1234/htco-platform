@@ -4,7 +4,7 @@ Operating manual for AI coding agents in this repository. Read it fully at the s
 
 ## What this repository is
 
-The backend of **HTCO OS** (HT Commerce, by H.T.Z Studios): a FastAPI API, the automation engine and the AI workforce (a LangGraph runtime behind a port), Supabase Postgres migrations, API and event contracts, DigitalOcean infrastructure as code, and the **system-level documentation** for the whole product. HTCO is a living office of 16 AI employees, deterministic automations, versioned tools and an engineering department ([ADR-0012](docs/adr/0012-living-office-organization.md)); keep the four concepts separate. The clients (web, Windows, Android, design system) live in the sibling repository `htco-clients` (checked out next to this one at `../htco-clients`).
+The backend of **HTCO OS** (HT Commerce, by H.T.Z Studios), **Claude-Native Hybrid Edition**: a FastAPI API, the automation engine and the AI workforce (the Claude Agent SDK runtime behind the `AgentRuntime` port, with LangGraph kept as the alternative adapter: [ADR-0016](docs/adr/0016-claude-native-agent-runtime.md)), Supabase Postgres migrations, API and event contracts, DigitalOcean infrastructure as code, and the **system-level documentation** for the whole product. HTCO is a living office of 16 AI employees, deterministic automations, versioned tools and an engineering department ([ADR-0012](docs/adr/0012-living-office-organization.md)); keep the four concepts separate. The clients (web, Windows, Android, design system) live in the sibling repository `htco-clients` (checked out next to this one at `../htco-clients`).
 
 ## Talking to the owner
 
@@ -13,9 +13,10 @@ The owner writes in Hebrew. Answer in Hebrew in conversation. Everything committ
 ## Before any task
 
 1. Load the `software-engineering` skill (mandatory, every task, including small fixes).
-2. Load the `tdd` skill before writing or changing production code or migrations.
-3. Find the current phase in [`docs/plan/PLAN.md`](docs/plan/PLAN.md) and the slice you are working on in `docs/plan/phases/`. Work only on planned slices or issues.
-4. Before calling anything done: load `feature-verification`, verify for real, and record the evidence. Then load `feature-docs` and update the documentation in the same pull request.
+2. Load the `tdd` and `testing` skills before writing or changing production code, tests or migrations.
+3. Find the current phase in [`docs/plan/PLAN.md`](docs/plan/PLAN.md) and open its **phase instruction file** in `docs/plan/phases/`. Follow its "Instructions for the agent" section. Work only on planned slices or issues.
+4. Know where the code goes before you write it: [`docs/architecture/CODE_DESIGN.md`](docs/architecture/CODE_DESIGN.md). Never cross a red line ([ENGINEERING_RULES §0](docs/engineering/ENGINEERING_RULES.md#0-red-lines)).
+5. Before calling anything done: load `feature-verification`, verify for real, and record the evidence. Then load `feature-docs` and update the documentation in the same pull request.
 
 Project hooks in `.claude/settings.json` back this up: every Python file you edit is formatted, and when code or configuration changed, the end of your turn runs `just check-fast` and is refused while it fails. Fix the reported problem; never weaken a test to get past the hook.
 
@@ -23,11 +24,12 @@ Project hooks in `.claude/settings.json` back this up: every Python file you edi
 
 | Topic | Document |
 |---|---|
-| What we build | [`docs/product/PRD.md`](docs/product/PRD.md), [`docs/product/MVP.md`](docs/product/MVP.md) |
+| What we build | [`docs/product/PRD.md`](docs/product/PRD.md), [`docs/product/MVP.md`](docs/product/MVP.md), the one-page [`SPEC_SHEET.md`](docs/product/SPEC_SHEET.md) |
 | Build order and status | [`docs/plan/PLAN.md`](docs/plan/PLAN.md) and phase files |
 | Architecture | [`docs/architecture/SOFTWARE_DESIGN.md`](docs/architecture/SOFTWARE_DESIGN.md), data model, event catalog, permission matrix, threat model |
+| Where code goes | [`docs/architecture/CODE_DESIGN.md`](docs/architecture/CODE_DESIGN.md) |
 | Decisions | [`docs/adr/`](docs/adr/README.md) |
-| Rules | [`docs/engineering/ENGINEERING_RULES.md`](docs/engineering/ENGINEERING_RULES.md) |
+| Rules (red lines first) | [`docs/engineering/ENGINEERING_RULES.md`](docs/engineering/ENGINEERING_RULES.md) |
 | Testing | [`docs/engineering/TESTING_STRATEGY.md`](docs/engineering/TESTING_STRATEGY.md) |
 | Versions | [`docs/engineering/TOOLCHAIN.md`](docs/engineering/TOOLCHAIN.md) |
 | Open questions | [`docs/product/ASSUMPTIONS.md`](docs/product/ASSUMPTIONS.md) |
@@ -45,7 +47,7 @@ packages/application/     Use cases, ports, policy engine
 packages/persistence/     Postgres adapters, inbox/outbox, job queue, audit
 packages/integrations/    Etsy, AutoVA, email adapters
 packages/model-router/    Model gateway, routing, budgets, provider SDKs
-packages/agent-runtime/   LangGraph graphs and tool bridge
+packages/agent-runtime/   Agent runtime adapters: claude/ (default, Claude Agent SDK) and langgraph/ (alternative; today still the package root until the Phase 6 move)
 packages/platform/        Settings, logging, tracing, crypto, clock, IDs
 packages/contracts/       openapi.yaml, event schemas
 supabase/                 Migrations and pgTAP tests (single schema source)
@@ -57,7 +59,7 @@ docs/                     Product, plan, architecture, ADRs, engineering, featur
 
 Folders appear when their first slice needs them; each `packages/<name>` is a uv workspace member whose Python package is `htco_<name>` (for example `packages/agent-runtime` → `htco_agent_runtime`).
 
-Dependency rule (enforced in CI): `domain` ← `application` ← adapters ← `apps`/`workers`. Only the model router (`htco_model_router`) imports model SDKs; only the agent runtime (`htco_agent_runtime`) imports LangGraph; only persistence imports the database driver.
+Dependency rule (enforced in CI): `domain` ← `application` ← adapters ← `apps`/`workers`. Only the model router (`htco_model_router`) imports model provider SDKs; only the Claude runtime (`htco_agent_runtime_claude`) imports `claude-agent-sdk`; only the LangGraph runtime imports LangGraph; only persistence imports the database driver.
 
 ## Commands
 
@@ -75,7 +77,7 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 | `just openapi` | Regenerate `packages/contracts/openapi.yaml` from the API (review the diff before committing) | Slice 1.3 |
 | `just contract` | The committed OpenAPI matches the API; Schemathesis against it (the `oasdiff` breaking-change check runs in CI) | Slice 1.3 |
 | `just registry` | Validate `registry/` (employees, automations, tools, advisors) and print a summary | ADR-0012 foundation |
-| `just up` | Local API on http://127.0.0.1:8000 with `.env.example` settings (the worker joins in Phase 5) | Slice 1.2 |
+| `just up` | Local API on http://127.0.0.1:8000 with `.env.example` settings (the worker joins in Phase 4) | Slice 1.2 |
 | `docker build -t htco-api .` | The production API image (CI also runs it read-only and scans it) | Slice 1.5 |
 | `just db-start`, `just db-reset`, `just db-test` | Local Supabase stack, migrations, pgTAP tests | Slice 2.1 |
 | `just seed` | Two organizations, their shops, one user per role | Slice 2.1 |
@@ -87,15 +89,16 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 3. Money is `Decimal` with a currency. Time is UTC and injected.
 4. Every handler and job is idempotent; external side effects go through the outbox.
 5. No secrets anywhere in the repository, logs, prompts or fixtures.
-6. Model calls only through the router and gateway with the employee's policy; tools only through access checks; automations only through the engine; Rule of Two for every agent run. No employee or automation is production-ready without a passed evaluation.
-7. Migrations are forward-only and tested; never applied to production by an agent.
-8. Docs change in the same pull request as the code. No junk files (no session notes, scratch files or summaries).
-9. Small pull requests, one slice each, Conventional Commit titles.
-10. Say what you verified and how. Never claim a check you did not run.
+6. Model calls only through the router and gateway with the employee's policy; tools only through the tool bridge; automations only through the engine; Rule of Two for every agent run. No employee or automation is production-ready without a passed evaluation.
+7. Hosted agent runs use API keys only (`API_PRODUCTION`); never a personal Claude subscription, its login or tokens ([ADR-0017](docs/adr/0017-auth-and-billing-policy.md)). Sessions are disposable: one bounded step, all state in Postgres, no built-in tools, `setting_sources=[]`, never `bypassPermissions`.
+8. Migrations are forward-only and tested; never applied to production by an agent.
+9. Docs change in the same pull request as the code. No junk files (no session notes, scratch files or summaries).
+10. Small pull requests, one slice each, Conventional Commit titles.
+11. Say what you verified and how. Never claim a check you did not run.
 
 ## Ask the owner first
 
-Production migrations or data changes; spending money; writes to Etsy, AutoVA or email with real data; permission, security or secret changes; activating an employee or automation, or changing an employee's autonomy, tools or budget; new kinds of dependencies; deviations from an ADR; deleting anything you did not create.
+Production migrations or data changes; spending money (including creating API keys with costs or raising AI budgets); switching any run to a subscription billing mode; writes to Etsy, AutoVA or email with real data; permission, security or secret changes; activating an employee or automation, or changing an employee's autonomy, tools or budget; new kinds of dependencies; deviations from an ADR; deleting anything you did not create.
 
 ## Git
 

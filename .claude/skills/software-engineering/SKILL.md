@@ -14,9 +14,12 @@ You are working on a production system that handles money, buyer data, marketpla
 3. **Restate the goal** in two or three sentences, including what is out of scope.
 4. **Map the change.** List the bounded contexts, layers, contracts (OpenAPI, events, database) and permissions it touches. If it changes a boundary, adds a technology or contradicts an ADR, write a new ADR first and get the owner's agreement.
 5. **Security and privacy impact.** Note: none, low, or needs a threat model (auth, money, PII, webhooks, agents, migrations, external writes all need one).
-6. **Plan the tests** with the `tdd` skill and the verification with the `feature-verification` skill before coding.
+6. **Plan the tests** with the `tdd` and `testing` skills and the verification with the `feature-verification` skill before coding.
+7. **Check the red lines** in [ENGINEERING_RULES §0](../../../docs/engineering/ENGINEERING_RULES.md#0-red-lines). If your plan needs to cross one, stop and ask the owner.
 
 ## 2. Where code belongs
+
+The full map, with every package, port and folder, is [`docs/architecture/CODE_DESIGN.md`](../../../docs/architecture/CODE_DESIGN.md). The short version:
 
 | You are writing… | It goes in | It may import |
 |---|---|---|
@@ -25,7 +28,9 @@ You are working on a production system that handles money, buyer data, marketpla
 | SQL, repositories, inbox, outbox, job queue | `packages/persistence` | application, domain, platform, psycopg |
 | Etsy, AutoVA, email code | `packages/integrations` | application, domain, platform, httpx, that provider's SDK |
 | Model calls, routing, prices, budgets | `packages/model-router` (`htco_model_router`) | application, domain, platform, model SDKs |
-| LangGraph graphs and the tool bridge | `packages/agent-runtime` (`htco_agent_runtime`) | application, domain, platform, LangGraph |
+| The Claude runtime adapter: session options, the `htco` MCP server, hooks, transcript mapping | `packages/agent-runtime/claude` (`htco_agent_runtime_claude`) | application, domain, platform, `claude-agent-sdk` |
+| LangGraph graphs (alternative runtime) | `packages/agent-runtime/langgraph` (`htco_agent_runtime_langgraph`; today still `packages/agent-runtime`) | application, domain, platform, LangGraph |
+| The tool bridge, task briefs, agent steps, billing policy | `packages/application` (`htco_application.tools`, `.agents`, `.billing`) | `htco_domain` |
 | An employee, automation, tool or advisor definition | `registry/` (TOML), checked by `just registry` | — (data, reviewed like code) |
 | Settings, logging, tracing, crypto, clock | `packages/platform` | infrastructure libraries |
 | HTTP routes and schemas, DI wiring | `apps/api` | everything above |
@@ -42,7 +47,8 @@ Never put business logic in routers, consumers or SQL. Never return database row
 - **Time:** UTC `timestamptz`; inject the clock.
 - **Idempotency:** every handler, job and webhook tolerates duplicates; external side effects go through the outbox with an idempotency key.
 - **Secrets:** never in code, tests, fixtures, logs, prompts or commits.
-- **Agents:** model calls only through the model gateway; tools only through the policy engine; tenant and actor from the run, never from model output; Rule of Two.
+- **Agents:** model calls only through the model gateway; tools only through the tool bridge and the policy engine; tenant and actor from the run, never from model output; Rule of Two.
+- **Claude runtime:** API-key billing only for hosted runs; disposable sessions (one bounded step, state in Postgres); only granted `mcp__htco__*` tools, no built-in tools, `setting_sources=[]`, never `bypassPermissions` ([ADR-0016](../../../docs/adr/0016-claude-native-agent-runtime.md), [ADR-0017](../../../docs/adr/0017-auth-and-billing-policy.md)).
 - **Migrations:** forward-only, expand then contract, tested with pgTAP; never edit an applied migration; never apply to production yourself.
 - **Errors:** typed domain errors; RFC 9457 problem responses; no stack traces to clients.
 - **Logs:** structured, with `request_id` and `correlation_id`; no PII or secrets.

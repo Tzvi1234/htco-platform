@@ -45,7 +45,7 @@ Write an ADR in `docs/adr/` (template in `docs/adr/README.md`) when you add or r
 - Link instead of repeating. One fact lives in one place.
 - Mermaid for diagrams (renders on GitHub).
 - Dates as YYYY-MM-DD. Mark anything unverified as such.
-- Code identifiers in backticks; requirement and criterion IDs as written (`FR-ORD-02`, `AC-5.4.1`).
+- Code identifiers in backticks; requirement and criterion IDs as written (`FR-ORD-02`, `AC-4.4.1`).
 
 ## Never commit
 
