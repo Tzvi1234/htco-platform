@@ -1,0 +1,13 @@
+# Automation Execution tools (ADR-0014). DRAFT: none is production-ready yet.
+
+[[tools]]
+name = "automation.trigger"
+version = 1
+family = "automation_execution"
+owner = "alex"
+side_effect = "internal"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Trigger an automation granted to the employee (AGENT_TOOL)."

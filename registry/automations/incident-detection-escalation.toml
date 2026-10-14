@@ -1,0 +1,90 @@
+# Incident Detection & Escalation. Automation specification (ADR-0013). DRAFT: not production-ready.
+id = "incident-detection-escalation"
+name = "Incident Detection & Escalation"
+version = 1
+business_owner = "amir"
+primary_trigger = "event"
+callable_from = ["event", "schedule", "workflow"]
+timeout_seconds = 120
+side_effect = "internal"
+approval_required = false
+ai_steps = []
+readiness = "draft"
+activation_phase = 6
+
+[retry]
+max_attempts = 5
+initial_backoff_seconds = 5
+max_backoff_seconds = 900
+
+[specification.identity]
+status = "draft"
+text = "Incident Detection & Escalation (incident-detection-escalation), version 1. Deterministic: no model calls."
+
+[specification.business_owner]
+status = "draft"
+text = "amir: accountable for the outcome; Engineering maintains the code."
+
+[specification.trigger]
+status = "draft"
+text = "Primary: event. Also callable from: event, schedule, workflow, each through the API and authorization checks."
+
+[specification.input_schema]
+status = "draft"
+text = "DRAFT: JSON Schema in packages/contracts/automations/incident-detection-escalation.json, written in Phase 6."
+
+[specification.preconditions]
+status = "draft"
+text = "DRAFT: shop connected and capability verified where external systems are involved."
+
+[specification.steps]
+status = "draft"
+text = "Evaluate SLA rules; open exactly one incident per root cause and resource; notify; escalate by severity and age."
+
+[specification.output_schema]
+status = "draft"
+text = "DRAFT: defined with the input schema in Phase 6."
+
+[specification.dependencies]
+status = "draft"
+text = "SLA rules, notifications"
+
+[specification.error_handling]
+status = "draft"
+text = "Typed errors per dependency; a capability blocked by the marketplace is recorded, never retried in a loop."
+
+[specification.retry_policy]
+status = "draft"
+text = "Exponential backoff from the retry table; then dead-letter and an incident."
+
+[specification.idempotency]
+status = "draft"
+text = "Key incident:{root_cause}:{resource_id}; unique per automation; a replay returns the existing execution."
+
+[specification.timeouts_and_sla]
+status = "draft"
+text = "Within 5 minutes of a rule breach"
+
+[specification.permissions]
+status = "draft"
+text = "Runs under its own service identity with least-privilege database grants; employees trigger it only when it is in their allowed_automations."
+
+[specification.audit]
+status = "draft"
+text = "One activity record per execution and per external side effect, with correlation and causation IDs."
+
+[specification.tests]
+status = "draft"
+text = "DRAFT: replay, failure and recovery tests in Phase 6 (Scenario G pattern)."
+
+[specification.recovery]
+status = "draft"
+text = "DRAFT: compensation or manual recovery runbook written in Phase 6."
+
+[specification.approvals]
+status = "draft"
+text = "None for internal effects; external effects go through the outbox."
+
+[specification.metrics]
+status = "draft"
+text = "Executions, success rate, retries, dead letters, latency p50/p95, cost per execution."

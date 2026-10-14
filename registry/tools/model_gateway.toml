@@ -1,0 +1,13 @@
+# Model Gateway tools (ADR-0014). DRAFT: none is production-ready yet.
+
+[[tools]]
+name = "models.complete"
+version = 1
+family = "model_gateway"
+owner = "iris"
+side_effect = "none"
+risk = "medium"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Call a model through the gateway under the employee's routing policy and budget."

@@ -1,0 +1,90 @@
+# Etsy Order Intake. Automation specification (ADR-0013). DRAFT: not production-ready.
+id = "etsy-order-intake"
+name = "Etsy Order Intake"
+version = 1
+business_owner = "eitan"
+primary_trigger = "event"
+callable_from = ["event", "schedule", "workflow", "agent_tool"]
+timeout_seconds = 120
+side_effect = "internal"
+approval_required = false
+ai_steps = []
+readiness = "draft"
+activation_phase = 5
+
+[retry]
+max_attempts = 5
+initial_backoff_seconds = 5
+max_backoff_seconds = 900
+
+[specification.identity]
+status = "draft"
+text = "Etsy Order Intake (etsy-order-intake), version 1. Deterministic: no model calls."
+
+[specification.business_owner]
+status = "draft"
+text = "eitan: accountable for the outcome; Engineering maintains the code."
+
+[specification.trigger]
+status = "draft"
+text = "Primary: event. Also callable from: event, schedule, workflow, agent_tool, each through the API and authorization checks."
+
+[specification.input_schema]
+status = "draft"
+text = "DRAFT: JSON Schema in packages/contracts/automations/etsy-order-intake.json, written in Phase 5."
+
+[specification.preconditions]
+status = "draft"
+text = "DRAFT: shop connected and capability verified where external systems are involved."
+
+[specification.steps]
+status = "draft"
+text = "Verify the webhook signature; store the event in the inbox; fetch the receipt; upsert order, items and shipments in one transaction when Etsy's updated_timestamp is newer; emit orders.ingested.v1."
+
+[specification.output_schema]
+status = "draft"
+text = "DRAFT: defined with the input schema in Phase 5."
+
+[specification.dependencies]
+status = "draft"
+text = "Etsy Open API v3, inbox, job queue"
+
+[specification.error_handling]
+status = "draft"
+text = "Typed errors per dependency; a capability blocked by the marketplace is recorded, never retried in a loop."
+
+[specification.retry_policy]
+status = "draft"
+text = "Exponential backoff from the retry table; then dead-letter and an incident."
+
+[specification.idempotency]
+status = "draft"
+text = "Key etsy:{shop_id}:{receipt_id}:{event_type}; unique per automation; a replay returns the existing execution."
+
+[specification.timeouts_and_sla]
+status = "draft"
+text = "Enqueued within 10 s at p95; reconciliation catches anything missed within minutes"
+
+[specification.permissions]
+status = "draft"
+text = "Runs under its own service identity with least-privilege database grants; employees trigger it only when it is in their allowed_automations."
+
+[specification.audit]
+status = "draft"
+text = "One activity record per execution and per external side effect, with correlation and causation IDs."
+
+[specification.tests]
+status = "draft"
+text = "DRAFT: replay, failure and recovery tests in Phase 5 (Scenario G pattern)."
+
+[specification.recovery]
+status = "draft"
+text = "DRAFT: compensation or manual recovery runbook written in Phase 5."
+
+[specification.approvals]
+status = "draft"
+text = "None for internal effects; external effects go through the outbox."
+
+[specification.metrics]
+status = "draft"
+text = "Executions, success rate, retries, dead letters, latency p50/p95, cost per execution."

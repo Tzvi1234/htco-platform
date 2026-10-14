@@ -1,0 +1,25 @@
+# Supplier Research tools (ADR-0014). DRAFT: none is production-ready yet.
+
+[[tools]]
+name = "suppliers.search"
+version = 1
+family = "supplier_research"
+owner = "iris"
+side_effect = "none"
+risk = "medium"
+data_scope = "public"
+audit_required = false
+readiness = "draft"
+description = "Search permitted supplier sources (results are untrusted data)."
+
+[[tools]]
+name = "suppliers.read_quotes"
+version = 1
+family = "supplier_research"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read supplier quotes and mappings."

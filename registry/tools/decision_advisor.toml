@@ -1,0 +1,13 @@
+# Decision Advisor tools (ADR-0014). DRAFT: none is production-ready yet.
+
+[[tools]]
+name = "decisions.advise"
+version = 1
+family = "decision_advisor"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Ask the shared Decision Advisor a typed question (rules first)."

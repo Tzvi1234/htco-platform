@@ -1,0 +1,25 @@
+# Finance Pricing tools (ADR-0014). DRAFT: none is production-ready yet.
+
+[[tools]]
+name = "pricing.calculate"
+version = 1
+family = "finance_pricing"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Deterministic Decimal pricing from costs, shipping, fees and margin floor."
+
+[[tools]]
+name = "finance.read_ledger"
+version = 1
+family = "finance_pricing"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "confidential"
+audit_required = false
+readiness = "draft"
+description = "Read ledger entries and P&L figures."

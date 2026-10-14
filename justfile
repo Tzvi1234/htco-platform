@@ -37,6 +37,10 @@ workflows:
     uv run --group ci zizmor --min-severity low .github
     uv run python -m tools.check_action_pins
 
+# Validate the office registry (employees, tools, automations, advisors) and print a summary
+registry:
+    uv run python -m tools.registry --check
+
 # Regenerate packages/contracts/openapi.yaml from the API; review the diff before committing
 openapi:
     uv run python -m tools.openapi --write

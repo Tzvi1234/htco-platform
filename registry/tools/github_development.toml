@@ -1,0 +1,37 @@
+# Github Development tools (ADR-0014). DRAFT: none is production-ready yet.
+
+[[tools]]
+name = "github.read_repository"
+version = 1
+family = "github_development"
+owner = "alex"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read code, issues and pull requests."
+
+[[tools]]
+name = "github.create_issue"
+version = 1
+family = "github_development"
+owner = "alex"
+side_effect = "external"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Open a GitHub issue."
+
+[[tools]]
+name = "github.open_pull_request"
+version = 1
+family = "github_development"
+owner = "alex"
+side_effect = "external"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Open a pull request; merging and deploying stay behind review and CI gates."

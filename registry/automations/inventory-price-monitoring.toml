@@ -1,0 +1,90 @@
+# Inventory & Supplier Price Monitoring. Automation specification (ADR-0013). DRAFT: not production-ready.
+id = "inventory-price-monitoring"
+name = "Inventory & Supplier Price Monitoring"
+version = 1
+business_owner = "tom"
+primary_trigger = "schedule"
+callable_from = ["schedule", "user_action"]
+timeout_seconds = 120
+side_effect = "internal"
+approval_required = false
+ai_steps = []
+readiness = "draft"
+activation_phase = 13
+
+[retry]
+max_attempts = 5
+initial_backoff_seconds = 5
+max_backoff_seconds = 900
+
+[specification.identity]
+status = "draft"
+text = "Inventory & Supplier Price Monitoring (inventory-price-monitoring), version 1. Deterministic: no model calls."
+
+[specification.business_owner]
+status = "draft"
+text = "tom: accountable for the outcome; Engineering maintains the code."
+
+[specification.trigger]
+status = "draft"
+text = "Primary: schedule. Also callable from: schedule, user_action, each through the API and authorization checks."
+
+[specification.input_schema]
+status = "draft"
+text = "DRAFT: JSON Schema in packages/contracts/automations/inventory-price-monitoring.json, written in Phase 13."
+
+[specification.preconditions]
+status = "draft"
+text = "DRAFT: shop connected and capability verified where external systems are involved."
+
+[specification.steps]
+status = "draft"
+text = "Check supplier price, stock and validity for active mappings; open a re-sourcing task on change."
+
+[specification.output_schema]
+status = "draft"
+text = "DRAFT: defined with the input schema in Phase 13."
+
+[specification.dependencies]
+status = "draft"
+text = "AutoVaPort, supplier mappings"
+
+[specification.error_handling]
+status = "draft"
+text = "Typed errors per dependency; a capability blocked by the marketplace is recorded, never retried in a loop."
+
+[specification.retry_policy]
+status = "draft"
+text = "Exponential backoff from the retry table; then dead-letter and an incident."
+
+[specification.idempotency]
+status = "draft"
+text = "Key monitor:{mapping_id}:{date}; unique per automation; a replay returns the existing execution."
+
+[specification.timeouts_and_sla]
+status = "draft"
+text = "Daily"
+
+[specification.permissions]
+status = "draft"
+text = "Runs under its own service identity with least-privilege database grants; employees trigger it only when it is in their allowed_automations."
+
+[specification.audit]
+status = "draft"
+text = "One activity record per execution and per external side effect, with correlation and causation IDs."
+
+[specification.tests]
+status = "draft"
+text = "DRAFT: replay, failure and recovery tests in Phase 13 (Scenario G pattern)."
+
+[specification.recovery]
+status = "draft"
+text = "DRAFT: compensation or manual recovery runbook written in Phase 13."
+
+[specification.approvals]
+status = "draft"
+text = "None for internal effects; external effects go through the outbox."
+
+[specification.metrics]
+status = "draft"
+text = "Executions, success rate, retries, dead letters, latency p50/p95, cost per execution."
