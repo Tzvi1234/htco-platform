@@ -81,7 +81,7 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 
 ## Deploying
 
-The API runs on DigitalOcean App Platform as the app `htco` (Frankfurt), defined in `infra/digitalocean/app.yaml`: one `apps-s-1vcpu-0.5gb` instance at $5 per month that cannot scale, readiness on `/readyz`, liveness on `/healthz`, alerts for failed deployments, CPU and memory above 80 % and more than three restarts in five minutes.
+The API runs on DigitalOcean App Platform as the app `htco` (Frankfurt) at `https://api.ht-co.app` (Cloudflare DNS: `api` CNAME to the app's platform address, DNS only, so App Platform manages the certificate), defined in `infra/digitalocean/app.yaml`: one `apps-s-1vcpu-0.5gb` instance at $5 per month that cannot scale, readiness on `/readyz`, liveness on `/healthz`, alerts for failed deployments, CPU and memory above 80 % and more than three restarts in five minutes.
 
 1. Actions → **Deploy API** → **Run workflow** on `main` with `image_tag` empty.
 2. The workflow builds the image, checks it runs as non-root, scans it, pushes `ghcr.io/tzvi1234/htco-api:<commit SHA>`, deploys it with the spec (secrets filled in at deploy time from GitHub secrets, never committed) and calls `/healthz` and `/readyz` on the app's URL. The run summary shows the tag and URL.

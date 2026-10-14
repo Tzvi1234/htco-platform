@@ -126,10 +126,12 @@ jobs:
           APP: ${{ steps.deploy.outputs.app }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          url="$(printf '%s' "$APP" | jq -r '.live_url')"
+          # The platform URL works at once; a custom domain may still be getting its certificate.
+          url="$(printf '%s' "$APP" | jq -r '.default_ingress // .live_url')"
           curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 6 "$url/healthz"
           curl --fail --silent --show-error "$url/readyz"
           {
             echo "## Deployed \`$TAG\`"
             echo "- URL: $url"
+            echo "- Domain: $(printf '%s' "$APP" | jq -r '.live_url')"
           } >> "$GITHUB_STEP_SUMMARY"
