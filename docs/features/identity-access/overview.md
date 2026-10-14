@@ -20,6 +20,11 @@ The security spine: who belongs to which organization, with which role, on which
 | AC-2.1.2 | A failing pgTAP test fails CI. | 2.1 | Pass (demonstrated in CI run 38574471491) |
 | AC-2.1.3 | `/readyz` returns 503 when the database is unreachable and 200 when it is back, without restarting the app. | 2.1 | Pass in CI (database job) |
 | AC-2.1.4 | The production migration workflow runs only when the owner starts it, shows a dry-run first, and records the applied version. | 2.1 | Written; first real run when the development project exists |
+| AC-2.2.1 | An inventory test fails if any table in `app` or `audit` lacks RLS. | 2.2 | Pass in CI (database job) |
+| AC-2.2.2 | With two organizations seeded, a user of organization A selects zero rows of organization B in every table. | 2.2 | Pass in CI |
+| AC-2.2.3 | A Support user with access to shop 1 only cannot read shop 2's rows. | 2.2 | Pass in CI |
+| AC-2.2.4 | The application role cannot update or delete `audit.audit_log` rows. | 2.2 | Pass in CI (grants and a trigger that also stops the table owner) |
+| AC-2.2.5 | An owner-only table rejects writes from an `aal1` session. | 2.2 | Pass in CI |
 | AC-2.4.1 | For every role in the matrix, a parametrized test asserts allowed and denied capabilities. | 2.4 | Pass |
 | AC-2.4.2 | `GET /v1/shops` never returns a shop the user is not granted, including when a `shop_id` filter names another tenant's shop (404, not 403). | 2.4 (part 2, needs 2.1 to 2.3) | Open |
 | AC-2.4.3 | Pagination returns stable, non-overlapping pages and rejects limits above the maximum. | 2.4 (part 2) | Open |

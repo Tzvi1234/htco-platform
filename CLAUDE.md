@@ -80,7 +80,7 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 | `just up` | Local API on http://127.0.0.1:8000 with `.env.example` settings (the worker joins in Phase 4) | Slice 1.2 |
 | `docker build -t htco-api .` | The production API image (CI also runs it read-only and scans it) | Slice 1.5 |
 | `just db-start`, `just db-stop`, `just db-reset`, `just db-test` | Local Supabase stack (needs Docker), migrations, pgTAP and the Python tests marked `database` (set `HTCO_TEST_DATABASE_URL`, printed by `db-start`) | Slice 2.1 |
-| `just seed` | Two organizations, their shops, one user per role | Slice 2.2 (needs its tables) |
+| `just seed` | Recreate the local database with the seed: two organizations, their shops, one user per role (no passwords until slice 2.3) | Slice 2.2 |
 
 ## Golden rules
 

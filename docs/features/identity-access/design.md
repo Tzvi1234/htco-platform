@@ -21,6 +21,17 @@
 
 Roles are created by the slice that first connects with them (2.3 for the API). Assumption A-13 tracks the connection limits.
 
+## Identity schema and RLS (slice 2.2)
+
+Tables, keys and policies are listed in [DATA_MODEL §3.1](../../architecture/DATA_MODEL.md#31-created-identity-and-access-slice-22). The design choices:
+
+- **The API is the client.** User requests run as `authenticated` with the verified JWT claims (slice 2.3), so every query is filtered by RLS even if application code forgets a filter. The Data API exposes none of these tables.
+- **Helpers instead of policy subqueries.** Policies call `private.*()` helpers inside `(select …)`. The helpers are security definers, so a policy on `memberships` can read memberships without recursing into its own policy, and the planner evaluates each helper once per statement.
+- **Two kinds of policy.** Permissive policies say who may read or write; restrictive policies add the MFA rule (`aal2`) to every write on owner-administered tables. Reading never needs MFA.
+- **Organization integrity in the keys.** `shop_access` references `(organization_id, id)` of both the membership and the shop, so a grant cannot join two organizations even if the API had a bug.
+- **Audit is append-only twice:** no update or delete grant for `authenticated`, and triggers that refuse updates, deletes and truncates for every role, including the table owner. Retention purges (DATA_MODEL §6) will need a reviewed, owner-run procedure.
+- **What RLS does not do:** stop an Admin from granting the Owner role or demoting the Owner. That rule lives in the use cases of slice 2.6 (the policy engine), with its own tests.
+
 ## Policy engine v0 (slice 2.4, part 1)
 
 ```mermaid

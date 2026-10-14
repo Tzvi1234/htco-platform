@@ -69,6 +69,10 @@ db-stop:
 db-reset:
     {{supabase}} db reset
 
+# Recreate the local database and load the seed: two organizations, their shops, one user per role
+seed:
+    {{supabase}} db reset
+
 # Database tests: pgTAP in supabase/tests, then the Python tests marked `database`
 db-test $HTCO_TEST_DATABASE_URL=local_database_url:
     {{supabase}} test db

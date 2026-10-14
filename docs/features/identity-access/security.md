@@ -19,6 +19,17 @@
 | Migrations | Tampering: an agent or a pull request changes the deployed schema | Only `workflow_dispatch` on `main` by the owner; dry run first; secrets only in the `development` environment | workflow review |
 | Local stack | Spoofing: local default credentials reused elsewhere | They are the CLI's fixed local values, used only for `127.0.0.1` and CI | review |
 
+## Threats, slice 2.2 (identity schema)
+
+| Element | Threat | Control | Test |
+|---|---|---|---|
+| Every table | Information disclosure across tenants | RLS on every table, tenant columns in every policy, helper functions keyed on `auth.uid()` | AC-2.2.1, AC-2.2.2 |
+| Shops | Elevation of privilege: a shop-scoped role reading another shop | `private.user_shop_ids()`: Owners and Admins see all shops, other roles only granted ones | AC-2.2.3 |
+| Shop grants | Tampering: a grant that joins two organizations | Composite foreign keys on `(organization_id, id)` | FK assertion in `01_identity_access.test.sql` |
+| Audit log | Repudiation and tampering: editing or deleting records | No update or delete grants; append-only triggers for every role | AC-2.2.4 |
+| Owner-administered tables | Elevation of privilege with a stolen password (no second factor) | Restrictive `aal2` policies on every write | AC-2.2.5 |
+| Policy helpers | Elevation of privilege through security-definer functions | `search_path = ''`, read-only, keyed on the caller's `auth.uid()`, executable only by `authenticated`, in a schema the Data API does not expose | review, `00_schemas.test.sql` |
+
 ## ASVS 5.0 requirements covered
 
 | Requirement | How it is met | Evidence |
