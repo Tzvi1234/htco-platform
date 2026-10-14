@@ -4,10 +4,14 @@ import time
 from collections.abc import Callable
 
 import structlog
+from opentelemetry.context import Context
+from opentelemetry.trace import SpanKind, Status, StatusCode, Tracer
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from htco_api.problems import INTERNAL_ERROR, problem_response
+from htco_platform.error_reporting import ErrorReporter
+from htco_platform.tracing import current_trace_id
 
 _logger = structlog.get_logger(__name__)
 
@@ -22,17 +26,28 @@ SECURITY_HEADERS = {
 
 
 class RequestContextMiddleware:
-    """Give every HTTP request an ID, one access log line and a last-resort error handler.
+    """Give every HTTP request an ID, a trace, one access log line and a last-resort handler.
 
-    The ID is always generated here; a client-supplied `X-Request-Id` is ignored, so it cannot
-    forge or inject log correlation. The ID goes into `scope["state"]`, the logging context and
-    the `X-Request-Id` response header. An unhandled exception is logged with its stack trace
-    and answered with a generic 500 problem (ASVS 16.5.1, 16.5.4).
+    The request ID is always generated here; a client-supplied `X-Request-Id` is ignored, so it
+    cannot forge or inject log correlation. The same goes for the trace: each request starts a
+    new root span, whatever `traceparent` the client sent. The ID goes into `scope["state"]`,
+    the logging context and the `X-Request-Id` response header. An unhandled exception is
+    logged with its stack trace, sent to error monitoring and answered with a generic 500
+    problem (ASVS 16.5.1, 16.5.4).
     """
 
-    def __init__(self, app: ASGIApp, *, new_request_id: Callable[[], str]) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        new_request_id: Callable[[], str],
+        tracer: Tracer,
+        error_reporter: ErrorReporter,
+    ) -> None:
         self._app = app
         self._new_request_id = new_request_id
+        self._tracer = tracer
+        self._error_reporter = error_reporter
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -50,16 +65,35 @@ class RequestContextMiddleware:
                 MutableHeaders(scope=message)["X-Request-Id"] = request_id
             await send(message)
 
-        with structlog.contextvars.bound_contextvars(request_id=request_id):
+        span_attributes = {
+            "http.request.method": scope["method"],
+            "url.path": scope["path"],
+            "htco.request_id": request_id,
+        }
+        with (
+            self._tracer.start_as_current_span(
+                scope["method"],
+                context=Context(),
+                kind=SpanKind.SERVER,
+                attributes=span_attributes,
+                record_exception=False,
+                set_status_on_exception=False,
+            ) as span,
+            structlog.contextvars.bound_contextvars(request_id=request_id),
+        ):
             try:
                 await self._app(scope, receive, send_with_request_id)
-            except Exception:
+            except Exception as error:
+                span.record_exception(error)
+                span.set_status(Status(StatusCode.ERROR))
                 _logger.exception("request.failed", method=scope["method"], path=scope["path"])
+                self._report(error, request_id)
                 if response["started"]:
                     raise
                 failure = problem_response(INTERNAL_ERROR.problem(request_id))
                 await failure(scope, receive, send_with_request_id)
             finally:
+                span.set_attribute("http.response.status_code", response["status"])
                 _logger.info(
                     "request.completed",
                     method=scope["method"],
@@ -67,6 +101,13 @@ class RequestContextMiddleware:
                     status=response["status"],
                     duration_ms=round((time.perf_counter() - started) * 1000, 2),
                 )
+
+    def _report(self, error: Exception, request_id: str) -> None:
+        """Send the error to monitoring; a monitoring failure never changes the response."""
+        try:
+            self._error_reporter.report(error, request_id=request_id, trace_id=current_trace_id())
+        except Exception as reporting_error:  # Monitoring must not break error handling.
+            _logger.warning("error_reporting.failed", error_type=type(reporting_error).__name__)
 
 
 class SecurityHeadersMiddleware:

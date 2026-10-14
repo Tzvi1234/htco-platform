@@ -15,6 +15,7 @@
 | Image policy | Base images pinned by digest, non-root runtime user, locked API-only install, allow-list build context | `tests/infra/test_dockerfile.py` |
 | Image (CI) | Build, user, exit 78 without settings, read-only run answering `/healthz` and `/readyz`, Grype scan | CI `image` job |
 | Agent hooks | Format hook (Python in and outside the project, other files, missing path); stop hook (pass, fail, retry with warning, skipped without code changes, output tail); `git status -z` parsing with renames; command line; settings wiring | `tests/tools/test_claude_hooks.py` |
+| Observability | Trace IDs (`current_trace_id`), trace and span IDs in log lines, HTTP client defaults and `traceparent`, Sentry adapter (tags, no local variables, global client untouched, scrubbing), API end to end (one trace per request across logs and the outgoing call, forged `traceparent` ignored, diagnostic error reported without secrets, diagnostics off by default and in production, failing reporter) | `tests/platform/test_tracing.py`, `test_http.py`, `test_error_reporting.py`, `tests/api/test_observability.py`, `tests/api/test_main.py` |
 | CI | The pipeline itself, on GitHub | `.github/workflows/ci.yml` (verification below) |
 
 ## Acceptance criteria coverage
@@ -36,6 +37,8 @@
 | AC-1.3.3 | `test_api__every_operation__conforms_to_the_contract` (Schemathesis) |
 | AC-1.5.2 | `test_dockerfile__runtime_stage__runs_as_a_non_root_user`; CI `image` job "Runs as a non-root user" |
 | AC-1.6.1 | `test_stop__checks_fail__blocks_and_tells_the_agent_why`, `test_stop__still_failing_after_one_retry__lets_go_but_warns_the_user`, `test_main__stop_with_failing_checks__exits_2_with_the_reason_on_stderr`, `test_settings__the_end_of_a_turn_triggers_the_check_hook` |
+| AC-1.7.1 | `test_diagnostic_error__is_reported_with_ids_and_without_request_secrets`, `test_diagnostics__off_by_default__the_route_does_not_exist`, `test_main__diagnostic_endpoint__exists_only_outside_production` |
+| AC-1.7.2 | `test_request__one_trace_id_in_every_log_line_and_the_outgoing_call`, `test_log_lines__inside_a_span__carry_its_trace_and_span_ids`, `test_client__inside_a_span__propagates_the_trace_as_traceparent` |
 | AC-1.4.1 | The `ci-gate` job (verified on GitHub, below) |
 | AC-1.4.2 | `test_main__skip_added_without_explanation__fails`, `test_main__skip_added_with_explanation__passes`, `test_diff_findings__skip_or_xfail_added_in_tests__is_reported` |
 | AC-1.4.3 | `test_unpinned_uses__*`, `test_main__workflow_with_unpinned_action__fails_naming_file_and_line`; runs in the `workflows` job |
@@ -54,6 +57,18 @@
 - Not applicable yet: time, money, tenancy, concurrency (no business code).
 
 ## Verification evidence
+
+### Verification — 1.7 (part 1) — 2026-10-14
+
+| Acceptance criterion | Covered by tests | Verified for real | Result |
+|---|---|---|---|
+| AC-1.7.1 | `tests/api/test_observability.py` (Sentry adapter with a capturing transport) | `uv run just up`, `POST /_diagnostics/error` with `Authorization: Bearer secret-token-1` gave the 500 problem; the log has `request.failed` with the `DiagnosticError` stack trace and the same request and trace IDs as `request.completed`; the token appears nowhere in the log; `api.starting` reports `error_monitoring: off` without a DSN. Delivery to a real Sentry project is part 2. | Pass (part 1) |
+| AC-1.7.2 | same, plus platform tests | Two requests got two different trace IDs; the forged `traceparent` (`0af76519…`) was ignored; every line of a request carried its trace ID. Propagation to an outgoing call is shown by the recorded request in the tests. | Pass |
+| AC-1.7.3 | — | Part 2 | Open |
+
+**Adversarial checks run:** forged `traceparent`; a reporter that raises (the response stays the 500 problem, `error_reporting.failed` is logged); cookies, bearer token and body in the failing request (absent from the captured event).
+**Deployed check:** part 2.
+**Open issues:** AC-1.7.3 and real Sentry delivery (part 2).
 
 ### Verification — 1.6 (part 1) — 2026-10-14
 

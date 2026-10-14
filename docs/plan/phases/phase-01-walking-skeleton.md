@@ -19,7 +19,7 @@
 - [ ] 1.6 Agent guardrails and repository rules
 - [ ] 1.7 Error monitoring, tracing and alerts
 
-Slice 1.4 was built right after 1.1 so that every later slice runs under CI; the `contract` job joined with slice 1.3 and the `image` job with slice 1.5. Slice 1.6 also ships in two parts: the Claude Code hooks now, the `main` ruleset once GitHub Pro is active. Slice 1.5 ships in two parts: the image and its CI job first, then the app spec, registry push, owner-started deploy and rollback drill once the owner's DigitalOcean prerequisites are in place.
+Slice 1.4 was built right after 1.1 so that every later slice runs under CI; the `contract` job joined with slice 1.3 and the `image` job with slice 1.5. Slice 1.7 ships its account-free part first (tracing, trace IDs in logs, propagation, the error-reporting port with the Sentry adapter, the diagnostic endpoint); the Sentry project, its DSN secret and the DigitalOcean alerts follow with the deployment. Slice 1.6 also ships in two parts: the Claude Code hooks now, the `main` ruleset once GitHub Pro is active. Slice 1.5 ships in two parts: the image and its CI job first, then the app spec, registry push, owner-started deploy and rollback drill once the owner's DigitalOcean prerequisites are in place.
 
 ## Goal
 

@@ -363,8 +363,8 @@ Mapped to the OWASP Top 10 for Agentic Applications (2026) in the threat model: 
 | Signal | Tooling | Rules |
 |---|---|---|
 | Logs | structlog JSON to stdout, forwarded by DigitalOcean | `request_id`, `correlation_id`, `trace_id`, `organization_id`, `shop_id`; never PII or secrets |
-| Traces | OpenTelemetry (FastAPI, HTTP client, database, jobs, agent runs) | Context propagated into jobs and agent threads |
-| Errors | Sentry (or equivalent) | PII scrubbing on |
+| Traces | OpenTelemetry SDK: one new root span per request (an incoming `traceparent` is ignored, like `X-Request-Id`); outgoing HTTP through `htco_platform.http` carries the trace; later the database, jobs and agent runs | `trace_id` and `span_id` in every log line inside a trace; spans are not exported until a tracing backend is chosen |
+| Errors | Sentry behind the `ErrorReporter` port (`htco_platform.error_reporting`) | An isolated client with no integrations: only the exception, stack trace (no local variables), environment, release and the `request_id`/`trace_id` tags; request, user and breadcrumb data are dropped |
 | Metrics | Job queue depth and age, retries, DLQ size, webhook lag, sync freshness per shop, budget consumption, agent run outcomes | Alerts link to runbooks |
 | Audit | `audit` schema, append-only | Every money, permission, publishing, approval and external action |
 | Health | `/healthz` (process), `/readyz` (database and critical config); worker heartbeat rows | DigitalOcean liveness and readiness checks |

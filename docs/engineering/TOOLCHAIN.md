@@ -27,10 +27,10 @@
 | Settings | pydantic-settings | Locked 2.15.0 | Loaded only in composition roots through `htco_platform.settings.load_settings`; `SecretStr`; fail fast with exit code 78 and messages that never echo values |
 | Database driver | psycopg 3 with `psycopg_pool` | Planned 3.3.x (Phase 2) | One driver, shared with the LangGraph checkpointer |
 | SQL composition | Explicit SQL; SQLAlchemy 2.1 Core optional | | No ORM |
-| HTTP client | httpx | Locked 0.28.1 (tests today) | Async, timeouts everywhere. Its INFO request lines are silenced because URLs can carry credentials. |
+| HTTP client | httpx | Locked 0.28.1 | Created only through `htco_platform.http.new_async_http_client`: 10-second timeout, no redirects, trace propagation. Its INFO request lines are silenced because URLs can carry credentials. |
 | Logging | structlog | Locked 26.1.0 | JSON to stdout, one object per line, standard-library loggers rendered the same way; trace IDs join in slice 1.7 |
-| Tracing | OpenTelemetry SDK + FastAPI instrumentation | Planned 1.45.x / 0.66bX (slice 1.7) | |
-| Errors | sentry-sdk | Planned 2.x (slice 1.7) | PII scrubbing on |
+| Tracing | OpenTelemetry API and SDK, `opentelemetry-instrumentation-httpx` transport wrappers | Locked 1.45.1 / 0.66b1 | No FastAPI instrumentation: our request middleware starts the server span itself, so incoming trace headers are never trusted. No exporter yet. |
+| Errors | sentry-sdk | Locked 2.71.0 | Isolated `sentry_sdk.Client` used through an isolation scope; no default or auto-enabled integrations; no local variables; `before_send` scrubbing |
 | Agent runtime | langgraph, langgraph-checkpoint, langgraph-checkpoint-postgres | Locked langgraph 1.2.14, langgraph-checkpoint 4.2.0 (langchain-core 1.6.7) | Only in `htco_agent_runtime`. Checkpoint 4.3.0 (store namespace validation) is inside the release-age window today and is taken before Phase 8 adds agent code. Strict msgpack, encrypted serializer; checkpoint tables created by a migration. |
 | Model providers | `anthropic`, `openai` official SDKs | | Only inside `htco_model_router` |
 | Email | `resend` | 2.49.x | Only inside `htco_integrations.email` |
