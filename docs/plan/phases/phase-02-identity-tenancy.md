@@ -7,11 +7,11 @@
 | **Size** | M |
 | **Depends on** | Phase 1 |
 | **Requirements** | FR-ADM-01, FR-AUD-01, FR-IAM-01, FR-IAM-02, FR-IAM-03, FR-IAM-04 |
-| **Status** | In progress: 2.4 part 1 (policy engine) merged; 2.1 (database workflow) in review |
+| **Status** | In progress: 2.1 (database workflow) and 2.4 part 1 (policy engine) merged |
 
 ## Progress
 
-- [ ] 2.1 Database workflow
+- [x] 2.1 Database workflow
 - [ ] 2.2 Identity and access schema with RLS
 - [ ] 2.3 Authentication in the API
 - [ ] 2.4 Policy engine v0 and first endpoints
@@ -42,6 +42,8 @@ Tenant isolation and audit cannot be bolted on later without rewriting every que
 
 - Supabase Pro project created in the chosen region with the IPv4 add-on; asymmetric JWT signing keys enabled; legacy keys disabled; custom SMTP configured for Auth emails (Resend's SMTP or another provider); leaked-password protection on; TOTP MFA on.
 - Owner's own user account created through Supabase Auth with MFA enrolled.
+
+State on 2026-10-14: the project `htco` exists in `eu-central-1` on the Free plan, so development can start at no cost. Free projects pause after a week without activity and have no IPv4 add-on; the move to Pro with IPv4 (or the IPv4 connection pooler) is the owner's decision before this phase's exit gate, which needs the DigitalOcean connection.
 
 ## Slices
 
