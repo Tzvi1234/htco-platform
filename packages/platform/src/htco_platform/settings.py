@@ -28,6 +28,9 @@ def load_settings[SettingsT: BaseSettings](settings_class: type[SettingsT]) -> S
 
 
 def _describe(prefix: str, detail: ErrorDetails) -> str:
+    if not detail["loc"]:
+        # A rule across several settings: its own message names the variables involved.
+        return detail["msg"].removeprefix("Value error, ")
     variable = (prefix + "__".join(str(part) for part in detail["loc"])).upper()
     if detail["type"] == "missing":
         return f"{variable} is required"

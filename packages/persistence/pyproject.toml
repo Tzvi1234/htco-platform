@@ -1,0 +1,19 @@
+[project]
+name = "htco-persistence"
+version = "0.0.0"
+description = "HTCO Postgres adapters: repositories, inbox and outbox, job queue, audit writer (ADR-0011)."
+requires-python = "==3.14.*"
+dependencies = [
+  "anyio>=4.12,<5",
+  "htco-application",
+  "htco-platform",
+  "psycopg[binary]>=3.3.6,<3.4",
+]
+
+[tool.uv.sources]
+htco-application = { workspace = true }
+htco-platform = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"

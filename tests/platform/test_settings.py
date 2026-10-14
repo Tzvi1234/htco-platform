@@ -1,7 +1,7 @@
 """Settings load once from the environment and fail fast with clear messages (ER-CODE-07)."""
 
 import pytest
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from htco_platform.settings import ConfigurationError, load_settings
@@ -72,3 +72,27 @@ def test_configuration_error__message__lists_one_problem_per_line() -> None:
     error = ConfigurationError(["HTCO_A is required", "HTCO_B must be a number"])
 
     assert str(error) == "HTCO_A is required\nHTCO_B must be a number"
+
+
+class _CrossFieldSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="HTCO_TEST_")
+
+    mode: str = "local"
+    url: str | None = None
+
+    @model_validator(mode="after")
+    def _deployed_needs_url(self) -> _CrossFieldSettings:
+        if self.mode == "deployed" and self.url is None:
+            raise ValueError("HTCO_TEST_URL is required when deployed")
+        return self
+
+
+def test_load_settings__cross_field_rule__reports_its_own_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTCO_TEST_MODE", "deployed")
+
+    with pytest.raises(ConfigurationError) as raised:
+        load_settings(_CrossFieldSettings)
+
+    assert raised.value.problems == ["HTCO_TEST_URL is required when deployed"]

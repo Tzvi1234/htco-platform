@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from htco_api.app import AppOptions, create_app
 from htco_api.settings import ApiSettings, Environment
+from htco_persistence.readiness import DatabaseCheck
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter, SentryErrorReporter
 from htco_platform.logs import configure_logging
 from htco_platform.settings import ConfigurationError, load_settings
@@ -54,7 +55,13 @@ def main(
         port=settings.port,
         error_monitoring="sentry" if isinstance(reporter, SentryErrorReporter) else "off",
     )
+    readiness_checks = (
+        [DatabaseCheck(settings.database_url.get_secret_value())]
+        if settings.database_url is not None
+        else []
+    )
     options = AppOptions(
+        readiness_checks=readiness_checks,
         diagnostics=settings.environment is not Environment.PRODUCTION,
         error_reporter=reporter,
         tracer_provider=new_tracer_provider(
