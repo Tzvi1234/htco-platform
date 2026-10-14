@@ -9,6 +9,7 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from htco_api.main import EXIT_CONFIGURATION_ERROR, main
 from htco_api.settings import ApiSettings, Environment
@@ -103,3 +104,19 @@ def test_process__started_without_required_setting__exits_non_zero_with_a_clear_
     assert result.returncode == EXIT_CONFIGURATION_ERROR
     assert "HTCO_ENVIRONMENT is required" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+@pytest.mark.ac("AC-1.7.1")
+@pytest.mark.usefixtures("restore_logging")
+@pytest.mark.parametrize(("environment_name", "status"), [("production", 404), ("staging", 500)])
+def test_main__diagnostic_endpoint__exists_only_outside_production(
+    environment: pytest.MonkeyPatch, environment_name: str, status: int
+) -> None:
+    environment.setenv("HTCO_ENVIRONMENT", environment_name)
+    serve = _FakeServer()
+
+    main(serve=serve)
+
+    [(app, _)] = serve.calls
+    with TestClient(app) as client:
+        assert client.post("/_diagnostics/error").status_code == status

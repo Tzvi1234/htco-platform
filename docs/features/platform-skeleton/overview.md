@@ -41,9 +41,12 @@ The frame every later feature is built inside: a uv workspace whose packages fol
 | AC-1.5.4 | No secret value appears in the app spec in git; secrets are injected at deploy time. | 1.5 (part 2) | Open |
 | AC-1.6.1 | An agent session that leaves a failing unit test is told by the hook and cannot finish silently. | 1.6 | Pass |
 | AC-1.6.2 | A direct push to `main` is rejected by GitHub. | 1.6 (part 2, needs GitHub Pro) | Open |
-| AC-1.4.1 | A pull request with a failing test, lint error, type error, forbidden import, secret-like string or vulnerable pinned dependency cannot merge (`ci-gate` red). | 1.4 | Open |
-| AC-1.4.2 | A pull request that adds `@pytest.mark.skip` without a "Test changes" section fails `test-integrity`. | 1.4 | Open |
-| AC-1.4.3 | Every `uses:` line references a full commit SHA (checked by a script). | 1.4 | Open |
+| AC-1.7.1 | An error raised by a diagnostic endpoint (enabled only outside production) appears in error monitoring with `request_id` and `trace_id`, and without request bodies, cookies or secret headers. | 1.7 | Pass in tests with a capturing transport; the real Sentry project is part 2 |
+| AC-1.7.2 | A request's `trace_id` appears in all its log lines and is propagated to outgoing HTTP calls (checked against a recorded request). | 1.7 | Pass |
+| AC-1.7.3 | A failed deployment and a crash-looping container each send one alert to the owner. | 1.7 (part 2, with the deployment) | Open |
+| AC-1.4.1 | A pull request with a failing test, lint error, type error, forbidden import, secret-like string or vulnerable pinned dependency cannot merge (`ci-gate` red). | 1.4 | Pass |
+| AC-1.4.2 | A pull request that adds `@pytest.mark.skip` without a "Test changes" section fails `test-integrity`. | 1.4 | Pass |
+| AC-1.4.3 | Every `uses:` line references a full commit SHA (checked by a script). | 1.4 | Pass |
 
 Slices 1.2 to 1.7 add their criteria here as they start; the full list is in the [phase plan](../../plan/phases/phase-01-walking-skeleton.md).
 
@@ -54,8 +57,9 @@ Slices 1.2 to 1.7 add their criteria here as they start; the full list is in the
 - **In (1.3):** `packages/contracts/openapi.yaml` generated from the API and committed, a drift test, Schemathesis against the contract, and the `oasdiff` breaking-change job.
 - **In (1.5, part 1):** the production image (`Dockerfile`, `.dockerignore`) and the CI `image` job.
 - **In (1.6, part 1):** Claude Code project hooks: format edited Python files; refuse to end a turn while `just check-fast` fails.
+- **In (1.7, part 1):** a server span per request, `trace_id` in every log line, trace propagation through `htco_platform.http`, the `ErrorReporter` port with the Sentry adapter, and `POST /_diagnostics/error` outside production.
 - **In (1.4):** the CI workflow with one required status (`ci-gate`), secret and dependency scans, workflow linting, the test-weakening check, the pull request title check, and the Renovate configuration.
-- **Out (so far):** the app spec, registry and deployment (1.5, part 2), the branch ruleset (1.6, part 2), monitoring (1.7).
+- **Out (so far):** the app spec, registry and deployment (1.5, part 2), the branch ruleset (1.6, part 2), the Sentry project and DigitalOcean alerts (1.7, part 2).
 
 ## External facts learned
 
@@ -67,6 +71,8 @@ Slices 1.2 to 1.7 add their criteria here as they start; the full list is in the
 - 2026-10-14: FastAPI documents an error response's model under the route's media type (`application/json`) even when the response declares `application/problem+json`; `HtcoAPI.openapi` moves it.
 - 2026-10-14: Schemathesis's own ASGI client keeps the app's lifespan running in a background portal until the interpreter exits, which leaks memory streams that our strict warning settings turn into errors. Our fuzz test sends each case through a TestClient it closes, and validates the response with `case.validate_response`.
 - 2026-10-14: httpx deprecates per-request cookies; cookies go on the client.
+- 2026-10-14: `sentry_sdk.Scope.capture_exception` on a scope you create yourself ignores that scope's client (Sentry looks the client up from the context scopes). Capturing inside `sentry_sdk.isolation_scope()` after `scope.set_client(...)` works and leaves the process-wide client inactive.
+- 2026-10-14: Sentry events carry source-code context lines around each frame even without local variables, so secrets must never be literals in code (they are not, by rule).
 - 2026-10-14: uv records a relative `exclude-newer` as a span in `uv.lock` (`exclude-newer-span = "P7D"`), so the release-age rule does not make the lock stale.
 
 ## Known limits

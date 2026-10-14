@@ -6,7 +6,7 @@ import anyio
 import httpx
 import pytest
 
-from htco_api.app import create_app
+from htco_api.app import AppOptions, create_app
 
 PROBLEM_TYPES = "https://ht-co.app/problems/"
 
@@ -27,7 +27,7 @@ class _Check:
 
 
 def _client_for(*checks: _Check, timeout: float = 1) -> httpx.AsyncClient:
-    app = create_app(readiness_checks=checks, readiness_timeout_seconds=timeout)
+    app = create_app(AppOptions(readiness_checks=checks, readiness_timeout_seconds=timeout))
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api.test")
 
 

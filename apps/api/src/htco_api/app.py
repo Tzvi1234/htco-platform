@@ -2,14 +2,18 @@
 
 import uuid
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Any, override
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
+from opentelemetry.sdk.trace import TracerProvider
 
+from htco_api.diagnostics import diagnostics_router
 from htco_api.health import health_router
 from htco_api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from htco_api.problems import PROBLEM_MEDIA_TYPE, add_problem_handlers
+from htco_platform.error_reporting import ErrorReporter, NoErrorReporter
 from htco_platform.readiness import ReadinessCheck
 
 
@@ -53,12 +57,19 @@ class HtcoAPI(FastAPI):
         return super().openapi()
 
 
-def create_app(
-    *,
-    readiness_checks: Sequence[ReadinessCheck] = (),
-    readiness_timeout_seconds: float = 2.0,
-    new_request_id: Callable[[], str] = _new_request_id,
-) -> FastAPI:
+@dataclass(frozen=True)
+class AppOptions:
+    """What the composition root injects; the defaults suit tests and local runs."""
+
+    readiness_checks: Sequence[ReadinessCheck] = ()
+    readiness_timeout_seconds: float = 2.0
+    new_request_id: Callable[[], str] = _new_request_id
+    diagnostics: bool = False
+    error_reporter: ErrorReporter = field(default_factory=NoErrorReporter)
+    tracer_provider: TracerProvider | None = None
+
+
+def create_app(options: AppOptions | None = None) -> FastAPI:
     """Build the API. Interactive docs and `/openapi.json` are off: the contract is the
     committed `packages/contracts/openapi.yaml` (ASVS 13.4.5)."""
     app = HtcoAPI(
@@ -70,12 +81,24 @@ def create_app(
         openapi_url=None,
         generate_unique_id_function=_operation_id,
     )
+    options = options or AppOptions()
     app.include_router(
-        health_router(readiness_checks=readiness_checks, timeout_seconds=readiness_timeout_seconds)
+        health_router(
+            readiness_checks=options.readiness_checks,
+            timeout_seconds=options.readiness_timeout_seconds,
+        )
     )
+    if options.diagnostics:
+        app.include_router(diagnostics_router())
     add_problem_handlers(app)
+    tracer_provider = options.tracer_provider or TracerProvider()
     # The last middleware added runs first: security headers wrap everything, including the
     # 500 response the request-context middleware produces.
-    app.add_middleware(RequestContextMiddleware, new_request_id=new_request_id)
+    app.add_middleware(
+        RequestContextMiddleware,
+        new_request_id=options.new_request_id,
+        tracer=tracer_provider.get_tracer("htco_api"),
+        error_reporter=options.error_reporter,
+    )
     app.add_middleware(SecurityHeadersMiddleware)
     return app

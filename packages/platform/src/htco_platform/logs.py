@@ -1,7 +1,8 @@
 """Structured JSON logging for every HTCO process (SOFTWARE_DESIGN §12, ASVS 16.2).
 
-Each line is one JSON object with `timestamp` (ISO 8601, UTC), `level`, `event`, `logger` and
-`request_id` (null outside a request), plus any bound context. Libraries that log through the
+Each line is one JSON object with `timestamp` (ISO 8601, UTC), `level`, `event`, `logger`,
+`request_id` (null outside a request) and `trace_id` (null outside a trace; `span_id` joins it
+inside one), plus any bound context. Libraries that log through the
 standard `logging` module (uvicorn, httpx) are rendered the same way.
 """
 
@@ -11,6 +12,8 @@ from typing import TextIO
 
 import structlog
 from structlog.typing import EventDict, Processor, WrappedLogger
+
+from htco_platform.tracing import current_trace_ids
 
 # Library loggers that install their own handlers; ours replace them.
 _LIBRARY_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
@@ -24,6 +27,15 @@ def _ensure_request_id(_logger: WrappedLogger, _method: str, event_dict: EventDi
     return event_dict
 
 
+def _add_trace_context(_logger: WrappedLogger, _method: str, event_dict: EventDict) -> EventDict:
+    ids = current_trace_ids()
+    if ids is None:
+        event_dict.setdefault("trace_id", None)
+    else:
+        event_dict["trace_id"], event_dict["span_id"] = ids
+    return event_dict
+
+
 def configure_logging(*, level: str, stream: TextIO | None = None) -> None:
     """Send every log line, ours and the libraries', to `stream` (stdout by default) as JSON."""
     shared: list[Processor] = [
@@ -33,6 +45,7 @@ def configure_logging(*, level: str, stream: TextIO | None = None) -> None:
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.TimeStamper(fmt="iso", utc=True, key="timestamp"),
         _ensure_request_id,
+        _add_trace_context,
     ]
     structlog.configure(
         processors=[

@@ -6,6 +6,7 @@ from datetime import datetime
 
 import pytest
 import structlog
+from opentelemetry.sdk.trace import TracerProvider
 
 from tests.log_capture import LogCapture
 
@@ -84,3 +85,26 @@ def test_every_line__is_valid_json_on_a_single_line(logs: LogCapture) -> None:
     raw = logs.raw()
     assert raw.count("\n") == 1
     assert json.loads(raw)["detail"] == "a\nb"
+
+
+@pytest.mark.ac("AC-1.7.2")
+def test_log_lines__inside_a_span__carry_its_trace_and_span_ids(logs: LogCapture) -> None:
+    tracer = TracerProvider().get_tracer("htco.test")
+
+    with tracer.start_as_current_span("work") as span:
+        structlog.get_logger("htco.test").info("inside")
+        logging.getLogger("uvicorn.error").info("library line inside")
+
+    context = span.get_span_context()
+    lines = logs.lines()
+    assert len(lines) == 2
+    assert {line["trace_id"] for line in lines} == {format(context.trace_id, "032x")}
+    assert {line["span_id"] for line in lines} == {format(context.span_id, "016x")}
+
+
+def test_log_line__outside_a_span__has_a_null_trace_id(logs: LogCapture) -> None:
+    structlog.get_logger("htco.test").info("outside")
+
+    [line] = logs.lines()
+    assert line["trace_id"] is None
+    assert "span_id" not in line

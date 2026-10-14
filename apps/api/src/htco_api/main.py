@@ -7,10 +7,12 @@ import structlog
 import uvicorn
 from fastapi import FastAPI
 
-from htco_api.app import create_app
-from htco_api.settings import ApiSettings
+from htco_api.app import AppOptions, create_app
+from htco_api.settings import ApiSettings, Environment
+from htco_platform.error_reporting import ErrorReporter, NoErrorReporter, SentryErrorReporter
 from htco_platform.logs import configure_logging
 from htco_platform.settings import ConfigurationError, load_settings
+from htco_platform.tracing import new_tracer_provider
 
 # sysexits.h EX_CONFIG: the process cannot start because its configuration is wrong.
 EXIT_CONFIGURATION_ERROR = 78
@@ -36,11 +38,31 @@ def main(*, serve: Callable[[FastAPI, ApiSettings], None] = _serve) -> int:
         return EXIT_CONFIGURATION_ERROR
 
     configure_logging(level=settings.log_level)
+    reporter = _error_reporter(settings)
     structlog.get_logger(__name__).info(
         "api.starting",
         environment=settings.environment.value,
+        release=settings.release,
         host=settings.host,
         port=settings.port,
+        error_monitoring="sentry" if isinstance(reporter, SentryErrorReporter) else "off",
     )
-    serve(create_app(), settings)
+    options = AppOptions(
+        diagnostics=settings.environment is not Environment.PRODUCTION,
+        error_reporter=reporter,
+        tracer_provider=new_tracer_provider(
+            service_name="htco-api", environment=settings.environment.value
+        ),
+    )
+    serve(create_app(options), settings)
     return 0
+
+
+def _error_reporter(settings: ApiSettings) -> ErrorReporter:
+    if settings.sentry_dsn is None:
+        return NoErrorReporter()
+    return SentryErrorReporter.from_dsn(
+        settings.sentry_dsn.get_secret_value(),
+        environment=settings.environment.value,
+        release=settings.release,
+    )

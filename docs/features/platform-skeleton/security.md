@@ -43,6 +43,10 @@ flowchart LR
 | Container | Elevation of privilege: code execution as root inside the container | Runs as user 10001; CI runs it with `--read-only`, `--cap-drop ALL`, `no-new-privileges` | CI `image` job |
 | Container | Tampering: a moved base-image tag | Base images pinned by digest | `test_dockerfile__every_base_image__is_pinned_by_digest` |
 | Container | Information disclosure and attack surface: sources, tests, build tools in production | Non-editable install, allow-list build context, runtime copies only the venv | `test_dockerignore__allows_only_the_build_inputs`, `test_dockerfile__installs_only_the_api_without_dev_tools` |
+| Error monitoring | Information disclosure: request bodies, cookies, headers, IPs or local variables sent to a third party | Isolated Sentry client, no integrations, no local variables, `scrub_event` drops request, user and breadcrumbs | `tests/platform/test_error_reporting.py`, `test_diagnostic_error__is_reported_with_ids_and_without_request_secrets` |
+| Traces | Spoofing: clients choosing our trace IDs | New root span per request; incoming `traceparent` ignored | `test_request__incoming_traceparent__is_not_trusted` |
+| Diagnostics | Denial of service and noise: anyone triggering errors in production | The route exists only outside production and is not in the contract | `test_main__diagnostic_endpoint__exists_only_outside_production` |
+| Outgoing calls | Tampering: redirects to attacker hosts; hanging calls | No redirects followed; 10-second default timeout | `tests/platform/test_http.py` |
 | Contract | Tampering: an endpoint or field changes without review | Committed contract with a drift test; oasdiff fails breaking changes | `tests/contract/`, CI `contract` job |
 | Configuration | Information disclosure: secret values in startup errors | Configuration errors name variables, never values | `test_load_settings__invalid_value__names_the_variable_without_echoing_the_value` |
 
@@ -60,6 +64,8 @@ None.
 | v5.0.0-13.3.1 (partial) | No secrets in the repository: gitleaks and private-key detection on commit and in CI over the full history; secret stores arrive with deployment (slice 1.5) | `.pre-commit-config.yaml`, `security` job |
 | v5.0.0-15.2.1 | Known-vulnerable locked versions fail the pull request (osv-scanner on `uv.lock`) | `security` job |
 | v5.0.0-15.2.3 | The production image holds only the installed API package and its dependencies: no tests, sources, build tools or uv | `tests/infra/test_dockerfile.py`, `image` job |
+| v5.0.0-15.3.2 | Outgoing HTTP never follows redirects unless a caller opts in deliberately | `test_client__redirect__is_returned_not_followed` |
+| v5.0.0-16.4.3 (partial) | Errors go to a separate monitoring system with minimal data; log shipping to a separate system arrives with the deployment | `htco_platform.error_reporting` |
 | v5.0.0-16.5.1 | Generic messages for unexpected errors; no stack traces, queries or secrets | `tests/api/test_errors.py` |
 | v5.0.0-16.5.4 | Last-resort handler for unhandled exceptions, logged with full detail | `RequestContextMiddleware`, `test_unhandled_exception__is_logged_…` |
 | v5.0.0-16.2.1, 16.2.2, 16.2.4 | Every line carries when (UTC timestamp), where (logger, path) and the request ID; one JSON format for every component | `tests/platform/test_logs.py` |

@@ -9,6 +9,8 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 | `HTCO_ENVIRONMENT` | Required: `local`, `test`, `staging`, `production` | Names the environment in logs; later slices switch behaviour on it |
 | `HTCO_LOG_LEVEL` | `INFO` (`DEBUG`, `WARNING`, `ERROR`) | Minimum level for every logger; HTTP client loggers stay at WARNING |
 | `HTCO_HOST`, `HTCO_PORT` | `127.0.0.1`, `8000` | Listen address |
+| `HTCO_SENTRY_DSN` | unset (secret) | Turns error monitoring on; never logged |
+| `HTCO_RELEASE` | unset | Build identifier (git SHA) attached to error reports and the `api.starting` line |
 | Python version | `.python-version` (3.14.8) | uv installs and uses exactly this interpreter |
 | uv version | `[tool.uv] required-version` | Any other uv version refuses to run on the workspace |
 | Release age | `[tool.uv] exclude-newer = "7 days"` | Resolution ignores versions younger than seven days |
@@ -37,6 +39,11 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 1. **Check:** the hook's message names the failing recipe step and shows the last 60 lines of `just check-fast`.
 2. **Fix:** fix the code or the test that is wrong; never weaken a test (ER-TEST-02).
 3. **If the failure is environmental** (for example uv cannot reach PyPI): the hook lets the turn end on the next attempt with a visible warning; report it to the owner instead of committing.
+
+### Check that error monitoring works (any environment except production)
+1. `curl -X POST https://<api>/_diagnostics/error` and note the `X-Request-Id`.
+2. **Expect:** a 500 problem; in the logs, `request.failed` with that request ID and a `trace_id`; in Sentry, one `DiagnosticError` event tagged with both IDs.
+3. If the event is missing: check `api.starting` says `error_monitoring: sentry`, then the DSN in the secret store.
 
 ### The API exits immediately with code 78
 1. **Check:** the last stderr lines: `htco-api: invalid configuration` followed by one line per variable.

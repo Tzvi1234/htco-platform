@@ -108,6 +108,32 @@ flowchart LR
 
 Documentation-only turns skip the check, so the hook costs nothing when no code changed. Claude Code also caps consecutive stop-hook continuations (8 by default).
 
+## Tracing and error monitoring (slice 1.7, part 1)
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant M as RequestContextMiddleware
+  participant R as Route
+  participant H as htco_platform.http client
+  participant X as Partner API
+  participant E as ErrorReporter (Sentry)
+  C->>M: request (any traceparent is ignored)
+  M->>M: new request ID, new root span
+  M->>R: call
+  R->>H: outgoing call
+  H->>X: traceparent: 00-<trace_id>-<span_id>-01
+  R--xM: unhandled exception
+  M->>E: report(error, request_id, trace_id)
+  M-->>C: 500 problem + X-Request-Id
+```
+
+- **Spans:** the middleware starts one `SERVER` span per request with an empty parent context (`http.request.method`, `url.path`, `htco.request_id`, then `http.response.status_code`), records exceptions on it and sets an error status. Spans are not exported yet.
+- **Logs:** a structlog processor adds `trace_id` (null outside a trace) and `span_id` from the active span to every line, including library lines.
+- **Outgoing calls:** `new_async_http_client(tracer_provider=…)` wraps the transport with `AsyncOpenTelemetryTransport`, so each call is a child span and carries `traceparent`; 10-second timeout; redirects are never followed.
+- **Errors:** the middleware reports every unhandled exception to the injected `ErrorReporter`; a failing reporter is logged (`error_reporting.failed`) and never changes the response. `main` uses `SentryErrorReporter` when `HTCO_SENTRY_DSN` is set, otherwise `NoErrorReporter`.
+- **Diagnostics:** `POST /_diagnostics/error` (not in the contract) raises on purpose; `main` registers it in every environment except `production`.
+
 ## Continuous integration (slice 1.4)
 
 `.github/workflows/ci.yml` runs on every pull request (opened, updated, reopened or edited) and on every push to `main`.
@@ -151,6 +177,8 @@ flowchart LR
 | Non-editable install into a venv copied to a clean stage | Install into the system interpreter; ship the source tree | The runtime has no uv, compilers, tests or sources (ASVS 15.2.3), and the venv is immutable (root-owned, read-only file system in CI). |
 | Grype fails only on fixable high or critical findings | Fail on every finding | Unfixable base-image findings would block every build with nothing to do; they are reviewed with each base-image update. |
 | Stop hook blocks once, then warns | Block until green | An environment problem (for example no network for uv) would otherwise trap the agent; the warning keeps the failure visible. |
+| Our own server span instead of FastAPI instrumentation | `opentelemetry-instrumentation-fastapi` | The instrumentation continues any incoming `traceparent`; clients could then choose our trace IDs. Our span always starts a new trace, matching the request-ID rule. |
+| Error monitoring behind a port with an isolated Sentry client | `sentry_sdk.init` with its integrations | The global init patches frameworks and logging and can attach request data; an isolated client sends only what we pass, and tests need no global state. |
 | One `ci-gate` job as the required status | Requiring every job in the branch rules | New jobs are protected automatically; the rules never drift from the workflow. |
 | Our own test-integrity and SHA-pin scripts | Marketplace actions | Small, tested, no extra third-party code with access to the workflow. |
 | Scanner binaries with pinned checksums | gitleaks and osv-scanner GitHub Actions | The gitleaks action needs write access to comment on pull requests; a checksum-verified binary needs none. |
