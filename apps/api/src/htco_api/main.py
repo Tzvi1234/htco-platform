@@ -9,13 +9,17 @@ from fastapi import FastAPI
 
 from htco_api.app import AppOptions, create_app
 from htco_api.settings import ApiSettings, Environment
+from htco_persistence.readiness import DatabaseReadinessCheck
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter, SentryErrorReporter
 from htco_platform.logs import configure_logging
+from htco_platform.readiness import ReadinessCheck
 from htco_platform.settings import ConfigurationError, load_settings
 from htco_platform.tracing import new_tracer_provider
 
 # sysexits.h EX_CONFIG: the process cannot start because its configuration is wrong.
 EXIT_CONFIGURATION_ERROR = 78
+# `/readyz` answers within about a second even when a dependency hangs (phase 2, slice 2.1).
+READINESS_TIMEOUT_SECONDS = 1.0
 
 
 def _serve(app: FastAPI, settings: ApiSettings) -> None:
@@ -53,9 +57,12 @@ def main(
         host=settings.host,
         port=settings.port,
         error_monitoring="sentry" if isinstance(reporter, SentryErrorReporter) else "off",
+        database="configured" if settings.database_url is not None else "not configured",
     )
     options = AppOptions(
         diagnostics=settings.environment is not Environment.PRODUCTION,
+        readiness_checks=_readiness_checks(settings),
+        readiness_timeout_seconds=READINESS_TIMEOUT_SECONDS,
         error_reporter=reporter,
         tracer_provider=new_tracer_provider(
             service_name="htco-api", environment=settings.environment.value
@@ -76,3 +83,9 @@ def _error_reporter(settings: ApiSettings) -> ErrorReporter:
         environment=settings.environment.value,
         release=settings.release,
     )
+
+
+def _readiness_checks(settings: ApiSettings) -> list[ReadinessCheck]:
+    if settings.database_url is None:
+        return []
+    return [DatabaseReadinessCheck(settings.database_url.get_secret_value())]

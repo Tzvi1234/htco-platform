@@ -79,8 +79,8 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 | `just registry` | Validate `registry/` (employees, automations, tools, advisors) and print a summary | ADR-0012 foundation |
 | `just up` | Local API on http://127.0.0.1:8000 with `.env.example` settings (the worker joins in Phase 4) | Slice 1.2 |
 | `docker build -t htco-api .` | The production API image (CI also runs it read-only and scans it) | Slice 1.5 |
-| `just db-start`, `just db-reset`, `just db-test` | Local Supabase stack, migrations, pgTAP tests | Slice 2.1 |
-| `just seed` | Two organizations, their shops, one user per role | Slice 2.1 |
+| `just db-start`, `just db-stop`, `just db-reset`, `just db-test` | Local Supabase stack (needs Docker), migrations, pgTAP and the Python tests marked `database` (set `HTCO_TEST_DATABASE_URL`, printed by `db-start`) | Slice 2.1 |
+| `just seed` | Two organizations, their shops, one user per role | Slice 2.2 (needs its tables) |
 
 ## Golden rules
 

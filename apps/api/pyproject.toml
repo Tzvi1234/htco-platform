@@ -7,6 +7,7 @@ dependencies = [
   "fastapi>=0.142,<0.144",
   "htco-application",
   "htco-domain",
+  "htco-persistence",
   "htco-platform",
   "uvicorn>=0.54,<0.55",
 ]
@@ -14,6 +15,7 @@ dependencies = [
 [tool.uv.sources]
 htco-application = { workspace = true }
 htco-domain = { workspace = true }
+htco-persistence = { workspace = true }
 htco-platform = { workspace = true }
 
 [build-system]

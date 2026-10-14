@@ -16,6 +16,9 @@ from htco_api.main import EXIT_CONFIGURATION_ERROR, main
 from htco_api.settings import ApiSettings, Environment
 from htco_platform.error_reporting import ErrorReporter
 
+# Nothing listens on port 1: startup never connects, and readiness fails fast.
+UNREACHABLE_DATABASE_URL = "postgresql://htco:not-a-secret@127.0.0.1:1/postgres"
+
 
 class _FakeServer:
     def __init__(self) -> None:
@@ -128,6 +131,7 @@ def test_main__diagnostic_endpoint__exists_only_outside_production(
     environment: pytest.MonkeyPatch, environment_name: str, status: int
 ) -> None:
     environment.setenv("HTCO_ENVIRONMENT", environment_name)
+    environment.setenv("HTCO_DATABASE_URL", UNREACHABLE_DATABASE_URL)
     serve = _FakeServer()
 
     main(serve=serve)
@@ -175,3 +179,51 @@ def test_main__blank_sentry_dsn__leaves_error_monitoring_off(
 
     [line] = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert line["error_monitoring"] == "off"
+
+
+@pytest.mark.ac("AC-2.1.3")
+@pytest.mark.parametrize("environment_name", ["staging", "production"])
+def test_main__deployed_environment_without_database__exits_with_configuration_error(
+    environment: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], environment_name: str
+) -> None:
+    environment.setenv("HTCO_ENVIRONMENT", environment_name)
+
+    exit_code = main(serve=_FakeServer())
+
+    assert exit_code == EXIT_CONFIGURATION_ERROR
+    assert "HTCO_DATABASE_URL is required in staging and production" in capsys.readouterr().err
+
+
+@pytest.mark.ac("AC-2.1.3")
+@pytest.mark.usefixtures("restore_logging")
+def test_main__database_configured__readyz_checks_it(
+    environment: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    environment.setenv("HTCO_ENVIRONMENT", "local")
+    environment.setenv("HTCO_DATABASE_URL", UNREACHABLE_DATABASE_URL)
+    serve = _FakeServer()
+
+    main(serve=serve)
+
+    [(app, _)] = serve.calls
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["checks"] == {"configuration": "ok", "database": "failed"}
+    assert "not-a-secret" not in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures("restore_logging")
+def test_main__no_database_configured__readyz_has_no_database_check(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    environment.setenv("HTCO_ENVIRONMENT", "local")
+    serve = _FakeServer()
+
+    main(serve=serve)
+
+    [(app, _)] = serve.calls
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+    assert response.status_code == 200
+    assert response.json()["checks"] == {"configuration": "ok"}

@@ -51,6 +51,29 @@ contract:
     uv run python -m tools.openapi --check
     uv run pytest tests/contract -q
 
+# The Supabase CLI at the version in docs/engineering/TOOLCHAIN.md (minimum release age applies)
+supabase := "npx --yes supabase@2.118.0"
+# Postgres of the local stack; the CLI's fixed local credentials, never used anywhere else
+local_database_url := "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+
+# Start the local Supabase stack (needs Docker) and apply every migration
+db-start:
+    {{supabase}} start
+    @echo "Database tests: set HTCO_TEST_DATABASE_URL={{local_database_url}}"
+
+# Stop the local Supabase stack
+db-stop:
+    {{supabase}} stop
+
+# Recreate the local database from the migrations (and the seed, from slice 2.2)
+db-reset:
+    {{supabase}} db reset
+
+# Database tests: pgTAP in supabase/tests, then the Python tests marked `database`
+db-test $HTCO_TEST_DATABASE_URL=local_database_url:
+    {{supabase}} test db
+    uv run pytest -m database -q
+
 # Run all tests with branch coverage and the per-layer coverage floors
 test:
     uv run coverage erase

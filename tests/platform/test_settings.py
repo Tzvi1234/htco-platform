@@ -1,7 +1,9 @@
 """Settings load once from the environment and fail fast with clear messages (ER-CODE-07)."""
 
+from typing import Self
+
 import pytest
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from htco_platform.settings import ConfigurationError, load_settings
@@ -66,6 +68,30 @@ def test_load_settings__several_problems__reports_all_of_them(
         "HTCO_EXAMPLE_NAME",
         "HTCO_EXAMPLE_PORT",
     ]
+
+
+class _PairedSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="HTCO_EXAMPLE_", frozen=True)
+
+    name: str = "api"
+    port: int | None = None
+
+    @model_validator(mode="after")
+    def _port_required_for_worker(self) -> Self:
+        if self.name == "worker" and self.port is None:
+            raise ValueError("HTCO_EXAMPLE_PORT is required for a worker")
+        return self
+
+
+def test_load_settings__rule_across_settings__reports_its_own_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTCO_EXAMPLE_NAME", "worker")
+
+    with pytest.raises(ConfigurationError) as raised:
+        load_settings(_PairedSettings)
+
+    assert raised.value.problems == ["HTCO_EXAMPLE_PORT is required for a worker"]
 
 
 def test_configuration_error__message__lists_one_problem_per_line() -> None:

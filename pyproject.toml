@@ -114,11 +114,15 @@ filterwarnings = [
 ]
 markers = [
   "ac(id): the acceptance criterion (for example AC-1.2.3) that this test proves",
+  "database: needs Postgres (HTCO_TEST_DATABASE_URL); deselected locally without it, required in CI",
 ]
 
 [tool.coverage.run]
 branch = true
-source_pkgs = ["htco_domain", "htco_application", "htco_platform", "htco_agent_runtime", "htco_api"]
+source_pkgs = [
+  "htco_domain", "htco_application", "htco_platform", "htco_persistence", "htco_agent_runtime",
+  "htco_api",
+]
 
 [tool.coverage.report]
 fail_under = 80
@@ -131,14 +135,22 @@ exclude_also = ["if TYPE_CHECKING:", "@overload", "raise NotImplementedError"]
 # tests/architecture/test_layer_purity.py, because import-linter cannot express an allow-list.
 
 [tool.importlinter]
-root_packages = ["htco_domain", "htco_application", "htco_platform", "htco_agent_runtime", "htco_api"]
+root_packages = [
+  "htco_domain", "htco_application", "htco_platform", "htco_persistence", "htco_agent_runtime",
+  "htco_api",
+]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
 id = "dependency-rule"
 name = "Dependency rule: composition roots -> adapters -> application -> domain"
 type = "layers"
-layers = ["htco_api", "htco_agent_runtime", "htco_application", "htco_domain"]
+layers = [
+  "htco_api",
+  "htco_agent_runtime | htco_persistence",
+  "htco_application",
+  "htco_domain",
+]
 
 [[tool.importlinter.contracts]]
 id = "platform-is-infrastructure"
@@ -146,7 +158,7 @@ name = "Platform holds infrastructure only: no business, adapter or web framewor
 type = "forbidden"
 source_modules = ["htco_platform"]
 forbidden_modules = [
-  "htco_domain", "htco_application", "htco_agent_runtime", "htco_api",
+  "htco_domain", "htco_application", "htco_persistence", "htco_agent_runtime", "htco_api",
   "fastapi", "starlette", "uvicorn",
 ]
 
@@ -161,5 +173,14 @@ forbidden_modules = ["htco_platform"]
 id = "langgraph-only-in-agent-runtime"
 name = "Only the agent runtime imports LangGraph"
 type = "forbidden"
-source_modules = ["htco_domain", "htco_application", "htco_platform", "htco_api"]
+source_modules = ["htco_domain", "htco_application", "htco_platform", "htco_persistence", "htco_api"]
 forbidden_modules = ["langgraph", "langchain_core"]
+
+[[tool.importlinter.contracts]]
+id = "db-driver-only-in-persistence"
+name = "Only the persistence adapters import the database driver"
+type = "forbidden"
+source_modules = ["htco_domain", "htco_application", "htco_platform", "htco_agent_runtime", "htco_api"]
+forbidden_modules = ["psycopg", "psycopg_pool"]
+# The composition root wires persistence in, so reaching the driver through it is expected.
+allow_indirect_imports = true

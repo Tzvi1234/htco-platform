@@ -25,7 +25,8 @@
 | HTTP API | FastAPI on Starlette, served by uvicorn | Locked FastAPI 0.142.2, Starlette 1.7.0, uvicorn 0.54.0 (no extras) | OpenAPI 3.1 output. Plain uvicorn (h11, asyncio) until measurements justify `httptools`/`uvloop`. |
 | Models and validation | Pydantic | Locked 2.13.5 | Boundaries only (API, contracts, tool schemas); domain stays plain Python. mypy runs with the Pydantic plugin. |
 | Settings | pydantic-settings | Locked 2.15.0 | Loaded only in composition roots through `htco_platform.settings.load_settings`; `SecretStr`; fail fast with exit code 78 and messages that never echo values |
-| Database driver | psycopg 3 with `psycopg_pool` | Planned 3.3.x (Phase 2) | One driver, shared with the LangGraph checkpointer |
+| Database driver | psycopg 3 (`psycopg[binary]`); `psycopg_pool` when the API keeps connections (slice 2.3) | Locked psycopg 3.3.6 | Only inside `htco_persistence`. The readiness probe uses the synchronous driver in a worker thread, because psycopg's async mode cannot run on the Windows event loop used in development. |
+| Database CLI | Supabase CLI via `npx --yes supabase@<version>` locally, `supabase/setup-cli` (pinned by SHA) in CI | 2.118.0 (published 2026-09-25) | Local stack, migrations, pgTAP (`supabase test db`); same version in `justfile` and both workflows |
 | SQL composition | Explicit SQL; SQLAlchemy 2.1 Core optional | | No ORM |
 | HTTP client | httpx | Locked 0.28.1 | Created only through `htco_platform.http.new_async_http_client`: 10-second timeout, no redirects, trace propagation. Its INFO request lines are silenced because URLs can carry credentials. |
 | Logging | structlog | Locked 26.1.0 | JSON to stdout, one object per line, standard-library loggers rendered the same way; trace IDs join in slice 1.7 |

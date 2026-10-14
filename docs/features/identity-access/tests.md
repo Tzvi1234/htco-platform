@@ -10,6 +10,10 @@
 
 | Acceptance criterion | Tests |
 |---|---|
+| AC-2.1.1 | CI `database` job: `supabase db start` applies every migration on a fresh runner |
+| AC-2.1.2 | CI `database` job: `supabase test db` (`supabase/tests/database/00_schemas.test.sql`); a deliberately failing assertion was pushed and failed the job (see the pull request) |
+| AC-2.1.3 | `tests/persistence/test_readiness.py::test_readyz__database_goes_away_and_comes_back__503_then_200` (database), `test_database_check__nothing_listening__raises`; `tests/api/test_main.py::test_main__database_configured__readyz_checks_it`, `test_main__deployed_environment_without_database__exits_with_configuration_error` |
+| AC-2.1.4 | `.github/workflows/migrate.yml` (actionlint and zizmor clean); first run when the development project exists |
 | AC-2.4.1 | `test_permissions__match_the_documented_matrix` (20 cases), `test_decide__fully_assured_principal__gets_exactly_the_documented_answer` (140 cases) |
 | AC-2.4.2, AC-2.4.3 | Part 2 |
 

@@ -248,10 +248,39 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: uv run python -m tools.conventional_commit --title "$PR_TITLE"
 
+  database:
+    name: database
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      # The local Supabase stack's Postgres; credentials are the CLI's fixed local defaults.
+      HTCO_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      HTCO_REQUIRE_DATABASE_TESTS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
+        with:
+          version: "2.118.0"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.13.0"
+          enable-cache: true
+          cache-python: true
+      - name: Start Postgres and apply every migration
+        run: supabase db start
+      - name: Database tests (pgTAP)
+        run: supabase test db
+      - name: Python tests that need the database
+        run: uv run pytest -m database -q
+
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [checks, tests, security, workflows, image, contract, test-integrity, pr-title]
+    needs: [checks, tests, database, security, workflows, image, contract, test-integrity, pr-title]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}

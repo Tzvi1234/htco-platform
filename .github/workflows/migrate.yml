@@ -1,0 +1,62 @@
+# Apply database migrations to a deployed Supabase project (phase 2, AC-2.1.4; ER-OPS-03).
+# Runs only when the owner starts it from the Actions tab: GitHub allows `workflow_dispatch` only
+# to people with write access, and the owner is the only one. Every run prints a dry run first;
+# migrations are applied only when "apply" is ticked, and the applied list is recorded in the
+# run summary. Agents never start this workflow (CLAUDE.md, "Ask the owner first").
+name: Migrate database
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which project to migrate
+        type: choice
+        options: [development]
+        default: development
+      apply:
+        description: Apply the migrations (leave unticked for a dry run only)
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: migrate-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: migrate (${{ inputs.target }})
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: ${{ inputs.target }}
+    permissions:
+      contents: read
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
+        with:
+          version: "2.118.0"
+      - name: Link the project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Dry run
+        run: supabase db push --dry-run
+      - name: Apply
+        if: inputs.apply
+        run: supabase db push
+      - name: Record the applied migrations
+        if: inputs.apply
+        run: |
+          {
+            echo "### Migrations on ${{ inputs.target }} after this run"
+            echo '```'
+            supabase migration list
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

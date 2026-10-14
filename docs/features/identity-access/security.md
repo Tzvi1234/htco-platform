@@ -10,6 +10,15 @@
 | Authorization | Elevation of privilege: acting on a weak session | MFA and step-up checks; step-up expires after 10 minutes; future timestamps refused | assurance and step-up tests |
 | Authorization rules | Tampering: the code or the documentation changed alone | The test parses the documented table; drift in either direction fails | `test_permissions__match_the_documented_matrix` |
 
+## Threats, slice 2.1 (database workflow)
+
+| Element | Threat | Control | Test |
+|---|---|---|---|
+| Data API | Information disclosure: tables reachable through PostgREST | Only `public` exposed; business schemas closed to `anon`, `authenticated`, `service_role` | `00_schemas.test.sql` |
+| Readiness probe | Information disclosure: the connection string in logs or errors | `SecretStr` setting; kept out of `repr`; readiness logs only the error type | `test_database_check__repr__hides_the_connection_string`, `test_main__database_configured__readyz_checks_it` |
+| Migrations | Tampering: an agent or a pull request changes the deployed schema | Only `workflow_dispatch` on `main` by the owner; dry run first; secrets only in the `development` environment | workflow review |
+| Local stack | Spoofing: local default credentials reused elsewhere | They are the CLI's fixed local values, used only for `127.0.0.1` and CI | review |
+
 ## ASVS 5.0 requirements covered
 
 | Requirement | How it is met | Evidence |

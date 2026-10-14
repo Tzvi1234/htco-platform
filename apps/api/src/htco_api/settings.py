@@ -1,9 +1,9 @@
 """API settings, read from `HTCO_*` environment variables."""
 
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,11 +27,24 @@ class ApiSettings(BaseSettings):
     sentry_dsn: SecretStr | None = None
     # The deployed build (a git commit SHA), attached to error reports.
     release: str | None = None
+    # Postgres connection string for the API's own database role. A secret: never logged.
+    # Optional locally and in tests; required in staging and production (checked below).
+    database_url: SecretStr | None = None
 
-    @field_validator("sentry_dsn", mode="before")
+    @field_validator("sentry_dsn", "database_url", mode="before")
     @classmethod
     def _blank_dsn_is_none(cls, value: object) -> object:
-        """An empty `HTCO_SENTRY_DSN` means "off", never a reporter that silently drops events."""
+        """An empty value means "not set": an empty `HTCO_SENTRY_DSN` turns error monitoring off,
+        never into a reporter that silently drops events."""
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @model_validator(mode="after")
+    def _deployed_environments_need_a_database(self) -> Self:
+        if self.database_url is None and self.environment in {
+            Environment.STAGING,
+            Environment.PRODUCTION,
+        }:
+            raise ValueError("HTCO_DATABASE_URL is required in staging and production")
+        return self

@@ -1,5 +1,26 @@
 # Identity and access — Design
 
+## Database workflow (slice 2.1)
+
+- **Schema source of truth:** SQL migrations in `supabase/migrations`, created and applied with the Supabase CLI (version in [TOOLCHAIN](../../engineering/TOOLCHAIN.md); `just` calls it through `npx`). The first migration creates the `app`, `private` and `audit` schemas, closed to `anon`, `authenticated` and `service_role` until a slice grants exactly what it needs ([ADR-0011](../../adr/0011-data-access-and-migrations.md)).
+- **Data API exposure:** only `public` is exposed by PostgREST (`supabase/config.toml`), and no business table lives there (pgTAP test). Clients use the HTCO API.
+- **Local Auth settings** mirror the production requirements: sign-ups closed (users are invited), passwords of at least 12 characters with mixed case and digits, TOTP MFA on, email confirmations on.
+- **Readiness:** `htco_persistence.readiness.DatabaseReadinessCheck` opens a fresh connection and runs `select 1` with a one-second connect timeout, in a worker thread (psycopg's async mode cannot use the Windows event loop used in development). The composition root adds it when `HTCO_DATABASE_URL` is set; staging and production refuse to start without it. `/readyz` uses a one-second overall timeout.
+- **Layers:** `htco_persistence` is the only package that imports psycopg (import-linter contract `db-driver-only-in-persistence`); it sits in the adapter layer beside the agent runtime.
+- **Tests:** pgTAP files in `supabase/tests/database`; Python tests that need Postgres carry `@pytest.mark.database`. Without `HTCO_TEST_DATABASE_URL` they are deselected and reported, so the agent hooks work without Docker; the CI `database` job sets `HTCO_REQUIRE_DATABASE_TESTS=1`, so they can never be silently skipped there.
+- **Deployed migrations:** `.github/workflows/migrate.yml`, started only by the owner, links the project, prints `supabase db push --dry-run`, applies only when "apply" is ticked, and records `supabase migration list` in the run summary.
+
+### Database roles and pool sizes (planned, confirmed when the development project exists)
+
+| Component | Database role | Connection | Pool size |
+|---|---|---|---|
+| `api` | `htco_api` (login, no `bypassrls`); user requests switch to `authenticated` with the verified claims via `set local` | Supabase IPv4 add-on, session or direct mode | 5 per instance (Supabase Pro small compute allows about 60 direct connections) |
+| `agent-worker` | `htco_worker` (login, explicit tenant filters, no `bypassrls`) | same | 5 |
+| migrations | the project owner role, only inside `migrate.yml` | direct | 1 |
+| readiness probe | the component's own role | one short-lived connection per probe | — |
+
+Roles are created by the slice that first connects with them (2.3 for the API). Assumption A-13 tracks the connection limits.
+
 ## Policy engine v0 (slice 2.4, part 1)
 
 ```mermaid

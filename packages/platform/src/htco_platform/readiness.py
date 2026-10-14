@@ -13,7 +13,8 @@ _logger = structlog.get_logger(__name__)
 class ReadinessCheck(Protocol):
     """A named dependency probe that returns when the dependency is usable and raises otherwise."""
 
-    name: str
+    @property
+    def name(self) -> str: ...
 
     async def __call__(self) -> None: ...
 
