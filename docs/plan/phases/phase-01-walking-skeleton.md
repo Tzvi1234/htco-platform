@@ -19,7 +19,7 @@
 - [ ] 1.6 Agent guardrails and repository rules
 - [ ] 1.7 Error monitoring, tracing and alerts
 
-Slice 1.4 was built right after 1.1 so that every later slice runs under CI; the `contract` job joined with slice 1.3 and the `image` job joins with slice 1.5.
+Slice 1.4 was built right after 1.1 so that every later slice runs under CI; the `contract` job joined with slice 1.3 and the `image` job with slice 1.5. Slice 1.5 ships in two parts: the image and its CI job first, then the app spec, registry push, owner-started deploy and rollback drill once the owner's DigitalOcean prerequisites are in place.
 
 ## Goal
 

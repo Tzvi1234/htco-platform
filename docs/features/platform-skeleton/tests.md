@@ -12,6 +12,8 @@
 | Platform | Settings loading and errors; JSON logging (structlog and standard-library lines, request ID, exceptions, levels, quiet HTTP clients); readiness checks (pass, fail, timeout) | `tests/platform/` |
 | API | Health and readiness, problem responses (404, 405, TRACE, 500, 422, streaming failure, property test over unknown paths), request IDs and access log, security headers, entry point and process exit | `tests/api/` |
 | Contract | The committed contract matches the app, drift and missing-file reports, OpenAPI 3.1 with stable operation IDs, the request-ID header and problem+json on every response, deterministic rendering; Schemathesis on every operation | `tests/contract/` |
+| Image policy | Base images pinned by digest, non-root runtime user, locked API-only install, allow-list build context | `tests/infra/test_dockerfile.py` |
+| Image (CI) | Build, user, exit 78 without settings, read-only run answering `/healthz` and `/readyz`, Grype scan | CI `image` job |
 | CI | The pipeline itself, on GitHub | `.github/workflows/ci.yml` (verification below) |
 
 ## Acceptance criteria coverage
@@ -31,6 +33,7 @@
 | AC-1.3.1 | `test_contract__committed_file__matches_the_app`, `test_contract_drift__endpoint_changed_without_updating_the_file__is_reported` |
 | AC-1.3.2 | The CI `contract` job (oasdiff); verified with the same binary locally (below) |
 | AC-1.3.3 | `test_api__every_operation__conforms_to_the_contract` (Schemathesis) |
+| AC-1.5.2 | `test_dockerfile__runtime_stage__runs_as_a_non_root_user`; CI `image` job "Runs as a non-root user" |
 | AC-1.4.1 | The `ci-gate` job (verified on GitHub, below) |
 | AC-1.4.2 | `test_main__skip_added_without_explanation__fails`, `test_main__skip_added_with_explanation__passes`, `test_diff_findings__skip_or_xfail_added_in_tests__is_reported` |
 | AC-1.4.3 | `test_unpinned_uses__*`, `test_main__workflow_with_unpinned_action__fails_naming_file_and_line`; runs in the `workflows` job |

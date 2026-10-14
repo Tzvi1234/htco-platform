@@ -155,10 +155,13 @@ jobs:
         run: |
           docker run --detach --name api --publish 8080:8080 --read-only --cap-drop ALL \
             --security-opt no-new-privileges --env HTCO_ENVIRONMENT=test htco-api:ci
-          curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 \
+          # Docker's port proxy resets connections until the app listens, so retry every error.
+          curl --fail --silent --show-error --retry 30 --retry-all-errors --retry-delay 1 \
             http://127.0.0.1:8080/healthz
           curl --fail --silent --show-error http://127.0.0.1:8080/readyz
-          docker logs api
+      - name: Container logs
+        if: always()
+        run: docker logs api || true
       - name: No fixable high or critical vulnerabilities
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
