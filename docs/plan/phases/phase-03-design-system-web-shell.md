@@ -7,12 +7,12 @@
 | **Size** | L |
 | **Depends on** | Phase 2 |
 | **Requirements** | FR-ADM-01, FR-IAM-01, FR-IAM-02, FR-IAM-05, FR-IAM-06 |
-| **Status** | Not started |
+| **Status** | In progress (design-system slices ahead of Phase 2) |
 
 ## Progress
 
 - [ ] 3.1 Clients repository tooling
-- [ ] 3.2 Token pipeline
+- [x] 3.2 Token pipeline
 - [ ] 3.3 Web app skeleton
 - [ ] 3.4 Core components
 - [ ] 3.5 BFF authentication (platform)
@@ -20,6 +20,8 @@
 - [ ] 3.7 Overview and shops screens
 - [ ] 3.8 Web deployment
 - [ ] 3.9 Administration screens
+
+Slices 3.1 and 3.2 need no backend, so they started early (the plan lets design-system work overlap Phase 2). Slice 3.1 ships in two parts: workspace tooling and CI now; Storybook, Playwright and the logical-CSS lint rule with the web app (3.3, 3.4). The token pipeline's `HighContrast` XAML dictionary moves to Phase 15 ([client ADR-0003](https://github.com/Tzvi1234/htco-clients/blob/main/docs/adr/0003-design-token-pipeline.md)).
 
 ## Goal
 
