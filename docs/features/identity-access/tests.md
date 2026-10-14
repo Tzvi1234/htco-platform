@@ -7,6 +7,10 @@
 | Database (pgTAP) | Base schemas exist; `anon` and `authenticated` cannot use `private` or create in `app` and `audit` | `supabase/tests/database/00_schemas.test.sql` |
 | Database (pgTAP) | Identity tables exist; RLS inventory; two-tenant isolation in every table; Support limited to its granted shop; append-only audit for `authenticated`, `service_role` and the owner; `aal2` required for writes to owner-administered tables; closed role and actor lists; cross-organization grants rejected; `anon` and direct helper calls refused (49 assertions) | `supabase/tests/database/01_identity_access.test.sql` |
 | Persistence | The SQL check constraints list exactly the domain's `Role` and `ActorKind` values | `tests/persistence/test_schema_mirrors_domain.py` |
+| Platform | Token verification: valid tokens, every rejection reason, `alg: none`, HS256 with a shared secret, tampered payload, a forged key with a known key ID; JWKS cache lifetime, refresh on rotation, cooldown against forged key IDs, fail-closed, a failed refresh keeps current keys, non-ES256 keys ignored, malformed documents | `tests/platform/test_jwt.py` |
+| Application | `AuthContext` from database memberships; no membership refused; `Principal` per organization; default organization | `tests/application/test_authentication.py` |
+| API | `CurrentAuth`: valid token; ten unauthenticated cases with their problem types and `WWW-Authenticate`; no membership 403; key set down 503; no authenticator 503; rejections logged without the token; resources start and stop with the app; settings and composition | `tests/api/test_auth.py`, `tests/api/test_settings.py`, `tests/api/test_main.py` |
+| Integration (`-m db`) | An unfiltered query in a user-scoped transaction returns only the user's tenant rows; no subject sees nothing; role and claims do not leak to the next use of the connection; the membership reader for Support, Operations, an Owner and an unknown user | `tests/integration/test_user_scope.py` |
 | Persistence | The database check fails fast on a closed port, is named `database`, hides its connection string | `tests/persistence/test_database_check.py` |
 | API | Deployed environments refuse to start without `HTCO_DATABASE_URL`; with it, `/readyz` reports the database; without it locally, configuration only | `tests/api/test_main.py` |
 | Integration (`-m db`) | `/readyz` against real Postgres through a TCP relay: 200, 503 when the relay closes, 200 again without a restart | `tests/integration/test_database_readiness.py` |
@@ -25,6 +29,10 @@
 | AC-2.2.3 | `01_identity_access.test.sql`: "Support A sees shop A1 and not shop A2" |
 | AC-2.2.4 | `01_identity_access.test.sql`: AC-2.2.4 block |
 | AC-2.2.5 | `01_identity_access.test.sql`: AC-2.2.5 block |
+| AC-2.3.1 | `test_unauthenticated_requests__401_with_a_distinct_problem_type` (10 cases), `test_the_five_ac_cases__have_five_different_types` |
+| AC-2.3.2 | `test_user_without_membership__403`, `test_authenticate__no_membership__is_refused` |
+| AC-2.3.3 | `test_unfiltered_query__returns_only_the_users_tenant_rows` |
+| AC-2.3.4 | `test_jwks__is_fetched_once_while_fresh`, `test_jwks__is_refetched_after_its_lifetime`, `test_jwks__unknown_kid__refreshes_and_accepts_a_rotated_key`, `test_jwks__unknown_kids_within_the_cooldown__do_not_refetch` |
 | AC-2.4.1 | `test_permissions__match_the_documented_matrix` (20 cases), `test_decide__fully_assured_principal__gets_exactly_the_documented_answer` (140 cases) |
 | AC-2.4.2, AC-2.4.3 | Part 2 |
 

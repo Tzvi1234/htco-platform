@@ -85,6 +85,55 @@ UNEXPECTED_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
 }
 NOT_READY = ProblemType("not-ready", "Not ready", 503, "A required dependency is not available.")
 
+# Authentication (slice 2.3, AC-2.3.1): one type per reason a request is not signed in, so clients
+# can tell an expired session (refresh it) from a token that will never work.
+UNAUTHENTICATED = ProblemType(
+    "unauthenticated", "Not signed in", 401, "Send an access token as `Authorization: Bearer …`."
+)
+TOKEN_EXPIRED = ProblemType(
+    "token-expired", "Session expired", 401, "The access token has expired. Refresh it and retry."
+)
+TOKEN_WRONG_AUDIENCE = ProblemType(
+    "token-wrong-audience",
+    "Token not for this API",
+    401,
+    "The access token is for another audience.",
+)
+TOKEN_WRONG_ISSUER = ProblemType(
+    "token-wrong-issuer",
+    "Token from another issuer",
+    401,
+    "The access token was not issued by HTCO's sign-in service.",
+)
+TOKEN_BAD_SIGNATURE = ProblemType(
+    "token-bad-signature",
+    "Token signature invalid",
+    401,
+    "The access token's signature cannot be verified.",
+)
+TOKEN_INVALID = ProblemType(
+    "token-invalid", "Token invalid", 401, "The access token is not a valid user token."
+)
+NO_MEMBERSHIP = ProblemType(
+    "no-membership", "No access", 403, "Your account is not a member of this organization."
+)
+AUTH_UNAVAILABLE = ProblemType(
+    "auth-unavailable",
+    "Sign-in unavailable",
+    503,
+    "Sign-in cannot be verified right now. Try again shortly.",
+)
+
+
+class ProblemError(Exception):
+    """Raised by routes and dependencies to answer with one problem type."""
+
+    def __init__(self, kind: ProblemType, *, headers: Mapping[str, str] | None = None) -> None:
+        super().__init__(kind.slug)
+        self.kind = kind
+        self.headers = dict(headers or {})
+
+
 _BY_STATUS = {kind.status: kind for kind in (NOT_FOUND, METHOD_NOT_ALLOWED, INTERNAL_ERROR)}
 
 
@@ -118,6 +167,12 @@ async def _http_exception(request: Request, exc: Exception) -> JSONResponse:
     return problem_response(problem, headers=exc.headers)
 
 
+async def _problem_error(request: Request, exc: Exception) -> JSONResponse:
+    if not isinstance(exc, ProblemError):
+        return problem_response(INTERNAL_ERROR.problem(request_id_of(request)))
+    return problem_response(exc.kind.problem(request_id_of(request)), headers=exc.headers)
+
+
 async def _validation_error(request: Request, exc: Exception) -> JSONResponse:
     base = VALIDATION_ERROR.problem(request_id_of(request))
     details = exc.errors() if isinstance(exc, RequestValidationError) else []
@@ -129,3 +184,4 @@ def add_problem_handlers(app: FastAPI) -> None:
     """Answer framework errors (unknown route, wrong method, invalid input) with problems."""
     app.add_exception_handler(StarletteHTTPException, _http_exception)
     app.add_exception_handler(RequestValidationError, _validation_error)
+    app.add_exception_handler(ProblemError, _problem_error)

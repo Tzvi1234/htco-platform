@@ -5,7 +5,7 @@
 | **Slug** | `identity-access` |
 | **Phase / slices** | Phase 2 — slices 2.1 to 2.6 |
 | **Requirements** | [FR-IAM-01 to FR-IAM-04, FR-ADM-01, FR-AUD-01](../../product/PRD.md) |
-| **Status** | In progress (slices 2.1 and 2.4 part 1 merged; slice 2.2 identity schema with RLS) |
+| **Status** | In progress (slices 2.1, 2.2 and 2.4 part 1 merged; slice 2.3 authentication in the API) |
 | **Last updated** | 2026-10-14 |
 
 ## What and why
@@ -25,6 +25,10 @@ The security spine: who belongs to which organization, with which role, on which
 | AC-2.2.3 | A Support user with access to shop 1 only cannot read shop 2's rows. | 2.2 | Pass |
 | AC-2.2.4 | The application role cannot update or delete `audit.audit_log` rows. | 2.2 | Pass (`authenticated`, `service_role`, and the table owner through a trigger) |
 | AC-2.2.5 | An owner-only table rejects writes from an `aal1` session. | 2.2 | Pass |
+| AC-2.3.1 | Requests without a token, with an expired token, a wrong audience, a wrong issuer or a bad signature return 401 with distinct problem `type` values. | 2.3 | Pass |
+| AC-2.3.2 | A token whose user has no membership returns 403. | 2.3 | Pass |
+| AC-2.3.3 | A deliberately unfiltered repository query, run inside a user-scoped transaction, still returns only that user's tenant rows (RLS as defense in depth). | 2.3 | Pass (CI `database` job) |
+| AC-2.3.4 | JWKS is cached with a bounded lifetime and refreshed on an unknown key ID. | 2.3 | Pass |
 | AC-2.4.1 | For every role in the matrix, a parametrized test asserts allowed and denied capabilities. | 2.4 | Pass |
 | AC-2.4.2 | `GET /v1/shops` never returns a shop the user is not granted, including when a `shop_id` filter names another tenant's shop (404, not 403). | 2.4 (part 2, needs 2.1 to 2.3) | Open |
 | AC-2.4.3 | Pagination returns stable, non-overlapping pages and rejects limits above the maximum. | 2.4 (part 2) | Open |
@@ -36,7 +40,8 @@ The criteria of slices 2.1, 2.2, 2.3, 2.5 and 2.6 join here when they start.
 - **In (2.1):** `supabase/` (config with invitation-only sign-up, 12-character passwords, TOTP MFA; base schemas `app`, `private`, `audit`), `htco_persistence` with the `/readyz` database check, `HTCO_DATABASE_URL` (required when deployed), the `database` CI job, the owner-started `migrate.yml` workflow.
 - **In (2.2):** tables `app.organizations`, `app.user_profiles`, `app.memberships` (seven roles, one active membership per user and organization), `app.shops` (shell), `app.shop_access` (composite keys keep a grant inside one organization), `audit.audit_log` (five actor kinds, append-only); RLS on every table with security-definer helpers in `private`; writes to owner-administered tables need Owner or Admin and an `aal2` session; `supabase/seed.sql` (`just seed`); a unit test keeps the SQL role and actor lists equal to the domain enums.
 - **In (2.4, part 1):** `Role` and `AssuranceLevel` (domain), `Capability`, `Grant`, `Principal`, `Decision` and `decide` (application), the matrix as data.
-- **Out:** building the `Principal` from a verified token and database memberships (2.3), the endpoints (2.4 part 2), approvals (Phase 7), worker and agent permissions (Phases 5 and 8).
+- **In (2.3):** `htco_platform.jwt` (ES256 only, issuer, audience, expiry, `role = authenticated`, JWKS cache with refresh on an unknown key ID, fail-closed when the key set is unreachable); `htco_application.access.authentication` (`AuthContext` and `Principal` from **database** memberships, never token claims); `htco_persistence.database` (pool; user-scoped transactions with `set local role authenticated` and the verified claims) and `PostgresMembershipReader`; `htco_api.auth` (`CurrentAuth` dependency and eight problem types: `unauthenticated`, `token-expired`, `token-wrong-audience`, `token-wrong-issuer`, `token-bad-signature`, `token-invalid`, `no-membership`, `auth-unavailable`); `HTCO_SUPABASE_URL`.
+- **Out:** the endpoints (2.4 part 2), approvals (Phase 7), worker and agent permissions (Phases 5 and 8).
 
 ## Known limits
 

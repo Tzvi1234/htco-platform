@@ -25,8 +25,9 @@
 | HTTP API | FastAPI on Starlette, served by uvicorn | Locked FastAPI 0.142.2, Starlette 1.7.0, uvicorn 0.54.0 (no extras) | OpenAPI 3.1 output. Plain uvicorn (h11, asyncio) until measurements justify `httptools`/`uvloop`. |
 | Models and validation | Pydantic | Locked 2.13.5 | Boundaries only (API, contracts, tool schemas); domain stays plain Python. mypy runs with the Pydantic plugin. |
 | Settings | pydantic-settings | Locked 2.15.0 | Loaded only in composition roots through `htco_platform.settings.load_settings`; `SecretStr`; fail fast with exit code 78 and messages that never echo values |
-| Database driver | psycopg 3 (binary) | Locked 3.3.6 (`htco-persistence`); `psycopg_pool` joins with the first repository (slice 2.2) | One driver, shared with the LangGraph checkpointer; only `htco_persistence` may import it (import-linter) |
+| Database driver | psycopg 3 (binary) and `psycopg_pool` | Locked 3.3.6 and 3.3.3 (`htco-persistence`; the pool since slice 2.3) | One driver, shared with the LangGraph checkpointer; only `htco_persistence` may import it (import-linter) |
 | SQL composition | Explicit SQL; SQLAlchemy 2.1 Core optional | | No ORM |
+| Access-token verification | PyJWT with `cryptography` | Locked 2.15.1 / 50.0.2 (`htco-platform`) | `htco_platform.jwt` only: ES256 against the Supabase JWKS, cached 10 minutes, refreshed on an unknown key ID at most every 30 seconds |
 | HTTP client | httpx | Locked 0.28.1 | Created only through `htco_platform.http.new_async_http_client`: 10-second timeout, no redirects, trace propagation. Its INFO request lines are silenced because URLs can carry credentials. |
 | Logging | structlog | Locked 26.1.0 | JSON to stdout, one object per line, standard-library loggers rendered the same way; trace IDs join in slice 1.7 |
 | Tracing | OpenTelemetry API and SDK, `opentelemetry-instrumentation-httpx` transport wrappers | Locked 1.45.1 / 0.66b1 | No FastAPI instrumentation: our request middleware starts the server span itself, so incoming trace headers are never trusted. No exporter yet. |

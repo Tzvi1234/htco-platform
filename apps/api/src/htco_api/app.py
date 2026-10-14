@@ -1,9 +1,10 @@
 """The FastAPI application factory."""
 
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, override
+from typing import TYPE_CHECKING, Any, Protocol, override
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
@@ -15,6 +16,17 @@ from htco_api.middleware import RequestContextMiddleware, SecurityHeadersMiddlew
 from htco_api.problems import PROBLEM_MEDIA_TYPE, UNEXPECTED_ERROR_RESPONSES, add_problem_handlers
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter
 from htco_platform.readiness import ReadinessCheck
+
+if TYPE_CHECKING:
+    from htco_api.auth import Authenticator
+
+
+class Resource(Protocol):
+    """Something the app opens at startup and closes at shutdown (a pool, an HTTP client)."""
+
+    async def start(self) -> None: ...
+
+    async def stop(self) -> None: ...
 
 
 def _new_request_id() -> str:
@@ -67,11 +79,32 @@ class AppOptions:
     diagnostics: bool = False
     error_reporter: ErrorReporter = field(default_factory=NoErrorReporter)
     tracer_provider: TracerProvider | None = None
+    # Verifies bearer tokens for `CurrentAuth`; without it, authenticated routes answer 503.
+    authenticator: Authenticator | None = None
+    # Started in order with the app, stopped in reverse order.
+    resources: Sequence[Resource] = ()
+
+
+def _lifespan(resources: Sequence[Resource]) -> Callable[[FastAPI], Any]:
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        started: list[Resource] = []
+        try:
+            for resource in resources:
+                await resource.start()
+                started.append(resource)
+            yield
+        finally:
+            for resource in reversed(started):
+                await resource.stop()
+
+    return lifespan
 
 
 def create_app(options: AppOptions | None = None) -> FastAPI:
     """Build the API. Interactive docs and `/openapi.json` are off: the contract is the
     committed `packages/contracts/openapi.yaml` (ASVS 13.4.5)."""
+    options = options or AppOptions()
     app = HtcoAPI(
         title="HTCO API",
         summary="Backend API of HTCO OS.",
@@ -80,8 +113,9 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
         redoc_url=None,
         openapi_url=None,
         generate_unique_id_function=_operation_id,
+        lifespan=_lifespan(options.resources),
     )
-    options = options or AppOptions()
+    app.state.authenticator = options.authenticator
     app.include_router(
         health_router(
             readiness_checks=options.readiness_checks,

@@ -7,6 +7,7 @@ dependencies = [
   "anyio>=4.12,<5",
   "htco-application",
   "htco-platform",
+  "psycopg-pool>=3.2,<4",
   "psycopg[binary]>=3.3.6,<3.4",
 ]
 
