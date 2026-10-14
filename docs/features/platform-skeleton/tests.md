@@ -11,6 +11,7 @@
 | Tooling | Test-integrity checker (diff parsing, skip markers, removed tests, changed assertions, thresholds, quality-gate settings, the "Test changes" section) | `tests/tools/test_test_integrity.py` |
 | Platform | Settings loading and errors; JSON logging (structlog and standard-library lines, request ID, exceptions, levels, quiet HTTP clients); readiness checks (pass, fail, timeout) | `tests/platform/` |
 | API | Health and readiness, problem responses (404, 405, TRACE, 500, 422, streaming failure, property test over unknown paths), request IDs and access log, security headers, entry point and process exit | `tests/api/` |
+| Contract | The committed contract matches the app, drift and missing-file reports, OpenAPI 3.1 with stable operation IDs, the request-ID header and problem+json on every response, deterministic rendering; Schemathesis on every operation | `tests/contract/` |
 | CI | The pipeline itself, on GitHub | `.github/workflows/ci.yml` (verification below) |
 
 ## Acceptance criteria coverage
@@ -27,6 +28,9 @@
 | AC-1.2.4 | `test_unhandled_exception__returns_generic_500_problem`, `test_unhandled_exception__is_logged_with_stack_trace_and_the_same_request_id` |
 | AC-1.2.5 | `test_load_settings__missing_required_setting__names_the_variable`, `test_main__missing_environment__exits_with_configuration_error`, `test_process__started_without_required_setting__exits_non_zero_with_a_clear_message` |
 | AC-1.2.6 | `tests/platform/test_logs.py`, `test_access_log__one_json_line_per_request_with_request_id` |
+| AC-1.3.1 | `test_contract__committed_file__matches_the_app`, `test_contract_drift__endpoint_changed_without_updating_the_file__is_reported` |
+| AC-1.3.2 | The CI `contract` job (oasdiff); verified with the same binary locally (below) |
+| AC-1.3.3 | `test_api__every_operation__conforms_to_the_contract` (Schemathesis) |
 | AC-1.4.1 | The `ci-gate` job (verified on GitHub, below) |
 | AC-1.4.2 | `test_main__skip_added_without_explanation__fails`, `test_main__skip_added_with_explanation__passes`, `test_diff_findings__skip_or_xfail_added_in_tests__is_reported` |
 | AC-1.4.3 | `test_unpinned_uses__*`, `test_main__workflow_with_unpinned_action__fails_naming_file_and_line`; runs in the `workflows` job |
@@ -45,6 +49,18 @@
 - Not applicable yet: time, money, tenancy, concurrency (no business code).
 
 ## Verification evidence
+
+### Verification — 1.3 — 2026-10-14
+
+| Acceptance criterion | Covered by tests | Verified for real | Result |
+|---|---|---|---|
+| AC-1.3.1 | `tests/contract/test_openapi_contract.py` | Before regenerating, the old file failed `test_contract__committed_file__matches_the_app` with a diff and the `just openapi` hint | Pass |
+| AC-1.3.2 | CI `contract` job | oasdiff 1.33.0 (checksum verified): removing `ReadinessStatus.checks` gave `error [response-required-property-removed] … GET /readyz`, exit 1; adding an optional field gave "No breaking changes", exit 0; identical files, exit 0 | Pass |
+| AC-1.3.3 | `tests/contract/test_api_fuzzing.py` | Schemathesis ran every operation (including unsupported methods); mutation check: removing the `X-Request-Id` header in the middleware made it fail with "Missing required headers: X-Request-Id" | Pass |
+
+**Adversarial checks run:** the header mutation above; the contract test for problem+json failed against the first generated file (FastAPI had filed the 503 schema under `application/json`) and passed after the fix.
+**Deployed check:** not applicable.
+**Open issues:** none.
 
 ### Verification — 1.2 — 2026-10-14
 

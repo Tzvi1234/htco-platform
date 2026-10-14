@@ -81,6 +81,12 @@ flowchart LR
 
 **Settings** (`HTCO_*`): `HTCO_ENVIRONMENT` (required: `local`, `test`, `staging`, `production`), `HTCO_LOG_LEVEL` (`INFO`), `HTCO_HOST` (`127.0.0.1`), `HTCO_PORT` (`8000`).
 
+## Contract (slice 1.3)
+
+- `packages/contracts/openapi.yaml` is generated from the app (`just openapi`, which runs `tools/openapi.py --write`) and committed. YAML without anchors or aliases, keys in FastAPI's order, so diffs read naturally.
+- `HtcoAPI` (a `FastAPI` subclass) adjusts the generated document to what the app really sends: every response documents the required `X-Request-Id` header (UUID), and error responses carry their schema under `application/problem+json`. Operation IDs are the route function names (`healthz`, `readyz`).
+- Three guards: `test_contract__committed_file__matches_the_app` fails on any drift (with a diff and the command to run); Schemathesis generates requests from the committed file, including methods the contract does not allow, and validates every response; the CI `contract` job runs `oasdiff breaking` against the pull request's base.
+
 ## Continuous integration (slice 1.4)
 
 `.github/workflows/ci.yml` runs on every pull request (opened, updated, reopened or edited) and on every push to `main`.
@@ -91,12 +97,13 @@ flowchart LR
   pr --> tests[tests<br/>coverage floors]
   pr --> security[security<br/>gitleaks · osv-scanner]
   pr --> workflows[workflows<br/>actionlint · zizmor · SHA pins]
+  pr --> contract[contract<br/>oasdiff, pull requests only]
   pr --> integrity[test-integrity<br/>pull requests only]
   pr --> title[pr-title<br/>pull requests only]
-  checks & tests & security & workflows & integrity & title --> gate{ci-gate}
+  checks & tests & security & workflows & contract & integrity & title --> gate{ci-gate}
 ```
 
-- **One required status.** `ci-gate` runs even when a job fails (`if: always()`) and passes only if every job succeeded; on pushes to `main` the two pull-request-only jobs may be skipped. Branch rules will require only `ci-gate` (slice 1.6), so adding a job never needs a settings change.
+- **One required status.** `ci-gate` runs even when a job fails (`if: always()`) and passes only if every job succeeded; on pushes to `main` the pull-request-only jobs (`contract`, `test-integrity`, `pr-title`) may be skipped. Branch rules will require only `ci-gate` (slice 1.6), so adding a job never needs a settings change.
 - **Least privilege.** The workflow grants nothing by default (`permissions: {}`); each job gets `contents: read`, and `ci-gate` gets nothing. Checkouts do not keep credentials.
 - **No template injection.** The pull request title, body and base commit reach scripts only through environment variables.
 - **Same tools as local.** Jobs call `just` recipes through `uv run` with `UV_LOCKED=1`, so CI fails when `uv.lock` is stale and uses exactly the locked versions. gitleaks and osv-scanner are release binaries checked against pinned SHA-256 sums.
@@ -117,6 +124,8 @@ flowchart LR
 | Our own last-resort handler in the request-context middleware | Starlette's `Exception` handler | Starlette runs it in `ServerErrorMiddleware`, outside our middleware, so the 500 would lose the request ID and the log context. |
 | No `/docs`, `/redoc` or `/openapi.json` | Docs in non-production environments | Less surface (ASVS 13.4.5); the reviewed contract is the committed `openapi.yaml` (slice 1.3). |
 | Exit code 78 (`EX_CONFIG`) on bad settings, no traceback | Let uvicorn crash | A clear one-line reason per variable, and a code that tells a crash loop apart from a configuration error. |
+| Contract generated from code and committed | Hand-written OpenAPI first, code generated from it | FastAPI's schema always matches the code; committing it makes every contract change a reviewed diff, and oasdiff guards compatibility. |
+| Committed-file comparison for the contract | syrupy snapshot | The contract must live at a fixed path that clients and oasdiff read; a snapshot file would duplicate it. |
 | One `ci-gate` job as the required status | Requiring every job in the branch rules | New jobs are protected automatically; the rules never drift from the workflow. |
 | Our own test-integrity and SHA-pin scripts | Marketplace actions | Small, tested, no extra third-party code with access to the workflow. |
 | Scanner binaries with pinned checksums | gitleaks and osv-scanner GitHub Actions | The gitleaks action needs write access to comment on pull requests; a checksum-verified binary needs none. |

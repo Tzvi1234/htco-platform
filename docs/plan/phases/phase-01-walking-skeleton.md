@@ -13,13 +13,13 @@
 
 - [x] 1.1 Workspace and tooling
 - [x] 1.2 API skeleton
-- [ ] 1.3 Contract-first OpenAPI
+- [x] 1.3 Contract-first OpenAPI
 - [ ] 1.4 Continuous integration
 - [ ] 1.5 Container and deployment
 - [ ] 1.6 Agent guardrails and repository rules
 - [ ] 1.7 Error monitoring, tracing and alerts
 
-Slice 1.4 is built right after 1.1 so that every later slice runs under CI; the `contract` and `image` jobs join the pipeline with slices 1.3 and 1.5.
+Slice 1.4 was built right after 1.1 so that every later slice runs under CI; the `contract` job joined with slice 1.3 and the `image` job joins with slice 1.5.
 
 ## Goal
 

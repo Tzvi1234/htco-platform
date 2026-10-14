@@ -117,6 +117,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: uv run just workflows
 
+  contract:
+    name: contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      OASDIFF_VERSION: "1.33.0"
+      OASDIFF_SHA256: 43a4e328e2d13ba1552d760aa68d2485c75c5621f309f6ff64ae895188345247
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install oasdiff
+        run: |
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/oasdiff.tar.gz" \
+            "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
+          echo "${OASDIFF_SHA256}  $RUNNER_TEMP/oasdiff.tar.gz" | sha256sum --check --strict -
+          tar --extract --gzip --file "$RUNNER_TEMP/oasdiff.tar.gz" --directory "$RUNNER_TEMP" oasdiff
+      - name: No breaking change against the base branch
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          contract=packages/contracts/openapi.yaml
+          if ! git cat-file -e "$BASE_SHA:$contract" 2>/dev/null; then
+            echo "::notice::The base branch has no OpenAPI contract yet; nothing to compare."
+            exit 0
+          fi
+          git show "$BASE_SHA:$contract" > "$RUNNER_TEMP/base-openapi.yaml"
+          "$RUNNER_TEMP/oasdiff" breaking "$RUNNER_TEMP/base-openapi.yaml" "$contract" --fail-on ERR
+
   test-integrity:
     name: test-integrity
     if: github.event_name == 'pull_request'
@@ -164,7 +197,7 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [checks, tests, security, workflows, test-integrity, pr-title]
+    needs: [checks, tests, security, workflows, contract, test-integrity, pr-title]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -179,7 +212,7 @@ jobs:
 
           needs = json.loads(os.environ["NEEDS"])
           # Pull-request-only jobs are skipped on pushes to main; everything else must succeed.
-          pull_request_only = {"test-integrity", "pr-title"}
+          pull_request_only = {"contract", "test-integrity", "pr-title"}
           on_push = os.environ["EVENT_NAME"] != "pull_request"
           failed = {
               name: job["result"]

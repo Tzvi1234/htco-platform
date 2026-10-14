@@ -349,7 +349,7 @@ Mapped to the OWASP Top 10 for Agentic Applications (2026) in the threat model: 
 
 ## 11. API design
 
-- REST over HTTPS, JSON, versioned path `/v1`. The OpenAPI 3.1 document in `packages/contracts/openapi.yaml` is the contract; the implementation is tested against it.
+- REST over HTTPS, JSON, versioned path `/v1`. The OpenAPI 3.1 document in `packages/contracts/openapi.yaml` is the contract: generated from the API with `just openapi`, reviewed as a diff in each pull request, and tested against the running app (Schemathesis). Operation IDs are the route function names; every response documents `X-Request-Id`; error responses are documented as `application/problem+json`.
 - Errors: RFC 9457 problem details (`application/problem+json`) with a stable `type` URI (`https://ht-co.app/problems/<slug>`, for example `not-found`, `validation-error`, `internal-error`), `title`, `status`, `detail` and `request_id`. Details are written by us, never copied from exceptions; validation errors list field locations and messages but never echo input.
 - Pagination: cursor-based (`?cursor=…&limit=…`), maximum limit enforced.
 - Idempotency: `Idempotency-Key` header required on unsafe `POST` endpoints that create or trigger work; stored responses replayed on retry.
