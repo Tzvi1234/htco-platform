@@ -14,6 +14,10 @@
 | Application | `list_shops`: organization-wide and granted scopes, shop filter (granted, not granted, other tenant, unknown), pages, limits, several organizations, non-member organization | `tests/application/test_shop_queries.py` |
 | API | `/v1/me` and `/v1/shops` through the app: bodies, scopes, 404 cases, pagination, limit and cursor validation, `organization-required`, no shop store | `tests/api/test_me_and_shops.py` |
 | Integration (`-m db`) | `PostgresShopReader` on the seed: ordering, explicit scope, paging, RLS hiding ungranted shops without the explicit scope, other tenant's shops never returned | `tests/integration/test_shop_reader.py` |
+| Application | Bootstrap: creates, idempotent second run, audit records (actor, organization, entity, before, after, correlation), unknown email, atomic failure, input validation | `tests/application/test_bootstrap.py` |
+| API (CLI) | `htco admin bootstrap`: JSON output, idempotent, unknown and invalid email (65), missing database URL (78), usage errors (2) | `tests/api/test_cli.py` |
+| Database (pgTAP) | The five actor kinds are accepted; `agent` and an empty actor ID are rejected | `supabase/tests/database/02_audit_actors.test.sql` |
+| Integration (`-m db`) | Bootstrap twice on Postgres: one organization, one owner membership; audit rows as `system:bootstrap` with correlation ID; two concurrent runs still create one organization | `tests/integration/test_bootstrap.py` |
 | Persistence | The database check fails fast on a closed port, is named `database`, hides its connection string | `tests/persistence/test_database_check.py` |
 | API | Deployed environments refuse to start without `HTCO_DATABASE_URL`; with it, `/readyz` reports the database; without it locally, configuration only | `tests/api/test_main.py` |
 | Integration (`-m db`) | `/readyz` against real Postgres through a TCP relay: 200, 503 when the relay closes, 200 again without a restart | `tests/integration/test_database_readiness.py` |
@@ -36,6 +40,9 @@
 | AC-2.3.2 | `test_user_without_membership__403`, `test_authenticate__no_membership__is_refused` |
 | AC-2.3.3 | `test_unfiltered_query__returns_only_the_users_tenant_rows` |
 | AC-2.3.4 | `test_jwks__is_fetched_once_while_fresh`, `test_jwks__is_refetched_after_its_lifetime`, `test_jwks__unknown_kid__refreshes_and_accepts_a_rotated_key`, `test_jwks__unknown_kids_within_the_cooldown__do_not_refetch` |
+| AC-2.5.1 | `test_bootstrap__twice__one_organization_and_one_membership`, `test_bootstrap_twice__one_organization_one_membership` (integration), `test_bootstrap__started_twice_at_once__still_one_organization` (integration) |
+| AC-2.5.2 | `test_bootstrap__audits_each_change_as_the_system_actor`, `test_bootstrap__audit_records__system_actor_entity_after_and_correlation` (integration) |
+| AC-2.5.3 | `02_audit_actors.test.sql`, `01_identity_access.test.sql` (unknown kind, blank actor), the integration audit test (`system`) |
 | AC-2.4.1 | `test_permissions__match_the_documented_matrix` (20 cases), `test_decide__fully_assured_principal__gets_exactly_the_documented_answer` (140 cases) |
 | AC-2.4.2 | `test_shops__filter_naming_a_shop_the_user_cannot_see__404` (not granted, other tenant, unknown), `test_shops__owner_naming_another_tenants_shop__404`, `test_shop_filter__a_shop_the_user_cannot_see__is_not_found`, `test_another_tenants_shop__is_never_returned` (integration) |
 | AC-2.4.3 | `test_shops__pages_are_stable_and_do_not_overlap`, `test_shops__limit_outside_1_to_100__422`, `test_pages__are_stable_and_do_not_overlap`, `test_after_and_limit__page_through_the_shops` (integration) |
