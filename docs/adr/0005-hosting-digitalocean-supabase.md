@@ -39,4 +39,3 @@ Phase 1 deploys `/healthz` and `/readyz`; Phase 2 proves the database connection
 ## Validation log
 
 No entries yet.
-

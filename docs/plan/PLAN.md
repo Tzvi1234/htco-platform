@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Version 1.0 — awaiting owner approval |
 | **Last updated** | 2026-10-14 |
-| **Current phase** | Phase 0 — Groundwork and decisions |
+| **Current phase** | Phase 0 — Groundwork and decisions (owner tasks open); Phase 1 — Walking skeleton (in progress) |
 | **Related** | [PRD](../product/PRD.md) · [MVP](../product/MVP.md) · [Software design](../architecture/SOFTWARE_DESIGN.md) · [Engineering rules](../engineering/ENGINEERING_RULES.md) |
 
 This plan supersedes the build order in the original HTCO planning brief (v5), which is kept outside the repository.
@@ -103,7 +103,8 @@ A phase is complete only when all of these hold:
 | Phase | Status | Started | Finished | Notes |
 |---|---|---|---|---|
 | 0 | In progress | 2026-10-14 | | Docs, repositories and design system created; owner prerequisites pending |
-| 1–17 | Not started | | | |
+| 1 | In progress | 2026-10-14 | | Slices that need no owner accounts first; deploy (1.5), ruleset (1.6) and alerts (1.7) wait for Phase 0 tasks |
+| 2–17 | Not started | | | |
 
 Update this table in the pull request that completes each phase.
 

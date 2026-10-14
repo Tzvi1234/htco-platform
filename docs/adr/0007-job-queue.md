@@ -37,4 +37,3 @@ The Phase 5 spike result is recorded in the validation log below and the status 
 ## Validation log
 
 No entries yet.
-

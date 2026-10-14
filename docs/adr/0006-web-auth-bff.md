@@ -45,4 +45,3 @@ Because the session cookie is `SameSite=Strict`, it is not sent on redirects arr
 ## Validation log
 
 No entries yet.
-

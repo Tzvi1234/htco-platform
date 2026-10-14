@@ -1,0 +1,144 @@
+# HTCO platform: uv workspace root. The root is virtual (not a package); each deployable
+# and library lives in packages/* or apps/*. Tool settings for the whole workspace live here.
+
+[tool.uv]
+required-version = ">=0.13,<0.14"
+# Minimum release age for every dependency (ER-SEC-09): new versions are adopted only after a week.
+exclude-newer = "7 days"
+
+[tool.uv.workspace]
+members = ["packages/*", "apps/*"]
+
+[dependency-groups]
+dev = [
+  "anyio>=4.12,<5",
+  "coverage>=7.10,<8",
+  "hypothesis>=6.140,<7",
+  "import-linter>=2.15,<3",
+  "mypy>=2.4,<3",
+  "prek>=0.5,<0.6",
+  "pytest>=9.1,<10",
+  "ruff>=0.16,<0.18",
+  "rust-just>=1.58,<2",
+]
+
+# --- Ruff ------------------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+extend-exclude = ["supabase"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = [
+  "E", "W", "F", "I", "UP", "B", "SIM", "C4", "PT", "RUF", "S", "ASYNC", "FAST", "TID", "ARG",
+  "DTZ", "T20", "ERA", "PL", "PERF", "FURB", "N", "TRY", "LOG", "G", "RET", "PTH",
+]
+ignore = [
+  "TRY003", # Exception messages are written where the error is raised; a subclass per message adds nothing.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "S101",    # pytest uses assert.
+  "PLR2004", # Literal expected values are the point of a test.
+  "S603",    # Tests start trusted subprocesses (our own entry points) on purpose.
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["htco_*", "tests", "tools"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+mark-parentheses = false
+
+# --- mypy ------------------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_unreachable = true
+enable_error_code = [
+  "ignore-without-code",
+  "redundant-expr",
+  "truthy-bool",
+  "possibly-undefined",
+  "unused-awaitable",
+  "explicit-override",
+]
+files = ["packages", "apps", "tests", "tools"]
+
+# --- pytest and coverage ---------------------------------------------------------------------
+
+[tool.pytest]
+minversion = "9.1"
+testpaths = ["tests"]
+pythonpath = ["."]
+# Third-party pytest plugins load only when listed here (dependencies such as langsmith ship one).
+addopts = [
+  "--import-mode=importlib",
+  "-ra",
+  "--disable-plugin-autoload",
+  "-p", "anyio",
+  "-p", "hypothesispytest",
+]
+strict = true
+filterwarnings = [
+  "error",
+  # langsmith, pulled in by langchain-core, calls an asyncio API deprecated in Python 3.14.
+  "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:langsmith",
+]
+markers = [
+  "ac(id): the acceptance criterion (for example AC-1.2.3) that this test proves",
+]
+
+[tool.coverage.run]
+branch = true
+source_pkgs = ["htco_domain", "htco_application", "htco_platform", "htco_agent_runtime", "htco_api"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "@overload", "raise NotImplementedError"]
+
+# --- Architecture contracts (ER-ARCH-01, SOFTWARE_DESIGN §4.3) --------------------------------
+# "Domain and application import only the standard library and inner layers" is checked by
+# tests/architecture/test_layer_purity.py, because import-linter cannot express an allow-list.
+
+[tool.importlinter]
+root_packages = ["htco_domain", "htco_application", "htco_platform", "htco_agent_runtime", "htco_api"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+id = "dependency-rule"
+name = "Dependency rule: composition roots -> adapters -> application -> domain"
+type = "layers"
+layers = ["htco_api", "htco_agent_runtime", "htco_application", "htco_domain"]
+
+[[tool.importlinter.contracts]]
+id = "platform-is-infrastructure"
+name = "Platform holds infrastructure only and never imports business or adapter code"
+type = "forbidden"
+source_modules = ["htco_platform"]
+forbidden_modules = ["htco_domain", "htco_application", "htco_agent_runtime", "htco_api"]
+
+[[tool.importlinter.contracts]]
+id = "inner-layers-without-platform"
+name = "Domain and application do not depend on platform infrastructure"
+type = "forbidden"
+source_modules = ["htco_domain", "htco_application"]
+forbidden_modules = ["htco_platform"]
+
+[[tool.importlinter.contracts]]
+id = "langgraph-only-in-agent-runtime"
+name = "Only the agent runtime imports LangGraph"
+type = "forbidden"
+source_modules = ["htco_domain", "htco_application", "htco_platform", "htco_api"]
+forbidden_modules = ["langgraph", "langchain_core"]

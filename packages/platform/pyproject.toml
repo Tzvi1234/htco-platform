@@ -1,0 +1,10 @@
+[project]
+name = "htco-platform"
+version = "0.0.0"
+description = "HTCO cross-cutting infrastructure: settings, logging, tracing, crypto, clock and IDs."
+requires-python = "==3.14.*"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"

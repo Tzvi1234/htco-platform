@@ -109,7 +109,8 @@ htco-platform/
   supabase/migrations/      SQL migrations (single source of truth for the schema)
   supabase/tests/           pgTAP database tests
   infra/digitalocean/       App spec and environment documentation
-  tests/e2e/                Cross-package end-to-end tests
+  tests/                    All tests: one folder per package, plus architecture and end-to-end tests
+  tools/                    Repository scripts used by Git hooks and CI
   docs/                     Product, plan, architecture, engineering, ADRs, feature docs
 ```
 

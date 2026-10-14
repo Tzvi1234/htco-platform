@@ -1,0 +1,13 @@
+[project]
+name = "htco-application"
+version = "0.0.0"
+description = "HTCO application layer: use cases, ports and the policy engine."
+requires-python = "==3.14.*"
+dependencies = ["htco-domain"]
+
+[tool.uv.sources]
+htco-domain = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
