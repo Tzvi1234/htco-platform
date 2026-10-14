@@ -6,9 +6,10 @@
 # deploy that already pushed image again, which is how a rollback is done (AC-1.5.3).
 #
 # Repository configuration (Settings → Secrets and variables → Actions):
-#   variables  SUPABASE_PROJECT_REF, SUPABASE_POOLER_HOST, HTCO_SUPABASE_URL
+#   variables  SUPABASE_PROJECT_REF, SUPABASE_POOLER_HOST, HTCO_SUPABASE_URL,
+#              HTCO_SUPABASE_PUBLISHABLE_KEY, HTCO_WEB_ORIGINS
 #   secrets    DIGITALOCEAN_ACCESS_TOKEN (App Platform scopes only), GHCR_PULL_TOKEN (read:packages),
-#              SUPABASE_DB_PASSWORD, HTCO_SENTRY_DSN, HTCO_SUPABASE_SECRET_KEY
+#              SUPABASE_DB_PASSWORD, HTCO_SENTRY_DSN, HTCO_SUPABASE_SECRET_KEY, HTCO_SESSION_KEY
 name: Deploy API
 
 on:
@@ -117,6 +118,9 @@ jobs:
           PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           HTCO_SENTRY_DSN: ${{ secrets.HTCO_SENTRY_DSN }}
           HTCO_SUPABASE_SECRET_KEY: ${{ secrets.HTCO_SUPABASE_SECRET_KEY }}
+          HTCO_SESSION_KEY: ${{ secrets.HTCO_SESSION_KEY }}
+          HTCO_SUPABASE_PUBLISHABLE_KEY: ${{ vars.HTCO_SUPABASE_PUBLISHABLE_KEY }}
+          HTCO_WEB_ORIGINS: ${{ vars.HTCO_WEB_ORIGINS }}
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
           app_spec_location: infra/digitalocean/app.yaml
