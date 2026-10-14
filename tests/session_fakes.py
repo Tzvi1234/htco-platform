@@ -98,6 +98,22 @@ class Store:
     async def revoke(self, session_id: uuid.UUID, at: datetime) -> None:
         self.sessions[session_id] = replace(self.sessions[session_id], revoked_at=at)
 
+    async def set_reauthenticated(self, session_id: uuid.UUID, at: datetime) -> None:
+        self.sessions[session_id] = replace(self.sessions[session_id], reauthenticated_at=at)
+
+    async def get(self, session_id: uuid.UUID) -> StoredSession | None:
+        return self.sessions.get(session_id)
+
+    async def list_active(self, user_id: uuid.UUID, now: datetime) -> list[StoredSession]:
+        return [
+            s
+            for s in self.sessions.values()
+            if s.user_id == user_id
+            and s.revoked_at is None
+            and now < s.idle_expires_at
+            and now < s.absolute_expires_at
+        ]
+
     async def record_attempt(
         self, email_hash: bytes, ip_hash: bytes | None, *, succeeded: bool, at: datetime
     ) -> None:

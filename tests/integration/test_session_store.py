@@ -112,3 +112,22 @@ async def test_attempts__counted_per_email_and_per_address_within_the_window(
 
     assert await store.recent_failures(email, ip, NOW - timedelta(minutes=15)) == (2, 2)
     assert await store.recent_failures(email, None, NOW - timedelta(minutes=15)) == (2, 0)
+
+
+async def test_step_up_get_and_list_active(database: Database) -> None:
+    store = PostgresSessionStore(database, SEALER)
+    user = new_user(database)
+    first, second, third = session(user), session(user), session(user)
+    for created in (first, second, third):
+        await store.create(created)
+    await store.revoke(third.id, NOW)
+    await store.set_reauthenticated(first.id, NOW + timedelta(minutes=1))
+
+    got = await store.get(first.id)
+    active = await store.list_active(user, NOW + timedelta(minutes=2))
+
+    assert got is not None
+    assert got.reauthenticated_at == NOW + timedelta(minutes=1)
+    assert {s.id for s in active} == {first.id, second.id}
+    assert await store.get(uuid.uuid4()) is None
+    assert await store.list_active(user, NOW + timedelta(days=30)) == []

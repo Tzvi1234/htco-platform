@@ -105,3 +105,21 @@ async def test_default_organization__several_memberships__is_none() -> None:
 async def test_authenticated_user__repr__hides_the_claims() -> None:
     assert "authenticated" not in repr(user())
     assert str(USER) in repr(user())
+
+
+async def test_reauthenticated_at__flows_from_the_user_into_every_principal() -> None:
+    """A web session's step-up time reaches the policy engine (AC-3.5.7)."""
+    from datetime import UTC, datetime  # noqa: PLC0415 - local to this test
+
+    at = datetime(2026, 10, 15, 9, 0, tzinfo=UTC)
+    stepped_up = AuthenticatedUser(
+        user_id=USER,
+        assurance=AssuranceLevel.AAL2,
+        session_id=None,
+        claims={},
+        reauthenticated_at=at,
+    )
+    context = await authenticate(
+        stepped_up, Memberships(Membership(ORG_A, Role.OWNER, frozenset()))
+    )
+    assert context.principal_for(ORG_A).reauthenticated_at == at

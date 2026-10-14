@@ -288,3 +288,15 @@ async def test_sign_out__revokes_here_and_at_supabase() -> None:
 
 async def test_sign_out__unknown_or_ended_session__is_quietly_done() -> None:
     await sign_out("nothing", auth=Auth(), store=Store(), now=NOW)
+
+
+async def test_resume__carries_the_sessions_step_up_time() -> None:
+    store, auth = Store(), Auth()
+    cookie = await signed_in(store, auth)
+    [session] = store.sessions.values()
+    await store.set_reauthenticated(session.id, NOW)
+
+    active = await resume_session(cookie, auth=auth, tokens=Tokens(), store=store, now=NOW)
+
+    assert active.user.reauthenticated_at == NOW
+    assert active.tokens.access_token == "access-1"  # noqa: S105 - test value

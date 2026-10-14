@@ -19,6 +19,7 @@ from htco_api.problems import AUTH_UNAVAILABLE, ProblemError
 from htco_api.settings import ApiSettings, Environment
 from htco_api.web_auth import WebAuth
 from htco_application.access.management import AccessStore, InviteeAlreadyRegisteredError
+from htco_application.mfa import Enrollment, Factor
 from htco_application.shops import ShopReader
 from htco_application.web_sessions import (
     CredentialsRefusedError,
@@ -170,6 +171,27 @@ class _AuthProvider:
         with contextlib.suppress(AuthServiceError):  # best effort: our session is already gone
             await self._auth.sign_out(access_token)
 
+    async def enroll_totp(self, access_token: str, *, friendly_name: str) -> Enrollment:
+        try:
+            enrolled = await self._auth.enroll_totp(access_token, friendly_name=friendly_name)
+        except AuthServiceError, InvalidCredentialsError, RateLimitedError:
+            raise ProblemError(AUTH_UNAVAILABLE) from None
+        return Enrollment(enrolled.factor_id, enrolled.qr_code, enrolled.secret, enrolled.uri)
+
+    async def verify_totp(self, access_token: str, factor_id: str, code: str) -> IssuedTokens:
+        return await self._call(self._auth.verify_totp(access_token, factor_id, code))
+
+    async def factors_of(self, access_token: str) -> list[Factor]:
+        try:
+            found = await self._auth.factors(access_token)
+        except AuthServiceError, InvalidCredentialsError, RateLimitedError:
+            raise ProblemError(AUTH_UNAVAILABLE) from None
+        return [
+            Factor(id=f.id, verified=f.verified, name=f.friendly_name)
+            for f in found
+            if f.factor_type == "totp"
+        ]
+
     @staticmethod
     async def _call(pending: Awaitable[AuthTokens]) -> IssuedTokens:
         try:
@@ -223,14 +245,16 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         )
     web_auth = None
     if settings.session_key is not None and settings.supabase_publishable_key is not None:
+        provider = _AuthProvider(
+            SupabaseAuth(
+                http,
+                supabase_url=str(settings.supabase_url),
+                publishable_key=settings.supabase_publishable_key,
+            )
+        )
         web_auth = WebAuth(
-            auth=_AuthProvider(
-                SupabaseAuth(
-                    http,
-                    supabase_url=str(settings.supabase_url),
-                    publishable_key=settings.supabase_publishable_key,
-                )
-            ),
+            auth=provider,
+            mfa=provider,
             tokens=VerifiedTokenReader(verifier),
             store=PostgresSessionStore(
                 database, Sealer.from_base64(settings.session_key.get_secret_value())

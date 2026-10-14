@@ -17,7 +17,7 @@ from htco_platform.crypto import Sealer
 
 _COLUMNS = """
 id, token_hash, user_id, access_token, refresh_token, access_expires_at, created_at,
-last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, user_agent
+last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, user_agent, reauthenticated_at
 """
 
 
@@ -49,6 +49,31 @@ class PostgresSessionStore:
             """,
             [at, session_id],
         )
+
+    async def set_reauthenticated(self, session_id: uuid.UUID, at: datetime) -> None:
+        await self._execute(
+            "update private.web_sessions set reauthenticated_at = %s where id = %s",
+            [at, session_id],
+        )
+
+    async def get(self, session_id: uuid.UUID) -> StoredSession | None:
+        return await anyio.to_thread.run_sync(self._select_one, "id", session_id)
+
+    async def list_active(self, user_id: uuid.UUID, now: datetime) -> list[StoredSession]:
+        def run() -> list[StoredSession]:
+            with self._database.connection() as connection:
+                rows = connection.execute(
+                    f"""
+                    select {_COLUMNS} from private.web_sessions
+                    where user_id = %(user)s and revoked_at is null
+                      and idle_expires_at > %(now)s and absolute_expires_at > %(now)s
+                    order by last_seen_at desc
+                    """,  # noqa: S608 - constant column list
+                    {"user": user_id, "now": now},
+                ).fetchall()
+            return [self._row(row) for row in rows]
+
+        return await anyio.to_thread.run_sync(run)
 
     async def record_attempt(
         self, email_hash: bytes, ip_hash: bytes | None, *, succeeded: bool, at: datetime
@@ -101,10 +126,15 @@ class PostgresSessionStore:
             )
 
     def _find(self, token_hash: bytes) -> StoredSession | None:
+        return self._select_one("token_hash", token_hash)
+
+    def _select_one(self, column: str, value: object) -> StoredSession | None:
+        if column not in {"id", "token_hash"}:  # pragma: no cover - internal callers only
+            raise ValueError(column)
         with self._database.connection() as connection:
             row = connection.execute(
-                f"select {_COLUMNS} from private.web_sessions where token_hash = %s",  # noqa: S608 - constant column list
-                [token_hash],
+                f"select {_COLUMNS} from private.web_sessions where {column} = %s",  # noqa: S608 - constant identifiers
+                [value],
             ).fetchone()
         return None if row is None else self._row(row)
 
@@ -126,6 +156,7 @@ class PostgresSessionStore:
             absolute_expires_at=row[9],
             revoked_at=row[10],
             user_agent=row[11],
+            reauthenticated_at=row[12],
         )
 
     def _replace_tokens(self, session_id: uuid.UUID, issued: IssuedTokens) -> None:

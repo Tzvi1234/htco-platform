@@ -74,6 +74,12 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "sign_in_web",
         "current_session",
         "sign_out_web",
+        "get_mfa_status",
+        "start_mfa_enrollment",
+        "verify_mfa_enrollment",
+        "confirm_step_up",
+        "list_web_sessions",
+        "revoke_web_session",
     }
 
 
