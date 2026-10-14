@@ -16,7 +16,7 @@ SPEC: dict[str, Any] = yaml.safe_load(
     (REPO_ROOT / "infra" / "digitalocean" / "app.yaml").read_text(encoding="utf-8")
 )
 DEPLOY_TEXT = (REPO_ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
-DEPLOY: dict[str, Any] = yaml.safe_load(DEPLOY_TEXT)
+DEPLOY: dict[Any, Any] = yaml.safe_load(DEPLOY_TEXT)
 PLACEHOLDER = re.compile(r"^\$\{[A-Z][A-Z0-9_]*\}$")
 SECRET_SETTINGS = {"PGPASSWORD", "HTCO_SENTRY_DSN", "HTCO_SUPABASE_SECRET_KEY"}
 
@@ -24,7 +24,8 @@ SECRET_SETTINGS = {"PGPASSWORD", "HTCO_SENTRY_DSN", "HTCO_SUPABASE_SECRET_KEY"}
 def _api() -> dict[str, Any]:
     [service] = SPEC["services"]
     assert service["name"] == "api"
-    return service
+    api: dict[str, Any] = service
+    return api
 
 
 def _envs() -> dict[str, dict[str, Any]]:
