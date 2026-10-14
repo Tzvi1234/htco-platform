@@ -10,6 +10,7 @@ from typing import Annotated, Protocol
 
 import structlog
 from fastapi import Depends, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from htco_api.problems import (
     AUTH_UNAVAILABLE,
@@ -92,12 +93,23 @@ def _rejected(kind: ProblemType, headers: dict[str, str] | None = None) -> Probl
     return ProblemError(kind, headers=headers)
 
 
-async def require_auth(request: Request) -> AuthContext:
+# Documents the scheme in the OpenAPI contract; `Authenticator` parses the header itself so every
+# failure gets its own problem type.
+_BEARER = HTTPBearer(auto_error=False, bearerFormat="JWT", description="Supabase access token")
+
+
+async def require_auth(
+    request: Request,
+    _credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_BEARER)],
+) -> AuthContext:
+    authorization = request.headers.get("authorization")
+    if _bearer_token(authorization) is None:  # no token: 401 even when sign-in is unavailable
+        raise _rejected(UNAUTHENTICATED, _CHALLENGE)
     authenticator = getattr(request.app.state, "authenticator", None)
     if not isinstance(authenticator, Authenticator):
         _log.warning("auth.unavailable", reason="no authenticator configured")
         raise ProblemError(AUTH_UNAVAILABLE)
-    return await authenticator.authenticate(request.headers.get("authorization"))
+    return await authenticator.authenticate(authorization)
 
 
 CurrentAuth = Annotated[AuthContext, Depends(require_auth)]

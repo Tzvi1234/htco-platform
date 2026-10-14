@@ -30,8 +30,8 @@ The security spine: who belongs to which organization, with which role, on which
 | AC-2.3.3 | A deliberately unfiltered repository query, run inside a user-scoped transaction, still returns only that user's tenant rows (RLS as defense in depth). | 2.3 | Pass (CI `database` job) |
 | AC-2.3.4 | JWKS is cached with a bounded lifetime and refreshed on an unknown key ID. | 2.3 | Pass |
 | AC-2.4.1 | For every role in the matrix, a parametrized test asserts allowed and denied capabilities. | 2.4 | Pass |
-| AC-2.4.2 | `GET /v1/shops` never returns a shop the user is not granted, including when a `shop_id` filter names another tenant's shop (404, not 403). | 2.4 (part 2, needs 2.1 to 2.3) | Open |
-| AC-2.4.3 | Pagination returns stable, non-overlapping pages and rejects limits above the maximum. | 2.4 (part 2) | Open |
+| AC-2.4.2 | `GET /v1/shops` never returns a shop the user is not granted, including when a `shop_id` filter names another tenant's shop (404, not 403). | 2.4 (part 2) | Pass |
+| AC-2.4.3 | Pagination returns stable, non-overlapping pages and rejects limits above the maximum. | 2.4 (part 2) | Pass |
 
 The criteria of slices 2.1, 2.2, 2.3, 2.5 and 2.6 join here when they start.
 
@@ -41,7 +41,8 @@ The criteria of slices 2.1, 2.2, 2.3, 2.5 and 2.6 join here when they start.
 - **In (2.2):** tables `app.organizations`, `app.user_profiles`, `app.memberships` (seven roles, one active membership per user and organization), `app.shops` (shell), `app.shop_access` (composite keys keep a grant inside one organization), `audit.audit_log` (five actor kinds, append-only); RLS on every table with security-definer helpers in `private`; writes to owner-administered tables need Owner or Admin and an `aal2` session; `supabase/seed.sql` (`just seed`); a unit test keeps the SQL role and actor lists equal to the domain enums.
 - **In (2.4, part 1):** `Role` and `AssuranceLevel` (domain), `Capability`, `Grant`, `Principal`, `Decision` and `decide` (application), the matrix as data.
 - **In (2.3):** `htco_platform.jwt` (ES256 only, issuer, audience, expiry, `role = authenticated`, JWKS cache with refresh on an unknown key ID, fail-closed when the key set is unreachable); `htco_application.access.authentication` (`AuthContext` and `Principal` from **database** memberships, never token claims); `htco_persistence.database` (pool; user-scoped transactions with `set local role authenticated` and the verified claims) and `PostgresMembershipReader`; `htco_api.auth` (`CurrentAuth` dependency and eight problem types: `unauthenticated`, `token-expired`, `token-wrong-audience`, `token-wrong-issuer`, `token-bad-signature`, `token-invalid`, `no-membership`, `auth-unavailable`); `HTCO_SUPABASE_URL`.
-- **Out:** the endpoints (2.4 part 2), approvals (Phase 7), worker and agent permissions (Phases 5 and 8).
+- **In (2.4, part 2):** `GET /v1/me` (user, session strength, role per organization) and `GET /v1/shops` (filters `organization_id` and `shop_id`; opaque cursor; `limit` 1 to 100, default 50); `htco_application.shops.list_shops` (scope from the policy engine, carried to the repository as an explicit filter; a shop or organization the caller cannot see is 404); `PostgresShopReader` under the caller's RLS; the bearer scheme in the OpenAPI contract; a missing token is 401 even when sign-in is unavailable.
+- **Out:** approvals (Phase 7), worker and agent permissions (Phases 5 and 8).
 
 ## Known limits
 

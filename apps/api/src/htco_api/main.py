@@ -12,9 +12,11 @@ from opentelemetry.sdk.trace import TracerProvider
 from htco_api.app import AppOptions, Resource, create_app
 from htco_api.auth import Authenticator
 from htco_api.settings import ApiSettings, Environment
+from htco_application.shops import ShopReader
 from htco_persistence.database import Database
 from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.readiness import DatabaseCheck
+from htco_persistence.shops import PostgresShopReader
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter, SentryErrorReporter
 from htco_platform.http import new_async_http_client
 from htco_platform.jwt import HttpJwksSource, JwtVerifier
@@ -60,7 +62,7 @@ def main(
     tracer_provider = new_tracer_provider(
         service_name="htco-api", environment=settings.environment.value
     )
-    authenticator, resources = _authentication(settings, tracer_provider)
+    authenticator, shops, resources = _authentication(settings, tracer_provider)
     structlog.get_logger(__name__).info(
         "api.starting",
         environment=settings.environment.value,
@@ -82,6 +84,7 @@ def main(
         error_reporter=reporter,
         tracer_provider=tracer_provider,
         authenticator=authenticator,
+        shops=shops,
         resources=resources,
     )
     try:
@@ -106,14 +109,14 @@ class _HttpClient:
 
 def _authentication(
     settings: ApiSettings, tracer_provider: TracerProvider
-) -> tuple[Authenticator | None, list[Resource]]:
-    """Token verification plus memberships from the database; both settings are needed."""
+) -> tuple[Authenticator | None, ShopReader | None, list[Resource]]:
+    """Token verification, memberships and shops from the database; both settings are needed."""
     if (
         settings.auth_issuer is None
         or settings.auth_jwks_url is None
         or settings.database_url is None
     ):
-        return None, []
+        return None, None, []
     database = Database(settings.database_url.get_secret_value())
     http = new_async_http_client(tracer_provider=tracer_provider)
     verifier = JwtVerifier(
@@ -121,10 +124,8 @@ def _authentication(
         audience=AUTH_AUDIENCE,
         jwks=HttpJwksSource(http, settings.auth_jwks_url),
     )
-    return Authenticator(verifier, PostgresMembershipReader(database)), [
-        database,
-        _HttpClient(http),
-    ]
+    authenticator = Authenticator(verifier, PostgresMembershipReader(database))
+    return authenticator, PostgresShopReader(database), [database, _HttpClient(http)]
 
 
 def _error_reporter(settings: ApiSettings) -> ErrorReporter:
