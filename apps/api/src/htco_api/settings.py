@@ -49,10 +49,18 @@ class ApiSettings(BaseSettings):
         issuer = self.auth_issuer
         return None if issuer is None else issuer + "/.well-known/jwks.json"
 
-    @field_validator("sentry_dsn", mode="before")
+    @field_validator(
+        "sentry_dsn",
+        "database_url",
+        "supabase_url",
+        "supabase_secret_key",
+        "invite_redirect_url",
+        mode="before",
+    )
     @classmethod
-    def _blank_dsn_is_none(cls, value: object) -> object:
-        """An empty `HTCO_SENTRY_DSN` means "off", never a reporter that silently drops events."""
+    def _blank_is_unset(cls, value: object) -> object:
+        """A blank optional setting is unset: an empty `HTCO_SENTRY_DSN` means "off", and an empty
+        injected secret fails the deployed-environment checks instead of passing them."""
         if isinstance(value, str) and not value.strip():
             return None
         return value

@@ -1,4 +1,5 @@
-# Deploy the API to DigitalOcean App Platform. Started only by the owner (slice 1.5 part 2).
+# Deploy the API to DigitalOcean App Platform. Started only by the owner (slice 1.5 part 2); the
+# first step stops anyone but the repository owner.
 #
 # Without `image_tag`: build the image of the chosen commit, check it runs as non-root, scan it,
 # push it to GHCR as ghcr.io/tzvi1234/htco-api:<commit SHA>, then deploy it. With `image_tag`:
@@ -36,6 +37,12 @@ jobs:
       IMAGE: ghcr.io/tzvi1234/htco-api
       REQUESTED_TAG: ${{ inputs.image_tag }}
     steps:
+      - name: Only the repository owner may run this
+        run: |
+          if [ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]; then
+            echo "::error::Only $GITHUB_REPOSITORY_OWNER may run this workflow (started by $GITHUB_ACTOR)"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

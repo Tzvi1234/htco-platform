@@ -134,6 +134,10 @@ class JwtVerifier:
         return kid
 
     async def _key(self, kid: str) -> jwt.PyJWK:
+        # Fast path: a fresh, known key needs no lock, so a slow refresh (started by some other
+        # request's unknown key ID) never delays tokens whose keys are already cached.
+        if not self._expired() and kid in self._keys:
+            return self._keys[kid]
         async with self._lock:
             if self._expired():
                 self._keys, self._fetched_at = {}, None
@@ -162,8 +166,8 @@ class JwtVerifier:
                 "the auth provider's key set could not be fetched"
             ) from error
         keys = _signing_keys(document)
-        if keys is None:
-            raise KeySetUnavailableError("the auth provider's key set is malformed")
+        if not keys:  # malformed, or no ES256 key at all: nothing could ever verify
+            raise KeySetUnavailableError("the auth provider's key set has no usable signing key")
         self._keys, self._fetched_at = keys, self._attempted_at
 
     def _decode(self, token: str, key: jwt.PyJWK) -> dict[str, Any]:

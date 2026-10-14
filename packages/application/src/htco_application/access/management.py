@@ -74,9 +74,15 @@ class AccessUnitOfWork(AuditWriter, Protocol):
         self, membership_id: uuid.UUID, organization_id: uuid.UUID, user_id: uuid.UUID, role: Role
     ) -> None: ...
 
-    def update_role(self, membership_id: uuid.UUID, role: Role) -> None: ...
+    def registered_user_id(self, organization_id: uuid.UUID, email: str) -> uuid.UUID | None: ...
 
-    def revoke_membership(self, membership_id: uuid.UUID, at: datetime) -> None: ...
+    def update_role(self, membership_id: uuid.UUID, role: Role) -> None:
+        """Refuses (AccessDeniedError) a row that is the Owner's by the time of the write."""
+        ...
+
+    def revoke_membership(self, membership_id: uuid.UUID, at: datetime) -> None:
+        """Refuses (AccessDeniedError) a row that is the Owner's by the time of the write."""
+        ...
 
     def shop_in_organization(self, organization_id: uuid.UUID, shop_id: uuid.UUID) -> bool: ...
 
@@ -88,7 +94,9 @@ class AccessUnitOfWork(AuditWriter, Protocol):
         organization_id: uuid.UUID,
         membership_id: uuid.UUID,
         shop_id: uuid.UUID,
-    ) -> None: ...
+    ) -> bool:
+        """Inserts the grant unless it exists (atomically); True when it was created."""
+        ...
 
     def delete_grant(self, grant_id: uuid.UUID) -> None: ...
 
@@ -194,10 +202,18 @@ async def invite_member(  # noqa: PLR0913 - the request's fields plus the collab
     address = _valid_email(email)
     principal = _authorize(auth, organization_id, now)
     _may_assign(principal, role)
-    user_id = await inviter.invite(address)
+    try:
+        invited: uuid.UUID | None = await inviter.invite(address)
+    except InviteeAlreadyRegisteredError:
+        # The email already has an account: an earlier invitation that did not reach the
+        # database, or a member of another organization. Add that user instead.
+        invited = None
     membership_id = new_id()
 
     def work(uow: AccessUnitOfWork) -> MemberRow:
+        user_id = invited or uow.registered_user_id(organization_id, address)
+        if user_id is None:
+            raise InviteeAlreadyRegisteredError(address)
         if uow.active_member_by_user(organization_id, user_id):
             raise MemberAlreadyExistsError("already a member of this organization")
         uow.create_membership(membership_id, organization_id, user_id, role)
@@ -270,7 +286,8 @@ async def remove_member(  # noqa: PLR0913 - the request's fields plus the collab
     def work(uow: AccessUnitOfWork) -> None:
         member = _target(uow, organization_id, membership_id)
         _changeable(member)
-        uow.revoke_membership(membership_id, now)
+        # Audit first: an Admin removing their own membership is no longer a member afterwards,
+        # and the audit log accepts records only from members. Both commit together or not at all.
         _audit(
             uow,
             auth,
@@ -281,6 +298,7 @@ async def remove_member(  # noqa: PLR0913 - the request's fields plus the collab
             after={"revoked_at": now.isoformat()},
             correlation_id=correlation_id,
         )
+        uow.revoke_membership(membership_id, now)
 
     await store.run(auth.claims, work)
 
@@ -305,7 +323,8 @@ async def grant_shop(  # noqa: PLR0913 - the request's fields plus the collabora
             raise ShopNotInOrganizationError("no such shop")
         if uow.grant_of(membership_id, shop_id) is not None:
             return
-        uow.create_grant(grant_id, organization_id, membership_id, shop_id)
+        if not uow.create_grant(grant_id, organization_id, membership_id, shop_id):
+            return  # an identical request created it meanwhile: already granted
         _audit(
             uow,
             auth,
