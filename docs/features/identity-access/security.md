@@ -6,6 +6,7 @@
 |---|---|---|---|
 | Authorization | Elevation of privilege: a role reaching a capability it was never granted | Deny by default; every role × capability tested against the documented matrix | `test_decide__fully_assured_principal__…` |
 | Authorization | Elevation of privilege: a shop-scoped user reaching another shop | Shop-scoped grants require the shop to be granted | `test_decide__shop_scoped_role__is_denied_a_shop_it_was_not_granted` |
+| Authorization | Elevation of privilege: an Owner or Admin of one organization reaching a shop of another | Every targeted shop carries its organization; a mismatch is denied for every role and capability | `test_decide__shop_of_another_organization__is_denied_to_every_role` |
 | Authorization | Elevation of privilege: acting on a weak session | MFA and step-up checks; step-up expires after 10 minutes; future timestamps refused | assurance and step-up tests |
 | Authorization rules | Tampering: the code or the documentation changed alone | The test parses the documented table; drift in either direction fails | `test_permissions__match_the_documented_matrix` |
 

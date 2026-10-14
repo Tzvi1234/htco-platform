@@ -1,8 +1,9 @@
 """Policy engine v0: who may do what, on which shops (FR-IAM-02, PERMISSION_MATRIX §1).
 
-Deny by default: a capability a role is not granted in `PERMISSIONS` does not exist for it.
-A grant can be organization-wide (Owner and Admin reach every shop) or limited to the shops
-granted to the user, and can require an `aal2` session (MFA), a recent re-authentication
+Deny by default: a capability a role is not granted in `PERMISSIONS` does not exist for it,
+and a shop of another organization does not exist for anyone. A grant can be
+organization-wide (Owner and Admin reach every shop of their organization) or limited to the
+shops granted to the user, and can require an `aal2` session (MFA), a recent re-authentication
 (step-up), an approval instead of acting directly, or masked buyer data. The table mirrors
 docs/architecture/PERMISSION_MATRIX.md; a test parses that document and fails on any drift.
 """
@@ -68,12 +69,21 @@ class Grant:
 
 @dataclass(frozen=True)
 class Principal:
-    """The acting user as the server knows them: role, session strength and granted shops."""
+    """The acting user as the server knows them: organization, role, session strength, shops."""
 
+    organization_id: uuid.UUID
     role: Role
     assurance: AssuranceLevel
     reauthenticated_at: datetime | None
     granted_shops: frozenset[uuid.UUID]
+
+
+@dataclass(frozen=True)
+class ShopRef:
+    """A targeted shop and the organization that owns it, both read from the database."""
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
 
 
 @dataclass(frozen=True)
@@ -184,25 +194,25 @@ def _recently_reauthenticated(principal: Principal, now: datetime) -> bool:
 
 
 def decide(
-    principal: Principal, capability: Capability, *, shop_id: uuid.UUID | None, now: datetime
+    principal: Principal, capability: Capability, *, shop: ShopRef | None, now: datetime
 ) -> Decision:
-    """Decide whether `principal` may use `capability`, on `shop_id` when one is targeted.
+    """Decide whether `principal` may use `capability`, on `shop` when one is targeted.
 
-    Without a `shop_id` (a list across shops), an allowed decision's `scope` says whether the
-    caller may see every shop or only the granted ones. Assurance is checked before step-up,
-    because a step-up needs an `aal2` session first.
+    A shop owned by another organization is denied whatever the role, so an organization-wide
+    grant never crosses tenants. Without a `shop` (a list across shops), an allowed decision's
+    `scope` says whether the caller may see every shop or only the granted ones. Assurance is
+    checked before step-up, because a step-up needs an `aal2` session first.
     """
     if now.tzinfo is None:
         raise ValueError("decide needs a timezone-aware clock")
     grant = PERMISSIONS[capability].get(principal.role)
     if grant is None:
         return Decision(Outcome.DENY)
-    if (
-        grant.scope is Scope.GRANTED_SHOPS
-        and shop_id is not None
-        and shop_id not in principal.granted_shops
-    ):
-        return Decision(Outcome.DENY)
+    if shop is not None:
+        if shop.organization_id != principal.organization_id:
+            return Decision(Outcome.DENY)
+        if grant.scope is Scope.GRANTED_SHOPS and shop.id not in principal.granted_shops:
+            return Decision(Outcome.DENY)
     if grant.mfa and principal.assurance is not AssuranceLevel.AAL2:
         return Decision(Outcome.MFA_REQUIRED)
     if grant.step_up and not _recently_reauthenticated(principal, now):

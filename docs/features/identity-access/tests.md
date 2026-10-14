@@ -4,7 +4,7 @@
 
 | Level | What is covered | Location |
 |---|---|---|
-| Application | The documented matrix parsed from `PERMISSION_MATRIX.md` equals `PERMISSIONS`; every role × capability (140 cases) for a fully assured user; shop scope (granted, not granted, organization-wide, lists); masked and approval grants; MFA; step-up window boundaries; check order; naive clocks | `tests/application/test_access_policy.py` |
+| Application | The documented matrix parsed from `PERMISSION_MATRIX.md` equals `PERMISSIONS`; every role × capability (140 cases) for a fully assured user; shop scope (granted, not granted, organization-wide, another organization's shop for every role × capability, lists); masked and approval grants; MFA; step-up window boundaries; check order; naive clocks | `tests/application/test_access_policy.py` |
 
 ## Acceptance criteria coverage
 
@@ -16,6 +16,7 @@
 ## Edge cases considered
 
 - Step-up exactly at 10 minutes (expired), one second before (valid), never, and in the future (refused).
+- An Owner naming a shop of another organization (denied, even with the shop in its granted set);
 - A shop-scoped role naming another shop; an organization role with no granted shops; a list request without a shop.
 - `aal1` with and without MFA-protected capabilities; `aal1` together with a missing step-up (MFA wins).
 

@@ -20,6 +20,7 @@ from htco_application.access.policy import (
     Outcome,
     Principal,
     Scope,
+    ShopRef,
     decide,
 )
 from htco_domain.identity import AssuranceLevel, Role
@@ -94,8 +95,11 @@ def _documented_matrix() -> dict[Capability, dict[Role, Grant]]:
 
 DOCUMENTED = _documented_matrix()
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
-SHOP_A = uuid.UUID("00000000-0000-7000-8000-00000000000a")
-SHOP_B = uuid.UUID("00000000-0000-7000-8000-00000000000b")
+ORG = uuid.UUID("00000000-0000-7000-8000-0000000000a0")
+OTHER_ORG = uuid.UUID("00000000-0000-7000-8000-0000000000b0")
+SHOP_A = ShopRef(uuid.UUID("00000000-0000-7000-8000-00000000000a"), organization_id=ORG)
+SHOP_B = ShopRef(uuid.UUID("00000000-0000-7000-8000-00000000000b"), organization_id=ORG)
+FOREIGN_SHOP = ShopRef(uuid.UUID("00000000-0000-7000-8000-00000000000c"), organization_id=OTHER_ORG)
 
 
 def a_principal(
@@ -103,9 +107,10 @@ def a_principal(
     *,
     assurance: AssuranceLevel = AssuranceLevel.AAL2,
     reauthenticated_at: datetime | None = NOW,
-    shops: frozenset[uuid.UUID] = frozenset({SHOP_A}),
+    shops: frozenset[uuid.UUID] = frozenset({SHOP_A.id}),
 ) -> Principal:
     return Principal(
+        organization_id=ORG,
         role=role,
         assurance=assurance,
         reauthenticated_at=reauthenticated_at,
@@ -132,7 +137,7 @@ def test_permissions__match_the_documented_matrix(capability: Capability) -> Non
 def test_decide__fully_assured_principal__gets_exactly_the_documented_answer(
     role: Role, capability: Capability
 ) -> None:
-    decision = decide(a_principal(role), capability, shop_id=SHOP_A, now=NOW)
+    decision = decide(a_principal(role), capability, shop=SHOP_A, now=NOW)
 
     grant = DOCUMENTED[capability].get(role)
     if grant is None:
@@ -148,36 +153,48 @@ def test_decide__fully_assured_principal__gets_exactly_the_documented_answer(
 
 
 def test_decide__shop_scoped_role__is_denied_a_shop_it_was_not_granted() -> None:
-    decision = decide(a_principal(Role.SUPPORT), Capability.VIEW_ORDERS, shop_id=SHOP_B, now=NOW)
+    decision = decide(a_principal(Role.SUPPORT), Capability.VIEW_ORDERS, shop=SHOP_B, now=NOW)
 
     assert decision == Decision(Outcome.DENY)
 
 
 def test_decide__organization_role__reaches_every_shop() -> None:
     decision = decide(
-        a_principal(Role.ADMIN, shops=frozenset()), Capability.VIEW_ORDERS, shop_id=SHOP_B, now=NOW
+        a_principal(Role.ADMIN, shops=frozenset()), Capability.VIEW_ORDERS, shop=SHOP_B, now=NOW
     )
 
     assert decision.outcome is Outcome.ALLOW
     assert decision.scope is Scope.ORGANIZATION
 
 
+@pytest.mark.parametrize("role", ROLE_COLUMNS)
+@pytest.mark.parametrize("capability", list(Capability))
+def test_decide__shop_of_another_organization__is_denied_to_every_role(
+    role: Role, capability: Capability
+) -> None:
+    principal = a_principal(role, shops=frozenset({SHOP_A.id, FOREIGN_SHOP.id}))
+
+    decision = decide(principal, capability, shop=FOREIGN_SHOP, now=NOW)
+
+    assert decision == Decision(Outcome.DENY)
+
+
 def test_decide__listing_without_a_shop__is_limited_to_granted_shops() -> None:
-    decision = decide(a_principal(Role.FINANCE), Capability.VIEW_INCIDENTS, shop_id=None, now=NOW)
+    decision = decide(a_principal(Role.FINANCE), Capability.VIEW_INCIDENTS, shop=None, now=NOW)
 
     assert decision.outcome is Outcome.ALLOW
     assert decision.scope is Scope.GRANTED_SHOPS
 
 
 def test_decide__viewer_orders__are_masked() -> None:
-    decision = decide(a_principal(Role.VIEWER), Capability.VIEW_ORDERS, shop_id=SHOP_A, now=NOW)
+    decision = decide(a_principal(Role.VIEWER), Capability.VIEW_ORDERS, shop=SHOP_A, now=NOW)
 
     assert decision.masked is True
 
 
 def test_decide__operations_shipment_write__becomes_an_approval() -> None:
     decision = decide(
-        a_principal(Role.OPERATIONS), Capability.CONFIRM_SHIPMENT_WRITE, shop_id=SHOP_A, now=NOW
+        a_principal(Role.OPERATIONS), Capability.CONFIRM_SHIPMENT_WRITE, shop=SHOP_A, now=NOW
     )
 
     assert decision.outcome is Outcome.ALLOW
@@ -190,7 +207,7 @@ def test_decide__operations_shipment_write__becomes_an_approval() -> None:
 def test_decide__mfa_capability_at_aal1__requires_mfa() -> None:
     principal = a_principal(Role.OWNER, assurance=AssuranceLevel.AAL1)
 
-    decision = decide(principal, Capability.MANAGE_ACCESS, shop_id=None, now=NOW)
+    decision = decide(principal, Capability.MANAGE_ACCESS, shop=None, now=NOW)
 
     assert decision == Decision(Outcome.MFA_REQUIRED)
 
@@ -198,9 +215,7 @@ def test_decide__mfa_capability_at_aal1__requires_mfa() -> None:
 def test_decide__capability_without_mfa_at_aal1__is_allowed() -> None:
     principal = a_principal(Role.OWNER, assurance=AssuranceLevel.AAL1)
 
-    assert decide(principal, Capability.VIEW_ORDERS, shop_id=None, now=NOW).outcome is (
-        Outcome.ALLOW
-    )
+    assert decide(principal, Capability.VIEW_ORDERS, shop=None, now=NOW).outcome is (Outcome.ALLOW)
 
 
 @pytest.mark.parametrize(
@@ -219,7 +234,7 @@ def test_decide__step_up_capability__needs_a_reauthentication_within_ten_minutes
 ) -> None:
     principal = a_principal(Role.OWNER, reauthenticated_at=reauthenticated)
 
-    decision = decide(principal, Capability.CONNECT_SHOP, shop_id=None, now=NOW)
+    decision = decide(principal, Capability.CONNECT_SHOP, shop=None, now=NOW)
 
     assert decision.outcome is outcome
 
@@ -231,7 +246,7 @@ def test_step_up_window__is_ten_minutes() -> None:
 def test_decide__mfa_is_checked_before_step_up() -> None:
     principal = a_principal(Role.OWNER, assurance=AssuranceLevel.AAL1, reauthenticated_at=None)
 
-    decision = decide(principal, Capability.EDIT_MODEL_POLICIES, shop_id=None, now=NOW)
+    decision = decide(principal, Capability.EDIT_MODEL_POLICIES, shop=None, now=NOW)
 
     assert decision.outcome is Outcome.MFA_REQUIRED
 
@@ -241,6 +256,6 @@ def test_decide__naive_clock__is_rejected() -> None:
         decide(
             a_principal(Role.OWNER),
             Capability.CONNECT_SHOP,
-            shop_id=None,
+            shop=None,
             now=datetime(2026, 10, 14, 12, 0),  # noqa: DTZ001 - the point of the test
         )
