@@ -64,7 +64,7 @@ An automation is activated only when all 18 sections of its specification are `d
 | P4-1 | Supabase Pro **development** project exists (Phase 0 O-13) and Phase 2's migrations are applied | The queue, inbox and order tables live there |
 | P4-2 | Decide the target **RTO and RPO** for the database (proposal written by the agent at kickoff from the plan's backup facts) | Test 13 measures the drill against them; no production project before they exist ([Phase 0](phase-00-groundwork.md) O-13) |
 | P4-3 | Approve adding the `agent-worker` component to the `htco-dev` app (Phase 0 O-14); the agent states the size and monthly price, verified at kickoff | New monthly cost |
-| P4-4 | The Phase 0 Etsy spike (slice 0.3) recorded receipts read-only, or the owner approves synthetic fixtures built from Etsy's documented schemas until it does | Slice 4.4 needs fixtures |
+| P4-4 | The Phase 0 Etsy spike (slice 0.3) recorded receipts read-only, or the owner approves synthetic fixtures built from Etsy's documented schemas until it does. **Approved 2026-10-14:** synthetic fixtures from the documented schemas; Phase 9 re-runs the same contract tests on real traffic | Slice 4.4 needs fixtures |
 | P4-5 | Approve the activation of the three order automations (end of slice 4.8) | Gate 7 |
 
 The webhook endpoint registration in the Etsy developer portal moved to [Phase 9](phase-09-etsy-connection.md).

@@ -16,7 +16,7 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 | D-03 | Start the first content workflow with Listing Health instead of Product Studio | Yes ([MVP.md](MVP.md)) | Phase 11 | Open |
 | D-04 | Catalog model on Etsy, given Etsy's reselling and production-partner rules | Owner review with Etsy's current Seller Policy before Phase 12 | Phase 12 | Open |
 | D-05 | Native app order: Android after the operational core, Windows last | Yes | Phase 7 | Open |
-| D-06 | Monthly AI budget cap for the pilot | Owner sets a number | Phase 6 | Open |
+| D-06 | Monthly AI budget cap for the pilot | Owner sets a number | Phase 6 | Decided 2026-10-14: $50 per month and $5 per day for the pilot (with D-19) |
 | D-07 | Repository license while private | Proprietary, all rights reserved; revisit before going public | Now | Decided (proprietary) |
 | D-08 | A machine account for AI agents' pull requests, so the owner can review and approve them | Yes, from Phase 1 | Phase 1 | Open |
 | D-09 | Point-in-time recovery (about $100+/month) vs daily backups | Daily backups for the pilot; decide before launch | Phase 20 | Open |
@@ -26,11 +26,11 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 | D-13 | The living-office organization (16 employees, Jev, automations, tools, engineering) | Accepted as [ADR-0012](../adr/0012-living-office-organization.md) | Now | Decided (owner's brief, 2026-10-14) |
 | D-14 | Autonomy level of each employee at activation | Start at the level in PRD §8.1; promote only after its evaluation | Each activation phase | Open |
 | D-15 | Whether engineering employees (Alex, Amir, Iris) may open pull requests under a machine account | Yes, with D-08; merging and releasing stay with the owner | Phase 19 | Open |
-| D-16 | Adopt the Claude-Native Hybrid Edition: Claude Agent SDK runtime by default, LangGraph kept as the alternative ([ADR-0016](../adr/0016-claude-native-agent-runtime.md)), and PLAN 3.0 with the four-employee pilot first | Yes | Phase 0 | Open (owner approval of PLAN 3.0) |
-| D-17 | Anthropic API organization, a service account and one key per environment; hosted runs never on a personal subscription ([ADR-0017](../adr/0017-auth-and-billing-policy.md)) | Yes; check API-credit eligibility only in Anthropic's official docs | Phase 6 | Open |
-| D-18 | Recovery objectives (RTO and RPO) for the database before any real order | Owner sets them; point-in-time recovery revisited against them (D-09) | Phase 4 (drill), Phase 9 (real orders) | Open |
-| D-19 | Pilot caps: monthly and daily AI budget for the four pilot employees, and the spend cap for recording SDK test transcripts | Owner sets numbers (part of D-06) | Phase 6 | Open |
-| D-20 | Web search provider for Shon's research tool (Claude's built-in web tools are disabled for business employees) | Choose one provider after a short comparison at Phase 7 kickoff | Phase 7 | Open |
+| D-16 | Adopt the Claude-Native Hybrid Edition: Claude Agent SDK runtime by default, LangGraph kept as the alternative ([ADR-0016](../adr/0016-claude-native-agent-runtime.md)), and PLAN 3.0 with the four-employee pilot first | Yes | Phase 0 | Decided 2026-10-14: adopted; PLAN 3.0 merged (htco-platform#14) |
+| D-17 | Anthropic API organization, a service account and one key per environment; hosted runs never on a personal subscription ([ADR-0017](../adr/0017-auth-and-billing-policy.md)) | Yes; check API-credit eligibility only in Anthropic's official docs | Phase 6 | Open: the owner and engineering open it together at Phase 6 kickoff |
+| D-18 | Recovery objectives (RTO and RPO) for the database before any real order | Owner sets them; point-in-time recovery revisited against them (D-09) | Phase 4 (drill), Phase 9 (real orders) | Open: decided before real orders (Phase 9); the Phase 4 drill uses the recommendation as a working target |
+| D-19 | Pilot caps: monthly and daily AI budget for the four pilot employees, and the spend cap for recording SDK test transcripts | Owner sets numbers (part of D-06) | Phase 6 | Decided 2026-10-14: $50 per month, $5 per day; transcript-recording spend comes from the same cap |
+| D-20 | Web search provider for Shon's research tool (Claude's built-in web tools are disabled for business employees) | Choose one provider after a short comparison at Phase 7 kickoff | Phase 7 | Open: engineering compares providers and recommends at Phase 7 kickoff |
 | D-21 | Who decides optimization proposals during the pilot | The owner decides; Maya only recommends a priority | Phase 7 | Open |
 | D-22 | GitHub access for issues and pull requests created by employees: a GitHub App with least privilege, or a fine-grained token | A GitHub App (issues only in Phase 7; branches and pull requests in Phase 19) | Phase 7 | Open |
 | D-23 | Approval expiry and the step-up window | 24 h expiry, 10 min step-up window | Phase 5 | Open |
