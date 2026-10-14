@@ -44,4 +44,11 @@
 | AC-2.1.3 | CI run 38573775759, job `database`: `test_readyz__database_goes_away_and_comes_back__503_then_200` against real Postgres; locally the unit and composition-root tests (714 passed) | Pass |
 | AC-2.1.4 | `migrate.yml` reviewed and linted (actionlint, zizmor); not run, because no deployed project exists yet | Open until the development project exists |
 
+### Verification — 2.2 — 2026-10-14
+
+| AC | Evidence | Result |
+|---|---|---|
+| AC-2.2.1 to AC-2.2.5 | CI run 38575026282, job `database`: both migrations and the seed applied on a fresh stack; `Files=3, Tests=39 … Result: PASS` (27 assertions in `01_identity_access.test.sql`) | Pass |
+| Enum sync | `tests/persistence/test_schema_matches_domain.py` locally and in CI | Pass |
+
 Local note: Docker Desktop's engine did not start on the development machine during this slice, so the database tests ran only in CI.

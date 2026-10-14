@@ -13,7 +13,7 @@
 ## Progress
 
 - [x] 2.1 Database workflow (local stack and CI; the deployed migration workflow runs for the first time when the development project exists)
-- [ ] 2.2 Identity and access schema with RLS
+- [x] 2.2 Identity and access schema with RLS
 - [ ] 2.3 Authentication in the API
 - [ ] 2.4 Policy engine v0 and first endpoints
 - [ ] 2.5 Audit writer and bootstrap
