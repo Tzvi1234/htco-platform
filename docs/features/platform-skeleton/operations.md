@@ -12,6 +12,8 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 | `HTCO_SENTRY_DSN` | unset (secret) | Turns error monitoring on; blank means off; never logged |
 | `HTCO_DATABASE_URL` | unset locally; **required** in staging and production (secret) | Postgres connection string; `/readyz` checks it with a one-second connect timeout |
 | `HTCO_SUPABASE_URL` | unset locally; **required** (HTTPS) in staging and production | Supabase project URL; the API verifies access tokens against `<url>/auth/v1/.well-known/jwks.json` with issuer `<url>/auth/v1`. Authentication is on only when this and `HTCO_DATABASE_URL` are set (`authentication` in `api.starting`); otherwise authenticated routes answer 503 |
+| `HTCO_SUPABASE_SECRET_KEY` | unset (secret) | Supabase secret key, used only for the Auth admin `invite` call (slice 2.6), never for database queries; without it invitations answer 503 (`invitations` in `api.starting`) |
+| `HTCO_INVITE_REDIRECT_URL` | unset | Where the invitation email's link lands (the web app's welcome page) |
 | `HTCO_RELEASE` | unset | Build identifier (git SHA) attached to error reports and the `api.starting` line |
 | Python version | `.python-version` (3.14.8) | uv installs and uses exactly this interpreter |
 | uv version | `[tool.uv] required-version` | Any other uv version refuses to run on the workspace |

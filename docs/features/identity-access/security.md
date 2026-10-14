@@ -10,6 +10,17 @@
 | Authorization | Elevation of privilege: acting on a weak session | MFA and step-up checks; step-up expires after 10 minutes; future timestamps refused | assurance and step-up tests |
 | Authorization rules | Tampering: the code or the documentation changed alone | The test parses the documented table; drift in either direction fails | `test_permissions__match_the_documented_matrix` |
 
+## Threats (STRIDE), slice 2.6
+
+| Element | Threat | Control | Test |
+|---|---|---|---|
+| Management endpoints | Elevation of privilege: a non-admin role changing access | `manage_access` only for Owner and Admin, with `aal2`; RLS restrictive `aal2` policies refuse the write even if the application were bypassed | AC-2.6.1 tests, integration RLS test |
+| Management endpoints | Elevation of privilege: an Admin making themselves or someone Owner, or removing the Owner | Only the Owner grants the Owner role; the Owner's membership is not changeable through the API | AC-2.6.2 tests |
+| Sessions | Elevation of privilege: a removed member keeps working until the token expires | Memberships are read from the database on every request | AC-2.6.3 tests |
+| Management endpoints | Repudiation: a change without a trace | One audit record per change, by the acting user, in the same transaction, with the request ID | AC-2.6.4 tests |
+| Secret key | Information disclosure or misuse: the Supabase secret key | Used only for the Auth admin `invite` call, never for database queries; hidden in `repr`; optional (invitations off without it) | `test_inviter__repr__hides_the_secret_key`, composition tests |
+| Tenancy | Information disclosure: probing other organizations' members and shops | Members, shops and grants outside the organization are 404 | not-found tests |
+
 ## Threats (STRIDE), slice 2.3
 
 | Element | Threat | Control | Test |

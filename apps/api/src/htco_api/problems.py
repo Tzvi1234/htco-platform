@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.routing import compile_path
 
 PROBLEM_TYPE_BASE = "https://ht-co.app/problems/"
 PROBLEM_MEDIA_TYPE = "application/problem+json"
@@ -164,7 +165,31 @@ async def _http_exception(request: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, StarletteHTTPException):
         return problem_response(INTERNAL_ERROR.problem(request_id_of(request)))
     problem = problem_type_for_status(exc.status_code).problem(request_id_of(request))
-    return problem_response(problem, headers=exc.headers)
+    headers = dict(exc.headers or {})
+    if exc.status_code == HTTPStatus.METHOD_NOT_ALLOWED:
+        headers["Allow"] = _allowed_methods(request) or headers.get("Allow", "")
+    return problem_response(problem, headers=headers)
+
+
+_HTTP_METHODS = frozenset({"get", "put", "post", "delete", "options", "head", "patch", "trace"})
+
+
+def _allowed_methods(request: Request) -> str:
+    """Every documented method on this path (RFC 9110 §15.5.6).
+
+    Starlette answers 405 from the first route whose path matches, naming only that route's
+    methods; a path served by several routes (PATCH and DELETE) needs all of them. The app's own
+    OpenAPI document lists them per path template.
+    """
+    openapi = getattr(request.app, "openapi", None)
+    if openapi is None:
+        return ""
+    methods: set[str] = set()
+    for template, operations in openapi().get("paths", {}).items():
+        pattern, _, _ = compile_path(template)
+        if pattern.match(request.url.path):
+            methods.update(method.upper() for method in operations if method in _HTTP_METHODS)
+    return ", ".join(sorted(methods))
 
 
 async def _problem_error(request: Request, exc: Exception) -> JSONResponse:

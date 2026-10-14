@@ -11,11 +11,13 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from opentelemetry.sdk.trace import TracerProvider
 
+from htco_api.access import access_router
 from htco_api.diagnostics import diagnostics_router
 from htco_api.health import health_router
 from htco_api.identity import identity_router
 from htco_api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from htco_api.problems import PROBLEM_MEDIA_TYPE, UNEXPECTED_ERROR_RESPONSES, add_problem_handlers
+from htco_application.access.management import AccessStore, Inviter
 from htco_application.shops import ShopReader
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter
 from htco_platform.readiness import ReadinessCheck
@@ -88,6 +90,10 @@ class AppOptions:
     resources: Sequence[Resource] = ()
     # Reads the caller's shops for `/v1/shops`; without it, that route answers 503.
     shops: ShopReader | None = None
+    # Member and shop-access changes; without it, those routes answer 503.
+    access: AccessStore | None = None
+    # Sends invitation emails; without it, `POST …/invitations` answers 503.
+    inviter: Inviter | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -123,6 +129,8 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     )
     app.state.authenticator = options.authenticator
     app.state.shops = options.shops
+    app.state.access = options.access
+    app.state.inviter = options.inviter
     app.include_router(
         health_router(
             readiness_checks=options.readiness_checks,
@@ -131,6 +139,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
         responses=UNEXPECTED_ERROR_RESPONSES,
     )
     app.include_router(identity_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
+    app.include_router(access_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     if options.diagnostics:
         app.include_router(diagnostics_router(), responses=UNEXPECTED_ERROR_RESPONSES)
     add_problem_handlers(app)

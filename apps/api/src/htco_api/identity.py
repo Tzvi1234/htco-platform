@@ -8,7 +8,7 @@ exist (AC-2.4.2). Pages are cursor-based: the cursor is opaque to clients (AC-2.
 import base64
 import binascii
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -77,11 +77,22 @@ def _problem(description: str, model: type[Problem] = Problem) -> dict[str, Any]
     return {"model": model, "content": {PROBLEM_MEDIA_TYPE: {}}, "description": description}
 
 
-_AUTH_RESPONSES: dict[int | str, dict[str, Any]] = {
-    401: _problem("Not signed in, or the access token was rejected"),
-    403: _problem("Signed in, but not a member of any organization"),
-    503: _problem("Sign-in or the database is unavailable"),
+_AUTH_DESCRIPTIONS: dict[int, str | tuple[str, type[Problem]]] = {
+    401: "Not signed in, or the access token was rejected",
+    403: "Signed in, but not a member of any organization",
+    503: "Sign-in or the database is unavailable",
 }
+
+
+def problem_responses(
+    described: Mapping[int, str | tuple[str, type[Problem]]] | None = None,
+) -> dict[int | str, dict[str, Any]]:
+    """OpenAPI problem responses for authenticated routes: the sign-in ones plus `described`."""
+    merged = {**_AUTH_DESCRIPTIONS, **(described or {})}
+    return {
+        status: _problem(*(text if isinstance(text, tuple) else (text,)))
+        for status, text in merged.items()
+    }
 
 
 def encode_cursor(after: uuid.UUID) -> str:
@@ -110,7 +121,7 @@ def _shop_reader(request: Request) -> ShopReader:
 
 
 def identity_router(*, clock: Callable[[], datetime]) -> APIRouter:
-    router = APIRouter(prefix="/v1", tags=["identity"], responses=_AUTH_RESPONSES)
+    router = APIRouter(prefix="/v1", tags=["identity"], responses=problem_responses())
 
     @router.get("/me", summary="The signed-in user and their organizations")
     async def me(auth: CurrentAuth) -> Me:
