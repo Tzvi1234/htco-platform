@@ -1,5 +1,7 @@
 """API settings, read from `HTCO_*` environment variables."""
 
+import base64
+import binascii
 from enum import StrEnum
 from typing import Literal, Self
 
@@ -37,6 +39,17 @@ class ApiSettings(BaseSettings):
     supabase_secret_key: SecretStr | None = None
     # Where the invitation email's link lands (the web app's welcome page).
     invite_redirect_url: AnyHttpUrl | None = None
+    # Web sign-in (slice 3.5). The session key seals Supabase tokens at rest: 32 random bytes,
+    # base64 (`openssl rand -base64 32`), a secret. The publishable key identifies the Supabase
+    # project to its sign-in service and is not secret. The web origins are the sites allowed to
+    # send cookie requests, comma-separated. Without the two keys, web sign-in answers 503.
+    session_key: SecretStr | None = None
+    supabase_publishable_key: str | None = None
+    web_origins: str = ""
+
+    @property
+    def web_origin_list(self) -> tuple[str, ...]:
+        return tuple(origin.strip() for origin in self.web_origins.split(",") if origin.strip())
 
     @property
     def auth_issuer(self) -> str | None:
@@ -55,6 +68,8 @@ class ApiSettings(BaseSettings):
         "supabase_url",
         "supabase_secret_key",
         "invite_redirect_url",
+        "session_key",
+        "supabase_publishable_key",
         mode="before",
     )
     @classmethod
@@ -63,6 +78,18 @@ class ApiSettings(BaseSettings):
         injected secret fails the deployed-environment checks instead of passing them."""
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("session_key")
+    @classmethod
+    def _session_key_is_32_bytes(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            try:
+                raw = base64.b64decode(value.get_secret_value(), validate=True)
+            except binascii.Error, ValueError:
+                raw = b""
+            if len(raw) != 32:  # noqa: PLR2004 - AES-256 key size
+                raise ValueError("HTCO_SESSION_KEY must be 32 random bytes, base64-encoded")
         return value
 
     @model_validator(mode="after")

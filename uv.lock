@@ -535,6 +535,7 @@ version = "0.0.0"
 source = { editable = "packages/platform" }
 dependencies = [
     { name = "anyio" },
+    { name = "cryptography" },
     { name = "httpx" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-instrumentation-httpx" },
@@ -548,6 +549,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.12,<5" },
+    { name = "cryptography", specifier = ">=50,<51" },
     { name = "httpx", specifier = ">=0.28,<0.29" },
     { name = "opentelemetry-api", specifier = ">=1.45,<2" },
     { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.66b0,<0.67" },

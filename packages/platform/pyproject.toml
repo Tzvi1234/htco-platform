@@ -5,6 +5,7 @@ description = "HTCO cross-cutting infrastructure: settings, logging, tracing, cr
 requires-python = "==3.14.*"
 dependencies = [
   "anyio>=4.12,<5",
+  "cryptography>=50,<51",
   "httpx>=0.28,<0.29",
   "opentelemetry-api>=1.45,<2",
   "opentelemetry-instrumentation-httpx>=0.66b0,<0.67",
