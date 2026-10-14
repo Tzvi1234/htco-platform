@@ -50,9 +50,14 @@ jobs:
         id: tag
         run: |
           if [ -n "$REQUESTED_TAG" ]; then
+            # A full 40-character commit SHA: images are tagged with it, so a shortened one
+            # would only fail later, at DigitalOcean ("image tag not found").
             case "$REQUESTED_TAG" in
-              *[!0-9a-f]*) echo "::error::image_tag must be a commit SHA"; exit 1 ;;
+              *[!0-9a-f]*) echo "::error::image_tag must be a full commit SHA"; exit 1 ;;
             esac
+            if [ "${#REQUESTED_TAG}" -ne 40 ]; then
+              echo "::error::image_tag must be the full 40-character commit SHA"; exit 1
+            fi
             echo "tag=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
             echo "build=false" >> "$GITHUB_OUTPUT"
           else

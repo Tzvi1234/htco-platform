@@ -98,3 +98,4 @@ Code: revert the pull request. Deployment: run **Deploy API** with `image_tag` s
 | Date | Drill | Result | Follow-ups |
 |---|---|---|---|
 | 2026-10-14 | Deliberate forbidden import and uncovered domain code (AC-1.1.2, AC-1.1.4) | Gates failed as designed | None |
+| 2026-10-14 | First deploy and rollback (AC-1.5.1, AC-1.5.3): deployed `165f0e0`, then `9559d67` (review fixes); rolled back to `165f0e0` with `image_tag` (run 38625634938, no rebuild, started with database, sign-in and invitations on); rolled forward to `9559d672…` (run 38631041130). `/healthz` 200 and `/readyz` `database: ok` after each step | Pass | A shortened SHA (`9559d67c`) reached DigitalOcean, which refused it ("image tag not found") and kept the running version; the workflow now requires the full 40-character SHA |

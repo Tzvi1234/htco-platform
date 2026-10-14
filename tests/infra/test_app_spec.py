@@ -135,3 +135,10 @@ def test_migrate__records_the_history_even_when_applying_fails() -> None:
     [job] = _workflow("migrate.yml")["jobs"].values()
     [record] = [step for step in job["steps"] if step.get("name") == "Record the applied versions"]
     assert record["if"] == "${{ !cancelled() }}"
+
+
+def test_deploy__a_rollback_tag_must_be_a_full_commit_sha() -> None:
+    """A shortened SHA passed the old check and failed only at DigitalOcean (2026-10-14 drill)."""
+    [job] = DEPLOY["jobs"].values()
+    [choose] = [step for step in job["steps"] if step.get("name") == "Choose the image tag"]
+    assert '"${#REQUESTED_TAG}" -ne 40' in choose["run"]
