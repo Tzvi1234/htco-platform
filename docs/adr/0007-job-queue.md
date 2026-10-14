@@ -1,6 +1,6 @@
 # ADR-0007: Postgres-native job queue behind a port
 
-- **Status:** Proposed; implementation chosen by a spike at the start of Phase 4
+- **Status:** Proposed; implementation chosen by a spike at the start of Phase 5
 - **Date:** 2026-10-14
 - **Deciders:** Owner, engineering
 
@@ -23,7 +23,7 @@ Ingest, sync, inspections, outbox delivery and agent runs need durable, at-least
 
 ## Proposed decision
 
-Define a `JobQueue` port now (enqueue with idempotency key, claim with lease, complete, fail with retry policy, dead-letter, schedule). Choose the implementation with a time-boxed spike at the start of Phase 4 against these criteria: crash safety (kill-worker test), duplicate suppression, dead-letter handling, scheduling, per-shop locks, observability (queue depth and age), and operational simplicity. The current preference is option 2 or 3 because of pgmq's alpha status and missing dead-letter support.
+Define a `JobQueue` port now (enqueue with idempotency key, claim with lease, complete, fail with retry policy, dead-letter, schedule). Choose the implementation with a time-boxed spike at the start of Phase 5 against these criteria: crash safety (kill-worker test), duplicate suppression, dead-letter handling, scheduling, per-shop locks, observability (queue depth and age), and operational simplicity. The current preference is option 2 or 3 because of pgmq's alpha status and missing dead-letter support.
 
 ## Consequences
 
@@ -32,8 +32,8 @@ Define a `JobQueue` port now (enqueue with idempotency key, claim with lease, co
 
 ## Validation
 
-The Phase 4 spike result is recorded in the validation log below and the status changes to Accepted with the chosen option.
+The Phase 5 spike result is recorded in the validation log below and the status changes to Accepted with the chosen option.
 
 ## Validation log
 
-- 2026-10-14 — The automation engine ([ADR-0013](0013-automation-engine.md)) is the queue's main consumer; its `ExecutionStore` port moves onto the queue in Phase 4.
+- 2026-10-14 — The automation engine ([ADR-0013](0013-automation-engine.md)) is the queue's main consumer; its `ExecutionStore` port moves onto the queue in Phase 5.

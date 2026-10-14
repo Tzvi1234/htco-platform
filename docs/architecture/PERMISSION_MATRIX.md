@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | 2.0 — the living office ([ADR-0012](../adr/0012-living-office-organization.md)). Section 1 is enforced in code by policy engine v0 (`htco_application.access.policy`, slice 2.4), whose test parses this table so the two cannot drift; RLS adds tenant isolation in the database (Phase 2). Employees' tool and automation grants (section 3) are enforced by `htco_application.workforce.tool_access` and the automation engine, from `registry/`; automations (section 2) from Phase 4. Extended per phase. |
+| **Status** | 2.0 — the living office ([ADR-0012](../adr/0012-living-office-organization.md)). Section 1 is enforced in code by policy engine v0 (`htco_application.access.policy`, slice 2.4), whose test parses this table so the two cannot drift; RLS adds tenant isolation in the database (Phase 2). Employees' tool and automation grants (section 3) are enforced by `htco_application.workforce.tool_access` and the automation engine, from `registry/`; automations (section 2) from Phase 5. Extended per phase. |
 | **Principle** | Deny by default. A permission not listed here does not exist. |
 
 Legend: **✓** allowed · **S** allowed for shops granted to the user · **MFA** requires an `aal2` session · **RA** requires recent re-authentication (step-up, default 10 minutes) · **A** creates an approval instead of acting · **—** denied.

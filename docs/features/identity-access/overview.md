@@ -25,7 +25,7 @@ The criteria of slices 2.1, 2.2, 2.3, 2.5 and 2.6 join here when they start.
 ## Scope
 
 - **In (2.4, part 1):** `Role` and `AssuranceLevel` (domain), `Capability`, `Grant`, `Principal`, `Decision` and `decide` (application), the matrix as data.
-- **Out:** building the `Principal` from a verified token and database memberships (2.3), the endpoints (2.4 part 2), RLS (2.2), approvals (Phase 5), worker and agent permissions (Phases 4 and 6).
+- **Out:** building the `Principal` from a verified token and database memberships (2.3), the endpoints (2.4 part 2), RLS (2.2), approvals (Phase 7), worker and agent permissions (Phases 5 and 8).
 
 ## Known limits
 

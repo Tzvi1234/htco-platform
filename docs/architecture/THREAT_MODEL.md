@@ -76,12 +76,12 @@ flowchart LR
 | T10a | Registry (employees, tools, automations) | **Tampering**: a profile or grant changed outside review widens an employee's access | Registry changes only through reviewed pull requests; the registry check refuses unknown tools, unknown automations and grants to automations not callable as agent tools; profile versions recorded on every session; employees have no tool that edits the registry | `tests/tools/test_registry_files.py`; `registry.read` is the only registry tool |
 | T10b | Engineering employees (Alex, Amir, Iris) | **Elevation of privilege / repudiation**: the office changes its own code, tests or permissions | Work only through pull requests; CI, review and the owner's release gate; test-integrity check fails a weakened test; no tool that merges, deploys or edits permissions; every change linked to an engineering request | Scenario I (Phase 19) |
 | T10c | Decision Advisor | **Elevation of privilege**: an advisor's answer used as an authorization | Advisors answer typed triage and ranking questions only; access decisions never take advisor input; schema validation; fallback chain | `test_advisor_answers__never_change_authorization` |
-| T10d | Office view | **Spoofing (of state)**: the office shows invented or inferred activity | The office renders only activity records and verified states; offline worker means read-only office | FR-OFC-01, FR-OFC-02 tests (Phase 16) |
+| T10d | Office view | **Spoofing (of state)**: the office shows invented or inferred activity | The office renders only activity records and verified states; offline worker means read-only office | FR-OFC-01, FR-OFC-02 tests (Phase 15) |
 | T10e | Automation triggers | **Tampering / replay**: a replayed or forged trigger repeats a business action | One entry point with authorization; executions unique per idempotency key; inbox for external events | Scenario G |
 | T11 | Web client | **Spoofing / information disclosure**: XSS steals sessions, clickjacking | BFF with `__Host-` HttpOnly cookies; CSP; `frame-ancestors 'none'`; output encoding; CSRF header | Cookie attribute tests; CSP header test; CSRF rejection tests |
 | T12 | Native clients | **Information disclosure**: stolen device, deep-link hijack, clipboard and screenshot leaks | Keystore or Credential Locker; verified App Links; re-authentication for high-risk approvals; masked PII | Platform security test checklist per release |
 | T13 | Supply chain | **Tampering**: a compromised dependency, action or image | Pinned versions with minimum release age; SHA-pinned actions; scanners; SBOM | Renovate policy; zizmor and actionlint in CI |
-| T14 | Owner account | **Spoofing**: account takeover | Mandatory TOTP; leaked-password protection; session limits; new-device sign-in recorded (Phase 3) and emailed (Phase 10) | MFA-required tests on owner-only routes; new-device notification test |
+| T14 | Owner account | **Spoofing**: account takeover | Mandatory TOTP; leaked-password protection; session limits; new-device sign-in recorded (Phase 3) and emailed (Phase 6) | MFA-required tests on owner-only routes; new-device notification test |
 | T15 | Audit log | **Repudiation**: actions without a trace or edited history | Append-only schema with no update or delete grants for application roles | Grant test; audit written for every money, permission, publishing and approval action |
 | T16 | Backups and restore | **Denial of service / information disclosure**: data loss, or restored data crossing tenants | Daily backups, media backup job, restore drills, tenant checks after restore | Restore drill record before production data is relied on |
 | T17 | Browser worker (later) | **Elevation of privilege**: automated browser used to reach internal services or act beyond scope | Separate container, outbound allowlist, no internal network, URL and action allowlists, stops at CAPTCHA and MFA | Isolation test before enabling (ADR required) |
@@ -119,17 +119,17 @@ Controls are built into the phases where the risk first appears:
 | 1 | Secret scanning (gitleaks), dependency and static-analysis scans, SHA-pinned actions, error envelope without internals, structured logs without PII, error monitoring with PII scrubbing |
 | 2 | RLS and authorization model, MFA enforcement, audit schema, two-tenant test matrix |
 | 3 | BFF sessions, CSRF, CSP and security headers, step-up re-authentication, password reset and MFA recovery, new-device sign-in records |
-| 4 | Webhook verification and rate limits, inbox and outbox, idempotency keys, dead-letter, queue alerts, restore and kill-worker drills |
-| 5 | Approvals with server-side re-checks, policy engine, self-approval prevention |
-| 6 | Agent controls ASI01–ASI10, tool bridge and registry, injection corpus, kill switches, validated memory writes |
-| 7, 14 | Supervision: monitors cannot be disabled by employees; findings close only on evidence |
-| 8 | Budgets, per-employee routing and data classes, PII masking before model calls, Decision Advisor isolation |
-| 9 | Token encryption, OAuth state and PKCE, capability probes |
-| 10 | Security notifications by email (new device, MFA change, shop connected or disconnected) |
-| 12 | Media backup job and restore test |
-| 15 | Inbound email quarantine and attachment policy |
+| 4 | Token encryption, OAuth state and PKCE, capability probes |
+| 5 | Webhook verification and rate limits, inbox and outbox, idempotency keys, dead-letter, queue alerts, restore and kill-worker drills |
+| 6 | Security notifications by email (new device, MFA change, shop connected or disconnected) |
+| 7 | Approvals with server-side re-checks, policy engine, self-approval prevention |
+| 8 | Agent controls ASI01–ASI10, tool bridge and registry, injection corpus, kill switches, validated memory writes |
+| 9 | Budgets, per-employee routing and data classes, PII masking before model calls, Decision Advisor isolation |
+| 10 | Supervision: monitors cannot be disabled by employees; findings close only on evidence |
 | 19 | Engineering safety: Scenario I; no self-granted permissions |
-| 20 | External security review against ASVS L2, restore drill, incident response runbook |
+| 10 | Media backup job and restore test |
+| 12 | Inbound email quarantine and attachment policy |
+| 16 | External security review against ASVS L2, restore drill, incident response runbook |
 
 ## 6. Did we do a good enough job?
 

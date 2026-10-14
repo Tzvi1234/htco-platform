@@ -12,8 +12,8 @@ The MVP is the smallest version of HTCO OS that proves the product's thesis: **a
 
 | Step | Milestone | Ends with | What the owner can do |
 |---|---|---|---|
-| **MVP-1: Operational Core** | M1 (end of Phase 5), with live Etsy orders and fulfillment at the end of Phase 10 | Phases 1–5, 9 and 10 | Sign in with MFA, connect the Etsy shop, see every order with its verified fulfillment state (all handled by deterministic automations), get one alert per late or missing tracking number, open an incident, approve or reject actions, read the activity and audit trail. No AI yet. |
-| **MVP: First Employees** | End of Phase 11 (after M2 Workforce pilot and M3 Models and tools) | Phases 6–8, 10 and 11 | Everything above, plus the workforce runtime and tool registry, the model router with per-employee policies and the Decision Advisor benchmark, supervision with the nightly report, and the first employees: **Eitan** (fulfillment exceptions), **Noa** (supervision), and **Daniel** and **Noam** running **Listing Health**: an audit of every active listing against supplier facts, with suggested fixes applied to Etsy only after the owner approves them. |
+| **MVP-1: Operational Core** | M2 (end of Phase 7) | Phases 1–7 | Sign in with MFA, connect the Etsy shop, see every order with its verified fulfillment state (all handled by deterministic automations), get one alert per late or missing tracking number, open an incident, approve or reject actions, read the activity and audit trail. No AI yet. |
+| **MVP: First Employees** | M3 (end of Phase 11) | Phases 8–11 | Everything above, plus the workforce runtime and tool registry, the model router with per-employee policies and the Decision Advisor benchmark, supervision with the nightly report, and the first employees: **Eitan** (fulfillment exceptions), **Noa** (supervision), and **Daniel** and **Noam** running **Listing Health**: an audit of every active listing against supplier facts, with suggested fixes applied to Etsy only after the owner approves them. |
 
 ### Why Listing Health is the first AI workflow
 
@@ -36,7 +36,7 @@ If the owner prefers to start with Product Studio, Phases 11 and 12 swap. Storie
 | Shops | Connect one Etsy shop with OAuth and PKCE, encrypted tokens, capability probe, disconnect | FR-SHOP-01..04 |
 | Orders | Automation engine; the Order Intake, Deduplication & Verification and Sales Counters automations; order state machine; list and detail with freshness; units vs orders; reconciliation | FR-ORD-01..06, 08, 09, FR-AUT-01..03 |
 | Fulfillment | Tracking Synchronization and Incident Detection & Escalation automations, SLA windows, one incident per gap, automatic resolution on evidence | FR-INC-01..03, 05 |
-| Tasks and approvals | Task model, durable queue, approvals with server-side re-check and expiry, policy engine v1, activity records for every actor. Approvals come first from operators' guarded shipment writes and bulk re-sync requests; employees produce them from Phase 7 | FR-TASK-01..03, FR-APR-01..04, FR-AUD-04 |
+| Tasks and approvals | Task model, durable queue, approvals with server-side re-check and expiry, policy engine v1, activity records for every actor. Approvals come first from operators' guarded shipment writes and bulk re-sync requests; employees produce them from Phase 9 | FR-TASK-01..03, FR-APR-01..04, FR-AUD-04 |
 | Notifications | In-app notifications, email alerts from `noreply@office.ht-co.app` | FR-NTF-01, FR-EML-01 |
 | Audit and ops | Append-only audit, structured logs, health checks, error monitoring | FR-AUD-01..03 |
 | Clients | Web app only: sign-in, overview, shops, orders, incidents, approvals, audit; Hebrew and English, light and dark | NFR-A11Y-01, NFR-I18N-01 |
@@ -60,7 +60,7 @@ AI employees, product creation, supplier quotes, finance P&L beyond basic order 
 
 | Area | Included | Requirements |
 |---|---|---|
-| Workforce runtime | Employee registry and versioned profiles in the database, separate identities, the Claude runtime behind the port (one bounded step per session, task state in Postgres), approvals and long waits as task states, resume after restart from the task brief, internal messages | FR-AGT-01..05, 07, 09, 10, FR-IAM-07 |
+| Workforce runtime | Employee registry and versioned profiles in the database, separate identities, LangGraph runtime behind the port, Postgres checkpoints, interrupts for approvals, resume after restart, internal messages | FR-AGT-01..05, 07, 09, 10, FR-IAM-07 |
 | Tools | Tool registry, least-privilege grants, the tool bridge, invocation records | FR-TOOL-01..03, FR-AGT-03, 04 |
 | Model router and advisor | Per-employee routing policies, verified model catalog, budget ledger with caps and alerts, routing decision log, PII masking; Decision Advisor with the Jev benchmark | FR-MDL-01..09 |
 | Supervision | Deterministic monitors, Noa's exception handling and sampling, the nightly supervisor and daily report | FR-QOS-01..04 |
@@ -84,7 +84,7 @@ AI employees, product creation, supplier quotes, finance P&L beyond basic order 
 The MVP is done when all of these are true in production with the pilot shop:
 
 1. Every MVP-1 and MVP user story passes its acceptance tests in CI and in a recorded demo.
-2. Proof-of-concept gates 1 to 8 pass (defined in [Phase 6](../plan/phases/phase-06-workforce-claude-runtime.md)), and office scenarios A, B, C, E, F, G, H and J pass ([TESTING_STRATEGY §10](../engineering/TESTING_STRATEGY.md#10-office-acceptance-scenarios)).
+2. Proof-of-concept gates POC-1 to POC-6 pass (defined in [Phase 8](../plan/phases/phase-08-workforce-runtime.md)), and office scenarios A, B, C, E, F, G, H and J pass ([TESTING_STRATEGY §10](../engineering/TESTING_STRATEGY.md#10-office-acceptance-scenarios)).
 3. No unapproved external write has happened (verified from the audit log).
 4. Listing Health precision on the owner-labeled sample is at least the threshold agreed in Phase 11 (proposed: 85% precision on "high risk" findings).
 5. Monthly AI spend stayed within the configured cap, and cost per audited listing is reported.
@@ -96,4 +96,4 @@ The pilot runs on Supabase Pro, a few small DigitalOcean components, an email pr
 
 ## 6. After the MVP
 
-Product Studio and Creative Studio (Phase 12), procurement and finance (13), governance at full scope (14), mail, customer service and the owner assistant (15), the complete web office (16), Android (17), Windows (18), the engineering department and self-improvement (19), hardening and release (20), growth and scale (21). See the [master plan](../plan/PLAN.md).
+Product Studio (Phase 12), suppliers and finance (13), email and customer service (14), the office and the executive team (15), Android (16), Windows (17), continuous optimization (18), the engineering department and self-improvement (19), hardening and v1.0 launch (20), growth and scale (21). See the [master plan](../plan/PLAN.md).

@@ -36,11 +36,11 @@ Option 2.
 
 - Positive: every tool call is explainable (who, which version, why allowed); access reviews are diffs of `registry/`.
 - Negative: each new tool needs a definition, an owner and tests before any employee can use it.
-- Follow-ups: tool invocation records and rate limits (Phase 6); the AI Tools Center in the office UI (Phase 16).
+- Follow-ups: tool invocation records and rate limits (Phase 8); the AI Tools Center in the office UI (Phase 15).
 
 ## Validation
 
-Scenario H passes now for tools and automations (`tests/application/test_tool_access.py`, `test_automation_engine.py`); it is repeated end to end through the agent runtime's tool bridge in Phase 6.
+Scenario H passes now for tools and automations (`tests/application/test_tool_access.py`, `test_automation_engine.py`); it is repeated end to end through the agent runtime's tool bridge in Phase 8.
 
 ## Validation log
 
