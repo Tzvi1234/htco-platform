@@ -111,6 +111,11 @@ services:
       - key: HTCO_INVITE_REDIRECT_URL
         scope: RUN_TIME
         value: https://dash.ht-co.app/accept-invite
+      # Emailed password reset links land on the web app's reset page, which posts the link's tokens
+      # and the new password to /v1/auth/password/reset. Must be in Supabase's redirect allow-list.
+      - key: HTCO_PASSWORD_RESET_REDIRECT_URL
+        scope: RUN_TIME
+        value: https://dash.ht-co.app/reset-password
       # Web sign-in (slice 3.5): off until the session key secret exists (blank means unset).
       - key: HTCO_SESSION_KEY
         scope: RUN_TIME

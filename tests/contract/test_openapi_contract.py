@@ -73,6 +73,8 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "revoke_member_shop",
         "sign_in_web",
         "accept_web_invitation",
+        "request_password_reset",
+        "reset_password",
         "current_session",
         "sign_out_web",
         "get_mfa_status",

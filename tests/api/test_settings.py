@@ -50,6 +50,21 @@ def test_blank_optional_settings__are_unset(blank: str) -> None:
     assert settings.invite_redirect_url is None
 
 
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_password_reset_redirect__is_unset(blank: str) -> None:
+    settings = ApiSettings.model_validate(
+        {"environment": "local", "password_reset_redirect_url": blank}
+    )
+    assert settings.password_reset_redirect_url is None
+
+
+def test_password_reset_redirect__is_a_url() -> None:
+    with pytest.raises(ValidationError):
+        ApiSettings.model_validate(
+            {"environment": "local", "password_reset_redirect_url": "not a url"}
+        )
+
+
 def test_blank_database_url__is_refused_when_deployed() -> None:
     with pytest.raises(ValidationError, match="HTCO_DATABASE_URL"):
         ApiSettings.model_validate(
@@ -242,3 +257,22 @@ def test_etsy_redirect_uri__local_http_is_allowed() -> None:
     )
 
     assert settings.etsy_redirect_uri is not None
+
+
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_password_reset_redirect__must_use_https_when_deployed(environment: str) -> None:
+    with pytest.raises(ValidationError, match="HTCO_PASSWORD_RESET_REDIRECT_URL must use HTTPS"):
+        ApiSettings.model_validate(
+            _DEPLOYED
+            | {
+                "environment": environment,
+                "password_reset_redirect_url": "http://dash.ht-co.app/reset-password",
+            }
+        )
+
+
+def test_password_reset_redirect__http_is_fine_locally() -> None:
+    settings = ApiSettings.model_validate(
+        {"environment": "local", "password_reset_redirect_url": "http://localhost:5173/reset"}
+    )
+    assert str(settings.password_reset_redirect_url) == "http://localhost:5173/reset"

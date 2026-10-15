@@ -43,6 +43,9 @@ class ApiSettings(BaseSettings):
     supabase_secret_key: SecretStr | None = None
     # Where the one-time invitation link lands (the web app's accept-invitation page).
     invite_redirect_url: AnyHttpUrl | None = None
+    # Where the emailed password reset link lands (the web app's reset page). Without it, asking
+    # for a reset link answers 503.
+    password_reset_redirect_url: AnyHttpUrl | None = None
     # Web sign-in (slice 3.5). The session key seals Supabase tokens at rest: 32 random bytes,
     # base64 (`openssl rand -base64 32`), a secret. The publishable key identifies the Supabase
     # project to its sign-in service and is not secret. The web origins are the sites allowed to
@@ -92,6 +95,7 @@ class ApiSettings(BaseSettings):
         "supabase_url",
         "supabase_secret_key",
         "invite_redirect_url",
+        "password_reset_redirect_url",
         "session_key",
         "supabase_publishable_key",
         "etsy_keystring",
@@ -144,6 +148,17 @@ class ApiSettings(BaseSettings):
         deployed = self.environment in {Environment.STAGING, Environment.PRODUCTION}
         if deployed and self.etsy_redirect_uri and not self.etsy_redirect_uri.startswith("https:"):
             raise ValueError("HTCO_ETSY_REDIRECT_URI must use HTTPS in staging and production")
+        return self
+
+    @model_validator(mode="after")
+    def _deployed_reset_redirect_uses_https(self) -> Self:
+        # The recovery tokens ride in the URL fragment: an HTTP page could be replaced on path.
+        deployed = self.environment in {Environment.STAGING, Environment.PRODUCTION}
+        url = self.password_reset_redirect_url
+        if deployed and url is not None and url.scheme != "https":
+            raise ValueError(
+                "HTCO_PASSWORD_RESET_REDIRECT_URL must use HTTPS in staging and production"
+            )
         return self
 
     @model_validator(mode="after")

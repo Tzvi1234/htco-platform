@@ -7,6 +7,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
+import anyio
 import pytest
 
 from htco_application.web_sessions import IssuedTokens, NewSession
@@ -112,6 +113,54 @@ async def test_attempts__counted_per_email_and_per_address_within_the_window(
 
     assert await store.recent_failures(email, ip, NOW - timedelta(minutes=15)) == (2, 2)
     assert await store.recent_failures(email, None, NOW - timedelta(minutes=15)) == (2, 0)
+
+
+async def test_claim_link__once_until_released(database: Database) -> None:
+    store = PostgresSessionStore(database, SEALER)
+    link, old = os.urandom(32), os.urandom(32)
+    since = NOW - timedelta(days=1)
+    await store.record_attempt(old, None, succeeded=True, at=NOW - timedelta(days=2))
+
+    assert await store.claim_link(link, since, NOW) is True
+    assert await store.claim_link(link, since, NOW) is False
+    await store.release_link(link)
+    assert await store.claim_link(link, since, NOW) is True
+    assert await store.claim_link(old, since, NOW) is True  # an old success is past the window
+    assert await store.recent_failures(link, None, since) == (0, 0)  # claims are not failures
+
+
+async def test_claim_link__concurrent_claims__one_wins(database: Database) -> None:
+    store = PostgresSessionStore(database, SEALER)
+    link = os.urandom(32)
+    won: list[bool] = []
+
+    async def claim() -> None:
+        won.append(await store.claim_link(link, NOW - timedelta(days=1), NOW))
+
+    async with anyio.create_task_group() as group:
+        for _ in range(5):
+            group.start_soon(claim)
+
+    assert sorted(won) == [False, False, False, False, True]
+
+
+async def test_admit_attempt__concurrent_burst__admits_only_the_limit(database: Database) -> None:
+    store = PostgresSessionStore(database, SEALER)
+    key, ip = os.urandom(32), os.urandom(32)
+    since = NOW - timedelta(minutes=15)
+    admitted: list[bool] = []
+
+    async def admit() -> None:
+        admitted.append(
+            await store.admit_attempt(key, ip, max_by_key=3, max_by_ip=20, since=since, at=NOW)
+        )
+
+    async with anyio.create_task_group() as group:
+        for _ in range(8):
+            group.start_soon(admit)
+
+    assert admitted.count(True) == 3
+    assert await store.recent_failures(key, ip, since) == (3, 3)
 
 
 async def test_step_up_get_and_list_active(database: Database) -> None:

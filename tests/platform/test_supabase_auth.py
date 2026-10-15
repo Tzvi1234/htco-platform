@@ -13,7 +13,9 @@ from htco_platform.supabase_auth import (
     AuthServiceError,
     AuthTokens,
     InvalidCredentialsError,
+    MfaRequiredError,
     RateLimitedError,
+    SamePasswordError,
     SupabaseAuth,
     WeakPasswordError,
 )
@@ -334,4 +336,85 @@ async def test_set_password__service_failure__is_an_auth_service_error() -> None
     subject, client = auth(lambda _: httpx.Response(500))
     async with client:
         with pytest.raises(AuthServiceError):
+            await subject.set_password("access-1", "a long new passphrase")
+
+
+async def test_set_password__authenticator_user_at_aal1__is_an_mfa_required_error() -> None:
+    body = {"error_code": "insufficient_aal", "msg": "AAL2 session is required"}
+    subject, client = auth(lambda _: httpx.Response(401, json=body))
+    async with client:
+        with pytest.raises(MfaRequiredError):
+            await subject.set_password("access-1", "a long new passphrase")
+
+
+def test_mfa_required__is_still_an_auth_service_error_for_other_callers() -> None:
+    assert issubclass(MfaRequiredError, AuthServiceError)
+
+
+# Password reset (slice 3.5 part 3) ---------------------------------------------------------------
+
+REDIRECT = "https://dash.ht-co.app/reset-password"
+
+
+async def test_send_password_reset__posts_the_email_with_the_redirect() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={})
+
+    subject, client = auth(handler)
+    async with client:
+        await subject.send_password_reset("owner@example.test", REDIRECT)
+
+    [request] = seen
+    assert request.method == "POST"
+    assert request.url.path == "/auth/v1/recover"
+    assert request.url.params["redirect_to"] == REDIRECT
+    assert request.headers["apikey"] == KEY
+    assert "authorization" not in request.headers
+    assert json.loads(request.content) == {"email": "owner@example.test"}
+
+
+async def test_send_password_reset__rate_limited__is_a_rate_limited_error() -> None:
+    body = {"error_code": "over_email_send_rate_limit"}
+    subject, client = auth(lambda _: httpx.Response(429, json=body))
+    async with client:
+        with pytest.raises(RateLimitedError):
+            await subject.send_password_reset("owner@example.test", REDIRECT)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(400, json={"error_code": "validation_failed"}),
+        httpx.Response(500),
+    ],
+    ids=["refused", "down"],
+)
+async def test_send_password_reset__failure__is_an_auth_service_error(
+    response: httpx.Response,
+) -> None:
+    subject, client = auth(lambda _: response)
+    async with client:
+        with pytest.raises(AuthServiceError) as raised:
+            await subject.send_password_reset("owner@example.test", REDIRECT)
+    assert "owner@example.test" not in str(raised.value)
+
+
+async def test_send_password_reset__unreachable__is_an_auth_service_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down", request=request)
+
+    subject, client = auth(handler)
+    async with client:
+        with pytest.raises(AuthServiceError):
+            await subject.send_password_reset("owner@example.test", REDIRECT)
+
+
+async def test_set_password__the_current_password__is_a_same_password_error() -> None:
+    body = {"error_code": "same_password", "msg": "New password should be different"}
+    subject, client = auth(lambda _: httpx.Response(422, json=body))
+    async with client:
+        with pytest.raises(SamePasswordError):
             await subject.set_password("access-1", "a long new passphrase")

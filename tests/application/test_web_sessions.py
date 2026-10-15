@@ -390,7 +390,8 @@ async def test_accept_invitation__refresh_token_refused__refused_without_a_sessi
     with pytest.raises(InvitationRefusedError):
         await accept(store, auth, refresh_token="unknown-refresh")  # noqa: S106 - test value
     assert store.sessions == {}
-    assert [a[2] for a in store.attempts] == [False]
+    # The password changed before the refresh failed, so the link stays claimed (a success row).
+    assert [a[2] for a in store.attempts] == [True, False]
 
 
 async def test_accept_invitation__weak_password__reported_and_not_counted_as_a_failure() -> None:
@@ -475,3 +476,17 @@ async def test_accept_invitation__repeated_failures_of_one_link__throttled() -> 
             store=store,
             now=NOW,
         )
+
+
+async def test_accept_invitation__replayed_link__refused_before_setting_the_password_again() -> (
+    None
+):
+    store, auth = Store(), Auth()
+    auth.invitation()
+    await accept(store, auth)
+    auth.valid_refresh.add(INVITE_REFRESH)
+
+    with pytest.raises(InvitationRefusedError):
+        await accept(store, auth, password="another long passphrase")  # noqa: S106 - test value
+
+    assert auth.passwords_set == [(INVITE_ACCESS, NEW_PASSWORD)]

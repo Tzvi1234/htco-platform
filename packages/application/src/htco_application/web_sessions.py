@@ -15,12 +15,14 @@ with the invited user's Supabase tokens; the web app posts them once with the ch
 The access token is verified, the password set as that user, the refresh token exchanged for fresh
 tokens, and the session opened as at sign-in. Failures are counted per link and per client address
 in the same attempt log as sign-ins, so failed sign-ins and refused links share the address limit.
+A password reset link works the same way (`set_password_from_link`; see `password_reset`).
 """
 
 import base64
 import hashlib
 import secrets
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -33,6 +35,9 @@ REFRESH_MARGIN = timedelta(minutes=2)
 THROTTLE_WINDOW = timedelta(minutes=15)
 MAX_FAILURES_PER_EMAIL = 5
 MAX_FAILURES_PER_IP = 20
+# A link that already opened a session is refused for this long, even if its access token is
+# still valid; longer than any access token or email link lives.
+LINK_REUSE_WINDOW = timedelta(days=1)
 # Writing `last_seen_at` on every request is wasteful; this much activity is enough to record.
 TOUCH_INTERVAL = timedelta(minutes=1)
 
@@ -47,6 +52,27 @@ class SignInRefusedError(Exception):
 
 class InvitationRefusedError(Exception):
     """The invitation link's tokens are not valid (forged, expired, used, or the user is gone)."""
+
+
+class ResetLinkRefusedError(Exception):
+    """The password reset link's tokens are not valid (forged, expired, used, or user gone)."""
+
+
+class MfaCodeRequiredError(Exception):
+    """The user has an authenticator app: the auth provider wants a code before the password
+    changes."""
+
+
+class MfaCodeRefusedError(Exception):
+    """The authenticator app's code is wrong or expired."""
+
+
+class ResetEmailNotSentError(Exception):
+    """The auth provider did not send the password reset email (refused, rate limited or down)."""
+
+
+class SamePasswordError(Exception):
+    """The new password is the account's current password."""
 
 
 class WeakPasswordError(Exception):
@@ -125,8 +151,14 @@ class AuthProvider(Protocol):
     async def sign_out(self, access_token: str) -> None: ...
 
     async def set_password(self, access_token: str, password: str) -> None:
-        """As the token's user. Raises WeakPasswordError, or CredentialsRefusedError when the
-        user's session is not valid any more."""
+        """As the token's user. Raises WeakPasswordError, CredentialsRefusedError when the
+        user's session is not valid any more, or MfaCodeRequiredError when the user has an
+        authenticator app and the session is not `aal2`."""
+        ...
+
+    async def send_password_reset(self, email: str, redirect_to: str) -> None:
+        """Emails a password reset link that lands on `redirect_to`. Says nothing about whether
+        the account exists; raises ResetEmailNotSentError when the email was not sent."""
         ...
 
 
@@ -158,6 +190,29 @@ class SessionStore(Protocol):
     async def recent_failures(
         self, email_hash: bytes, ip_hash: bytes | None, since: datetime
     ) -> tuple[int, int]: ...
+
+    async def claim_link(self, key: bytes, since: datetime, at: datetime) -> bool:
+        """Atomically records a success under `key` unless one exists at or after `since`;
+        False when the link is already claimed."""
+        ...
+
+    async def release_link(self, key: bytes) -> None:
+        """Drops the claim, so the link can be tried again."""
+        ...
+
+    async def admit_attempt(  # noqa: PLR0913 - the keys, the limits and the moments
+        self,
+        key: bytes,
+        ip_hash: bytes | None,
+        *,
+        max_by_key: int,
+        max_by_ip: int,
+        since: datetime,
+        at: datetime,
+    ) -> bool:
+        """Atomically counts an attempt (as a failure) unless the key or the address already
+        reached its limit since `since`."""
+        ...
 
 
 def hash_cookie(cookie_value: str) -> bytes:
@@ -207,28 +262,113 @@ async def accept_invitation(  # noqa: PLR0913 - the link's tokens, the password 
     now: datetime,
 ) -> SignedIn:
     """Sets the invited user's password and signs them in on this browser."""
-    link_hash = _hash(f"invitation:{access_token}")
+    return await set_password_from_link(
+        access_token,
+        refresh_token,
+        password,
+        link=INVITATION_LINK,
+        client=client,
+        auth=auth,
+        tokens=tokens,
+        store=store,
+        now=now,
+    )
+
+
+@dataclass(frozen=True)
+class PasswordLink:
+    """A kind of link that lets its user choose a password (an invitation, a password reset)."""
+
+    # Namespaces the link's throttle key in the attempt log.
+    namespace: str
+    refused: type[Exception]
+
+
+INVITATION_LINK = PasswordLink("invitation", InvitationRefusedError)
+RESET_LINK = PasswordLink("password-reset", ResetLinkRefusedError)
+
+# Turns the link's session into an `aal2` one with the user's authenticator app, when needed.
+Elevate = Callable[[str, AuthenticatedUser], Awaitable[IssuedTokens | None]]
+
+
+async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the password and the collaborators
+    access_token: str,
+    refresh_token: str,
+    password: str,
+    *,
+    link: PasswordLink,
+    client: ClientInfo,
+    auth: AuthProvider,
+    tokens: TokenReader,
+    store: SessionStore,
+    now: datetime,
+    elevate: Elevate | None = None,
+) -> SignedIn:
+    """Sets the password as the link's user and opens a session on this browser.
+
+    The access token is verified, the password set as that user, the refresh token exchanged for
+    fresh tokens (spending the link's session) and the session opened as at sign-in. Refused
+    links and wrong codes count per link and per address; a weak or unchanged password or a missing
+    code does not, so the page can ask again with the same link. A link that already opened a
+    session is refused before anything changes.
+    """
+    link_hash = _hash(f"{link.namespace}:{access_token}")
     ip_hash = _hash(client.ip) if client.ip else None
     by_link, by_ip = await store.recent_failures(link_hash, ip_hash, now - THROTTLE_WINDOW)
     if by_link >= MAX_FAILURES_PER_EMAIL or by_ip >= MAX_FAILURES_PER_IP:
         raise TooManyAttemptsError("too many failed attempts")
 
-    async def refused() -> InvitationRefusedError:
+    async def failed(error: Exception) -> Exception:
         await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
-        return InvitationRefusedError("the invitation link is not valid")
+        return error
 
+    # The claim is the link's success record. Taken atomically before the password changes, it
+    # stops a replay of a used link (its access token can outlive it) and two requests racing
+    # with the same link. It is released only while the password is unchanged, so the page can
+    # try again.
+    if not await store.claim_link(link_hash, now - LINK_REUSE_WINDOW, now):
+        await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
+        raise link.refused("the link was already used")
     try:
-        invited = await tokens.read(access_token)
-        await auth.set_password(access_token, password)
+        # Nothing changes before the password call: any failure here releases the claim. Each
+        # path releases once; the handlers below only count the failure (a second release could
+        # drop the fresh claim of a concurrent retry).
+        try:
+            linked = await tokens.read(access_token)
+            elevated = None if elevate is None else await elevate(access_token, linked)
+        except BaseException:
+            await store.release_link(link_hash)
+            raise
+        if elevated is not None:
+            access_token, refresh_token = elevated.access_token, elevated.refresh_token
+        try:
+            await auth.set_password(access_token, password)
+        except (
+            WeakPasswordError,
+            SamePasswordError,
+            MfaCodeRequiredError,
+            TooManyAttemptsError,
+            CredentialsRefusedError,
+        ):
+            # Refused before any change: the page can try again with the same link.
+            await store.release_link(link_hash)
+            raise
+    except SessionEndedError, CredentialsRefusedError:
+        raise await failed(link.refused("the link is not valid")) from None
+    except MfaCodeRefusedError:
+        raise await failed(MfaCodeRefusedError("wrong code")) from None
+    # The password changed, or might have (an unknown outcome keeps the claim too): from here on
+    # the link stays claimed, whatever happens.
+    try:
         issued = await auth.refresh(refresh_token)
         user = await tokens.read(issued.access_token)
     except SessionEndedError, CredentialsRefusedError:
-        raise await refused() from None
-    if user.user_id != invited.user_id:
-        raise await refused()
-    signed_in = await _open_session(issued, user, client=client, store=store, now=now)
-    await store.record_attempt(link_hash, ip_hash, succeeded=True, at=now)
-    return signed_in
+        await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
+        raise link.refused("the link is not valid") from None
+    if user.user_id != linked.user_id:
+        await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
+        raise link.refused("the link is not valid")
+    return await _open_session(issued, user, client=client, store=store, now=now)
 
 
 async def _open_session(
