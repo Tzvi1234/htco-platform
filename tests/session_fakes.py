@@ -5,11 +5,14 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 from htco_application.access.authentication import AuthenticatedUser
+from htco_application.mfa import Enrollment, Factor
 from htco_application.web_sessions import (
     ClientInfo,
     CredentialsRefusedError,
     IssuedTokens,
+    MfaCodeRequiredError,
     NewSession,
+    ResetEmailNotSentError,
     SessionEndedError,
     StoredSession,
     WeakPasswordError,
@@ -23,6 +26,12 @@ CLIENT = ClientInfo(ip="203.0.113.7", user_agent="Firefox")
 INVITE_ACCESS = "invite-access"
 INVITE_REFRESH = "invite-refresh"
 NEW_PASSWORD = "a long new passphrase"  # noqa: S105 - test value
+# The tokens a password reset (recovery) link hands the browser, the same way.
+RESET_ACCESS = "reset-access"
+RESET_REFRESH = "reset-refresh"
+RESET_REDIRECT = "https://dash.ht-co.app/reset-password"
+# The authenticator app's right code in `Authenticator`.
+RIGHT_CODE = "123456"
 
 
 def tokens(n: int, *, expires_in: timedelta = timedelta(hours=1)) -> IssuedTokens:
@@ -41,6 +50,11 @@ class Auth:
     signed_out: list[str] = field(default_factory=list)
     refresh_expires_in: timedelta = timedelta(hours=1)
     passwords_set: list[tuple[str, str]] = field(default_factory=list)
+    # Password reset emails asked for: (email, redirect), and whether the provider fails.
+    reset_emails: list[tuple[str, str]] = field(default_factory=list)
+    reset_email_fails: bool = False
+    # A user with an authenticator app: Supabase wants an `aal2` session to change the password.
+    mfa_enrolled: bool = False
 
     async def sign_in_with_password(self, email: str, password: str) -> IssuedTokens:
         if (email, password) != ("owner@example.test", self.password):
@@ -60,20 +74,57 @@ class Auth:
         """Supabase refuses an ended session, and a password its policy calls weak."""
         if access_token.startswith("revoked"):
             raise CredentialsRefusedError
+        if self.mfa_enrolled and not access_token.startswith("aal2"):
+            raise MfaCodeRequiredError("an aal2 session is required")
         if "weak" in password:
             raise WeakPasswordError("too weak")
         self.passwords_set.append((access_token, password))
+
+    async def send_password_reset(self, email: str, redirect_to: str) -> None:
+        if self.reset_email_fails:
+            raise ResetEmailNotSentError("the provider failed")
+        self.reset_emails.append((email, redirect_to))
 
     def invitation(self) -> tuple[str, str]:
         """The access and refresh tokens of a session opened by an invitation link."""
         self.valid_refresh.add(INVITE_REFRESH)
         return INVITE_ACCESS, INVITE_REFRESH
 
+    def recovery(self) -> tuple[str, str]:
+        """The access and refresh tokens of a session opened by a password reset link."""
+        self.valid_refresh.add(RESET_REFRESH)
+        return RESET_ACCESS, RESET_REFRESH
+
     def _issue(self, expires_in: timedelta) -> IssuedTokens:
         self.issued += 1
         issued = tokens(self.issued, expires_in=expires_in)
         self.valid_refresh.add(issued.refresh_token)
         return issued
+
+
+@dataclass
+class Authenticator:
+    """Supabase MFA in memory for one user with a verified authenticator app (or none)."""
+
+    auth: Auth
+    enrolled: bool = True
+    verified: list[tuple[str, str]] = field(default_factory=list)
+
+    async def enroll_totp(self, access_token: str, *, friendly_name: str) -> Enrollment:
+        raise NotImplementedError
+
+    async def verify_totp(self, access_token: str, factor_id: str, code: str) -> IssuedTokens:
+        if code != RIGHT_CODE:
+            raise CredentialsRefusedError
+        self.verified.append((access_token, factor_id))
+        self.auth.valid_refresh.add("aal2-refresh")
+        return IssuedTokens("aal2-access", "aal2-refresh", NOW + timedelta(hours=1))
+
+    async def factors_of(self, access_token: str) -> list[Factor]:  # noqa: ARG002 - fake
+        return [Factor(id="factor-1", verified=True, name="Phone")] if self.enrolled else []
+
+    async def remove_factor(self, access_token: str, factor_id: str) -> None:
+        raise NotImplementedError
 
 
 class Tokens:

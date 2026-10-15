@@ -17,6 +17,8 @@ from htco_api.settings import ApiSettings
 from htco_application.access.management import InvitedUser, InviteeAlreadyRegisteredError
 from htco_application.web_sessions import (
     CredentialsRefusedError,
+    MfaCodeRequiredError,
+    ResetEmailNotSentError,
     TooManyAttemptsError,
     WeakPasswordError,
 )
@@ -98,6 +100,31 @@ async def test_provider__set_password_errors__are_the_applications(
             await subject.set_password("access-1", "a long new passphrase")
 
 
+async def test_provider__set_password_needing_aal2__asks_for_the_code() -> None:
+    subject, client = provider(httpx.Response(401, json={"error_code": "insufficient_aal"}))
+    async with client:
+        with pytest.raises(MfaCodeRequiredError):
+            await subject.set_password("access-1", "a long new passphrase")
+
+
+async def test_provider__send_password_reset__succeeds() -> None:
+    subject, client = provider(httpx.Response(200, json={}))
+    async with client:
+        await subject.send_password_reset("n@x.test", "https://dash.ht-co.app/reset-password")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(429), httpx.Response(400, json={"error_code": "x"}), httpx.Response(500)],
+    ids=["rate-limited", "refused", "down"],
+)
+async def test_provider__send_password_reset_errors__are_not_sent(response: httpx.Response) -> None:
+    subject, client = provider(response)
+    async with client:
+        with pytest.raises(ResetEmailNotSentError):
+            await subject.send_password_reset("n@x.test", "https://dash.ht-co.app/reset-password")
+
+
 class _Server:
     def __init__(self) -> None:
         self.apps: list[FastAPI] = []
@@ -160,3 +187,24 @@ def test_main__web_sign_in_needs_the_session_key_and_publishable_key(
 
     [app] = server.apps
     assert (app.state.web_auth is not None) is on
+
+
+@pytest.mark.usefixtures("restore_logging")
+@pytest.mark.parametrize(
+    "redirect", ["https://dash.ht-co.app/reset-password", None], ids=["set", "unset"]
+)
+def test_main__password_reset_links_land_on_the_configured_page(
+    environment: pytest.MonkeyPatch, redirect: str | None
+) -> None:
+    import base64  # noqa: PLC0415 - local to this test
+
+    environment.setenv("HTCO_SESSION_KEY", base64.b64encode(b"k" * 32).decode())
+    environment.setenv("HTCO_SUPABASE_PUBLISHABLE_KEY", "sb_publishable_x")
+    if redirect is not None:
+        environment.setenv("HTCO_PASSWORD_RESET_REDIRECT_URL", redirect)
+    server = _Server()
+
+    main(serve=server)
+
+    [app] = server.apps
+    assert app.state.web_auth.password_reset_redirect == redirect

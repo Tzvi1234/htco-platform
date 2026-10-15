@@ -73,6 +73,12 @@ def test_spec__invitation_links_land_on_the_web_apps_accept_page() -> None:
     assert _envs()["HTCO_INVITE_REDIRECT_URL"]["value"] == "https://dash.ht-co.app/accept-invite"
 
 
+def test_spec__password_reset_links_land_on_the_web_apps_reset_page() -> None:
+    env = _envs()["HTCO_PASSWORD_RESET_REDIRECT_URL"]
+    assert env["value"] == "https://dash.ht-co.app/reset-password"
+    assert env.get("type") != "SECRET"
+
+
 def test_spec__health_checks_and_alerts() -> None:
     api = _api()
     assert api["http_port"] == 8080

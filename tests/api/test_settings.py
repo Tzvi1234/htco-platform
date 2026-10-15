@@ -48,6 +48,21 @@ def test_blank_optional_settings__are_unset(blank: str) -> None:
     assert settings.invite_redirect_url is None
 
 
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_password_reset_redirect__is_unset(blank: str) -> None:
+    settings = ApiSettings.model_validate(
+        {"environment": "local", "password_reset_redirect_url": blank}
+    )
+    assert settings.password_reset_redirect_url is None
+
+
+def test_password_reset_redirect__is_a_url() -> None:
+    with pytest.raises(ValidationError):
+        ApiSettings.model_validate(
+            {"environment": "local", "password_reset_redirect_url": "not a url"}
+        )
+
+
 def test_blank_database_url__is_refused_when_deployed() -> None:
     with pytest.raises(ValidationError, match="HTCO_DATABASE_URL"):
         ApiSettings.model_validate(
