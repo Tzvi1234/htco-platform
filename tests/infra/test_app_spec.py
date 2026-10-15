@@ -244,7 +244,9 @@ def test_deploy__checks_health_on_the_default_ingress() -> None:
     [check] = [
         s for s in job["steps"] if s.get("name") == "The deployed API answers its health checks"
     ]
-    assert ".default_ingress" in check["run"]
+    # The URLs arrive through the step's environment; the platform URL is tried first.
+    assert ".default_ingress" in check["env"]["INGRESS"]
+    assert 'url="${INGRESS:-$LIVE_URL}"' in check["run"]
 
 
 def test_deploy__refuses_a_spec_that_costs_more_than_the_budget() -> None:
@@ -269,3 +271,9 @@ def test_admin_bootstrap__owner_dispatch_only_inputs_via_env_and_no_password_in_
     assert "${{" not in run["run"]
     assert run["env"]["PGPASSWORD"] == "${{ secrets.SUPABASE_DB_PASSWORD }}"
     assert ":${" not in run["env"]["HTCO_DATABASE_URL"].split("@")[0]
+
+
+def test_deploy_never_puts_the_whole_app_object_in_a_step_environment() -> None:
+    """GitHub prints every step's environment in the run log. DigitalOcean's app object holds the
+    account's email, internal IDs and every (encrypted) secret, so only the URLs are passed on."""
+    assert "${{ steps.deploy.outputs.app }}" not in DEPLOY_TEXT
