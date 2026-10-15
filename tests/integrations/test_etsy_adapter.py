@@ -597,6 +597,28 @@ async def test_quota_headers__missing_or_garbled__keep_the_call_working(
     assert snapshot.remaining_today is None
 
 
+@pytest.mark.ac("AC-4.1.2")
+async def test_quota_headers__headerless_failure__does_not_lift_deferral(
+    make: Callable[..., Harness],
+) -> None:
+    script = Scripted(
+        httpx.Response(200, json=fixture("shop.json"), headers=quota_headers(today=100)),
+        httpx.Response(503, text="Service Unavailable"),
+    )
+    harness = make(script, daily_quota_floor=500, max_attempts=1)
+
+    async with harness.client:
+        await harness.adapter.get_shop(SHOP_ID)
+        with pytest.raises(MarketplaceUnavailableError):
+            await harness.adapter.get_shop(SHOP_ID, urgent=True)
+        with pytest.raises(QuotaDeferredError):
+            await harness.adapter.get_shop(SHOP_ID)
+
+    snapshot = harness.adapter.last_seen_quota()
+    assert snapshot is not None
+    assert snapshot.remaining_today == 100
+
+
 async def test_throttle__allows_half_the_per_second_limit__then_waits(
     make: Callable[..., Harness],
 ) -> None:
