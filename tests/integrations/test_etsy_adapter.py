@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 import pytest
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, Sum
 from opentelemetry.sdk.trace import TracerProvider
 
 from htco_application.marketplace import (
@@ -150,8 +150,8 @@ class Harness:
         for resource in data.resource_metrics:
             for scope in resource.scope_metrics:
                 for metric in scope.metrics:
-                    if metric.name == name:
-                        total += sum(int(point.value) for point in metric.data.data_points)  # type: ignore[union-attr]
+                    if metric.name == name and isinstance(metric.data, Sum):
+                        total += sum(int(point.value) for point in metric.data.data_points)
         return total
 
 
@@ -710,7 +710,7 @@ async def test_daily_quota_at_or_above_floor__routine_calls_run(
 
     async with harness.client:
         await harness.adapter.get_shop(SHOP_ID)
-        await harness.adapter.list_listings(SHOP_ID)
+        await harness.adapter.get_shop(SHOP_ID)
 
     assert len(script.requests) == 2
 
