@@ -109,8 +109,9 @@ async def reset_password(  # noqa: PLR0913 - the link's tokens, the password, th
                     return await mfa.verify_totp(link_access_token, factor.id, entered)
                 except CredentialsRefusedError:
                     continue
-            ip_hash = hash_value(client.ip) if client.ip else None
-            await store.record_attempt(key, ip_hash, succeeded=False, at=now)
+            # Counted against the user only; the link's failure row carries the address, so one
+            # wrong code counts once against the address limit.
+            await store.record_attempt(key, None, succeeded=False, at=now)
             raise MfaCodeRefusedError("wrong code")
 
         return elevate

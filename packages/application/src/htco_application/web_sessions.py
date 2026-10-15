@@ -331,19 +331,25 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
         await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
         raise link.refused("the link was already used")
     try:
-        linked = await tokens.read(access_token)
-        elevated = None if elevate is None else await elevate(access_token, linked)
+        # Nothing changes before the password call: any failure here releases the claim.
+        try:
+            linked = await tokens.read(access_token)
+            elevated = None if elevate is None else await elevate(access_token, linked)
+        except BaseException:
+            await store.release_link(link_hash)
+            raise
         if elevated is not None:
             access_token, refresh_token = elevated.access_token, elevated.refresh_token
-        await auth.set_password(access_token, password)
+        try:
+            await auth.set_password(access_token, password)
+        except WeakPasswordError, SamePasswordError, MfaCodeRequiredError, TooManyAttemptsError:
+            # Refused before any change: the page can try again with the same link.
+            await store.release_link(link_hash)
+            raise
     except SessionEndedError, CredentialsRefusedError:
         raise await failed(link.refused("the link is not valid")) from None
     except MfaCodeRefusedError:
         raise await failed(MfaCodeRefusedError("wrong code")) from None
-    except WeakPasswordError, SamePasswordError, MfaCodeRequiredError, TooManyAttemptsError:
-        # Refused before any change: the page can try again with the same link.
-        await store.release_link(link_hash)
-        raise
     # The password changed, or might have (an unknown outcome keeps the claim too): from here on
     # the link stays claimed, whatever happens.
     try:
