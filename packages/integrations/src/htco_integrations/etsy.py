@@ -58,6 +58,13 @@ from htco_application.marketplace import (
 ETSY_BASE_URL = "https://openapi.etsy.com/v3/application"
 MAX_PAGE_SIZE = 100
 
+_QUOTA_HEADERS = (
+    "x-limit-per-second",
+    "x-remaining-this-second",
+    "x-limit-per-day",
+    "x-remaining-today",
+)
+
 _log = structlog.get_logger(__name__)
 
 
@@ -307,6 +314,10 @@ class EtsyAdapter:
 
     def _observe_quota(self, response: httpx.Response) -> None:
         headers = response.headers
+        # An answer without any budget header (a gateway error page, say) says nothing about the
+        # budget; it must not erase what Etsy reported last.
+        if self._quota is not None and not any(name in headers for name in _QUOTA_HEADERS):
+            return
         snapshot = QuotaSnapshot(
             limit_per_second=_count(headers.get("x-limit-per-second")),
             remaining_this_second=_count(headers.get("x-remaining-this-second")),
