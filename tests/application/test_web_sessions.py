@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import override
 
+import anyio
 import pytest
 
 from htco_application.access.authentication import AuthenticatedUser
@@ -241,6 +242,33 @@ async def test_sign_in__supabase_unreachable__not_counted() -> None:
     assert await store.recent_failures(
         hashlib.sha256(b"owner@example.test").digest(), None, NOW - timedelta(minutes=15)
     ) == (0, 0)
+
+
+async def test_sign_in__cancelled_while_supabase_answers__the_attempt_stays_counted() -> None:
+    """A request dropped in flight fails closed: its reservation counts until the window passes."""
+    store = Store()
+    with anyio.CancelScope() as scope:
+
+        class Cancelled(Auth):
+            @override
+            async def sign_in_with_password(self, email: str, password: str) -> IssuedTokens:
+                scope.cancel()
+                await anyio.lowlevel.checkpoint()
+                raise AssertionError  # pragma: no cover - cancelled at the checkpoint
+
+        await sign_in(
+            "owner@example.test",
+            "x",
+            client=CLIENT,
+            auth=Cancelled(),
+            tokens=Tokens(),
+            store=store,
+            now=NOW,
+        )
+
+    assert await store.recent_failures(
+        hashlib.sha256(b"owner@example.test").digest(), None, NOW - timedelta(minutes=15)
+    ) == (1, 0)
 
 
 async def test_sign_in__old_failures_no_longer_count() -> None:
