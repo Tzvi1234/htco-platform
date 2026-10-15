@@ -137,7 +137,8 @@ async def test_invite__creates_the_membership_and_audits_it() -> None:
     assert record.before is None
     assert record.after == {"user_id": str(NEWCOMER), "role": "support"}
     assert record.correlation_id == "corr"
-    assert store.claims_seen == [{"sub": str(ADMIN)}]
+    # The membership check and the write both run as the caller (RLS applies to each).
+    assert store.claims_seen == [{"sub": str(ADMIN)}, {"sub": str(ADMIN)}]
 
 
 async def test_invite__someone_already_in_the_organization__conflict() -> None:
@@ -153,6 +154,26 @@ async def test_invite__someone_already_in_the_organization__conflict() -> None:
             now=NOW,
             correlation_id="c",
         )
+    assert store.audit == []
+
+
+async def test_invite__a_member_again__refused_without_replacing_the_delivered_link() -> None:
+    """A retried invitation (its first response lost) must not ask the sign-in service for a new
+    link: that would replace the pending token and break the link already sent."""
+    store = Store(registered={"s@x.test": SUPPORT})
+    inviter = Inviter(SUPPORT)
+    with pytest.raises(MemberAlreadyExistsError):
+        await invite_member(
+            AS_OWNER,
+            store,
+            inviter,
+            ORG,
+            email="s@x.test",
+            role=Role.VIEWER,
+            now=NOW,
+            correlation_id="c",
+        )
+    assert inviter.invited == []
     assert store.audit == []
 
 

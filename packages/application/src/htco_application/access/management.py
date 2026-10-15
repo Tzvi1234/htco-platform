@@ -224,6 +224,15 @@ async def invite_member(  # noqa: PLR0913 - the request's fields plus the collab
     address = _valid_email(email)
     principal = _authorize(auth, organization_id, now)
     _may_assign(principal, role)
+
+    def already_member(uow: AccessUnitOfWork) -> bool:
+        user_id = uow.registered_user_id(organization_id, address)
+        return user_id is not None and uow.active_member_by_user(organization_id, user_id)
+
+    # Checked before asking for a link: a new link replaces the pending one, so a retried
+    # invitation would otherwise break the link that was already sent.
+    if await store.run(auth.claims, already_member):
+        raise MemberAlreadyExistsError("already a member of this organization")
     try:
         invited: InvitedUser | None = await inviter.invite(address)
     except InviteeAlreadyRegisteredError:
