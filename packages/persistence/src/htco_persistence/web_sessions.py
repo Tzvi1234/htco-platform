@@ -91,6 +91,22 @@ class PostgresSessionStore:
     ) -> tuple[int, int]:
         return await anyio.to_thread.run_sync(self._recent_failures, email_hash, ip_hash, since)
 
+    async def succeeded_since(self, key: bytes, since: datetime) -> bool:
+        def run() -> bool:
+            with self._database.connection() as connection:
+                row = connection.execute(
+                    """
+                    select exists (
+                      select 1 from private.sign_in_attempts
+                      where email_hash = %s and succeeded and attempted_at >= %s
+                    )
+                    """,
+                    [key, since],
+                ).fetchone()
+            return row is not None and bool(row[0])
+
+        return await anyio.to_thread.run_sync(run)
+
     # Sync work in a worker thread ----------------------------------------------------------------
 
     def _seal(self, session_id: uuid.UUID, issued: IssuedTokens) -> tuple[bytes, bytes]:

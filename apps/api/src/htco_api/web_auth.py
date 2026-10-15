@@ -58,6 +58,7 @@ from htco_application.web_sessions import (
     MfaCodeRefusedError,
     MfaCodeRequiredError,
     ResetLinkRefusedError,
+    SamePasswordError,
     SessionEndedError,
     SignInRefusedError,
     TokenReader,
@@ -110,6 +111,12 @@ MFA_CODE_REQUIRED = ProblemType(
     "Code required",
     403,
     "Enter the code from your authenticator app to set a new password.",
+)
+SAME_PASSWORD = ProblemType(
+    "same-password",
+    "Password unchanged",
+    422,
+    "This is the current password. Choose a different one.",
 )
 SESSION_ENDED = ProblemType(
     "session-ended", "Session ended", 401, "Your session ended. Sign in again."
@@ -350,7 +357,8 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
             # Two shapes: `validation-error` (with `errors`) and `weak-password` (without).
             422: _problem(
                 "Missing tokens or a password of the wrong length (validation-error), "
-                "or a password the sign-in service calls weak (weak-password)"
+                "a password the sign-in service calls weak (weak-password), "
+                "or the current password (same-password)"
             ),
             429: _problem("Too many failed attempts; see Retry-After"),
             503: _problem("Sign-in is unavailable"),
@@ -377,6 +385,8 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
             raise ProblemError(INVITATION_REFUSED) from None
         except WeakPasswordError:
             raise ProblemError(WEAK_PASSWORD) from None
+        except SamePasswordError:
+            raise ProblemError(SAME_PASSWORD) from None
         except MfaCodeRequiredError:
             raise ProblemError(MFA_CODE_REQUIRED) from None
         except TooManyAttemptsError:
@@ -434,7 +444,8 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
             # Two shapes: `validation-error` (with `errors`) and `weak-password` (without).
             422: _problem(
                 "Missing tokens, a password of the wrong length or a malformed code "
-                "(validation-error), or a password the sign-in service calls weak (weak-password)"
+                "(validation-error), a password the sign-in service calls weak (weak-password), "
+                "or the current password (same-password)"
             ),
             429: _problem("Too many failed attempts; see Retry-After"),
             503: _problem("Sign-in is unavailable"),
@@ -467,6 +478,8 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
             raise ProblemError(MFA_CODE_REFUSED) from None
         except WeakPasswordError:
             raise ProblemError(WEAK_PASSWORD) from None
+        except SamePasswordError:
+            raise ProblemError(SAME_PASSWORD) from None
         except TooManyAttemptsError:
             raise _too_many() from None
         _set_cookie(response, signed_in.cookie_value)

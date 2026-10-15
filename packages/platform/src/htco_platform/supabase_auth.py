@@ -32,6 +32,10 @@ class WeakPasswordError(Exception):
     """Supabase Auth's password policy refused the new password."""
 
 
+class SamePasswordError(Exception):
+    """The new password is the user's current password (`same_password`)."""
+
+
 # Updating the user also fails when the user's session is gone, not only on a bad password.
 _SESSION_REFUSED = _REJECTED | {"bad_jwt", "session_not_found", "user_not_found"}
 
@@ -201,6 +205,8 @@ class SupabaseAuth:
             raise MfaRequiredError("an aal2 session is required")
         if response.status_code == httpx.codes.UNPROCESSABLE_ENTITY and code == "weak_password":
             raise WeakPasswordError("the password is too weak")
+        if response.status_code == httpx.codes.UNPROCESSABLE_ENTITY and code == "same_password":
+            raise SamePasswordError("the password is unchanged")
         if response.is_client_error and code in refused:
             raise InvalidCredentialsError("refused")
         if response.is_error:

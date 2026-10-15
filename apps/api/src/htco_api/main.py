@@ -29,6 +29,7 @@ from htco_application.web_sessions import (
     IssuedTokens,
     MfaCodeRequiredError,
     ResetEmailNotSentError,
+    SamePasswordError,
     TooManyAttemptsError,
     WeakPasswordError,
 )
@@ -57,6 +58,7 @@ from htco_platform.supabase_auth import (
     RateLimitedError,
     SupabaseAuth,
 )
+from htco_platform.supabase_auth import SamePasswordError as SupabaseSamePasswordError
 from htco_platform.supabase_auth import WeakPasswordError as SupabaseWeakPasswordError
 from htco_platform.tracing import new_tracer_provider
 
@@ -185,6 +187,8 @@ class _AuthProvider:
             await self._auth.set_password(access_token, password)
         except SupabaseWeakPasswordError:
             raise WeakPasswordError("the password is too weak") from None
+        except SupabaseSamePasswordError:
+            raise SamePasswordError("the password is unchanged") from None
         except InvalidCredentialsError:
             raise CredentialsRefusedError from None
         except RateLimitedError:

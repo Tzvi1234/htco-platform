@@ -93,15 +93,19 @@ async def reset_password(  # noqa: PLR0913 - the link's tokens, the password, th
             if failures >= MAX_CODE_FAILURES:
                 raise TooManyAttemptsError("too many wrong codes")
             factors = await mfa.factors_of(link_access_token)
-            verified = next((factor for factor in factors if factor.verified), None)
-            if verified is None:
+            verified = [factor for factor in factors if factor.verified]
+            if not verified:
                 return None  # no authenticator app: the password changes without a code
-            try:
-                return await mfa.verify_totp(link_access_token, verified.id, entered)
-            except CredentialsRefusedError:
-                ip_hash = hash_value(client.ip) if client.ip else None
-                await store.record_attempt(key, ip_hash, succeeded=False, at=now)
-                raise MfaCodeRefusedError("wrong code") from None
+            # The request names no factor: the code may come from any of the user's apps (one
+            # may be the lost one). One wrong code counts once, however many apps were tried.
+            for factor in verified:
+                try:
+                    return await mfa.verify_totp(link_access_token, factor.id, entered)
+                except CredentialsRefusedError:
+                    continue
+            ip_hash = hash_value(client.ip) if client.ip else None
+            await store.record_attempt(key, ip_hash, succeeded=False, at=now)
+            raise MfaCodeRefusedError("wrong code")
 
         return elevate
 

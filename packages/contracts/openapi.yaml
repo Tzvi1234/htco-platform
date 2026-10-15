@@ -1246,8 +1246,8 @@ paths:
                 type: string
                 format: uuid
         '422':
-          description: Missing tokens or a password of the wrong length (validation-error), or a password
-            the sign-in service calls weak (weak-password)
+          description: Missing tokens or a password of the wrong length (validation-error), a password
+            the sign-in service calls weak (weak-password), or the current password (same-password)
           content:
             application/problem+json:
               schema:
@@ -1474,7 +1474,7 @@ paths:
                 format: uuid
         '422':
           description: Missing tokens, a password of the wrong length or a malformed code (validation-error),
-            or a password the sign-in service calls weak (weak-password)
+            a password the sign-in service calls weak (weak-password), or the current password (same-password)
           content:
             application/problem+json:
               schema:

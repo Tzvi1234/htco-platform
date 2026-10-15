@@ -35,6 +35,9 @@ REFRESH_MARGIN = timedelta(minutes=2)
 THROTTLE_WINDOW = timedelta(minutes=15)
 MAX_FAILURES_PER_EMAIL = 5
 MAX_FAILURES_PER_IP = 20
+# A link that already opened a session is refused for this long, even if its access token is
+# still valid; longer than any access token or email link lives.
+LINK_REUSE_WINDOW = timedelta(days=1)
 # Writing `last_seen_at` on every request is wasteful; this much activity is enough to record.
 TOUCH_INTERVAL = timedelta(minutes=1)
 
@@ -66,6 +69,10 @@ class MfaCodeRefusedError(Exception):
 
 class ResetEmailNotSentError(Exception):
     """The auth provider did not send the password reset email (refused, rate limited or down)."""
+
+
+class SamePasswordError(Exception):
+    """The new password is the account's current password."""
 
 
 class WeakPasswordError(Exception):
@@ -184,6 +191,10 @@ class SessionStore(Protocol):
         self, email_hash: bytes, ip_hash: bytes | None, since: datetime
     ) -> tuple[int, int]: ...
 
+    async def succeeded_since(self, key: bytes, since: datetime) -> bool:
+        """Whether an attempt under `key` succeeded at or after `since`."""
+        ...
+
 
 def hash_cookie(cookie_value: str) -> bytes:
     return hashlib.sha256(cookie_value.encode("utf-8")).digest()
@@ -278,8 +289,9 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
 
     The access token is verified, the password set as that user, the refresh token exchanged for
     fresh tokens (spending the link's session) and the session opened as at sign-in. Refused
-    links and wrong codes count per link and per address; a weak password or a missing code does
-    not, so the page can ask again with the same link.
+    links and wrong codes count per link and per address; a weak or unchanged password or a missing
+    code does not, so the page can ask again with the same link. A link that already opened a
+    session is refused before anything changes.
     """
     link_hash = _hash(f"{link.namespace}:{access_token}")
     ip_hash = _hash(client.ip) if client.ip else None
@@ -290,6 +302,10 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
     async def failed(error: Exception) -> Exception:
         await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
         return error
+
+    # A used link's access token can outlive it; refuse before the password changes again.
+    if await store.succeeded_since(link_hash, now - LINK_REUSE_WINDOW):
+        raise await failed(link.refused("the link was already used"))
 
     try:
         linked = await tokens.read(access_token)
