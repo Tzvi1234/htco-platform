@@ -587,3 +587,28 @@ async def test_reset__one_wrong_code__counts_once_against_the_address() -> None:
 
     ip_hash = hashlib.sha256(CLIENT.ip.encode()).digest()  # type: ignore[union-attr]
     assert [a[1] for a in store.attempts if not a[2]].count(ip_hash) == 1
+
+
+@pytest.mark.parametrize(
+    ("access_token", "code"),
+    [(RESET_ACCESS, "000000"), ("invalid-token", None), ("revoked-access", None)],
+    ids=["wrong-code", "invalid-token", "session-ended"],
+)
+async def test_reset__a_refusal_releases_the_claim_exactly_once(
+    access_token: str, code: str | None
+) -> None:
+    class Counting(Store):
+        releases: int = 0
+
+        @override
+        async def release_link(self, key: bytes) -> None:
+            self.releases += 1
+            await super().release_link(key)
+
+    store, auth = Counting(), Auth(mfa_enrolled=code is not None)
+    auth.recovery()
+
+    with pytest.raises((MfaCodeRefusedError, ResetLinkRefusedError)):
+        await reset(store, auth, access_token=access_token, code=code, mfa=Authenticator(auth))
+
+    assert store.releases == 1  # a second release could drop a concurrent retry's fresh claim
