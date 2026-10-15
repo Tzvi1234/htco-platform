@@ -29,6 +29,13 @@ Supplier quotes are collected and approved once per product or variant, and beco
 
 ## Scope
 
+**Shop statistics (owner, 2026-10-15).** Views, visits and conversion are not in the Etsy API. At kickoff we evaluate two sources:
+- whether an Etsy App Marketplace tool the owner already uses (eRank, Alura, Marmalead…) offers an API or an export;
+- the official Shop Manager CSV export, which the owner uploads and HTCO parses.
+
+No scraping of etsy.com.
+
+
 **In:** quote requests, quotes and mappings; the Supplier Quote Request & Follow-up automation (records the request, waits in `WAITING_FOR_QUOTES` without model calls, collects quotes, applies hard rules, notifies Tom); hard-rule filtering in code; Tom's evaluation of valid quotes, with optional ranking through the Decision Advisor only after a benchmark on 200+ labelled cases; approval by risk; supplier mappings; Inventory & Supplier Price Monitoring opening re-sourcing tasks; `AutoVaPort` adapters (manual first; API if AutoVA provides one); Finance Ledger Ingestion from Etsy payment and ledger endpoints, refunds, payouts, cost snapshots, AI and infrastructure costs (from `model_usage`); P&L views; unit costs per listing, ticket, inspected order, repair, shop, employee and department; CSV export with audit; Roni's monthly narrative and anomaly review (explains, never records).
 
 **Out:** paying suppliers (AutoVA's job); optimization proposals from the cost data ([Phase 18](phase-18-optimization.md)).
