@@ -69,6 +69,10 @@ class Mfa:
     async def factors_of(self, access_token: str) -> list[Factor]:  # noqa: ARG002 - fake
         return list(self.factors)
 
+    async def remove_factor(self, access_token: str, factor_id: str) -> None:
+        self.calls.append(f"remove {access_token} {factor_id}")
+        self.factors = [f for f in self.factors if f.id != factor_id]
+
 
 async def active(store: Store, auth: Auth, *, at: datetime = NOW) -> ActiveSession:
     signed = await sign_in(
@@ -98,6 +102,34 @@ async def test_enroll_then_verify__session_gets_the_new_aal2_tokens_and_a_step_u
     assert stored.tokens == tokens(99)
     assert stored.reauthenticated_at == NOW
     assert mfa.calls == ["enroll access-1 Phone", "verify access-1 factor-1"]
+
+
+async def test_enroll_again__the_unfinished_factor_is_removed_first() -> None:
+    """Supabase refuses a second factor with the same name, so an abandoned QR code would block
+    every later attempt (mfa_factor_name_conflict)."""
+    store, auth, mfa = Store(), Auth(), Mfa()
+    session = await active(store, auth)
+    await start_enrollment(session, mfa, friendly_name="Phone")
+
+    again = await start_enrollment(session, mfa, friendly_name="Phone")
+
+    assert mfa.calls == [
+        "enroll access-1 Phone",
+        "remove access-1 factor-1",
+        "enroll access-1 Phone",
+    ]
+    assert [(f.id, f.verified) for f in mfa.factors] == [(again.factor_id, False)]
+
+
+async def test_enroll_another__a_verified_factor_is_kept_and_the_name_made_unique() -> None:
+    store, auth, mfa = Store(), Auth(), Mfa()
+    mfa.factors = [Factor(id="kept", verified=True, name="Phone")]
+    session = await active(store, auth)
+
+    await start_enrollment(session, mfa, friendly_name="Phone")
+
+    assert mfa.calls == ["enroll access-1 Phone (2)"]
+    assert [(f.id, f.verified) for f in mfa.factors] == [("kept", True), ("factor-2", False)]
 
 
 async def test_verify__wrong_code__refused_and_throttled() -> None:

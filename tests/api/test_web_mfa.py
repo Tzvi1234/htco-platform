@@ -51,6 +51,9 @@ class Mfa:
     async def factors_of(self, access_token: str) -> list[Factor]:  # noqa: ARG002 - fake
         return list(self.factors)
 
+    async def remove_factor(self, access_token: str, factor_id: str) -> None:  # noqa: ARG002
+        self.factors = [f for f in self.factors if f.id != factor_id]
+
 
 class Aal2AfterVerify(Tokens):
     """Token 50 is the one Supabase issues after MFA: it carries `aal2`."""
