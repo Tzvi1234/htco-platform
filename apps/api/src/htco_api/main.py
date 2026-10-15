@@ -192,6 +192,12 @@ class _AuthProvider:
             if f.factor_type == "totp"
         ]
 
+    async def remove_factor(self, access_token: str, factor_id: str) -> None:
+        try:
+            await self._auth.unenroll(access_token, factor_id)
+        except AuthServiceError, InvalidCredentialsError, RateLimitedError:
+            raise ProblemError(AUTH_UNAVAILABLE) from None
+
     @staticmethod
     async def _call(pending: Awaitable[AuthTokens]) -> IssuedTokens:
         try:
