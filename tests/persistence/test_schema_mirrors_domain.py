@@ -5,6 +5,7 @@ from pathlib import Path
 
 from htco_domain.actors import ActorKind
 from htco_domain.identity import Role
+from htco_domain.integrations import IntegrationProvider, IntegrationStatus
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
 
@@ -23,3 +24,13 @@ def test_memberships_role_check__lists_exactly_the_domain_roles() -> None:
 
 def test_audit_actor_kind_check__lists_exactly_the_domain_actor_kinds() -> None:
     assert _check_values("audit_log_actor_kind_check") == {kind.value for kind in ActorKind}
+
+
+def test_shop_integrations_status_check__lists_exactly_the_domain_statuses() -> None:
+    assert _check_values("shop_integrations_status_check") == {s.value for s in IntegrationStatus}
+
+
+def test_shop_integrations_provider_check__lists_exactly_the_domain_providers() -> None:
+    assert _check_values("shop_integrations_provider_check") == {
+        provider.value for provider in IntegrationProvider
+    }
