@@ -4,6 +4,7 @@ import hashlib
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta
+from typing import override
 
 import pytest
 
@@ -404,6 +405,7 @@ async def test_accept_invitation__weak_password__reported_and_not_counted_as_a_f
 
 async def test_accept_invitation__refreshed_tokens_of_another_user__refused() -> None:
     class Switching(Tokens):
+        @override
         async def read(self, access_token: str) -> AuthenticatedUser:
             user = await super().read(access_token)
             if access_token == INVITE_ACCESS:
