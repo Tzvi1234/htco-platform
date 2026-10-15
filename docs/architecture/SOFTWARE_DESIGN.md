@@ -47,7 +47,7 @@ Trust boundaries: everything outside the HTCO platform box is either untrusted (
 flowchart TB
   subgraph DO[DigitalOcean App Platform · app htco-prod · region fra]
     direction TB
-    web[web<br/>SPA served by Caddy<br/>strict security headers]
+    web[web<br/>static site<br/>CSP in the page]
     api[api<br/>FastAPI · BFF for web · bearer for native<br/>webhook ingress]
     worker[agent-worker<br/>automations · job consumers · schedulers<br/>AI employees from Phase 8]
   end
@@ -56,8 +56,8 @@ flowchart TB
     auth[Auth<br/>MFA · PKCE · JWKS]
     store[Storage<br/>product media]
   end
-  browser([Browser]) -->|app.ht-co.app /| web
-  browser -->|app.ht-co.app /api · session cookie| api
+  browser([Browser]) -->|dash.ht-co.app /| web
+  browser -->|dash.ht-co.app /api · session cookie| api
   native([Windows and Android apps]) -->|api.ht-co.app · bearer token| api
   etsy[Etsy] -->|signed webhooks| api
   api --> pg
@@ -71,12 +71,12 @@ flowchart TB
 
 | Component | Type | Source | Responsibility | Scale-out path |
 |---|---|---|---|---|
-| `web` | Service (Caddy serving the built SPA) or static site | `htco-clients/apps/web` | Serves the web app with CSP, HSTS and frame-ancestors headers | Static assets, CDN |
+| `web` | Static site, built by App Platform from `htco-clients` `main` | `htco-clients/apps/web` | Serves the web app; CSP and referrer policy in the page, HTTPS-only through the `.app` HSTS preload, no framing ([client ADR-0006](https://github.com/Tzvi1234/htco-clients/blob/main/docs/adr/0006-static-web-hosting.md)) | Static assets, CDN |
 | `api` | Web service | `htco-platform/apps/api` | HTTP API, BFF session handling for the web, bearer auth for native apps, webhook ingress, health | More instances; dedicated CPU when needed |
 | `agent-worker` | Worker | `htco-platform/workers` | The automation engine (ingest, sync, reconciliation, outbox delivery, schedules) and, from Phase 8, the AI employees through the agent runtime | An `automation-worker` splits out when isolation or measured load requires it (ADR); never one container per employee |
 | `browser-runner` | Isolated worker or job, later | `htco-platform/workers/browser` | Playwright automation only if an approved AutoVA path needs it | Possibly a separate droplet for sandboxing (ADR) |
 
-Routing: `app.ht-co.app/` goes to `web`, `app.ht-co.app/api` to `api` (same origin, so the web session cookie needs no CORS), and `api.ht-co.app` to `api` for native clients and webhooks. `office.ht-co.app` and `agents.ht-co.app` are **mail domains only** (MX, SPF, DKIM, DMARC) and never get web records.
+Routing: `dash.ht-co.app/` goes to `web`, `dash.ht-co.app/api` to `api` (same origin, so the web session cookie needs no CORS), and `api.ht-co.app` to `api` for native clients and webhooks. `office.ht-co.app` and `agents.ht-co.app` are **mail domains only** (MX, SPF, DKIM, DMARC) and never get web records.
 
 Why this shape ([ADR-0002](../adr/0002-modular-monolith-hexagonal.md), [ADR-0005](../adr/0005-hosting-digitalocean-supabase.md), [ADR-0012](../adr/0012-living-office-organization.md)): one API and one worker are cheap, simple to operate, and enough for the pilot. Sixteen employees are sixteen *profiles* running in one worker, not sixteen services; employee, tool and automation definitions are data. Containers are stateless: sessions, checkpoints and executions live in Postgres.
 

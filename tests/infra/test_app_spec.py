@@ -116,9 +116,11 @@ def test_deploy__secrets_reach_only_the_deploy_step() -> None:
             if uses.startswith(("digitalocean/app_action/deploy@", "docker/login-action@")):
                 continue
             if step.get("name") == BUDGET_STEP:
-                # Reads the proposed monthly cost; needs only the DigitalOcean token.
+                # Reads the proposed monthly cost: the DigitalOcean token, and the image pull token
+                # so the proposal can validate the private image. No application secret.
                 assert set(re.findall(r"secrets\.([A-Z_]+)", yaml.safe_dump(step))) == {
-                    "DIGITALOCEAN_ACCESS_TOKEN"
+                    "DIGITALOCEAN_ACCESS_TOKEN",
+                    "GHCR_PULL_TOKEN",
                 }
                 continue
             assert "secrets." not in yaml.safe_dump(step), step.get("name")

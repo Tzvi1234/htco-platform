@@ -64,10 +64,10 @@ def test_web_sign_in_settings__origins_and_keys() -> None:
             "environment": "local",
             "session_key": key,
             "supabase_publishable_key": "sb_publishable_x",
-            "web_origins": "https://app.ht-co.app, http://localhost:5173",
+            "web_origins": "https://dash.ht-co.app, http://localhost:5173",
         }
     )
-    assert settings.web_origin_list == ("https://app.ht-co.app", "http://localhost:5173")
+    assert settings.web_origin_list == ("https://dash.ht-co.app", "http://localhost:5173")
     assert settings.session_key is not None
 
 

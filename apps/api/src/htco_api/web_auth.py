@@ -81,7 +81,7 @@ class WebAuth:
     auth: AuthProvider
     tokens: TokenReader
     store: SessionDirectory
-    # The web app's origins, e.g. ("https://app.ht-co.app",).
+    # The web app's origins, e.g. ("https://dash.ht-co.app",).
     allowed_origins: tuple[str, ...]
     # Authenticator-app enrollment and verification; without it, the MFA routes answer 503.
     mfa: MfaProvider | None = None

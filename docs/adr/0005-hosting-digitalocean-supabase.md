@@ -19,7 +19,7 @@ The original planning brief fixes hosting on DigitalOcean App Platform (managed 
 
 ## Decision
 
-- **One DigitalOcean app, `htco-prod`**, with components `api` (service), `web` (service serving the SPA through Caddy with strict headers, or a static site until real data is shown), and `worker` (worker). More components only by ADR.
+- **One DigitalOcean app, `htco-prod`**, with components `api` (service), `web` (a static site; the security policies travel in the page, [client ADR-0006](https://github.com/Tzvi1234/htco-clients/blob/main/docs/adr/0006-static-web-hosting.md), revised 2026-10-15), and `worker` (worker). More components only by ADR.
 - **Same region** for DigitalOcean and Supabase. Recommended: Frankfurt (`fra` with Supabase `eu-central-1`), close to the owner and suitable for EU personal data. Alternative: New York (`nyc` with `us-east-1`), closer to Etsy and US buyers.
 - **Supabase Pro** with the **IPv4 add-on**, so the API and workers use direct connections with their own pools; the agent runtime uses a direct connection for checkpoints. Without the add-on: session mode for workers and checkpoints, transaction mode with prepared statements off for the API.
 - **Images are built once in GitHub Actions**, scanned, pushed to a registry and deployed by digest.

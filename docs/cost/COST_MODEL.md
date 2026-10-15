@@ -23,7 +23,7 @@ This is the only place infrastructure prices are kept; other documents link here
 | Supabase IPv4 add-on | 4 | 4 | Required for direct connections from DigitalOcean |
 | DigitalOcean `api` | 5 | 12 | 0.5 GB → 1 GB shared CPU |
 | DigitalOcean `agent-worker` | 5 | 12 | From Phase 5: automations, then AI employees (no container per employee) |
-| DigitalOcean `web` | 5 | 5 | Caddy service for security headers (Phase 3) |
+| DigitalOcean `web` | 0 | 0 | Static site inside the paid app (client ADR-0006); the deploy refuses a spec over the $5 budget |
 | Container registry | 0 | 5 | DigitalOcean Starter or GHCR within GitHub Pro storage |
 | Resend | 0 | 20 | Free until inbound mail (Phase 14) |
 | GitHub Pro | 4 | 4 | Rulesets on private repositories |

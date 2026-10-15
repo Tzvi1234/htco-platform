@@ -110,7 +110,7 @@ def test_main__web_sign_in_needs_the_session_key_and_publishable_key(
     if configured:
         environment.setenv("HTCO_SESSION_KEY", base64.b64encode(b"k" * 32).decode())
         environment.setenv("HTCO_SUPABASE_PUBLISHABLE_KEY", "sb_publishable_x")
-        environment.setenv("HTCO_WEB_ORIGINS", "https://app.ht-co.app")
+        environment.setenv("HTCO_WEB_ORIGINS", "https://dash.ht-co.app")
     server = _Server()
 
     main(serve=server)

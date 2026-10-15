@@ -24,7 +24,7 @@ The web dashboard shows orders, buyer data and money, and lets the owner approve
 
 Option 2:
 
-- The web app is served from `app.ht-co.app`, and the API is routed at `app.ht-co.app/api` (same origin), so no CORS is needed for the web.
+- The web app is served from `dash.ht-co.app`, and the API is routed at `dash.ht-co.app/api` (same origin), so no CORS is needed for the web.
 - The API stores Supabase tokens server-side (encrypted) and sets a session cookie named with the `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no `Domain`.
 - Every unsafe request must carry a custom header (for example `X-HTCO-CSRF`) and pass `Origin` and `Sec-Fetch-Site` checks.
 - Native apps (Windows, Android) use bearer tokens from PKCE through the system browser; CSRF checks apply only to cookie-authenticated requests.

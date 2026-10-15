@@ -90,8 +90,8 @@ A small team running one or more marketplace shops repeats the same work by hand
 
 | Surface | What it is | Where |
 |---|---|---|
-| **HTCO Command** | The dashboard and CRM: overview, shops, orders, products, tasks, approvals, finance, support, incidents, administration | `app.ht-co.app` (web), Windows app, Android app |
-| **HTCO Office** | The organization at work: Executive Office, departments, employee profiles, Automation Center, AI Tools Center, Engineering Console, Office Communication, Decision & Model Observatory, Activity Feed & Audit, Notifications & Approvals (§7.16) | `app.ht-co.app/office` and inside the native apps |
+| **HTCO Command** | The dashboard and CRM: overview, shops, orders, products, tasks, approvals, finance, support, incidents, administration | `dash.ht-co.app` (web), Windows app, Android app |
+| **HTCO Office** | The organization at work: Executive Office, departments, employee profiles, Automation Center, AI Tools Center, Engineering Console, Office Communication, Decision & Model Observatory, Activity Feed & Audit, Notifications & Approvals (§7.16) | `dash.ht-co.app/office` and inside the native apps |
 | **Owner Assistant (Lia)** | Conversations with Lia, Maya, one employee or a department; approvals inline | Inside HTCO Command; optional bridge to Hermes (WhatsApp/Telegram) through the Action API |
 | **HTCO API** | The only door into the system for every client | `api.ht-co.app` |
 | **Brand site** | Public marketing site | `ht-co.app` |
@@ -434,7 +434,7 @@ Request in AutoVA → task waits `WAITING_FOR_QUOTES` (no model calls while wait
 
 | Client | Stack | Distribution |
 |---|---|---|
-| Web | TypeScript, React, design tokens as CSS variables | DigitalOcean App Platform static site at `app.ht-co.app` |
+| Web | TypeScript, React, design tokens as CSS variables | DigitalOcean App Platform static site at `dash.ht-co.app` |
 | Windows | C#/.NET, WinUI 3, Windows App SDK | Signed MSIX through GitHub Releases (later WinGet) |
 | Android | Kotlin, Jetpack Compose | Google Play internal testing, then production |
 | API and workers | Python, FastAPI, LangGraph (behind a port) | DigitalOcean App Platform: `api` web service and one `agent-worker` (employees and automations); an `automation-worker` splits out only when isolation or measured load justifies it; later an isolated `browser-runner`. No container per employee. |
