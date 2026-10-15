@@ -14,6 +14,7 @@ from typing import override
 import anyio
 import pytest
 
+from htco_application.access.authentication import AuthenticatedUser
 from htco_application.mfa import MAX_CODE_FAILURES
 from htco_application.password_reset import (
     MAX_RESET_REQUESTS_PER_EMAIL,
@@ -537,3 +538,52 @@ async def test_reset__supabase_rate_limit_before_the_change__the_link_can_be_tri
     await reset(store, auth)
 
     assert auth.passwords_set == [(RESET_ACCESS, NEW_PASSWORD)]
+
+
+async def test_reset__verification_unavailable_before_the_change__the_link_can_be_tried_again() -> (
+    None
+):
+    class Flaky(Tokens):
+        down = True
+
+        @override
+        async def read(self, access_token: str) -> AuthenticatedUser:
+            if self.down:
+                self.down = False
+                raise ConnectionError("the key set is unreachable")
+            return await super().read(access_token)
+
+    store, auth = Store(), Auth()
+    auth.recovery()
+    reader = Flaky()
+
+    async def attempt() -> None:
+        await reset_password(
+            RESET_ACCESS,
+            RESET_REFRESH,
+            NEW_PASSWORD,
+            code=None,
+            client=CLIENT,
+            auth=auth,
+            mfa=Authenticator(auth, enrolled=False),
+            tokens=reader,
+            store=store,
+            now=NOW,
+        )
+
+    with pytest.raises(ConnectionError):
+        await attempt()
+    await attempt()
+
+    assert auth.passwords_set == [(RESET_ACCESS, NEW_PASSWORD)]
+
+
+async def test_reset__one_wrong_code__counts_once_against_the_address() -> None:
+    store, auth = Store(), Auth(mfa_enrolled=True)
+    auth.recovery()
+
+    with pytest.raises(MfaCodeRefusedError):
+        await reset(store, auth, code="000000", mfa=Authenticator(auth))
+
+    ip_hash = hashlib.sha256(CLIENT.ip.encode()).digest()  # type: ignore[union-attr]
+    assert [a[1] for a in store.attempts if not a[2]].count(ip_hash) == 1
