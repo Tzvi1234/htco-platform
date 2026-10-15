@@ -41,3 +41,8 @@ revoke all on private.oauth_authorizations from public, anon, authenticated, ser
 -- existing row. The token provider and that check find integrations by the Etsy shop ID.
 create index shop_integrations_etsy_shop_id_idx
   on app.shop_integrations (etsy_shop_id) where status <> 'disconnected';
+
+-- Token refresh (slice 4.4): when the last refresh attempt failed. For a minute after it, no
+-- process tries again, so one Etsy outage counts once towards `needs_reauth`. Not granted to any
+-- client role (like the sealed columns); cleared by a successful refresh or a reconnect.
+alter table app.shop_integrations add column last_refresh_failed_at timestamptz;

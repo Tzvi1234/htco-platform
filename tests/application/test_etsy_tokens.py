@@ -254,6 +254,7 @@ async def test_access_token__a_success_resets_the_failure_count() -> None:
         await world.provider.access_token(ETSY_SHOP)
 
     world.server.refresh_outcome = "ok"
+    world.clock.now += REFRESH_RETRY_INTERVAL
     await world.provider.access_token(ETSY_SHOP)
 
     assert world.row.failure_count == 0

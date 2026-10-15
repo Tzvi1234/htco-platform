@@ -9,8 +9,10 @@ are stored every time, including the new refresh token.
 
 Failures never loop (AC-4.4.2): `invalid_grant` (a revoked or expired refresh token) marks the
 integration `needs_reauth` at once; any other failure is counted, and the third in a row marks it
-`needs_reauth`. Both are audited once. While the old access token still works, a failed refresh
-returns it; the next call tries again. Errors and audit records never carry a token.
+`needs_reauth`. Both are audited once. A failed attempt is shared: for `REFRESH_RETRY_INTERVAL`
+nobody tries again, so callers queued behind it (in any process) and calls during one outage do
+not each spend one of the three tries. While the old access token still works it is returned.
+Errors and audit records never carry a token.
 """
 
 import asyncio
@@ -32,6 +34,9 @@ from htco_domain.actors import ActorKind, ActorRef
 
 REFRESH_MARGIN = timedelta(minutes=5)
 MAX_REFRESH_FAILURES = 3
+# After a failed attempt nobody tries again for this long: callers that waited for that attempt,
+# or arrive during one outage, share its result instead of each spending one of the three tries.
+REFRESH_RETRY_INTERVAL = timedelta(minutes=1)
 _ACTOR = ActorRef(ActorKind.SYSTEM, "etsy-token-refresh")
 
 
@@ -44,7 +49,9 @@ class RefreshableTokens(Protocol):
 
     async def update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool: ...
 
-    async def record_refresh_failure(self, shop_id: uuid.UUID) -> int: ...
+    async def record_refresh_failure(
+        self, shop_id: uuid.UUID, *, at: datetime | None = None
+    ) -> int: ...
 
     async def mark_needs_reauth(
         self, shop_id: uuid.UUID, *, audit: AuditRecord | None = None
@@ -87,7 +94,18 @@ class VaultAccessTokenProvider:
             tokens = _usable(current, shop_id)
             if self._fresh(tokens):  # refreshed by another caller while we waited
                 return tokens.access_token
+            failed_at = current.last_refresh_failed_at
+            if failed_at is not None and self._clock() - failed_at < REFRESH_RETRY_INTERVAL:
+                return self._after_recent_failure(tokens, shop_id)
             return await self._refresh(current, tokens, shop_id)
+
+    def _after_recent_failure(self, tokens: OAuthTokens, etsy: int) -> str:
+        """Share the result of the attempt that failed moments ago."""
+        if tokens.access_expires_at > self._clock():
+            return tokens.access_token
+        raise MarketplaceUnavailableError(
+            f"refreshing the token of Etsy shop {etsy} failed moments ago; try again shortly"
+        )
 
     def _fresh(self, tokens: OAuthTokens) -> bool:
         return tokens.access_expires_at - self._clock() > REFRESH_MARGIN
@@ -102,7 +120,7 @@ class VaultAccessTokenProvider:
                 f"Etsy refused the refresh token of shop {etsy}; reconnect the shop"
             ) from None
         except OAuthUnavailableError:
-            failures = await self._vault.record_refresh_failure(integration.shop_id)
+            failures = await self._vault.record_refresh_failure(integration.shop_id, at=now)
             if failures >= MAX_REFRESH_FAILURES:
                 await self._needs_reauth(integration, "refresh_failed")
                 raise MarketplaceAuthError(

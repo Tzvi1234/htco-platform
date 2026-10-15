@@ -40,7 +40,7 @@ _PROVIDER = IntegrationProvider.ETSY
 _COLUMNS = """
 id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id, wrapped_data_key,
 access_token_ciphertext, refresh_token_ciphertext, scopes, access_expires_at, refresh_expires_at,
-status, failure_count, last_successful_call_at, created_at, updated_at
+status, failure_count, last_successful_call_at, created_at, updated_at, last_refresh_failed_at
 """
 
 _log = structlog.get_logger(__name__)
@@ -64,16 +64,20 @@ class PostgresTokenVault:
     async def update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool:
         return await anyio.to_thread.run_sync(self._update_tokens, shop_id, tokens)
 
-    async def record_refresh_failure(self, shop_id: uuid.UUID) -> int:
+    async def record_refresh_failure(
+        self, shop_id: uuid.UUID, *, at: datetime | None = None
+    ) -> int:
         def run() -> int:
             with self._database.connection() as connection:
                 row = connection.execute(
                     """
-                    update app.shop_integrations set failure_count = failure_count + 1
+                    update app.shop_integrations
+                    set failure_count = failure_count + 1,
+                        last_refresh_failed_at = coalesce(%s, now())
                     where shop_id = %s and provider = %s and status = 'connected'
                     returning failure_count
                     """,
-                    [shop_id, _PROVIDER.value],
+                    [at, shop_id, _PROVIDER.value],
                 ).fetchone()
             return 0 if row is None else int(row[0])
 
@@ -203,7 +207,8 @@ class PostgresTokenVault:
               access_expires_at = excluded.access_expires_at,
               refresh_expires_at = excluded.refresh_expires_at,
               status = 'connected',
-              failure_count = 0
+              failure_count = 0,
+              last_refresh_failed_at = null
             -- Never across tenants: a shop's row stays with its organization.
             where app.shop_integrations.organization_id = excluded.organization_id
             returning {_COLUMNS}
@@ -248,7 +253,7 @@ class PostgresTokenVault:
                 update app.shop_integrations
                 set key_id = %s, wrapped_data_key = %s, access_token_ciphertext = %s,
                     refresh_token_ciphertext = %s, access_expires_at = %s,
-                    refresh_expires_at = %s, failure_count = 0
+                    refresh_expires_at = %s, failure_count = 0, last_refresh_failed_at = null
                 where shop_id = %s and provider = %s and status = 'connected'
                 """,
                 [
@@ -333,6 +338,7 @@ class PostgresTokenVault:
             last_successful_call_at=row[15],
             created_at=row[16],
             updated_at=row[17],
+            last_refresh_failed_at=row[18],
         )
 
     async def _execute(self, sql: str, params: list[object]) -> None:

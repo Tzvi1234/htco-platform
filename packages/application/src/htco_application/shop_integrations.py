@@ -88,6 +88,8 @@ class ShopIntegration:
     last_successful_call_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    # When the last refresh attempt failed (None after a success); later attempts wait a while.
+    last_refresh_failed_at: datetime | None = None
 
     @property
     def is_usable(self) -> bool:
@@ -109,8 +111,11 @@ class TokenVault(Protocol):
         so a refresh that finishes after a disconnect never brings tokens back."""
         ...
 
-    async def record_refresh_failure(self, shop_id: uuid.UUID) -> int:
-        """Count a failed refresh; returns the failures since the last success."""
+    async def record_refresh_failure(
+        self, shop_id: uuid.UUID, *, at: datetime | None = None
+    ) -> int:
+        """Count a failed refresh made `at` (default: the database's now); returns the failures
+        since the last success."""
         ...
 
     async def record_successful_call(self, shop_id: uuid.UUID, *, at: datetime) -> None: ...
