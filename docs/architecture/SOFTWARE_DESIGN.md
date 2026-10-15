@@ -208,7 +208,7 @@ All external systems sit behind ports owned by the application layer.
 
 | Port | Adapter(s) | Notes |
 |---|---|---|
-| `MarketplacePort` | `EtsyAdapter` (later `ShopifyAdapter`) | OAuth with PKCE, token refresh with a per-shop lock, `x-api-key` header, rate-limit budget per shop read from response headers, typed errors for 401, 403, 404, 409, 429 and 5xx |
+| `MarketplacePort` | `EtsyAdapter` (later `ShopifyAdapter`) | OAuth with PKCE, token refresh with a per-shop lock, `x-api-key` header, rate-limit budget per app key (Etsy's limits are per app) read from response headers, deferring routine calls below a daily floor, typed errors for 401, 403, 404, 409, 429 and 5xx |
 | `WebhookVerifier` | Standard Webhooks (HMAC-SHA256 over `id.timestamp.body`) | Shared by Etsy and Resend webhooks; 5-minute timestamp tolerance; raw body only |
 | `AutoVaPort` | `ManualAutoVaAdapter` first; API adapter if AutoVA offers one; browser adapter only by ADR | Tracking does not need AutoVA access: AutoVA writes tracking to Etsy and we read it there |
 | `EmailPort` | `ResendAdapter` | Idempotency keys on send; inbound via `email.received` webhook then fetch content; attachments copied within one hour |

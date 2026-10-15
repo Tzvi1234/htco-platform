@@ -1,0 +1,19 @@
+[project]
+name = "htco-integrations"
+version = "0.0.0"
+description = "HTCO marketplace and provider adapters (Etsy first) implementing application ports."
+requires-python = "==3.14.*"
+dependencies = [
+  "anyio>=4.12,<5",
+  "htco-application",
+  "httpx>=0.28,<0.29",
+  "opentelemetry-api>=1.45,<2",
+  "structlog>=26.1,<27",
+]
+
+[tool.uv.sources]
+htco-application = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"

@@ -1,5 +1,7 @@
 """Sign-in settings derived from the Supabase project URL (slice 2.3)."""
 
+import base64
+
 import pytest
 from pydantic import ValidationError
 
@@ -90,3 +92,116 @@ def test_web_sign_in_settings__origins_and_keys() -> None:
 def test_session_key__must_be_a_32_byte_base64_key(key: str) -> None:
     with pytest.raises(ValidationError, match="HTCO_SESSION_KEY"):
         ApiSettings.model_validate({"environment": "local", "session_key": key})
+
+
+def test_etsy_settings__are_optional__with_a_default_quota_floor() -> None:
+    settings = ApiSettings.model_validate({"environment": "production", **_DEPLOYED})
+
+    assert settings.etsy_keystring is None
+    assert settings.etsy_shared_secret is None
+    assert settings.etsy_daily_quota_floor == 500
+
+
+def test_etsy_settings__secrets__never_appear_in_repr() -> None:
+    settings = ApiSettings.model_validate(
+        {
+            "environment": "local",
+            "etsy_keystring": "fakekeystring",
+            "etsy_shared_secret": "fake-shared-secret",
+        }
+    )
+
+    assert settings.etsy_keystring is not None
+    assert settings.etsy_shared_secret is not None
+    assert settings.etsy_keystring.get_secret_value() == "fakekeystring"
+    assert "fakekeystring" not in repr(settings)
+    assert "fake-shared-secret" not in repr(settings)
+    assert "fake-shared-secret" not in str(settings.model_dump())
+
+
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_etsy_settings__blank__are_unset(blank: str) -> None:
+    settings = ApiSettings.model_validate(
+        {"environment": "local", "etsy_keystring": blank, "etsy_shared_secret": blank}
+    )
+
+    assert settings.etsy_keystring is None
+    assert settings.etsy_shared_secret is None
+
+
+@pytest.mark.parametrize(
+    "given", [{"etsy_keystring": "fakekeystring"}, {"etsy_shared_secret": "fake-shared-secret"}]
+)
+def test_etsy_settings__one_without_the_other__is_refused(given: dict[str, str]) -> None:
+    with pytest.raises(ValidationError, match="HTCO_ETSY_KEYSTRING and HTCO_ETSY_SHARED_SECRET"):
+        ApiSettings.model_validate({"environment": "local", **given})
+
+
+def test_etsy_settings__negative_quota_floor__is_refused() -> None:
+    with pytest.raises(ValidationError, match="etsy_daily_quota_floor"):
+        ApiSettings.model_validate({"environment": "local", "etsy_daily_quota_floor": -1})
+
+
+_DEPLOYED = {"database_url": "postgresql://x@db.invalid/x", "supabase_url": "https://a.b"}
+
+# The Etsy token vault's keys (slice 4.2) ---------------------------------------------------------
+
+VAULT_KEY_A = "key-a:" + base64.b64encode(b"a" * 32).decode()
+VAULT_KEY_B = "key-b:" + base64.b64encode(b"b" * 32).decode()
+
+
+def test_token_vault_keys__current_and_previous__build_the_key_ring() -> None:
+    settings = ApiSettings.model_validate(
+        {
+            "environment": "local",
+            "token_vault_key": VAULT_KEY_B,
+            "token_vault_previous_keys": VAULT_KEY_A,
+        }
+    )
+
+    ring = settings.token_key_ring
+    assert ring is not None
+    assert ring.key_ids == ("key-b", "key-a")
+
+
+@pytest.mark.parametrize("blank", [None, "", "  "])
+def test_token_vault_key__blank_or_unset__leaves_the_vault_off(blank: str | None) -> None:
+    settings = ApiSettings.model_validate(
+        {"environment": "production", "database_url": "postgresql://x@db.invalid/x"}
+        | {"supabase_url": "https://abc.supabase.co"}
+        | ({} if blank is None else {"token_vault_key": blank, "token_vault_previous_keys": blank})
+    )
+    assert settings.token_key_ring is None
+
+
+@pytest.mark.ac("AC-4.2.3")
+@pytest.mark.parametrize(
+    ("current", "previous"),
+    [
+        ("key-a:not-base64!", None),
+        ("key-a:c2hvcnQ=", None),
+        (VAULT_KEY_B, "key-b:" + base64.b64encode(b"c" * 32).decode()),
+        (None, VAULT_KEY_A),
+    ],
+    ids=["not-base64", "short", "duplicate-id", "previous-without-current"],
+)
+def test_token_vault_keys__invalid__name_the_setting_but_never_the_value(
+    current: str | None, previous: str | None
+) -> None:
+    with pytest.raises(ValidationError, match="HTCO_TOKEN_VAULT") as raised:
+        ApiSettings.model_validate(
+            {"environment": "local"}
+            | ({} if current is None else {"token_vault_key": current})
+            | ({} if previous is None else {"token_vault_previous_keys": previous})
+        )
+    message = str(raised.value)
+    for value in (current, previous):
+        if value is not None:
+            assert value.partition(":")[2] not in message
+
+
+@pytest.mark.ac("AC-4.2.3")
+def test_token_vault_keys__hidden_in_the_settings_repr() -> None:
+    settings = ApiSettings.model_validate({"environment": "local", "token_vault_key": VAULT_KEY_A})
+    assert VAULT_KEY_A.partition(":")[2] not in repr(settings)
+    assert VAULT_KEY_A.partition(":")[2] not in str(settings.model_dump())

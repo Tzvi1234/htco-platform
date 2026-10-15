@@ -8,6 +8,8 @@ from typing import Literal, Self
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from htco_platform.crypto import KeyRing
+
 
 class Environment(StrEnum):
     LOCAL = "local"
@@ -19,7 +21,8 @@ class Environment(StrEnum):
 class ApiSettings(BaseSettings):
     """Validated once at startup; a missing or invalid value stops the process (ER-CODE-07)."""
 
-    model_config = SettingsConfigDict(env_prefix="HTCO_", frozen=True)
+    # Errors never repeat an input: settings hold secrets (also when an error is printed raw).
+    model_config = SettingsConfigDict(env_prefix="HTCO_", frozen=True, hide_input_in_errors=True)
 
     environment: Environment
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
@@ -49,6 +52,22 @@ class ApiSettings(BaseSettings):
     session_key: SecretStr | None = None
     supabase_publishable_key: str | None = None
     web_origins: str = ""
+    # Etsy app credentials (slice 4.1, ADR-0008): the keystring and shared secret, sent together
+    # as `x-api-key`. Both are secrets and both or neither are set; they become required when
+    # Phase 4 connects a shop. Below the daily floor of requests left, routine Etsy calls wait.
+    etsy_keystring: SecretStr | None = None
+    etsy_shared_secret: SecretStr | None = None
+    etsy_daily_quota_floor: int = Field(default=500, ge=0)
+    # The Etsy token vault (slice 4.2). Each key is `<key ID>:<32 random bytes, base64>`, a secret.
+    # The current key wraps new data keys; previous keys (comma-separated) only open rows not yet
+    # re-wrapped by `htco admin rotate-token-keys`. Without the current key the Etsy integration is
+    # off and the API still starts.
+    token_vault_key: SecretStr | None = None
+    token_vault_previous_keys: SecretStr | None = None
+
+    @property
+    def token_key_ring(self) -> KeyRing | None:
+        return token_key_ring(self.token_vault_key, self.token_vault_previous_keys)
 
     @property
     def web_origin_list(self) -> tuple[str, ...]:
@@ -74,6 +93,10 @@ class ApiSettings(BaseSettings):
         "password_reset_redirect_url",
         "session_key",
         "supabase_publishable_key",
+        "etsy_keystring",
+        "etsy_shared_secret",
+        "token_vault_key",
+        "token_vault_previous_keys",
         mode="before",
     )
     @classmethod
@@ -97,6 +120,17 @@ class ApiSettings(BaseSettings):
         return value
 
     @model_validator(mode="after")
+    def _etsy_credentials_come_in_pairs(self) -> Self:
+        if (self.etsy_keystring is None) != (self.etsy_shared_secret is None):
+            raise ValueError("HTCO_ETSY_KEYSTRING and HTCO_ETSY_SHARED_SECRET must be set together")
+        return self
+
+    @model_validator(mode="after")
+    def _token_vault_keys_are_valid(self) -> Self:
+        check_token_vault_keys(self.token_vault_key, self.token_vault_previous_keys)
+        return self
+
+    @model_validator(mode="after")
     def _deployed_needs_a_database(self) -> Self:
         if self.environment in {Environment.STAGING, Environment.PRODUCTION} and (
             self.database_url is None
@@ -113,3 +147,27 @@ class ApiSettings(BaseSettings):
         if self.supabase_url.scheme != "https":
             raise ValueError("HTCO_SUPABASE_URL must use HTTPS in staging and production")
         return self
+
+
+def token_key_ring(current: SecretStr | None, previous: SecretStr | None) -> KeyRing | None:
+    """The vault's key ring, or None when no current key is set (the integration is off)."""
+    if current is None:
+        return None
+    return KeyRing.parse(
+        current.get_secret_value(), None if previous is None else previous.get_secret_value()
+    )
+
+
+def check_token_vault_keys(current: SecretStr | None, previous: SecretStr | None) -> None:
+    """Raise a `ValueError` naming the setting, never its value."""
+    if current is None:
+        if previous is not None:
+            raise ValueError("HTCO_TOKEN_VAULT_PREVIOUS_KEYS needs HTCO_TOKEN_VAULT_KEY")
+        return
+    try:
+        token_key_ring(current, previous)
+    except ValueError as error:
+        problem = str(error)  # describes the format or a duplicate key ID, never a key
+        raise ValueError(
+            f"HTCO_TOKEN_VAULT_KEY and HTCO_TOKEN_VAULT_PREVIOUS_KEYS are invalid: {problem}"
+        ) from None

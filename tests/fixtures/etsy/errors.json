@@ -1,0 +1,10 @@
+{
+  "400": {"error": "Expected int value for 'limit'"},
+  "401": {"error": "invalid_token"},
+  "403": {"error": "The application does not have permission to access this resource"},
+  "404": {"error": "Shop not found"},
+  "409": {"error": "The resource was modified by another request"},
+  "429": {"error": "Rate limit exceeded"},
+  "500": {"error": "Internal server error"},
+  "503": {"error": "Service unavailable"}
+}

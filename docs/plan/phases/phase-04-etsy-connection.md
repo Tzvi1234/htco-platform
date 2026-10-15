@@ -7,12 +7,12 @@
 | **Size** | M |
 | **Depends on** | Phases 2 and 3; Etsy Seller App registered (Phase 0) |
 | **Requirements** | FR-ADM-02, FR-SHOP-01, FR-SHOP-02, FR-SHOP-03, FR-SHOP-04, FR-SHOP-05 |
-| **Status** | Not started |
+| **Status** | In progress |
 
 ## Progress
 
-- [ ] 4.1 Etsy adapter foundation
-- [ ] 4.2 Token vault
+- [x] 4.1 Etsy adapter foundation
+- [x] 4.2 Token vault
 - [ ] 4.3 OAuth connect flow
 - [ ] 4.4 Token refresh
 - [ ] 4.5 Capability probes
@@ -33,6 +33,7 @@ The owner connects the real Etsy shop from the web app and sees, honestly, what 
 
 Research of 2026-10-15 ([Etsy API capabilities](../../architecture/etsy-api-capabilities.md), [multi-shop policy](../../architecture/etsy-multi-shop-policy.md)):
 - One HTCO app connects every shop through OAuth, with no proxies and never a second key.
+- Owner, 2026-10-15: we start with the owner's existing **Seller App** (his own shop only). Before connecting other people's shops we move to a **Personal App**, and later to Commercial Access. The code does not change; only the keystring and the app's access level do.
 - Personal access covers the owner's shops plus about 4 others. Commercial access is requested early, describing the AI assistance honestly.
 - The first test with our own key checks `createReceiptShipment` and the receipt addresses for an Israeli shop, which Etsy restricted for new keys on 2026-07-20. The result decides the Phase 6 tracking path: direct upload, an approved POD or fulfillment partner, or a task for the owner.
 
@@ -43,7 +44,7 @@ Research of 2026-10-15 ([Etsy API capabilities](../../architecture/etsy-api-capa
 
 ### 4.1 — Etsy adapter foundation
 
-`MarketplacePort` with the first read operations (shop, receipts page, listing page); `EtsyAdapter` on httpx with timeouts, `x-api-key` header, rate-limit budget read from `x-remaining-*` headers (throttle at half the per-second limit), backoff on 429 honoring `retry-after`, typed errors for 401/403/404/409/429/5xx; respx fixtures recorded in the Phase 0 spike and scrubbed.
+`MarketplacePort` with the first read operations (shop, receipts page, listing page); `EtsyAdapter` on httpx with timeouts, `x-api-key` header, rate-limit budget read from `x-remaining-*` headers (throttle at half the per-second limit), backoff on 429 honoring `retry-after`, typed errors for 401/403/404/409/429/5xx; scrubbed fixtures (hand-written from the OpenAPI spec until a key exists; replaced by recorded ones from the first live calls). Built in `packages/integrations` (`htco_integrations.etsy`); see [etsy-integration](../../features/etsy-integration/overview.md).
 
 | ID | Acceptance criterion |
 |---|---|
@@ -115,7 +116,7 @@ Adapter contract tests against fixtures; vault crypto tests; OAuth flow tests wi
 ## Security checklist
 
 - [ ] ASVS V10 (OAuth client): state, PKCE S256, exact redirect URI, minimal scopes (10.2.3).
-- [ ] Tokens encrypted at rest at the application level; key rotation tested.
+- [x] Tokens encrypted at rest at the application level; key rotation tested.
 - [ ] Connect and disconnect require owner role, MFA and recent re-authentication; both audited.
 - [ ] Etsy trademark notice present in the web app's footer or about page.
 

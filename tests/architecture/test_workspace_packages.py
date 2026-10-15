@@ -12,6 +12,7 @@ WORKSPACE_PACKAGES = {
     "htco_application": "packages/application/src",
     "htco_platform": "packages/platform/src",
     "htco_agent_runtime": "packages/agent-runtime/src",
+    "htco_integrations": "packages/integrations/src",
     "htco_api": "apps/api/src",
 }
 
