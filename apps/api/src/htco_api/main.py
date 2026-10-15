@@ -27,6 +27,8 @@ from htco_application.shops import ShopReader
 from htco_application.web_sessions import (
     CredentialsRefusedError,
     IssuedTokens,
+    MfaCodeRequiredError,
+    ResetEmailNotSentError,
     TooManyAttemptsError,
     WeakPasswordError,
 )
@@ -51,6 +53,7 @@ from htco_platform.supabase_auth import (
     AuthServiceError,
     AuthTokens,
     InvalidCredentialsError,
+    MfaRequiredError,
     RateLimitedError,
     SupabaseAuth,
 )
@@ -186,8 +189,16 @@ class _AuthProvider:
             raise CredentialsRefusedError from None
         except RateLimitedError:
             raise TooManyAttemptsError("the sign-in service is rate limiting") from None
+        except MfaRequiredError:
+            raise MfaCodeRequiredError("an authenticator code is required") from None
         except AuthServiceError:
             raise ProblemError(AUTH_UNAVAILABLE) from None
+
+    async def send_password_reset(self, email: str, redirect_to: str) -> None:
+        try:
+            await self._auth.send_password_reset(email, redirect_to)
+        except (AuthServiceError, RateLimitedError) as error:
+            raise ResetEmailNotSentError(type(error).__name__) from None
 
     async def enroll_totp(self, access_token: str, *, friendly_name: str) -> Enrollment:
         try:
@@ -284,6 +295,9 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
                 database, Sealer.from_base64(settings.session_key.get_secret_value())
             ),
             allowed_origins=settings.web_origin_list,
+            password_reset_redirect=None
+            if settings.password_reset_redirect_url is None
+            else str(settings.password_reset_redirect_url),
         )
     return _Wiring(
         web_auth=web_auth,

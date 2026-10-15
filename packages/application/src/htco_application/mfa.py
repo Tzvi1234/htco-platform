@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
+from htco_application import web_sessions
 from htco_application.web_sessions import (
     THROTTLE_WINDOW,
     ActiveSession,
@@ -30,9 +31,8 @@ from htco_domain.identity import AssuranceLevel
 
 MAX_CODE_FAILURES = 5
 
-
-class MfaCodeRefusedError(Exception):
-    """The code from the authenticator app was wrong or expired."""
+# Shared with the password reset, where a code can be entered too.
+MfaCodeRefusedError = web_sessions.MfaCodeRefusedError
 
 
 class MfaNotEnrolledError(Exception):
@@ -91,6 +91,11 @@ class SessionDirectory(SessionStore, Protocol):
     async def get(self, session_id: uuid.UUID) -> StoredSession | None: ...
 
     async def list_active(self, user_id: uuid.UUID, now: datetime) -> list[StoredSession]: ...
+
+
+def mfa_failure_key(user_id: uuid.UUID) -> bytes:
+    """Wrong codes are counted per user under this key, wherever the code was entered."""
+    return hashlib.sha256(f"mfa:{user_id}".encode()).digest()
 
 
 async def mfa_status(session: ActiveSession, mfa: MfaProvider) -> MfaStatus:
@@ -158,7 +163,7 @@ async def _verify(  # noqa: PLR0913 - the code, its factor and the collaborators
     client: ClientInfo,
     now: datetime,
 ) -> None:
-    key = hashlib.sha256(f"mfa:{session.user.user_id}".encode()).digest()
+    key = mfa_failure_key(session.user.user_id)
     ip_hash = hashlib.sha256(client.ip.encode()).digest() if client.ip else None
     failures, _ = await store.recent_failures(key, None, now - THROTTLE_WINDOW)
     if failures >= MAX_CODE_FAILURES:

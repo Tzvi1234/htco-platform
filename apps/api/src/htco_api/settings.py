@@ -39,6 +39,9 @@ class ApiSettings(BaseSettings):
     supabase_secret_key: SecretStr | None = None
     # Where the one-time invitation link lands (the web app's accept-invitation page).
     invite_redirect_url: AnyHttpUrl | None = None
+    # Where the emailed password reset link lands (the web app's reset page). Without it, asking
+    # for a reset link answers 503.
+    password_reset_redirect_url: AnyHttpUrl | None = None
     # Web sign-in (slice 3.5). The session key seals Supabase tokens at rest: 32 random bytes,
     # base64 (`openssl rand -base64 32`), a secret. The publishable key identifies the Supabase
     # project to its sign-in service and is not secret. The web origins are the sites allowed to
@@ -68,6 +71,7 @@ class ApiSettings(BaseSettings):
         "supabase_url",
         "supabase_secret_key",
         "invite_redirect_url",
+        "password_reset_redirect_url",
         "session_key",
         "supabase_publishable_key",
         mode="before",

@@ -169,11 +169,12 @@ async def test_forgot__malformed__422(
     assert auth.reset_emails == []
 
 
-async def test_forgot__not_json__400(client: httpx.AsyncClient) -> None:
+async def test_forgot__not_json__422(client: httpx.AsyncClient) -> None:
     response = await client.post(
         FORGOT, content=b"{", headers=CSRF | {"Content-Type": "application/json"}
     )
-    assert response.status_code == 400
+    assert response.status_code == 422
+    assert response.json()["type"] == PROBLEMS + "validation-error"
 
 
 @pytest.mark.parametrize(

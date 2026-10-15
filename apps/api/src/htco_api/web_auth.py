@@ -9,6 +9,11 @@ unsafe request that relies on the cookie, and the sign-in itself (login CSRF), m
 An invited user accepts the invitation here too: the invitation link lands on the web app with
 Supabase tokens in the URL fragment, and the web app posts them once with a new password to
 `/v1/auth/invitations/accept`, which answers exactly like a sign-in.
+
+A forgotten password works the same way (slice 3.5 part 3): `/v1/auth/password/forgot` always
+answers 202 and sends the email after the response, so neither the answer nor its timing says
+whether the account exists; the emailed link lands on the web app, which posts its tokens with the
+new password (and, for a user with an authenticator app, a code) to `/v1/auth/password/reset`.
 """
 
 import uuid
@@ -17,7 +22,7 @@ from datetime import datetime
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
 from pydantic import BaseModel, Field
 
 from htco_api.problems import (
@@ -30,7 +35,6 @@ from htco_api.problems import (
     ValidationProblem,
 )
 from htco_application.mfa import (
-    MfaCodeRefusedError,
     MfaNotEnrolledError,
     MfaProvider,
     SessionDirectory,
@@ -42,6 +46,8 @@ from htco_application.mfa import (
     step_up,
     verify_enrollment,
 )
+from htco_application.password_reset import admit_password_reset, send_password_reset
+from htco_application.password_reset import reset_password as reset_password_from_link
 from htco_application.web_sessions import (
     ABSOLUTE_LIFETIME,
     THROTTLE_WINDOW,
@@ -49,6 +55,9 @@ from htco_application.web_sessions import (
     AuthProvider,
     ClientInfo,
     InvitationRefusedError,
+    MfaCodeRefusedError,
+    MfaCodeRequiredError,
+    ResetLinkRefusedError,
     SessionEndedError,
     SignInRefusedError,
     TokenReader,
@@ -90,6 +99,18 @@ WEAK_PASSWORD = ProblemType(
     422,
     "Choose a longer password that is harder to guess.",
 )
+RESET_LINK_REFUSED = ProblemType(
+    "reset-link-refused",
+    "Reset link not valid",
+    401,
+    "This password reset link is invalid, expired or already used. Ask for a new one.",
+)
+MFA_CODE_REQUIRED = ProblemType(
+    "mfa-code-required",
+    "Code required",
+    403,
+    "Enter the code from your authenticator app to set a new password.",
+)
 SESSION_ENDED = ProblemType(
     "session-ended", "Session ended", 401, "Your session ended. Sign in again."
 )
@@ -104,6 +125,8 @@ class WebAuth:
     allowed_origins: tuple[str, ...]
     # Authenticator-app enrollment and verification; without it, the MFA routes answer 503.
     mfa: MfaProvider | None = None
+    # Where emailed password reset links land; without it, asking for one answers 503.
+    password_reset_redirect: str | None = None
 
 
 MFA_CODE_REFUSED = ProblemType(
@@ -179,6 +202,19 @@ class AcceptInvitationRequest(BaseModel):
     refresh_token: str = Field(min_length=1, max_length=1024)
     # The same length rule as the sign-in service's password policy (12 characters).
     password: str = Field(min_length=12, max_length=128)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class ResetPasswordRequest(BaseModel):
+    # The tokens from the reset link's redirect (URL fragment), posted once.
+    access_token: str = Field(min_length=1, max_length=8192)
+    refresh_token: str = Field(min_length=1, max_length=1024)
+    password: str = Field(min_length=12, max_length=128)
+    # The authenticator app's code, for a user who has one (asked for with `mfa-code-required`).
+    code: str | None = Field(default=None, pattern=r"^[0-9]{6}$")
 
 
 class SessionView(BaseModel):
@@ -341,10 +377,101 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
             raise ProblemError(INVITATION_REFUSED) from None
         except WeakPasswordError:
             raise ProblemError(WEAK_PASSWORD) from None
+        except MfaCodeRequiredError:
+            raise ProblemError(MFA_CODE_REQUIRED) from None
         except TooManyAttemptsError:
             raise _too_many() from None
         _set_cookie(response, signed_in.cookie_value)
         response.headers["Cache-Control"] = "no-store"
+        return SessionView(
+            user_id=str(signed_in.user.user_id), assurance=signed_in.user.assurance.value
+        )
+
+    @router.post(
+        "/password/forgot",
+        status_code=status.HTTP_202_ACCEPTED,
+        response_class=Response,
+        summary="Ask for a password reset email",
+        responses={
+            202: {"description": "Accepted; the same answer whether or not the account exists"},
+            400: _problem("The body is not valid JSON"),
+            403: _problem("The request did not come from the web app"),
+            422: _validation("Missing or malformed email"),
+            429: _problem("Too many requests for this email or from this address; see Retry-After"),
+            503: _problem("Password reset is unavailable"),
+        },
+    )
+    async def request_password_reset(
+        body: ForgotPasswordRequest, request: Request, background: BackgroundTasks, web: Web
+    ) -> Response:
+        """Emails a link to set a new password, if an account exists for the email. The answer
+        never says whether it does."""
+        check_csrf(request, web)
+        if web.password_reset_redirect is None:
+            raise ProblemError(AUTH_UNAVAILABLE)
+        try:
+            address = await admit_password_reset(
+                body.email, client=client_info(request), store=web.store, now=clock()
+            )
+        except TooManyAttemptsError:
+            raise _too_many() from None
+        background.add_task(_send_reset_email, address, web.password_reset_redirect, web)
+        return Response(status_code=status.HTTP_202_ACCEPTED, headers={"Cache-Control": "no-store"})
+
+    @router.post(
+        "/password/reset",
+        summary="Set a new password from a reset link and sign in",
+        responses={
+            400: _problem("The body is not valid JSON"),
+            401: _problem(
+                "The reset link is invalid, expired or already used (reset-link-refused), "
+                "or the authenticator code is wrong (mfa-code-refused)"
+            ),
+            403: _problem(
+                "The request did not come from the web app (csrf-failed), or the user has an "
+                "authenticator app and must send its code (mfa-code-required)"
+            ),
+            # Two shapes: `validation-error` (with `errors`) and `weak-password` (without).
+            422: _problem(
+                "Missing tokens, a password of the wrong length or a malformed code "
+                "(validation-error), or a password the sign-in service calls weak (weak-password)"
+            ),
+            429: _problem("Too many failed attempts; see Retry-After"),
+            503: _problem("Sign-in is unavailable"),
+        },
+    )
+    async def reset_password(
+        body: ResetPasswordRequest, request: Request, response: Response, web: Web
+    ) -> SessionView:
+        """Sets the new password with Supabase Auth, starts a server-side session exactly like a
+        sign-in (same cookie, `no-store`) and signs out every other session of the user."""
+        check_csrf(request, web)
+        try:
+            signed_in = await reset_password_from_link(
+                body.access_token,
+                body.refresh_token,
+                body.password,
+                code=body.code,
+                client=client_info(request),
+                auth=web.auth,
+                mfa=mfa_of(web),
+                tokens=web.tokens,
+                store=web.store,
+                now=clock(),
+            )
+        except ResetLinkRefusedError:
+            raise ProblemError(RESET_LINK_REFUSED) from None
+        except MfaCodeRequiredError:
+            raise ProblemError(MFA_CODE_REQUIRED) from None
+        except MfaCodeRefusedError:
+            raise ProblemError(MFA_CODE_REFUSED) from None
+        except WeakPasswordError:
+            raise ProblemError(WEAK_PASSWORD) from None
+        except TooManyAttemptsError:
+            raise _too_many() from None
+        _set_cookie(response, signed_in.cookie_value)
+        response.headers["Cache-Control"] = "no-store"
+        _log.info("auth.password_reset", session_id=str(signed_in.session_id))
         return SessionView(
             user_id=str(signed_in.user.user_id), assurance=signed_in.user.assurance.value
         )
@@ -520,6 +647,14 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router
+
+
+async def _send_reset_email(address: str, redirect_to: str, web: WebAuth) -> None:
+    """Runs after the 202 has been sent. Logged without the email."""
+    if await send_password_reset(address, redirect_to=redirect_to, auth=web.auth):
+        _log.info("auth.password_reset_email_sent")
+    else:
+        _log.warning("auth.password_reset_email_failed")
 
 
 def _too_many() -> ProblemError:

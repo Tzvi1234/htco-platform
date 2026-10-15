@@ -44,6 +44,12 @@ class AuthServiceError(Exception):
     """Supabase Auth could not be reached or answered unexpectedly."""
 
 
+class MfaRequiredError(AuthServiceError):
+    """The user has an authenticator app and the session is not `aal2` (`insufficient_aal`).
+
+    An AuthServiceError for every caller that does not expect it."""
+
+
 @dataclass(frozen=True)
 class TotpEnrollment:
     factor_id: str
@@ -94,10 +100,31 @@ class SupabaseAuth:
             raise AuthServiceError("Supabase Auth is unreachable") from error
 
     async def set_password(self, access_token: str, password: str) -> None:
-        """Sets the password of the user the token belongs to (accepting an invitation)."""
+        """Sets the password of the user the token belongs to (an invitation or a reset link).
+
+        Supabase refuses it from an `aal1` session when the user has an authenticator app."""
         await self._as_user(
             "PUT", "/user", access_token, {"password": password}, refused=_SESSION_REFUSED
         )
+
+    async def send_password_reset(self, email: str, redirect_to: str) -> None:
+        """Asks Supabase to email a password reset (recovery) link that lands on `redirect_to`.
+
+        Supabase answers the same whether or not the account exists. Errors never carry the
+        email."""
+        try:
+            response = await self._client.post(
+                f"{self._base}/recover",
+                params={"redirect_to": redirect_to},
+                json={"email": email},
+                headers=self._headers,
+            )
+        except httpx.HTTPError as error:
+            raise AuthServiceError("Supabase Auth is unreachable") from error
+        if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
+            raise RateLimitedError("Supabase Auth rate limit")
+        if response.is_error:
+            raise AuthServiceError(f"Supabase Auth answered {response.status_code}")
 
     # MFA (slice 3.5 part 2): every call acts as the user, with their access token.
 
@@ -170,6 +197,8 @@ class SupabaseAuth:
         if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
             raise RateLimitedError("Supabase Auth rate limit")
         code = _error_code(response)
+        if response.is_client_error and code == "insufficient_aal":
+            raise MfaRequiredError("an aal2 session is required")
         if response.status_code == httpx.codes.UNPROCESSABLE_ENTITY and code == "weak_password":
             raise WeakPasswordError("the password is too weak")
         if response.is_client_error and code in refused:

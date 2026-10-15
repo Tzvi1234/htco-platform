@@ -16,6 +16,7 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 | `HTCO_SESSION_KEY` | unset (secret) | Seals web sessions' Supabase tokens (32 random bytes, base64); with `HTCO_SUPABASE_PUBLISHABLE_KEY` it turns web sign-in on (`web_sign_in` in `api.starting`) |
 | `HTCO_SUPABASE_PUBLISHABLE_KEY` | unset | The project's publishable key for Supabase Auth calls (not secret) |
 | `HTCO_WEB_ORIGINS` | empty | Comma-separated web app origins allowed to send cookie requests (CSRF check) |
+| `HTCO_PASSWORD_RESET_REDIRECT_URL` | unset | Where the emailed password reset link lands (the web app's reset page; production: `https://dash.ht-co.app/reset-password`, which must be in Supabase Auth's redirect allow-list). Unset: `POST /v1/auth/password/forgot` answers 503 |
 | `HTCO_INVITE_REDIRECT_URL` | unset | Where the one-time invitation link lands (the web app's accept page; production: `https://dash.ht-co.app/accept-invite`, which must be in Supabase Auth's redirect allow-list) |
 | `HTCO_RELEASE` | unset | Build identifier (git SHA) attached to error reports and the `api.starting` line |
 | Python version | `.python-version` (3.14.8) | uv installs and uses exactly this interpreter |
