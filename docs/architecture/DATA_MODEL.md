@@ -71,6 +71,7 @@ The phase column says when a table first appears.
 | `shop_access` | Membership ↔ shop grants | 2 |
 | `service_identities` | Automations, employees and system components as authenticated actors | 7–8 |
 | `web_sessions` | BFF sessions (hashed session ID, encrypted Supabase tokens, expiry, device, last step-up time) | 3 |
+| `oauth_authorizations` (`private`) | Pending marketplace OAuth authorizations: SHA-256 of the state, sealed PKCE verifier, organization, user, web session, scopes, 10-minute expiry; deleted when used ([connect flow](../features/etsy-integration/connect-flow.md)) | 4 |
 | `device_keys` | Public keys of native devices for biometric step-up (Android, Windows) | 16 |
 
 ### Shops
@@ -78,7 +79,7 @@ The phase column says when a table first appears.
 | Table | Purpose | Phase |
 |---|---|---|
 | `shops` | Shop per marketplace account | 2 (shell), 4 |
-| `shop_integrations` | Etsy tokens sealed by envelope encryption (key ID, wrapped data key, ciphertexts), scopes, token expiry, status, failure count ([token vault](../features/etsy-integration/token-vault.md)) | 4 |
+| `shop_integrations` | Etsy tokens sealed by envelope encryption (key ID, wrapped data key, ciphertexts), scopes, token expiry, status, failure count ([token vault](../features/etsy-integration/token-vault.md)); one per Etsy shop and organization | 4 |
 | `shop_capabilities` | Probe results with `checked_at` | 4 |
 | `sync_cursors` | Reconciliation cursors per shop and resource | 5 |
 | `sync_drifts` | Differences found by reconciliation between our records and the marketplace | 5 |
@@ -232,7 +233,7 @@ Data classes are written DC0–DC4 so they are never confused with requirement p
 
 | Class | Examples | Where | Default handling |
 |---|---|---|---|
-| DC0 Secret | OAuth tokens, API keys, session tokens | `shop_integrations`, `web_sessions` | Application-level encryption; never logged or shown |
+| DC0 Secret | OAuth tokens, API keys, session tokens, PKCE verifiers | `shop_integrations`, `web_sessions`, `oauth_authorizations` | Application-level encryption; never logged or shown |
 | DC1 Buyer contact | Buyer name, shipping address, email (if granted) | `orders`, `customers` | Masked in lists and logs; visible only to roles that need it |
 | DC2 Buyer content | Messages, emails, attachments | `customer_messages`, `email_*` | Untrusted; masked before model calls unless needed |
 | DC3 User account | Team members' names and emails | `user_profiles` | Visible inside the organization |

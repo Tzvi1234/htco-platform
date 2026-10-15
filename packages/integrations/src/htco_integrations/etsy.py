@@ -2,7 +2,8 @@
 
 Every request carries `x-api-key: <keystring>:<shared secret>` (the shared secret is mandatory
 since February 2026) and the shop's OAuth access token, supplied per call by an
-`AccessTokenProvider` (the token vault arrives in slice 4.2).
+`AccessTokenProvider` (the vault, refreshed on demand: `htco_application.etsy_tokens`). The connect
+flow's shop lookup (`shop_of_user`) passes the token it has just received instead.
 
 Rate-limit budget (per app, not per shop): each answer's `x-limit-per-second`,
 `x-remaining-this-second`, `x-limit-per-day` and `x-remaining-today` headers are kept as the last
@@ -223,9 +224,26 @@ class EtsyAdapter:
     def last_seen_quota(self) -> QuotaSnapshot | None:
         return self._quota
 
+    # --- EtsyShopDirectory (the connect flow, slice 4.3) --------------------------------------
+
+    async def shop_of_user(self, user_id: int, *, access_token: str) -> MarketplaceShop:
+        """getShopByOwnerUserId with the token just issued (not yet in the vault). Urgent: the
+        owner is waiting for the connection to finish."""
+        if user_id <= 0:
+            raise ValueError("the Etsy user ID must be positive")
+        body = await self._get(
+            "shop_of_user",
+            user_id,
+            f"/users/{user_id}/shops",
+            {},
+            urgent=True,
+            access_token=access_token,
+        )
+        return _parse("shop_of_user", _shop, body)
+
     # --- One call: floor, throttle, retries ---------------------------------------------------
 
-    async def _get(
+    async def _get(  # noqa: PLR0913 - the call, its budget class and an optional token
         self,
         operation: str,
         shop_id: int,
@@ -233,18 +251,19 @@ class EtsyAdapter:
         params: Mapping[str, str | int],
         *,
         urgent: bool,
+        access_token: str | None = None,
     ) -> Any:
         refreshing = self._admit(operation, shop_id, urgent=urgent)
         try:
-            return await self._send(operation, shop_id, path, params)
+            token = access_token or await self._tokens.access_token(shop_id)
+            return await self._send(operation, path, params, token)
         finally:
             if refreshing:
                 self._refresh_in_flight = False
 
     async def _send(
-        self, operation: str, shop_id: int, path: str, params: Mapping[str, str | int]
+        self, operation: str, path: str, params: Mapping[str, str | int], token: str
     ) -> Any:
-        token = await self._tokens.access_token(shop_id)
         headers = {
             "x-api-key": self._credentials.api_key_header(),
             "authorization": f"Bearer {token}",

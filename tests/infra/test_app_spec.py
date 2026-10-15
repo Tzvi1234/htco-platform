@@ -25,6 +25,8 @@ SECRET_SETTINGS = {
     "HTCO_SESSION_KEY",
     "HTCO_TOKEN_VAULT_KEY",
     "HTCO_TOKEN_VAULT_PREVIOUS_KEYS",
+    "HTCO_ETSY_KEYSTRING",
+    "HTCO_ETSY_SHARED_SECRET",
 }
 
 
@@ -79,6 +81,26 @@ def test_spec__password_reset_links_land_on_the_web_apps_reset_page() -> None:
     env = _envs()["HTCO_PASSWORD_RESET_REDIRECT_URL"]
     assert env["value"] == "https://dash.ht-co.app/reset-password"
     assert env.get("type") != "SECRET"
+
+
+def test_spec__etsy_redirect_uri_is_the_web_apps_callback_route() -> None:
+    env = _envs()["HTCO_ETSY_REDIRECT_URI"]
+
+    assert env["value"] == "https://dash.ht-co.app/integrations/etsy/callback"
+    assert "type" not in env  # a plain value, registered exactly at Etsy
+
+
+def test_deploy__etsy_app_credentials_come_from_their_github_secrets() -> None:
+    [deploy_step] = [
+        step
+        for job in DEPLOY["jobs"].values()
+        for step in job["steps"]
+        if str(step.get("uses", "")).startswith("digitalocean/app_action/deploy@")
+    ]
+    env = deploy_step["env"]
+
+    assert env["HTCO_ETSY_KEYSTRING"] == "${{ secrets.ETSY_KEYSTRING }}"
+    assert env["HTCO_ETSY_SHARED_SECRET"] == "${{ secrets.ETSY_SHARED_SECRET }}"  # noqa: S105 - test value
 
 
 def test_spec__health_checks_and_alerts() -> None:

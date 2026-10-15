@@ -4,6 +4,7 @@ import base64
 import binascii
 from enum import StrEnum
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -58,6 +59,10 @@ class ApiSettings(BaseSettings):
     etsy_keystring: SecretStr | None = None
     etsy_shared_secret: SecretStr | None = None
     etsy_daily_quota_floor: int = Field(default=500, ge=0)
+    # Where Etsy sends the owner back after consent (slice 4.3): the web app's callback route,
+    # registered exactly in the Etsy app. Not secret. HTTPS without query or fragment when
+    # deployed. With the credentials, the vault key and web sign-in it turns the connect flow on.
+    etsy_redirect_uri: str | None = None
     # The Etsy token vault (slice 4.2). Each key is `<key ID>:<32 random bytes, base64>`, a secret.
     # The current key wraps new data keys; previous keys (comma-separated) only open rows not yet
     # re-wrapped by `htco admin rotate-token-keys`. Without the current key the Etsy integration is
@@ -95,6 +100,7 @@ class ApiSettings(BaseSettings):
         "supabase_publishable_key",
         "etsy_keystring",
         "etsy_shared_secret",
+        "etsy_redirect_uri",
         "token_vault_key",
         "token_vault_previous_keys",
         mode="before",
@@ -123,6 +129,25 @@ class ApiSettings(BaseSettings):
     def _etsy_credentials_come_in_pairs(self) -> Self:
         if (self.etsy_keystring is None) != (self.etsy_shared_secret is None):
             raise ValueError("HTCO_ETSY_KEYSTRING and HTCO_ETSY_SHARED_SECRET must be set together")
+        return self
+
+    @field_validator("etsy_redirect_uri")
+    @classmethod
+    def _redirect_uri_is_a_plain_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parts = urlsplit(value.strip())
+        if parts.scheme not in {"http", "https"} or not parts.hostname:
+            raise ValueError("HTCO_ETSY_REDIRECT_URI must be an absolute http(s) URL")
+        if parts.query or parts.fragment or "#" in value:
+            raise ValueError("HTCO_ETSY_REDIRECT_URI must not have a query or a fragment")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def _deployed_redirect_uri_uses_https(self) -> Self:
+        deployed = self.environment in {Environment.STAGING, Environment.PRODUCTION}
+        if deployed and self.etsy_redirect_uri and not self.etsy_redirect_uri.startswith("https:"):
+            raise ValueError("HTCO_ETSY_REDIRECT_URI must use HTTPS in staging and production")
         return self
 
     @model_validator(mode="after")

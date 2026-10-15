@@ -137,6 +137,21 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: ${HTCO_TOKEN_VAULT_PREVIOUS_KEYS}
+      # Etsy app credentials (slices 4.1 and 4.3), from the GitHub secrets ETSY_KEYSTRING and
+      # ETSY_SHARED_SECRET. The redirect URI is the web app's callback route, registered exactly
+      # in the Etsy app. Connecting stays off (503 etsy-unavailable) until the credentials, the
+      # vault key and web sign-in are all set; blank secrets mean unset.
+      - key: HTCO_ETSY_KEYSTRING
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_ETSY_KEYSTRING}
+      - key: HTCO_ETSY_SHARED_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_ETSY_SHARED_SECRET}
+      - key: HTCO_ETSY_REDIRECT_URI
+        scope: RUN_TIME
+        value: https://dash.ht-co.app/integrations/etsy/callback
 # The web app (slice 3.8, client ADR-0006): built by App Platform from htco-clients `main` on every
 # push and served as static files; free inside an app that has a paid service (the deploy workflow's
 # budget step checks the proposed cost).

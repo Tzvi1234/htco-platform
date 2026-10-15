@@ -4,6 +4,7 @@ import contextlib
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import httpx
 import structlog
@@ -22,8 +23,11 @@ from htco_application.access.management import (
     InvitedUser,
     InviteeAlreadyRegisteredError,
 )
+from htco_application.etsy_connect import EtsyConnect
+from htco_application.etsy_tokens import VaultAccessTokenProvider
+from htco_application.marketplace import MarketplacePort
 from htco_application.mfa import Enrollment, Factor
-from htco_application.shop_integrations import TokenVault
+from htco_application.shop_integrations import IntegrationReader, TokenVault
 from htco_application.shops import ShopReader
 from htco_application.web_sessions import (
     CredentialsRefusedError,
@@ -34,11 +38,19 @@ from htco_application.web_sessions import (
     TooManyAttemptsError,
     WeakPasswordError,
 )
+from htco_integrations.etsy import EtsyAdapter, EtsyConfig, EtsyCredentials
+from htco_integrations.etsy_oauth import EtsyOAuthClient
 from htco_persistence.access import PostgresAccessStore
+from htco_persistence.audit import PostgresAuditLog
 from htco_persistence.database import Database
+from htco_persistence.etsy_connect import PostgresPendingAuthorizations, PostgresShopConnector
 from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.readiness import DatabaseCheck
-from htco_persistence.shop_integrations import PostgresTokenVault
+from htco_persistence.shop_integrations import (
+    PostgresIntegrationReader,
+    PostgresRefreshLock,
+    PostgresTokenVault,
+)
 from htco_persistence.shops import PostgresShopReader
 from htco_persistence.web_sessions import PostgresSessionStore
 from htco_platform.crypto import EnvelopeSealer, Sealer
@@ -116,6 +128,8 @@ def main(
         web_sign_in="on" if wiring.web_auth is not None else "off",
         # Off without HTCO_TOKEN_VAULT_KEY: no Etsy token can be stored or read (slice 4.2).
         etsy_token_vault="on" if wiring.token_vault is not None else "off",
+        # Off without the Etsy credentials, the redirect URI, the vault key or web sign-in.
+        etsy_connect="on" if wiring.etsy is not None else "off",
     )
     readiness_checks = (
         [DatabaseCheck(settings.database_url.get_secret_value())]
@@ -132,6 +146,8 @@ def main(
         access=wiring.access,
         inviter=wiring.inviter,
         web_auth=wiring.web_auth,
+        etsy=wiring.etsy,
+        integrations=wiring.integrations,
         resources=wiring.resources,
     )
     try:
@@ -255,8 +271,12 @@ class _Wiring:
     access: AccessStore | None = None
     inviter: _Inviter | None = None
     web_auth: WebAuth | None = None
-    # Used by the Etsy connect flow from slice 4.3 on.
     token_vault: TokenVault | None = None
+    # The connect flow (slice 4.3) and the shop card's connection health (slice 4.4).
+    etsy: EtsyConnect | None = None
+    integrations: IntegrationReader | None = None
+    # Etsy reads with refreshed tokens; no route calls it yet (Phase 5 ingests orders with it).
+    marketplace: MarketplacePort | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -313,15 +333,62 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
     token_vault = (
         None if key_ring is None else PostgresTokenVault(database, EnvelopeSealer(key_ring))
     )
+    etsy, marketplace = _etsy_wiring(settings, database, http, token_vault, web_auth)
     return _Wiring(
         web_auth=web_auth,
         token_vault=token_vault,
+        etsy=etsy,
+        marketplace=marketplace,
+        integrations=PostgresIntegrationReader(database),
         authenticator=Authenticator(verifier, PostgresMembershipReader(database)),
         shops=PostgresShopReader(database),
         access=PostgresAccessStore(database),
         inviter=inviter,
         resources=[database, _HttpClient(http)],
     )
+
+
+def _etsy_wiring(
+    settings: ApiSettings,
+    database: Database,
+    http: httpx.AsyncClient,
+    vault: PostgresTokenVault | None,
+    web_auth: WebAuth | None,
+) -> tuple[EtsyConnect | None, MarketplacePort | None]:
+    """The connect flow and the adapter, when every piece they need is configured."""
+    if (
+        vault is None
+        or web_auth is None
+        or settings.session_key is None
+        or settings.etsy_keystring is None
+        or settings.etsy_shared_secret is None
+        or settings.etsy_redirect_uri is None
+    ):
+        return None, None
+    credentials = EtsyCredentials(
+        keystring=settings.etsy_keystring.get_secret_value(),
+        shared_secret=settings.etsy_shared_secret.get_secret_value(),
+    )
+    oauth = EtsyOAuthClient(http, credentials=credentials)
+    adapter = EtsyAdapter(
+        http,
+        credentials=credentials,
+        access_tokens=VaultAccessTokenProvider(
+            vault, oauth, PostgresRefreshLock(database), clock=lambda: datetime.now(UTC)
+        ),
+        config=EtsyConfig(daily_quota_floor=settings.etsy_daily_quota_floor),
+    )
+    etsy = EtsyConnect(
+        authorization_server=oauth,
+        directory=adapter,
+        pending=PostgresPendingAuthorizations(
+            database, Sealer.from_base64(settings.session_key.get_secret_value())
+        ),
+        connector=PostgresShopConnector(database, vault),
+        audit=PostgresAuditLog(database),
+        redirect_uri=settings.etsy_redirect_uri,
+    )
+    return etsy, adapter
 
 
 def _error_reporter(settings: ApiSettings) -> ErrorReporter:

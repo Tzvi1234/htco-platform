@@ -14,19 +14,25 @@ Nothing here logs a token or a key; errors name the shop only (AC-4.2.3).
 """
 
 import uuid
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
 import anyio
+import psycopg
 import structlog
 
+from htco_application.audit import AuditRecord
 from htco_application.shop_integrations import (
     EtsyConnection,
+    IntegrationSummary,
     OAuthTokens,
     ShopIntegration,
     TokenVaultError,
 )
 from htco_domain.integrations import IntegrationProvider, IntegrationStatus
+from htco_persistence.audit import append_audit
 from htco_persistence.database import Database
 from htco_platform.crypto import Envelope, EnvelopeSealer, SealingError
 
@@ -34,7 +40,7 @@ _PROVIDER = IntegrationProvider.ETSY
 _COLUMNS = """
 id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id, wrapped_data_key,
 access_token_ciphertext, refresh_token_ciphertext, scopes, access_expires_at, refresh_expires_at,
-status, failure_count, last_successful_call_at, created_at, updated_at
+status, failure_count, last_successful_call_at, created_at, updated_at, last_refresh_failed_at
 """
 
 _log = structlog.get_logger(__name__)
@@ -58,16 +64,20 @@ class PostgresTokenVault:
     async def update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool:
         return await anyio.to_thread.run_sync(self._update_tokens, shop_id, tokens)
 
-    async def record_refresh_failure(self, shop_id: uuid.UUID) -> int:
+    async def record_refresh_failure(
+        self, shop_id: uuid.UUID, *, at: datetime | None = None
+    ) -> int:
         def run() -> int:
             with self._database.connection() as connection:
                 row = connection.execute(
                     """
-                    update app.shop_integrations set failure_count = failure_count + 1
+                    update app.shop_integrations
+                    set failure_count = failure_count + 1,
+                        last_refresh_failed_at = coalesce(%s, now())
                     where shop_id = %s and provider = %s and status = 'connected'
                     returning failure_count
                     """,
-                    [shop_id, _PROVIDER.value],
+                    [at, shop_id, _PROVIDER.value],
                 ).fetchone()
             return 0 if row is None else int(row[0])
 
@@ -82,14 +92,43 @@ class PostgresTokenVault:
             [at, shop_id, _PROVIDER.value],
         )
 
-    async def mark_needs_reauth(self, shop_id: uuid.UUID) -> None:
-        await self._execute(
-            """
-            update app.shop_integrations set status = 'needs_reauth'
-            where shop_id = %s and provider = %s and status = 'connected'
-            """,
-            [shop_id, _PROVIDER.value],
-        )
+    async def mark_needs_reauth(
+        self, shop_id: uuid.UUID, *, audit: AuditRecord | None = None
+    ) -> bool:
+        def run() -> bool:
+            with self._database.connection() as connection, connection.transaction():
+                row = connection.execute(
+                    """
+                    update app.shop_integrations set status = 'needs_reauth'
+                    where shop_id = %s and provider = %s and status = 'connected'
+                    returning id
+                    """,
+                    [shop_id, _PROVIDER.value],
+                ).fetchone()
+                if row is not None and audit is not None:
+                    append_audit(connection, audit)
+            return row is not None
+
+        return await anyio.to_thread.run_sync(run)
+
+    async def find_by_marketplace_shop(self, etsy_shop_id: int) -> ShopIntegration | None:
+        def run() -> ShopIntegration | None:
+            with self._database.connection() as connection:
+                rows = connection.execute(
+                    f"""
+                    select {_COLUMNS} from app.shop_integrations
+                    where etsy_shop_id = %s and provider = %s and status <> 'disconnected'
+                    limit 2
+                    """,  # noqa: S608 - constant column list
+                    [etsy_shop_id, _PROVIDER.value],
+                ).fetchall()
+            if len(rows) > 1:  # the connect flow refuses this; never guess between tenants
+                raise TokenVaultError(
+                    f"Etsy shop {etsy_shop_id} is connected in more than one organization"
+                )
+            return self._row(rows[0]) if rows else None
+
+        return await anyio.to_thread.run_sync(run)
 
     async def disconnect(self, shop_id: uuid.UUID) -> None:
         await self._execute(
@@ -143,48 +182,53 @@ class PostgresTokenVault:
         )
 
     def _store(self, connection: EtsyConnection) -> ShopIntegration:
+        with self._database.connection() as db:
+            return self.store_in(db, connection)
+
+    def store_in(self, db: psycopg.Connection[Any], connection: EtsyConnection) -> ShopIntegration:
+        """`store` inside the caller's transaction (the connect flow's unit of work)."""
         envelope = self._seal(connection.shop_id, connection.tokens)
         access, refresh = envelope.ciphertexts
-        with self._database.connection() as db:
-            row = db.execute(
-                f"""
-                insert into app.shop_integrations
-                  (id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id,
-                   wrapped_data_key, access_token_ciphertext, refresh_token_ciphertext, scopes,
-                   access_expires_at, refresh_expires_at, status, failure_count)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'connected', 0)
-                on conflict (shop_id, provider) do update set
-                  etsy_shop_id = excluded.etsy_shop_id,
-                  etsy_user_id = excluded.etsy_user_id,
-                  key_id = excluded.key_id,
-                  wrapped_data_key = excluded.wrapped_data_key,
-                  access_token_ciphertext = excluded.access_token_ciphertext,
-                  refresh_token_ciphertext = excluded.refresh_token_ciphertext,
-                  scopes = excluded.scopes,
-                  access_expires_at = excluded.access_expires_at,
-                  refresh_expires_at = excluded.refresh_expires_at,
-                  status = 'connected',
-                  failure_count = 0
-                -- Never across tenants: a shop's row stays with its organization.
-                where app.shop_integrations.organization_id = excluded.organization_id
-                returning {_COLUMNS}
-                """,  # noqa: S608 - constant column list
-                [
-                    uuid.uuid7(),
-                    connection.organization_id,
-                    connection.shop_id,
-                    _PROVIDER.value,
-                    connection.etsy_shop_id,
-                    connection.etsy_user_id,
-                    envelope.key_id,
-                    envelope.wrapped_key,
-                    access,
-                    refresh,
-                    sorted(connection.scopes),
-                    connection.tokens.access_expires_at,
-                    connection.tokens.refresh_expires_at,
-                ],
-            ).fetchone()
+        row = db.execute(
+            f"""
+            insert into app.shop_integrations
+              (id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id,
+               wrapped_data_key, access_token_ciphertext, refresh_token_ciphertext, scopes,
+               access_expires_at, refresh_expires_at, status, failure_count)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'connected', 0)
+            on conflict (shop_id, provider) do update set
+              etsy_shop_id = excluded.etsy_shop_id,
+              etsy_user_id = excluded.etsy_user_id,
+              key_id = excluded.key_id,
+              wrapped_data_key = excluded.wrapped_data_key,
+              access_token_ciphertext = excluded.access_token_ciphertext,
+              refresh_token_ciphertext = excluded.refresh_token_ciphertext,
+              scopes = excluded.scopes,
+              access_expires_at = excluded.access_expires_at,
+              refresh_expires_at = excluded.refresh_expires_at,
+              status = 'connected',
+              failure_count = 0,
+              last_refresh_failed_at = null
+            -- Never across tenants: a shop's row stays with its organization.
+            where app.shop_integrations.organization_id = excluded.organization_id
+            returning {_COLUMNS}
+            """,  # noqa: S608 - constant column list
+            [
+                uuid.uuid7(),
+                connection.organization_id,
+                connection.shop_id,
+                _PROVIDER.value,
+                connection.etsy_shop_id,
+                connection.etsy_user_id,
+                envelope.key_id,
+                envelope.wrapped_key,
+                access,
+                refresh,
+                sorted(connection.scopes),
+                connection.tokens.access_expires_at,
+                connection.tokens.refresh_expires_at,
+            ],
+        ).fetchone()
         if row is None:  # the conflict update was skipped: another organization's shop
             raise TokenVaultError.wrong_organization(connection.shop_id)
         return self._row(row)
@@ -209,7 +253,7 @@ class PostgresTokenVault:
                 update app.shop_integrations
                 set key_id = %s, wrapped_data_key = %s, access_token_ciphertext = %s,
                     refresh_token_ciphertext = %s, access_expires_at = %s,
-                    refresh_expires_at = %s, failure_count = 0
+                    refresh_expires_at = %s, failure_count = 0, last_refresh_failed_at = null
                 where shop_id = %s and provider = %s and status = 'connected'
                 """,
                 [
@@ -294,6 +338,7 @@ class PostgresTokenVault:
             last_successful_call_at=row[15],
             created_at=row[16],
             updated_at=row[17],
+            last_refresh_failed_at=row[18],
         )
 
     async def _execute(self, sql: str, params: list[object]) -> None:
@@ -302,3 +347,87 @@ class PostgresTokenVault:
                 connection.execute(sql, params)
 
         await anyio.to_thread.run_sync(run)
+
+
+# --- The refresh lock (slice 4.4) ----------------------------------------------------------------
+
+
+class PostgresRefreshLock:
+    """A session-level advisory lock per shop, held on one pooled connection.
+
+    Every API process (and the worker, from Phase 5) refreshes a shop's token only while holding
+    it, so concurrent refreshes across processes become one (AC-4.4.1). If the process dies, the
+    connection closes and Postgres releases the lock.
+    """
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    @asynccontextmanager
+    async def hold(self, shop_id: uuid.UUID) -> AsyncIterator[None]:
+        key = f"htco.etsy_token_refresh:{shop_id}"
+        pooled = self._database.connection()
+        connection = await anyio.to_thread.run_sync(pooled.__enter__)
+        try:
+            await anyio.to_thread.run_sync(_advisory, connection, "pg_advisory_lock", key)
+            try:
+                yield
+            finally:
+                await anyio.to_thread.run_sync(_advisory, connection, "pg_advisory_unlock", key)
+        except BaseException as error:
+            await anyio.to_thread.run_sync(pooled.__exit__, type(error), error, error.__traceback__)
+            raise
+        else:
+            await anyio.to_thread.run_sync(pooled.__exit__, None, None, None)
+
+
+def _advisory(connection: psycopg.Connection[Any], function: str, key: str) -> None:
+    connection.execute(
+        f"select {function}(hashtextextended(%s, 0))",
+        [key],
+    )
+    connection.commit()
+
+
+# --- The shop card's view (slice 4.4) ------------------------------------------------------------
+
+# Runs as the caller: the policy `shop_integrations_select` limits rows to Owner and Admin, and
+# the sealed columns are not even granted to `authenticated`.
+_LIST_INTEGRATIONS = """
+select shop_id, organization_id, provider, status, etsy_shop_id, scopes, access_expires_at,
+       refresh_expires_at, failure_count, last_successful_call_at, created_at, updated_at
+from app.shop_integrations
+where organization_id = %s
+order by shop_id
+"""
+
+
+class PostgresIntegrationReader:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def list_integrations(
+        self, claims: Mapping[str, Any], organization_id: uuid.UUID
+    ) -> Sequence[IntegrationSummary]:
+        def run() -> list[IntegrationSummary]:
+            with self._database.user_transaction(claims) as connection:
+                rows = connection.execute(_LIST_INTEGRATIONS, [organization_id]).fetchall()
+            return [
+                IntegrationSummary(
+                    shop_id=row[0],
+                    organization_id=row[1],
+                    provider=IntegrationProvider(row[2]),
+                    status=IntegrationStatus(row[3]),
+                    etsy_shop_id=int(row[4]),
+                    scopes=frozenset(row[5]),
+                    access_expires_at=row[6],
+                    refresh_expires_at=row[7],
+                    failure_count=int(row[8]),
+                    last_successful_call_at=row[9],
+                    created_at=row[10],
+                    updated_at=row[11],
+                )
+                for row in rows
+            ]
+
+        return await anyio.to_thread.run_sync(run)

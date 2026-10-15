@@ -1,6 +1,6 @@
 # Etsy integration — Security
 
-Slice 4.1 adds outgoing, read-only calls to Etsy. Tokens are not stored yet (slice 4.2); this page grows with every Phase 4 slice.
+Slice 4.1 adds outgoing, read-only calls to Etsy. The token vault (4.2) has its own threat table in [token vault](token-vault.md#security); the OAuth connect flow and refresh (4.3, 4.4), including ASVS V10, in [connect flow](connect-flow.md#security). This page grows with every Phase 4 slice.
 
 ## Data flow and trust boundaries
 
