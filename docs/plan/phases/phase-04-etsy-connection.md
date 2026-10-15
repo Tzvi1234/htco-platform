@@ -31,6 +31,11 @@ The owner connects the real Etsy shop from the web app and sees, honestly, what 
 
 ## Owner prerequisites
 
+Research of 2026-10-15 ([Etsy API capabilities](../../architecture/etsy-api-capabilities.md), [multi-shop policy](../../architecture/etsy-multi-shop-policy.md)):
+- One HTCO app connects every shop through OAuth, with no proxies and never a second key.
+- Personal access covers the owner's shops plus about 4 others. Commercial access is requested early, describing the AI assistance honestly.
+- The first test with our own key checks `createReceiptShipment` and the receipt addresses for an Israeli shop, which Etsy restricted for new keys on 2026-07-20. The result decides the Phase 6 tracking path: direct upload, an approved POD or fulfillment partner, or a task for the owner.
+
 - Etsy Seller App keystring and shared secret stored as secrets; redirect URI `https://dash.ht-co.app/integrations/etsy/callback` registered exactly (a web-app route; see ADR-0008).
 - The owner has read Etsy's current API Terms (A-09).
 
