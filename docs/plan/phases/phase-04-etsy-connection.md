@@ -7,11 +7,11 @@
 | **Size** | M |
 | **Depends on** | Phases 2 and 3; Etsy Seller App registered (Phase 0) |
 | **Requirements** | FR-ADM-02, FR-SHOP-01, FR-SHOP-02, FR-SHOP-03, FR-SHOP-04, FR-SHOP-05 |
-| **Status** | Not started |
+| **Status** | In progress |
 
 ## Progress
 
-- [ ] 4.1 Etsy adapter foundation
+- [x] 4.1 Etsy adapter foundation
 - [ ] 4.2 Token vault
 - [ ] 4.3 OAuth connect flow
 - [ ] 4.4 Token refresh
@@ -43,7 +43,7 @@ Research of 2026-10-15 ([Etsy API capabilities](../../architecture/etsy-api-capa
 
 ### 4.1 — Etsy adapter foundation
 
-`MarketplacePort` with the first read operations (shop, receipts page, listing page); `EtsyAdapter` on httpx with timeouts, `x-api-key` header, rate-limit budget read from `x-remaining-*` headers (throttle at half the per-second limit), backoff on 429 honoring `retry-after`, typed errors for 401/403/404/409/429/5xx; respx fixtures recorded in the Phase 0 spike and scrubbed.
+`MarketplacePort` with the first read operations (shop, receipts page, listing page); `EtsyAdapter` on httpx with timeouts, `x-api-key` header, rate-limit budget read from `x-remaining-*` headers (throttle at half the per-second limit), backoff on 429 honoring `retry-after`, typed errors for 401/403/404/409/429/5xx; scrubbed fixtures (hand-written from the OpenAPI spec until a key exists; replaced by recorded ones from the first live calls). Built in `packages/integrations` (`htco_integrations.etsy`); see [etsy-integration](../../features/etsy-integration/overview.md).
 
 | ID | Acceptance criterion |
 |---|---|
