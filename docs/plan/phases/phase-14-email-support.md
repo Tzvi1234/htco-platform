@@ -27,6 +27,18 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 
 ## Scope
 
+**Etsy buyer messages (owner, 2026-10-15).** Etsy has no messages API ([capabilities](../../architecture/etsy-api-capabilities.md)).
+- **Default path:**
+  - Dana reads Etsy's message notifications from the owner's mailbox.
+  - She gathers the context: the order, its shipment and the conversation's history.
+  - She drafts a reply. A person approves it with one click.
+  - "Open in Etsy" opens the conversation with the reply copied, ready to paste and send.
+- **Opt-in path (the owner's decision, one pilot shop first):** Dana sends only approved replies herself, from an isolated browser session.
+  - Human pace and no disguise of any kind: no proxies, no fingerprint changes, no CAPTCHA solving.
+  - Off by default, per shop.
+  - This is automated use of etsy.com, which Etsy's terms restrict. The owner accepts that risk per shop. It is recorded as a decision with its own kill switch, and buyer-facing sends always need approval.
+
+
 **In:** MX for `office.ht-co.app` to Resend inbound (addresses `support@`, `info@` and `security@`); the `email.received` webhook (signed, idempotent), content fetch, attachment copy within the provider's one-hour URL window, attachment policy and scanning, HTML sandboxing with remote content off; threads and tickets; a quarantined extractor (no tools) that turns an email into a validated schema; Dana drafting replies (L2: sending needs approval); the assisted-reply workflow for Etsy conversations with a "sent manually" record; consent ledger; retention for messages (data class DC2).
 
 **Out:** per-employee addresses (FR-EML-04, [Phase 15](phase-15-office-executive.md) onwards); marketing email ([Phase 21](phase-21-growth-scale.md)).
