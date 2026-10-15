@@ -165,6 +165,8 @@ class PostgresTokenVault:
                   refresh_expires_at = excluded.refresh_expires_at,
                   status = 'connected',
                   failure_count = 0
+                -- Never across tenants: a shop's row stays with its organization.
+                where app.shop_integrations.organization_id = excluded.organization_id
                 returning {_COLUMNS}
                 """,  # noqa: S608 - constant column list
                 [
@@ -183,8 +185,8 @@ class PostgresTokenVault:
                     connection.tokens.refresh_expires_at,
                 ],
             ).fetchone()
-        if row is None:  # pragma: no cover - `returning` always yields the row
-            raise TokenVaultError.unreadable(connection.shop_id)
+        if row is None:  # the conflict update was skipped: another organization's shop
+            raise TokenVaultError.wrong_organization(connection.shop_id)
         return self._row(row)
 
     def _load(self, shop_id: uuid.UUID) -> ShopIntegration | None:

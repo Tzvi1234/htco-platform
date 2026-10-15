@@ -103,3 +103,10 @@ def test_integration__tokens_are_usable_only_when_connected() -> None:
     assert connected.is_usable
     assert not replace(connected, status=IntegrationStatus.NEEDS_REAUTH).is_usable
     assert not replace(connected, status=IntegrationStatus.DISCONNECTED, tokens=None).is_usable
+
+
+def test_vault_error__wrong_organization__names_the_shop_only() -> None:
+    error = TokenVaultError.wrong_organization(SHOP)
+
+    assert str(SHOP) in str(error)
+    assert "another organization" in str(error)

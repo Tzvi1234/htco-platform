@@ -25,6 +25,10 @@ class TokenVaultError(Exception):
     def unreadable(cls, shop_id: uuid.UUID) -> TokenVaultError:
         return cls(f"the stored tokens of shop {shop_id} cannot be opened (missing key or altered)")
 
+    @classmethod
+    def wrong_organization(cls, shop_id: uuid.UUID) -> TokenVaultError:
+        return cls(f"shop {shop_id} belongs to another organization; nothing was stored")
+
 
 @dataclass(frozen=True)
 class OAuthTokens:

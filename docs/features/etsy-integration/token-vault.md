@@ -57,7 +57,7 @@ Port in `htco_application.shop_integrations` (`TokenVault`), adapter `htco_persi
 
 | Method | Does |
 |---|---|
-| `store(connection: EtsyConnection) -> ShopIntegration` | Connect or reconnect: upsert by shop and provider, new envelope, status `connected`, failures reset, scopes replaced |
+| `store(connection: EtsyConnection) -> ShopIntegration` | Connect or reconnect: upsert by shop and provider, new envelope, status `connected`, failures reset, scopes replaced; a shop of another organization raises `TokenVaultError` and changes nothing |
 | `load(shop_id) -> ShopIntegration \| None` | The row with tokens opened (`tokens` is `None` once disconnected); raises `TokenVaultError` naming the shop only |
 | `update_tokens(shop_id, tokens: OAuthTokens) -> bool` | After a refresh: new envelope, failures reset; `False` if the shop is no longer `connected`, so a refresh finishing after a disconnect never restores tokens |
 | `record_refresh_failure(shop_id) -> int` | Increment and return `failure_count` |
