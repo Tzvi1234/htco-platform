@@ -25,7 +25,7 @@ Slices 3.1 to 3.3 need no backend, so they started early (the plan lets design-s
 
 ## Goal
 
-The owner signs in on `app.ht-co.app` with password and authenticator app, and lands in a calm, branded, bilingual shell that shows their organization and shops. Underneath: the token pipeline, the core component library with accessibility and RTL tests, generated API clients and a secure session model.
+The owner signs in on `dash.ht-co.app` with password and authenticator app, and lands in a calm, branded, bilingual shell that shows their organization and shops. Underneath: the token pipeline, the core component library with accessibility and RTL tests, generated API clients and a secure session model.
 
 ## Why now
 
@@ -39,7 +39,7 @@ Every later phase adds screens. If tokens, components, i18n, RTL, accessibility 
 
 ## Owner prerequisites
 
-- `app.ht-co.app` DNS ready (or use the default DigitalOcean domain until it is).
+- `dash.ht-co.app` DNS ready (or use the default DigitalOcean domain until it is).
 - Approved design system (Phase 0).
 
 ## Slices
@@ -117,11 +117,11 @@ Overview with empty state ("Connect your first shop" for the owner), organizatio
 
 ### 3.8 — Web deployment
 
-`web` component: Caddy serving the built app with CSP (no inline scripts), HSTS, `frame-ancestors 'none'`, `Referrer-Policy`, `Permissions-Policy`; ingress routes `/api` to the API; custom domain when ready.
+`web` component: a static site built by App Platform from `htco-clients` `main` at `dash.ht-co.app`; the CSP (no inline scripts) and referrer policy are written into the page, HTTPS-only comes from the `.app` HSTS preload, and the app refuses to run in a frame. A Caddy service with real headers would cost $5 a month more ([client ADR-0006](https://github.com/Tzvi1234/htco-clients/blob/main/docs/adr/0006-static-web-hosting.md)). The ingress routes `dash.ht-co.app/api` to the API; the deploy refuses a spec whose proposed monthly cost exceeds the budget.
 
 | ID | Acceptance criterion |
 |---|---|
-| AC-3.8.1 | Security headers present on every web response (automated check against the deployed site). |
+| AC-3.8.1 | The security policies (CSP, referrer) are present on the deployed site, over HTTPS only (automated check in the deploy workflow). |
 | AC-3.8.2 | The deployed app passes the Playwright sign-in journey (with a test user on the deployed environment). |
 
 ### 3.9 — Administration screens
@@ -168,4 +168,4 @@ Web and API deploys roll back independently; the sessions table is additive.
 
 ## Cost impact
 
-`web` service about $5/month if served by Caddy (static site would be free but cannot set security headers).
+`web` static site: free inside the paid app (client ADR-0006).

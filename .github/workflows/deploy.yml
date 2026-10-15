@@ -1,5 +1,6 @@
-# Deploy the API to DigitalOcean App Platform. Started only by the owner (slice 1.5 part 2); the
-# first step stops anyone but the repository owner.
+# Deploy the API, and the app spec that also holds the web app's static site, to DigitalOcean App
+# Platform. Started only by the owner (slice 1.5 part 2); the first step stops anyone but the
+# repository owner. Before deploying, App Platform's proposed monthly cost must stay within budget.
 #
 # Without `image_tag`: build the image of the chosen commit, check it runs as non-root, scan it,
 # push it to GHCR as ghcr.io/tzvi1234/htco-api:<commit SHA>, then deploy it. With `image_tag`:
@@ -106,6 +107,31 @@ jobs:
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: docker push "$IMAGE:$TAG"
+      - name: The monthly cost stays within the budget
+        env:
+          TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          BUDGET_USD: "5"
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          # The private image must be readable for the proposal to validate.
+          GHCR_PULL_CREDENTIALS: tzvi1234:${{ secrets.GHCR_PULL_TOKEN }}
+          HTCO_SUPABASE_URL: ${{ vars.HTCO_SUPABASE_URL }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+          SUPABASE_POOLER_HOST: ${{ vars.SUPABASE_POOLER_HOST }}
+          HTCO_SUPABASE_PUBLISHABLE_KEY: ${{ vars.HTCO_SUPABASE_PUBLISHABLE_KEY }}
+          HTCO_WEB_ORIGINS: ${{ vars.HTCO_WEB_ORIGINS }}
+        run: |
+          # Ask App Platform what this spec would cost per month before deploying it. The other
+          # secrets stay empty here: they do not change the price.
+          spec="$(envsubst < infra/digitalocean/app.yaml | yq -o=json '.')"
+          app_id="$(curl --fail --silent --show-error -H "Authorization: Bearer $TOKEN"             "https://api.digitalocean.com/v2/apps?per_page=200"             | jq -r '.apps[] | select(.spec.name == "htco") | .id')"
+          proposal="$(jq -n --argjson spec "$spec" --arg app_id "$app_id"               '{spec: $spec, app_id: $app_id}'             | curl --fail-with-body --silent --show-error -X POST               -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json"               --data @- https://api.digitalocean.com/v2/apps/propose)"
+          cost="$(printf '%s' "$proposal" | jq -r '.app_cost')"
+          echo "Proposed monthly cost: \$$cost (budget \$$BUDGET_USD)"
+          echo "- Monthly cost: \$$cost (budget \$$BUDGET_USD)" >> "$GITHUB_STEP_SUMMARY"
+          if ! awk -v cost="$cost" -v budget="$BUDGET_USD"             'BEGIN { exit !(cost ~ /^[0-9.]+$/ && cost + 0 <= budget + 0) }'; then
+            echo "::error::The spec would cost \$$cost a month, over the \$$BUDGET_USD budget"
+            exit 1
+          fi
       - name: Deploy
         id: deploy
         uses: digitalocean/app_action/deploy@cc55bc9b848d25f9c1c9f831cf843fbab3fbfb15 # v2.0.11
@@ -139,3 +165,11 @@ jobs:
             echo "- URL: $url"
             echo "- Domain: $(printf '%s' "$APP" | jq -r '.live_url')"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: The web app answers on its domain
+        # A new domain waits minutes for its certificate, so this reports instead of failing.
+        continue-on-error: true
+        run: |
+          page="$(curl --fail --silent --show-error --retry 20 --retry-all-errors --retry-delay 15             https://dash.ht-co.app/)"
+          printf '%s' "$page" | grep -q 'http-equiv="Content-Security-Policy"'
+          curl --fail --silent --show-error https://dash.ht-co.app/api/healthz
+          echo "- Web app: https://dash.ht-co.app (CSP present, /api reaches the API)" >> "$GITHUB_STEP_SUMMARY"

@@ -31,7 +31,7 @@ The owner connects the real Etsy shop from the web app and sees, honestly, what 
 
 ## Owner prerequisites
 
-- Etsy Seller App keystring and shared secret stored as secrets; redirect URI `https://app.ht-co.app/integrations/etsy/callback` registered exactly (a web-app route; see ADR-0008).
+- Etsy Seller App keystring and shared secret stored as secrets; redirect URI `https://dash.ht-co.app/integrations/etsy/callback` registered exactly (a web-app route; see ADR-0008).
 - The owner has read Etsy's current API Terms (A-09).
 
 ## Slices

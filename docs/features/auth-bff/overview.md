@@ -42,6 +42,6 @@ The web app signs in through the API, never directly with Supabase. The API chec
 |---|---|
 | `HTCO_SESSION_KEY` | 32 random bytes, base64 (`openssl rand -base64 32`). Seals tokens at rest. A secret; rotating it ends every session. |
 | `HTCO_SUPABASE_PUBLISHABLE_KEY` | The project's publishable key (`sb_publishable_…`), sent to Supabase Auth. Not secret. |
-| `HTCO_WEB_ORIGINS` | Comma-separated origins allowed to send cookie requests, e.g. `https://app.ht-co.app`. |
+| `HTCO_WEB_ORIGINS` | Comma-separated origins allowed to send cookie requests, e.g. `https://dash.ht-co.app`. |
 
 Web sign-in is on when the two keys are set (with the Supabase and database URLs); `api.starting` logs `web_sign_in`.

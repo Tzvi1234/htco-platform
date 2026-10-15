@@ -39,7 +39,7 @@ Every phase file has the same structure: goal, why now, scope in and out, prereq
 | [0](phases/phase-00-groundwork.md) | Groundwork and decisions | Plan approved, accounts ready, Etsy and AutoVA facts verified | — | both | S | **M0 Plan approved** |
 | [1](phases/phase-01-walking-skeleton.md) | Platform walking skeleton | Deployed API with health checks, full CI and quality gates | — | platform | M | **M1 Skeleton live** |
 | [2](phases/phase-02-identity-tenancy.md) | Identity, tenancy, actors and audit | Organizations, roles, shops (shell), MFA rules, RLS, audit with actor kinds, `/v1/me` | — | platform | M | |
-| [3](phases/phase-03-design-system-web-shell.md) | Design system and web shell | Sign in with MFA on `app.ht-co.app`, see org and shops, Hebrew/English, light/dark | — | clients, platform | L | |
+| [3](phases/phase-03-design-system-web-shell.md) | Design system and web shell | Sign in with MFA on `dash.ht-co.app`, see org and shops, Hebrew/English, light/dark | — | clients, platform | L | |
 | [4](phases/phase-04-etsy-connection.md) | Etsy shop connection | Connect the real shop, see scopes, capabilities and sync health | — | both | M | |
 | [5](phases/phase-05-orders-ingest.md) | Automation engine and orders CRM | Every order ingested exactly once by deterministic workflows; job queue, inbox, outbox, automation registry in the database | Order Intake, Deduplication & Verification, Sales Counters | both | L | |
 | [6](phases/phase-06-fulfillment-incidents.md) | Fulfillment monitoring and incidents | Late or missing tracking raises one incident and one email; auto-resolves on evidence | Tracking Sync, Incident Detection & Escalation | both | M | |

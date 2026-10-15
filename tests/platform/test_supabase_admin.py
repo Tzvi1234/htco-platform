@@ -76,13 +76,13 @@ async def test_invite__redirect_is_passed_when_configured() -> None:
         client,
         supabase_url=URL + "/",
         secret_key="test-key",  # noqa: S106 - a test value
-        redirect_to="https://app.ht-co.app/welcome",
+        redirect_to="https://dash.ht-co.app/welcome",
     )
     async with client:
         await subject.invite("n@x.test")
     assert (
         str(seen[0].url)
-        == f"{URL}/auth/v1/invite?redirect_to=https%3A%2F%2Fapp.ht-co.app%2Fwelcome"
+        == f"{URL}/auth/v1/invite?redirect_to=https%3A%2F%2Fdash.ht-co.app%2Fwelcome"
     )
 
 

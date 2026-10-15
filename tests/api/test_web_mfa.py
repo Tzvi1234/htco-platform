@@ -25,7 +25,7 @@ from tests.session_fakes import NOW, USER, Auth, Store, Tokens, tokens
 
 pytestmark = pytest.mark.anyio
 
-ORIGIN = "https://app.ht-co.app"
+ORIGIN = "https://dash.ht-co.app"
 PROBLEMS = "https://ht-co.app/problems/"
 ORG = uuid.UUID("a0000000-0000-0000-0000-000000000000")
 CSRF = {"X-HTCO-CSRF": "1", "Origin": ORIGIN}
