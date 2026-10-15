@@ -6,6 +6,7 @@ answers with its own problem type (AC-2.3.1); a verified user with no membership
 (AC-2.3.2). Rejections are logged with their reason only, never the token.
 """
 
+import uuid
 from typing import Annotated, Protocol
 
 import structlog
@@ -141,7 +142,15 @@ async def require_auth(
     if not isinstance(web, WebAuth):  # pragma: no cover - has_cookie implies it
         raise ProblemError(AUTH_UNAVAILABLE)
     active = await resume(request, web, request.app.state.clock())
+    # Flows bound to the browser session (the Etsy connect flow) read it from here.
+    request.state.web_session_id = active.session_id
     return await authenticator.authenticate_user(active.user)
+
+
+def web_session_id(request: Request) -> uuid.UUID | None:
+    """The web session behind this request's cookie; None for bearer requests."""
+    found = getattr(request.state, "web_session_id", None)
+    return found if isinstance(found, uuid.UUID) else None
 
 
 CurrentAuth = Annotated[AuthContext, Depends(require_auth)]

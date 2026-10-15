@@ -31,6 +31,8 @@ Fixtures (`tests/fixtures/etsy/`): `shop.json`, `receipts_page.json`, `listings_
 - **Hostile input:** malformed payloads, timestamps outside the datetime range; no redirects followed.
 - **Not applicable in 4.1:** tenancy and roles (no endpoint yet), writes and idempotency (no write), webhooks (Phase 5).
 
+Slices 4.2 to 4.4 have their own test maps in [token vault](token-vault.md#tests) and [connect flow](connect-flow.md#tests).
+
 ## Verification evidence
 
 ### Slice 4.1 — 2026-10-15

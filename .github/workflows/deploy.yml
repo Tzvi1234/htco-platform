@@ -12,7 +12,8 @@
 #   secrets    DIGITALOCEAN_ACCESS_TOKEN (App Platform scopes only), GHCR_PULL_TOKEN (read:packages),
 #              SUPABASE_DB_PASSWORD, HTCO_SENTRY_DSN, HTCO_SUPABASE_SECRET_KEY, HTCO_SESSION_KEY,
 #              HTCO_TOKEN_VAULT_KEY, HTCO_TOKEN_VAULT_PREVIOUS_KEYS (both optional: unset leaves the
-#              Etsy integration off)
+#              Etsy integration off), ETSY_KEYSTRING, ETSY_SHARED_SECRET (the Etsy app's
+#              credentials; unset leaves connecting a shop off)
 name: Deploy API
 
 on:
@@ -149,6 +150,8 @@ jobs:
           HTCO_SESSION_KEY: ${{ secrets.HTCO_SESSION_KEY }}
           HTCO_TOKEN_VAULT_KEY: ${{ secrets.HTCO_TOKEN_VAULT_KEY }}
           HTCO_TOKEN_VAULT_PREVIOUS_KEYS: ${{ secrets.HTCO_TOKEN_VAULT_PREVIOUS_KEYS }}
+          HTCO_ETSY_KEYSTRING: ${{ secrets.ETSY_KEYSTRING }}
+          HTCO_ETSY_SHARED_SECRET: ${{ secrets.ETSY_SHARED_SECRET }}
           HTCO_SUPABASE_PUBLISHABLE_KEY: ${{ vars.HTCO_SUPABASE_PUBLISHABLE_KEY }}
           HTCO_WEB_ORIGINS: ${{ vars.HTCO_WEB_ORIGINS }}
         with:

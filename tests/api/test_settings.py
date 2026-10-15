@@ -190,3 +190,55 @@ def test_token_vault_keys__hidden_in_the_settings_repr() -> None:
     settings = ApiSettings.model_validate({"environment": "local", "token_vault_key": VAULT_KEY_A})
     assert VAULT_KEY_A.partition(":")[2] not in repr(settings)
     assert VAULT_KEY_A.partition(":")[2] not in str(settings.model_dump())
+
+
+def test_etsy_redirect_uri__optional_and_read_from_the_environment() -> None:
+    unset = ApiSettings.model_validate({"environment": "local"})
+    given = ApiSettings.model_validate(
+        {
+            "environment": "local",
+            "etsy_redirect_uri": "https://dash.ht-co.app/integrations/etsy/callback",
+        }
+    )
+
+    assert unset.etsy_redirect_uri is None
+    assert str(given.etsy_redirect_uri) == "https://dash.ht-co.app/integrations/etsy/callback"
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_etsy_redirect_uri__blank__is_unset(blank: str) -> None:
+    settings = ApiSettings.model_validate({"environment": "local", "etsy_redirect_uri": blank})
+
+    assert settings.etsy_redirect_uri is None
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "http://dash.ht-co.app/integrations/etsy/callback",
+        "https://dash.ht-co.app/integrations/etsy/callback?x=1",
+        "https://dash.ht-co.app/integrations/etsy/callback#frag",
+        "not a url",
+    ],
+)
+def test_etsy_redirect_uri__deployed_must_be_https_without_query_or_fragment(uri: str) -> None:
+    with pytest.raises(ValidationError, match="HTCO_ETSY_REDIRECT_URI"):
+        ApiSettings.model_validate(
+            {
+                "environment": "production",
+                "database_url": "postgresql://db.invalid/htco",
+                "supabase_url": "https://project.supabase.co",
+                "etsy_redirect_uri": uri,
+            }
+        )
+
+
+def test_etsy_redirect_uri__local_http_is_allowed() -> None:
+    settings = ApiSettings.model_validate(
+        {
+            "environment": "local",
+            "etsy_redirect_uri": "http://localhost:5173/integrations/etsy/callback",
+        }
+    )
+
+    assert settings.etsy_redirect_uri is not None

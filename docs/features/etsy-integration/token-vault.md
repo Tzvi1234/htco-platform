@@ -44,6 +44,7 @@ Migration `supabase/migrations/20261015140000_shop_integrations.sql`. One row pe
 | `access_expires_at`, `refresh_expires_at` | `timestamptz` | Token expiry (1 hour and 90 days at Etsy) |
 | `status` | `text` | `connected`, `needs_reauth`, `disconnected` (mirrors `IntegrationStatus`) |
 | `failure_count` | `integer` | Failed refreshes since the last success (slice 4.4 marks `needs_reauth` after three) |
+| `last_refresh_failed_at` | `timestamptz` | When the last refresh failed (slice 4.4, [connect flow](connect-flow.md#refresh-slice-44)); not granted to client roles |
 | `last_successful_call_at` | `timestamptz` | Shown on the shop card |
 | `created_at`, `updated_at` | `timestamptz` | `updated_at` set by trigger |
 
@@ -60,7 +61,8 @@ Port in `htco_application.shop_integrations` (`TokenVault`), adapter `htco_persi
 | `store(connection: EtsyConnection) -> ShopIntegration` | Connect or reconnect: upsert by shop and provider, new envelope, status `connected`, failures reset, scopes replaced; a shop of another organization raises `TokenVaultError` and changes nothing |
 | `load(shop_id) -> ShopIntegration \| None` | The row with tokens opened (`tokens` is `None` once disconnected); raises `TokenVaultError` naming the shop only |
 | `update_tokens(shop_id, tokens: OAuthTokens) -> bool` | After a refresh: new envelope, failures reset; `False` if the shop is no longer `connected`, so a refresh finishing after a disconnect never restores tokens |
-| `record_refresh_failure(shop_id) -> int` | Increment and return `failure_count` |
+| `record_refresh_failure(shop_id, *, at=None) -> int` | Increment and return `failure_count`; set `last_refresh_failed_at` |
+| `find_by_marketplace_shop(etsy_shop_id)` | The integration (not disconnected) of an Etsy shop, tokens opened (slice 4.4) |
 | `record_successful_call(shop_id, *, at)` | Set `last_successful_call_at` |
 | `mark_needs_reauth(shop_id)` | Status `needs_reauth` (tokens kept until reconnect or disconnect) |
 | `disconnect(shop_id)` | Delete key ID, wrapped key, ciphertexts and expiry; status `disconnected`; the row stays |
