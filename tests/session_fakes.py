@@ -1,6 +1,7 @@
 """In-memory fakes for web sessions, shared by the application and API tests (slice 3.5)."""
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
@@ -60,6 +61,7 @@ class Auth:
     mfa_enrolled: bool = False
 
     async def sign_in_with_password(self, email: str, password: str) -> IssuedTokens:
+        await anyio.lowlevel.checkpoint()  # a network call: concurrent requests interleave here
         if (email, password) != ("owner@example.test", self.password):
             raise CredentialsRefusedError
         return self._issue(timedelta(hours=1))
@@ -121,6 +123,7 @@ class Authenticator:
         raise NotImplementedError
 
     async def verify_totp(self, access_token: str, factor_id: str, code: str) -> IssuedTokens:
+        await anyio.lowlevel.checkpoint()  # a network call
         if self.codes.get(factor_id) != code:
             raise CredentialsRefusedError
         self.verified.append((access_token, factor_id))
@@ -140,6 +143,7 @@ class Tokens:
     """Reads the user out of an access token (the JWT verifier in production)."""
 
     async def read(self, access_token: str) -> AuthenticatedUser:
+        await anyio.lowlevel.checkpoint()  # may fetch the signing keys
         if access_token.startswith("invalid"):  # forged, expired or for another project
             raise SessionEndedError("not a valid access token")
         return AuthenticatedUser(
@@ -242,3 +246,21 @@ class Store:
         by_email = sum(1 for a in failed if a[0] == email_hash)
         by_ip = sum(1 for a in failed if ip_hash is not None and a[1] == ip_hash)
         return by_email, by_ip
+
+
+async def at_once(count: int, attempt: Callable[[int], Awaitable[object]]) -> list[str]:
+    """Runs `count` attempts concurrently; each outcome is "ok" or the error's class name."""
+    outcomes: list[str] = []
+
+    async def run(n: int) -> None:
+        try:
+            await attempt(n)
+        except Exception as error:
+            outcomes.append(type(error).__name__)
+        else:
+            outcomes.append("ok")
+
+    async with anyio.create_task_group() as group:
+        for n in range(count):
+            group.start_soon(run, n)
+    return outcomes

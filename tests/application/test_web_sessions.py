@@ -16,6 +16,7 @@ from htco_application.web_sessions import (
     MAX_FAILURES_PER_IP,
     ClientInfo,
     InvitationRefusedError,
+    IssuedTokens,
     SessionEndedError,
     SignInRefusedError,
     TooManyAttemptsError,
@@ -36,6 +37,7 @@ from tests.session_fakes import (
     Auth,
     Store,
     Tokens,
+    at_once,
     tokens,
 )
 
@@ -174,6 +176,71 @@ async def test_sign_in__too_many_failures_from_an_address__throttled_for_every_e
             store=store,
             now=NOW,
         )
+
+
+async def test_sign_in__a_burst_for_one_email__only_the_limit_reaches_supabase() -> None:
+    """AC-3.5.5: each attempt is reserved before Supabase is asked, so requests in flight count."""
+    store, auth = Store(), Auth()
+
+    async def wrong(n: int) -> None:
+        await sign_in(
+            "owner@example.test",
+            "x",
+            client=ClientInfo(f"198.51.100.{n}", None),
+            auth=auth,
+            tokens=Tokens(),
+            store=store,
+            now=NOW,
+        )
+
+    outcomes = await at_once(MAX_FAILURES_PER_EMAIL * 3, wrong)
+
+    assert outcomes.count("SignInRefusedError") == MAX_FAILURES_PER_EMAIL
+    assert outcomes.count("TooManyAttemptsError") == MAX_FAILURES_PER_EMAIL * 2
+
+
+async def test_sign_in__a_burst_from_one_address__only_the_limit_reaches_supabase() -> None:
+    store, auth = Store(), Auth()
+
+    async def wrong(n: int) -> None:
+        await sign_in(
+            f"user{n}@example.test",
+            "x",
+            client=CLIENT,
+            auth=auth,
+            tokens=Tokens(),
+            store=store,
+            now=NOW,
+        )
+
+    outcomes = await at_once(MAX_FAILURES_PER_IP + 10, wrong)
+
+    assert outcomes.count("SignInRefusedError") == MAX_FAILURES_PER_IP
+    assert outcomes.count("TooManyAttemptsError") == 10
+
+
+async def test_sign_in__supabase_unreachable__not_counted() -> None:
+    class Unreachable(Auth):
+        @override
+        async def sign_in_with_password(self, email: str, password: str) -> IssuedTokens:
+            raise ConnectionError
+
+    store = Store()
+    with pytest.raises(ConnectionError):
+        await sign_in(
+            "owner@example.test",
+            "x",
+            client=CLIENT,
+            auth=Unreachable(),
+            tokens=Tokens(),
+            store=store,
+            now=NOW,
+        )
+
+    assert store.attempts == []
+    assert await store.recent_failures(
+        hashlib.sha256(b"owner@example.test").digest(), None, NOW - timedelta(minutes=15)
+    ) == (0, 0)
 
 
 async def test_sign_in__old_failures_no_longer_count() -> None:
@@ -392,6 +459,28 @@ async def test_accept_invitation__refresh_token_refused__refused_without_a_sessi
     assert store.sessions == {}
     # The password changed before the refresh failed, so the link stays claimed (a success row).
     assert [a[2] for a in store.attempts] == [True, False]
+
+
+async def test_accept_invitation__a_burst_with_one_bad_link__only_the_limit_is_tried() -> None:
+    """AC-3.5.9: link failures are reserved before the link is checked, so a burst cannot pass."""
+    store, auth = Store(), Auth()
+
+    async def bad(n: int) -> None:
+        await accept_invitation(
+            "invalid-same-link",
+            INVITE_REFRESH,
+            NEW_PASSWORD,
+            client=ClientInfo(f"198.51.100.{n}", None),
+            auth=auth,
+            tokens=Tokens(),
+            store=store,
+            now=NOW,
+        )
+
+    outcomes = await at_once(MAX_FAILURES_PER_EMAIL * 3, bad)
+
+    assert outcomes.count("InvitationRefusedError") == MAX_FAILURES_PER_EMAIL
+    assert outcomes.count("TooManyAttemptsError") == MAX_FAILURES_PER_EMAIL * 2
 
 
 async def test_accept_invitation__weak_password__reported_and_not_counted_as_a_failure() -> None:
