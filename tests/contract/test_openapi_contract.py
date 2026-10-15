@@ -81,6 +81,9 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "confirm_step_up",
         "list_web_sessions",
         "revoke_web_session",
+        "connect_etsy_shop",
+        "complete_etsy_connection",
+        "list_shop_integrations",
     }
 
 
