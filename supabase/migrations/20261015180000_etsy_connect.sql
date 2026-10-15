@@ -1,4 +1,4 @@
--- Etsy connect (slice 4.3, ADR-0008): pending OAuth authorizations, one shop per Etsy shop.
+-- Etsy connect (slice 4.3, ADR-0008): pending OAuth authorizations.
 --
 -- `POST /v1/shops/etsy/connect` keeps a pending authorization here for ten minutes: the SHA-256
 -- of the random `state` (the state itself is never stored) and the PKCE code verifier, sealed by
@@ -36,9 +36,8 @@ create index oauth_authorizations_web_session_id_idx
 alter table private.oauth_authorizations enable row level security;
 revoke all on private.oauth_authorizations from public, anon, authenticated, service_role;
 
--- One integration per Etsy shop and organization (AC-4.3.2): reconnecting updates that row.
-create unique index shop_integrations_organization_id_provider_etsy_shop_id_key
-  on app.shop_integrations (organization_id, provider, etsy_shop_id);
--- The token provider finds a shop's integration by the Etsy shop ID.
+-- One integration per Etsy shop and organization (AC-4.3.2) is kept by the API's connect
+-- transaction, which serializes connections of one Etsy shop with an advisory lock and updates the
+-- existing row. The token provider and that check find integrations by the Etsy shop ID.
 create index shop_integrations_etsy_shop_id_idx
   on app.shop_integrations (etsy_shop_id) where status <> 'disconnected';

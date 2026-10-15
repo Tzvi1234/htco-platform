@@ -75,7 +75,7 @@ The web session ID reaches the routes through `request.state.web_session_id`, se
 Migration `supabase/migrations/20261015180000_etsy_connect.sql`:
 
 - `private.oauth_authorizations`: `state_hash` (SHA-256, unique, 32 bytes), `provider`, `organization_id`, `user_id`, `web_session_id` (foreign key to `private.web_sessions`, cascade), `code_verifier` (sealed with the web session key, AES-256-GCM bound to the state hash; the version-byte check refuses plaintext), `scopes`, `redirect_uri`, `created_at`, `expires_at` (at most 10 minutes later, checked). RLS on, no policy, no grant to any client role. `take` deletes the row as it reads it, so concurrent callbacks with one state have exactly one winner; saving a new authorization deletes the user's expired ones.
-- `app.shop_integrations`: unique `(organization_id, provider, etsy_shop_id)` (AC-4.3.2 in the database), and a partial index on `etsy_shop_id` for the token provider.
+- `app.shop_integrations`: a partial index on `etsy_shop_id` (rows not disconnected) for the token provider and the connect check. One integration per Etsy shop and organization is kept by the connect transaction (advisory lock per Etsy shop, then update of the existing row), not by a unique index: such an index would fire before the composite foreign key that keeps a row inside its organization (pgTAP `05_shop_integrations` test 18 expects that foreign-key error).
 
 ### Connecting (one transaction, login role)
 
@@ -132,7 +132,7 @@ Rule of Two: no agent is involved; not applicable.
 | AC | Tests |
 |---|---|
 | AC-4.3.1 | `tests/application/test_etsy_connect.py::test_complete__missing_state__*`, `::test_complete__unknown_state__*`, `::test_complete__reused_state__*`, `::test_complete__expired_state__*`, `::test_complete__state_of_another_session__*`, `::test_complete__state_of_another_user__*`; `tests/api/test_etsy_connect_routes.py::test_callback__missing_state__*`, `::test_callback__reused_state__*`, `::test_callback__expired_state__*`, `::test_callback__state_from_another_browser_session__*`; `tests/integration/test_etsy_connection.py::test_pending__*`; pgTAP `supabase/tests/database/06_etsy_connect.test.sql` |
-| AC-4.3.2 | `test_complete__connecting_the_same_shop_twice__one_shop`, `test_callback__same_shop_twice__one_shop_reconnected`, `tests/integration/test_etsy_connection.py::test_connect__same_etsy_shop_twice__updates_one_shop`, pgTAP unique index |
+| AC-4.3.2 | `test_complete__connecting_the_same_shop_twice__one_shop`, `test_callback__same_shop_twice__one_shop_reconnected`, `tests/integration/test_etsy_connection.py::test_connect__same_etsy_shop_twice__updates_one_shop` |
 | AC-4.3.3 | `test_complete__exchanges_the_code_with_the_verifier_and_connects_the_shop`, `test_callback__connects_the_shop_and_answers_the_shop_view`, `tests/integration/test_etsy_connection.py::test_connect__creates_the_shop_integration_owner_grant_and_audit_in_one_go` (one grant; the operations member sees no shop through RLS) |
 | AC-4.3.4 | `test_complete__records_the_scopes_etsy_granted_when_it_names_them`, `test_callback__reconnect_with_more_scopes__scopes_updated`, `tests/integration/test_etsy_connection.py::test_connect__reconnect_with_more_scopes__same_record_new_scopes` |
 | AC-4.4.1 | `tests/application/test_etsy_tokens.py::test_access_token__ten_concurrent_requests_on_an_expired_token__one_refresh`, `tests/integration/test_etsy_connection.py::test_refresh__ten_concurrent_requests_in_two_processes__one_refresh_call` (two pools, as two API processes) |

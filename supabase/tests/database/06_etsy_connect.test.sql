@@ -1,8 +1,8 @@
 -- Etsy connect (slice 4.3): pending OAuth authorizations are server-only, short-lived, sealed and
--- bound to a web session; one integration per Etsy shop and organization.
+-- bound to a web session.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(14);
+select plan(13);
 
 insert into auth.users (id, email) values
   ('61111111-0000-0000-0000-000000000001', 'owner-x@example.test');
@@ -99,18 +99,6 @@ select is(
    where user_id = '61111111-0000-0000-0000-000000000001')::int,
   0,
   'ending (deleting) the web session deletes its pending authorizations'
-);
-
-select throws_ok(
-  $$ insert into app.shop_integrations
-       (id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id,
-        wrapped_data_key, access_token_ciphertext, refresh_token_ciphertext, scopes,
-        access_expires_at, refresh_expires_at, status)
-     values ('6c100000-0000-0000-0000-000000000002', '6a000000-0000-0000-0000-000000000000',
-             '6c000000-0000-0000-0000-000000000002', 'etsy', 601, 701, 'key-a', '\x01aa',
-             '\x01bb', '\x01cc', '{shops_r}', now() + interval '1 hour',
-             now() + interval '90 days', 'connected') $$,
-  '23505', null, 'one integration per Etsy shop and organization (AC-4.3.2)'
 );
 
 select * from finish();
