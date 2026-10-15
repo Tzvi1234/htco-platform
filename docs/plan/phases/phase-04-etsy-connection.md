@@ -12,7 +12,7 @@
 ## Progress
 
 - [x] 4.1 Etsy adapter foundation
-- [ ] 4.2 Token vault
+- [x] 4.2 Token vault
 - [ ] 4.3 OAuth connect flow
 - [ ] 4.4 Token refresh
 - [ ] 4.5 Capability probes
@@ -115,7 +115,7 @@ Adapter contract tests against fixtures; vault crypto tests; OAuth flow tests wi
 ## Security checklist
 
 - [ ] ASVS V10 (OAuth client): state, PKCE S256, exact redirect URI, minimal scopes (10.2.3).
-- [ ] Tokens encrypted at rest at the application level; key rotation tested.
+- [x] Tokens encrypted at rest at the application level; key rotation tested.
 - [ ] Connect and disconnect require owner role, MFA and recent re-authentication; both audited.
 - [ ] Etsy trademark notice present in the web app's footer or about page.
 

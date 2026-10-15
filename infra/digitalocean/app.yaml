@@ -122,6 +122,16 @@ services:
       - key: HTCO_WEB_ORIGINS
         scope: RUN_TIME
         value: ${HTCO_WEB_ORIGINS}
+      # Etsy token vault (slice 4.2): off until the key secret exists (blank means unset). The
+      # previous keys stay blank except while rotating to a new key.
+      - key: HTCO_TOKEN_VAULT_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_TOKEN_VAULT_KEY}
+      - key: HTCO_TOKEN_VAULT_PREVIOUS_KEYS
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_TOKEN_VAULT_PREVIOUS_KEYS}
 # The web app (slice 3.8, client ADR-0006): built by App Platform from htco-clients `main` on every
 # push and served as static files; free inside an app that has a paid service (the deploy workflow's
 # budget step checks the proposed cost).

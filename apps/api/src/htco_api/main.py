@@ -23,6 +23,7 @@ from htco_application.access.management import (
     InviteeAlreadyRegisteredError,
 )
 from htco_application.mfa import Enrollment, Factor
+from htco_application.shop_integrations import TokenVault
 from htco_application.shops import ShopReader
 from htco_application.web_sessions import (
     CredentialsRefusedError,
@@ -34,9 +35,10 @@ from htco_persistence.access import PostgresAccessStore
 from htco_persistence.database import Database
 from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.readiness import DatabaseCheck
+from htco_persistence.shop_integrations import PostgresTokenVault
 from htco_persistence.shops import PostgresShopReader
 from htco_persistence.web_sessions import PostgresSessionStore
-from htco_platform.crypto import Sealer
+from htco_platform.crypto import EnvelopeSealer, Sealer
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter, SentryErrorReporter
 from htco_platform.http import new_async_http_client
 from htco_platform.jwt import HttpJwksSource, JwtVerifier
@@ -107,6 +109,8 @@ def main(
         authentication="on" if wiring.authenticator is not None else "off",
         invitations="on" if wiring.inviter is not None else "off",
         web_sign_in="on" if wiring.web_auth is not None else "off",
+        # Off without HTCO_TOKEN_VAULT_KEY: no Etsy token can be stored or read (slice 4.2).
+        etsy_token_vault="on" if wiring.token_vault is not None else "off",
     )
     readiness_checks = (
         [DatabaseCheck(settings.database_url.get_secret_value())]
@@ -236,6 +240,8 @@ class _Wiring:
     access: AccessStore | None = None
     inviter: _Inviter | None = None
     web_auth: WebAuth | None = None
+    # Used by the Etsy connect flow from slice 4.3 on.
+    token_vault: TokenVault | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -285,8 +291,13 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
             ),
             allowed_origins=settings.web_origin_list,
         )
+    key_ring = settings.token_key_ring
+    token_vault = (
+        None if key_ring is None else PostgresTokenVault(database, EnvelopeSealer(key_ring))
+    )
     return _Wiring(
         web_auth=web_auth,
+        token_vault=token_vault,
         authenticator=Authenticator(verifier, PostgresMembershipReader(database)),
         shops=PostgresShopReader(database),
         access=PostgresAccessStore(database),

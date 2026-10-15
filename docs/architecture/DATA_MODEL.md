@@ -78,7 +78,7 @@ The phase column says when a table first appears.
 | Table | Purpose | Phase |
 |---|---|---|
 | `shops` | Shop per marketplace account | 2 (shell), 4 |
-| `shop_integrations` | Encrypted tokens, scopes, token expiry, status | 4 |
+| `shop_integrations` | Etsy tokens sealed by envelope encryption (key ID, wrapped data key, ciphertexts), scopes, token expiry, status, failure count ([token vault](../features/etsy-integration/token-vault.md)) | 4 |
 | `shop_capabilities` | Probe results with `checked_at` | 4 |
 | `sync_cursors` | Reconciliation cursors per shop and resource | 5 |
 | `sync_drifts` | Differences found by reconciliation between our records and the marketplace | 5 |
