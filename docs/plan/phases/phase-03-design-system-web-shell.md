@@ -97,6 +97,7 @@ Endpoints under `/v1/auth/*`: sign in (password), MFA enroll (TOTP QR), MFA veri
 | AC-3.5.6 | Password reset and email verification work end to end and never reveal whether an account exists. |
 | AC-3.5.7 | An action that requires recent re-authentication returns 403 with a `step-up-required` problem type until the user re-enters TOTP; the elevation expires after 10 minutes (tested with an injected clock). |
 | AC-3.5.8 | The documented recovery path for a lost authenticator works (second factor, or owner-assisted reset with an audit record). |
+| AC-3.5.9 | An invited user who opens the invitation link sets a password and is signed in with the same cookie as a sign-in; an invalid, expired or used link is refused with 401, a weak password with 422, and failures are throttled like sign-ins. |
 
 ### 3.6 — Generated API client and contract job
 

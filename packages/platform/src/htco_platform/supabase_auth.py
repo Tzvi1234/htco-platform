@@ -28,6 +28,14 @@ class InvalidCredentialsError(Exception):
     """The email and password, or the refresh token, were refused."""
 
 
+class WeakPasswordError(Exception):
+    """Supabase Auth's password policy refused the new password."""
+
+
+# Updating the user also fails when the user's session is gone, not only on a bad password.
+_SESSION_REFUSED = _REJECTED | {"bad_jwt", "session_not_found", "user_not_found"}
+
+
 class RateLimitedError(Exception):
     """Supabase Auth asked us to slow down."""
 
@@ -85,6 +93,12 @@ class SupabaseAuth:
         except httpx.HTTPError as error:
             raise AuthServiceError("Supabase Auth is unreachable") from error
 
+    async def set_password(self, access_token: str, password: str) -> None:
+        """Sets the password of the user the token belongs to (accepting an invitation)."""
+        await self._as_user(
+            "PUT", "/user", access_token, {"password": password}, refused=_SESSION_REFUSED
+        )
+
     # MFA (slice 3.5 part 2): every call acts as the user, with their access token.
 
     async def enroll_totp(self, access_token: str, *, friendly_name: str) -> TotpEnrollment:
@@ -136,7 +150,13 @@ class SupabaseAuth:
         await self._as_user("DELETE", f"/factors/{factor_id}", access_token, None)
 
     async def _as_user(
-        self, method: str, path: str, access_token: str, body: dict[str, str] | None
+        self,
+        method: str,
+        path: str,
+        access_token: str,
+        body: dict[str, str] | None,
+        *,
+        refused: frozenset[str] = _REJECTED,
     ) -> dict[str, Any]:
         try:
             response = await self._client.request(
@@ -149,7 +169,10 @@ class SupabaseAuth:
             raise AuthServiceError("Supabase Auth is unreachable") from error
         if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
             raise RateLimitedError("Supabase Auth rate limit")
-        if response.is_client_error and _error_code(response) in _REJECTED:
+        code = _error_code(response)
+        if response.status_code == httpx.codes.UNPROCESSABLE_ENTITY and code == "weak_password":
+            raise WeakPasswordError("the password is too weak")
+        if response.is_client_error and code in refused:
             raise InvalidCredentialsError("refused")
         if response.is_error:
             raise AuthServiceError(f"Supabase Auth answered {response.status_code}")

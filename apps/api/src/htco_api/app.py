@@ -93,7 +93,7 @@ class AppOptions:
     shops: ShopReader | None = None
     # Member and shop-access changes; without it, those routes answer 503.
     access: AccessStore | None = None
-    # Sends invitation emails; without it, `POST …/invitations` answers 503.
+    # Creates invitation links; without it, `POST …/invitations` answers 503.
     inviter: Inviter | None = None
     # Cookie sign-in for the web app (BFF); without it, `/v1/auth/*` answers 503.
     web_auth: WebAuth | None = None

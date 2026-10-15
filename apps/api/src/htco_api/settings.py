@@ -37,7 +37,7 @@ class ApiSettings(BaseSettings):
     # Supabase secret key (`sb_secret_…`), used only to send invitations (slice 2.6), never for
     # database queries. Without it, invitations answer 503.
     supabase_secret_key: SecretStr | None = None
-    # Where the invitation email's link lands (the web app's welcome page).
+    # Where the one-time invitation link lands (the web app's accept-invitation page).
     invite_redirect_url: AnyHttpUrl | None = None
     # Web sign-in (slice 3.5). The session key seals Supabase tokens at rest: 32 random bytes,
     # base64 (`openssl rand -base64 32`), a secret. The publishable key identifies the Supabase

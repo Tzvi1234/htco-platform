@@ -27,6 +27,7 @@ from htco_domain.identity import AssuranceLevel, Role
 from tests.access_fakes import (
     ADMIN,
     FOREIGN_SHOP,
+    INVITE_LINK,
     M_ADMIN,
     M_ELSEWHERE,
     M_OWNER,
@@ -112,7 +113,7 @@ async def test_another_organization__is_denied() -> None:
 
 async def test_invite__creates_the_membership_and_audits_it() -> None:
     store, inviter = Store(), Inviter()
-    member = await invite_member(
+    invited = await invite_member(
         AS_ADMIN,
         store,
         inviter,
@@ -122,6 +123,7 @@ async def test_invite__creates_the_membership_and_audits_it() -> None:
         now=NOW,
         correlation_id="corr",
     )
+    member = invited.member
 
     assert inviter.invited == ["new@example.test"]
     assert (member.user_id, member.role, member.organization_id) == (NEWCOMER, Role.SUPPORT, ORG)
@@ -183,6 +185,39 @@ async def test_invite__invalid_email__refused_before_inviting(email: str) -> Non
             correlation_id="c",
         )
     assert inviter.invited == []
+
+
+async def test_invite__returns_the_one_time_link_for_the_inviter_to_pass_on() -> None:
+    """No email provider yet: the sign-in service creates the link and the caller shares it."""
+    invited = await invite_member(
+        AS_OWNER,
+        Store(),
+        Inviter(),
+        ORG,
+        email="new@example.test",
+        role=Role.ADMIN,
+        now=NOW,
+        correlation_id="c",
+    )
+    assert invited.invite_link == INVITE_LINK
+    assert invited.member.role is Role.ADMIN
+    assert INVITE_LINK not in repr(invited)
+
+
+async def test_invite__email_already_registered__added_without_a_link() -> None:
+    store = Store(registered={"known@example.test": NEWCOMER})
+    invited = await invite_member(
+        AS_OWNER,
+        store,
+        Inviter(registered=True),
+        ORG,
+        email="known@example.test",
+        role=Role.ADMIN,
+        now=NOW,
+        correlation_id="c",
+    )
+    assert invited.invite_link is None
+    assert invited.member.user_id == NEWCOMER
 
 
 # AC-2.6.2: an Admin cannot grant the Owner role or remove the Owner -----------------------------
@@ -329,7 +364,7 @@ async def test_invite__email_already_registered__adds_that_user() -> None:
     """An invitation interrupted after the sign-in service created the user can be retried, and a
     member of another organization can be added."""
     store = Store(registered={"known@example.test": NEWCOMER})
-    member = await invite_member(
+    invited = await invite_member(
         AS_OWNER,
         store,
         Inviter(registered=True),
@@ -339,6 +374,7 @@ async def test_invite__email_already_registered__adds_that_user() -> None:
         now=NOW,
         correlation_id="c",
     )
+    member = invited.member
     assert member.user_id == NEWCOMER
     [record] = store.audit
     assert record.after == {"user_id": str(NEWCOMER), "role": "viewer"}

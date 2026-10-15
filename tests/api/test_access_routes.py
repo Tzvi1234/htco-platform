@@ -14,6 +14,7 @@ from htco_domain.identity import Role
 from htco_platform.jwt import JwtVerifier
 from tests.access_fakes import (
     ADMIN,
+    INVITE_LINK,
     M_ADMIN,
     M_ELSEWHERE,
     M_OWNER,
@@ -28,6 +29,7 @@ from tests.access_fakes import (
     Store,
 )
 from tests.auth_tokens import AUDIENCE, ISSUER, FakeJwks, SigningKey, claims
+from tests.log_capture import LogCapture
 
 pytestmark = pytest.mark.anyio
 
@@ -149,6 +151,36 @@ async def test_invite__registered_elsewhere__409(store: Store) -> None:
         )
     assert response.status_code == 409
     assert response.json()["type"] == PROBLEMS + "user-already-registered"
+
+
+async def test_invite__returns_the_one_time_link_uncached_and_unlogged(
+    logs: LogCapture, owner: httpx.AsyncClient
+) -> None:
+    """No email provider yet: the Owner or Admin copies the link and sends it themselves."""
+    response = await owner.post(
+        f"{BASE}/invitations", json={"email": "new@example.test", "role": "admin"}
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["invite_link"] == INVITE_LINK
+    assert (body["user_id"], body["role"], body["shop_ids"]) == (str(NEWCOMER), "admin", [])
+    assert set(body) == {"id", "user_id", "display_name", "role", "shop_ids", "invite_link"}
+    assert response.headers["cache-control"] == "no-store"
+    assert INVITE_LINK not in logs.raw()
+    assert "one-time" not in logs.raw()
+
+
+async def test_invite__existing_account_added__no_link(store: Store) -> None:
+    store.registered["known@example.test"] = NEWCOMER
+    async with client_for(store, OWNER, inviter=Inviter(registered=True)) as client:
+        response = await client.post(
+            f"{BASE}/invitations", json={"email": "known@example.test", "role": "viewer"}
+        )
+    assert response.status_code == 201
+    assert response.json()["invite_link"] is None
+    assert response.json()["user_id"] == str(NEWCOMER)
+    assert response.headers["cache-control"] == "no-store"
 
 
 async def test_change_role_remove_grant_and_revoke(owner: httpx.AsyncClient, store: Store) -> None:

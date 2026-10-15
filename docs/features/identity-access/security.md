@@ -18,7 +18,8 @@
 | Management endpoints | Elevation of privilege: an Admin making themselves or someone Owner, or removing the Owner | Only the Owner grants the Owner role; the Owner's membership is not changeable through the API | AC-2.6.2 tests |
 | Sessions | Elevation of privilege: a removed member keeps working until the token expires | Memberships are read from the database on every request | AC-2.6.3 tests |
 | Management endpoints | Repudiation: a change without a trace | One audit record per change, by the acting user, in the same transaction, with the request ID | AC-2.6.4 tests |
-| Secret key | Information disclosure or misuse: the Supabase secret key | Used only for the Auth admin `invite` call, never for database queries; hidden in `repr`; optional (invitations off without it) | `test_inviter__repr__hides_the_secret_key`, composition tests |
+| Secret key | Information disclosure or misuse: the Supabase secret key | Used only for the Auth admin `generate_link` invitation call, never for database queries; hidden in `repr`; optional (invitations off without it) | `test_inviter__repr__hides_the_secret_key`, composition tests |
+| Invitation link | Information disclosure or spoofing: the one-time link lets whoever holds it set the invitee's password | Returned only to Owner or Admin with `aal2`; `Cache-Control: no-store`; never logged, audited or stored; hidden from `repr`; one use, expires with Supabase's email OTP expiry; lands only on the allow-listed redirect | `test_invite__returns_the_one_time_link_uncached_and_unlogged`, `test_invited__repr__hides_the_link`, `test_invite__returns_the_one_time_link_for_the_inviter_to_pass_on` |
 | Tenancy | Information disclosure: probing other organizations' members and shops | Members, shops and grants outside the organization are 404 | not-found tests |
 
 ## Threats (STRIDE), slice 2.3

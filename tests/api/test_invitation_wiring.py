@@ -11,11 +11,18 @@ from fastapi import FastAPI
 from opentelemetry.sdk.trace import TracerProvider
 
 from htco_api.access import InvitationFailedError
-from htco_api.main import _Inviter, main
+from htco_api.main import _AuthProvider, _Inviter, main
+from htco_api.problems import ProblemError
 from htco_api.settings import ApiSettings
-from htco_application.access.management import InviteeAlreadyRegisteredError
+from htco_application.access.management import InvitedUser, InviteeAlreadyRegisteredError
+from htco_application.web_sessions import (
+    CredentialsRefusedError,
+    TooManyAttemptsError,
+    WeakPasswordError,
+)
 from htco_platform.http import new_async_http_client
 from htco_platform.supabase_admin import SupabaseInviter
+from htco_platform.supabase_auth import SupabaseAuth
 
 pytestmark = pytest.mark.anyio
 
@@ -36,9 +43,10 @@ def inviter(response: httpx.Response) -> tuple[_Inviter, httpx.AsyncClient]:
 
 
 async def test_inviter__success__returns_the_user_id() -> None:
-    subject, client = inviter(httpx.Response(200, json={"id": str(NEW_USER)}))
+    link = "https://x.test/one-time"
+    subject, client = inviter(httpx.Response(200, json={"id": str(NEW_USER), "action_link": link}))
     async with client:
-        assert await subject.invite("n@x.test") == NEW_USER
+        assert await subject.invite("n@x.test") == InvitedUser(NEW_USER, link)
 
 
 async def test_inviter__existing_account__is_the_applications_error() -> None:
@@ -53,6 +61,41 @@ async def test_inviter__service_failure__is_the_apis_error() -> None:
     async with client:
         with pytest.raises(InvitationFailedError):
             await subject.invite("n@x.test")
+
+
+def provider(response: httpx.Response) -> tuple[_AuthProvider, httpx.AsyncClient]:
+    client = new_async_http_client(
+        tracer_provider=TracerProvider(), transport=httpx.MockTransport(lambda _: response)
+    )
+    supabase = SupabaseAuth(
+        client, supabase_url="https://abc.supabase.co", publishable_key="sb_publishable_x"
+    )
+    return _AuthProvider(supabase), client
+
+
+async def test_provider__set_password__succeeds() -> None:
+    subject, client = provider(httpx.Response(200, json={"id": str(NEW_USER)}))
+    async with client:
+        await subject.set_password("access-1", "a long new passphrase")
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (httpx.Response(422, json={"error_code": "weak_password"}), WeakPasswordError),
+        (httpx.Response(403, json={"error_code": "session_not_found"}), CredentialsRefusedError),
+        (httpx.Response(429), TooManyAttemptsError),
+        (httpx.Response(500), ProblemError),
+    ],
+    ids=["weak", "session-ended", "rate-limited", "down"],
+)
+async def test_provider__set_password_errors__are_the_applications(
+    response: httpx.Response, expected: type[Exception]
+) -> None:
+    subject, client = provider(response)
+    async with client:
+        with pytest.raises(expected):
+            await subject.set_password("access-1", "a long new passphrase")
 
 
 class _Server:

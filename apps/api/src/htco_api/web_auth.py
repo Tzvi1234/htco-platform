@@ -5,6 +5,10 @@ The browser signs in here and receives one cookie: `__Host-htco_session`, `Secur
 unsafe request that relies on the cookie, and the sign-in itself (login CSRF), must carry the
 `X-HTCO-CSRF` header and come from an allowed origin: the `Origin` header when present, otherwise
 `Sec-Fetch-Site` (AC-3.5.2). Bearer requests from native apps carry no cookie and skip this.
+
+An invited user accepts the invitation here too: the invitation link lands on the web app with
+Supabase tokens in the URL fragment, and the web app posts them once with a new password to
+`/v1/auth/invitations/accept`, which answers exactly like a sign-in.
 """
 
 import uuid
@@ -44,10 +48,13 @@ from htco_application.web_sessions import (
     ActiveSession,
     AuthProvider,
     ClientInfo,
+    InvitationRefusedError,
     SessionEndedError,
     SignInRefusedError,
     TokenReader,
     TooManyAttemptsError,
+    WeakPasswordError,
+    accept_invitation,
     resume_session,
     sign_in,
     sign_out,
@@ -70,6 +77,18 @@ TOO_MANY_ATTEMPTS = ProblemType(
 )
 CSRF_FAILED = ProblemType(
     "csrf-failed", "Request refused", 403, "This request did not come from the HTCO web app."
+)
+INVITATION_REFUSED = ProblemType(
+    "invitation-refused",
+    "Invitation link not valid",
+    401,
+    "This invitation link is invalid, expired or already used. Ask for a new one.",
+)
+WEAK_PASSWORD = ProblemType(
+    "weak-password",
+    "Password too weak",
+    422,
+    "Choose a longer password that is harder to guess.",
 )
 SESSION_ENDED = ProblemType(
     "session-ended", "Session ended", 401, "Your session ended. Sign in again."
@@ -152,6 +171,14 @@ class SessionList(BaseModel):
 class SignInRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=256)
+
+
+class AcceptInvitationRequest(BaseModel):
+    # The tokens from the invitation link's redirect (URL fragment), posted once.
+    access_token: str = Field(min_length=1, max_length=8192)
+    refresh_token: str = Field(min_length=1, max_length=1024)
+    # The same length rule as the sign-in service's password policy (12 characters).
+    password: str = Field(min_length=12, max_length=128)
 
 
 class SessionView(BaseModel):
@@ -269,6 +296,51 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
             )
         except SignInRefusedError:
             raise ProblemError(SIGN_IN_REFUSED) from None
+        except TooManyAttemptsError:
+            raise _too_many() from None
+        _set_cookie(response, signed_in.cookie_value)
+        response.headers["Cache-Control"] = "no-store"
+        return SessionView(
+            user_id=str(signed_in.user.user_id), assurance=signed_in.user.assurance.value
+        )
+
+    @router.post(
+        "/invitations/accept",
+        summary="Accept an invitation: set a password and sign in",
+        responses={
+            400: _problem("The body is not valid JSON"),
+            401: _problem("The invitation link is invalid, expired or already used"),
+            403: _problem("The request did not come from the web app"),
+            # Two shapes: `validation-error` (with `errors`) and `weak-password` (without).
+            422: _problem(
+                "Missing tokens or a password of the wrong length (validation-error), "
+                "or a password the sign-in service calls weak (weak-password)"
+            ),
+            429: _problem("Too many failed attempts; see Retry-After"),
+            503: _problem("Sign-in is unavailable"),
+        },
+    )
+    async def accept_web_invitation(
+        body: AcceptInvitationRequest, request: Request, response: Response, web: Web
+    ) -> SessionView:
+        """Sets the invited user's password with Supabase Auth and starts a server-side session,
+        exactly like a sign-in (same cookie, `no-store`)."""
+        check_csrf(request, web)
+        try:
+            signed_in = await accept_invitation(
+                body.access_token,
+                body.refresh_token,
+                body.password,
+                client=client_info(request),
+                auth=web.auth,
+                tokens=web.tokens,
+                store=web.store,
+                now=clock(),
+            )
+        except InvitationRefusedError:
+            raise ProblemError(INVITATION_REFUSED) from None
+        except WeakPasswordError:
+            raise ProblemError(WEAK_PASSWORD) from None
         except TooManyAttemptsError:
             raise _too_many() from None
         _set_cookie(response, signed_in.cookie_value)

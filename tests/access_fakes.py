@@ -8,6 +8,7 @@ from typing import Any
 
 from htco_application.access.management import (
     AccessDeniedError,
+    InvitedUser,
     InviteeAlreadyRegisteredError,
     MemberRow,
 )
@@ -27,6 +28,7 @@ M_SUPPORT = uuid.UUID("ae000000-0000-0000-0000-000000000003")
 M_ELSEWHERE = uuid.UUID("be000000-0000-0000-0000-000000000001")
 SHOP = uuid.UUID("a1000000-0000-0000-0000-000000000001")
 FOREIGN_SHOP = uuid.UUID("b1000000-0000-0000-0000-000000000001")
+INVITE_LINK = "https://abc.supabase.co/auth/v1/verify?token=one-time&type=invite"
 
 
 @dataclass
@@ -141,8 +143,8 @@ class Inviter:
         self.user_id, self.registered = user_id, registered
         self.invited: list[str] = []
 
-    async def invite(self, email: str) -> uuid.UUID:
+    async def invite(self, email: str) -> InvitedUser:
         self.invited.append(email)
         if self.registered:
             raise InviteeAlreadyRegisteredError(email)
-        return self.user_id
+        return InvitedUser(self.user_id, INVITE_LINK)

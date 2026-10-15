@@ -15,6 +15,7 @@ from htco_platform.supabase_auth import (
     InvalidCredentialsError,
     RateLimitedError,
     SupabaseAuth,
+    WeakPasswordError,
 )
 
 pytestmark = pytest.mark.anyio
@@ -279,3 +280,58 @@ async def test_unenroll__deletes_the_factor() -> None:
         await subject.unenroll("access-1", "f1")
 
     assert (seen[0].method, seen[0].url.path) == ("DELETE", "/auth/v1/factors/f1")
+
+
+# Accepting an invitation: the invited user sets their password --------------------------------
+
+
+async def test_set_password__updates_the_user_as_themselves() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"id": "11111111-0000-0000-0000-000000000001"})
+
+    subject, client = auth(handler)
+    async with client:
+        await subject.set_password("access-1", "a long new passphrase")
+
+    [request] = seen
+    assert request.method == "PUT"
+    assert str(request.url) == f"{URL}/auth/v1/user"
+    assert request.headers["authorization"] == "Bearer access-1"
+    assert request.headers["apikey"] == KEY
+    assert json.loads(request.content) == {"password": "a long new passphrase"}
+
+
+async def test_set_password__weak__is_a_weak_password_error() -> None:
+    body = {"error_code": "weak_password", "msg": "Password should be at least 12 characters."}
+    subject, client = auth(lambda _: httpx.Response(422, json=body))
+    async with client:
+        with pytest.raises(WeakPasswordError):
+            await subject.set_password("access-1", "short")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(401, json={"error_code": "bad_jwt"}),
+        httpx.Response(403, json={"error_code": "session_not_found"}),
+        httpx.Response(404, json={"error_code": "user_not_found"}),
+    ],
+    ids=["bad-jwt", "session-ended", "user-gone"],
+)
+async def test_set_password__session_refused__is_invalid_credentials(
+    response: httpx.Response,
+) -> None:
+    subject, client = auth(lambda _: response)
+    async with client:
+        with pytest.raises(InvalidCredentialsError):
+            await subject.set_password("access-1", "a long new passphrase")
+
+
+async def test_set_password__service_failure__is_an_auth_service_error() -> None:
+    subject, client = auth(lambda _: httpx.Response(500))
+    async with client:
+        with pytest.raises(AuthServiceError):
+            await subject.set_password("access-1", "a long new passphrase")
