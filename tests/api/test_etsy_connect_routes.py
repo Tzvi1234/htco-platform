@@ -137,7 +137,8 @@ class World:
     async def state(self) -> str:
         response = await self.connect()
         assert response.status_code == 200, response.text
-        [state] = parse_qs(urlsplit(response.json()["authorization_url"]).query)["state"]
+        url: str = response.json()["authorization_url"]
+        [state] = parse_qs(urlsplit(url).query)["state"]
         return state
 
     async def _send(self, pending: Any) -> httpx.Response:
@@ -498,7 +499,12 @@ async def test_callback__caller_demoted_since_the_start__403_forbidden(world: Wo
 
 async def test_integrations__owner_sees_status_scopes_and_token_health(world: World) -> None:
     await world.callback({"code": GOOD_CODE, "state": await world.state()})
-    world.clock.now = NOW + timedelta(days=81)
+    # The refresh token ends in nine days (the session would not last 81 days to see it).
+    world.connector.integrations = {
+        k: replace(v, tokens=replace(v.tokens, refresh_expires_at=NOW + timedelta(days=9)))
+        for k, v in world.connector.integrations.items()
+        if v.tokens is not None
+    }
 
     response = await world.integrations()
 
@@ -507,7 +513,7 @@ async def test_integrations__owner_sees_status_scopes_and_token_health(world: Wo
     assert item["status"] == "connected"
     # The refresh token ends in under ten days.
     assert item["token_health"] == "expiring"  # noqa: S105 - a status
-    assert item["refresh_expires_at"].startswith("2027-01-13")
+    assert item["refresh_expires_at"].startswith("2026-10-24")
     assert item["failure_count"] == 0
     assert set(item) == {
         "shop_id",

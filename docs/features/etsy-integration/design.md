@@ -9,7 +9,9 @@
 | Platform | `htco_platform.http` | The outgoing client (timeouts, no redirects, trace propagation) the composition root passes in |
 | Transport | `htco_api.settings` | `HTCO_ETSY_KEYSTRING`, `HTCO_ETSY_SHARED_SECRET`, `HTCO_ETSY_DAILY_QUOTA_FLOOR` |
 
-`htco_integrations` sits beside `htco_persistence` and `htco_agent_runtime` in the import-linter layers contract: it imports the application layer, never another adapter. It is not wired into the API yet; slice 4.3 builds it in the composition root together with the token vault.
+Slices 4.3 and 4.4 add the OAuth connect flow, on-demand refresh and the shop card's connection health; see [connect flow and refresh](connect-flow.md). Slice 4.2's vault is described in [token vault](token-vault.md).
+
+`htco_integrations` sits beside `htco_persistence` and `htco_agent_runtime` in the import-linter layers contract: it imports the application layer, never another adapter. Slice 4.3 builds it in the composition root with `VaultAccessTokenProvider`; only the callback's shop lookup (`shop_of_user`) calls it so far.
 
 ## Contracts
 

@@ -3,10 +3,10 @@
 | | |
 |---|---|
 | **Slug** | `etsy-integration` |
-| **Phase / slices** | Phase 4 — slice 4.1 (done); 4.2 to 4.7 planned |
+| **Phase / slices** | Phase 4 — slices 4.1 to 4.4 (done; 4.4 platform side); 4.5 to 4.7 planned |
 | **Requirements** | [FR-SHOP-01 to FR-SHOP-05](../../product/PRD.md) |
 | **Decision** | [ADR-0008](../../adr/0008-etsy-integration.md); research in [Etsy API capabilities](../../architecture/etsy-api-capabilities.md) |
-| **Status** | In progress (4.1 adapter foundation) |
+| **Status** | In progress (4.1 adapter, 4.2 [token vault](token-vault.md), 4.3 and 4.4 [connect flow and refresh](connect-flow.md)) |
 | **Last updated** | 2026-10-15 |
 
 ## What and why
@@ -27,6 +27,12 @@ No Etsy key exists yet, so everything is tested against hand-written fixtures bu
 | AC-4.1.1 | Given Etsy answers 400, 401, 403, 404, 409, 422, 429 or 5xx, when the adapter calls it, then each status maps to a typed error; 5xx, 429 and transport failures retry with backoff (429 honours `retry-after`), other 4xx do not retry. | 4.1 | Pass |
 | AC-4.1.2 | Given Etsy reported fewer requests left today than the configured floor, when a routine (non-urgent) call is made, then it is deferred with `QuotaDeferredError`, a warning is logged and the `htco.etsy.calls_deferred` counter grows; urgent calls still run; the last seen budget is available for the shop card. | 4.1 | Pass at the adapter; the shop card shows it from slice 4.6 |
 | AC-4.1.3 | Given any committed fixture, when the test suite runs, then a test fails if it contains an email address, a street address or a token-shaped string. | 4.1 | Pass |
+| AC-4.3.1 | A callback with a missing, reused, expired or foreign `state` is rejected and audited. | 4.3 | Pass (application, API and database tests) |
+| AC-4.3.2 | Connecting the same Etsy shop twice updates one shop record instead of creating two. | 4.3 | Pass |
+| AC-4.3.3 | Connecting does not grant shop access to any user other than the connecting owner. | 4.3 | Pass |
+| AC-4.3.4 | Reconnecting with additional scopes (re-consent) updates the granted scopes on the same shop record. | 4.3 | Pass |
+| AC-4.4.1 | Ten concurrent requests on an expired token cause exactly one refresh call. | 4.4 | Pass (in process and across two database pools) |
+| AC-4.4.2 | A revoked refresh token leads to `needs_reauth`, audited, with no retry loop. | 4.4 | Pass at the platform; the shop card and overview banner show it from slice 4.6 |
 
 ## Scope
 
@@ -44,6 +50,13 @@ From Etsy's OpenAPI spec and developer documentation (2026-10-15; not yet confir
 - Receipts filter by `min_last_modified` / `max_last_modified` (Unix seconds); lists page with `limit` (1–100, default 25) and `offset`, and answer `{count, results}`.
 - Listing states: `active`, `inactive`, `sold_out`, `draft`, `expired`. Receipt `status` arrives capitalised in examples (`Paid`, `Completed`); the adapter lower-cases it.
 - **UNCONFIRMED:** the real per-second and per-day limits of our key, and whether the daily window is rolling (the snapshot TTL guards against either).
+
+OAuth (developers.etsy.com/documentation/essentials/authentication and the OpenAPI spec, read 2026-10-15; to confirm with the first live connection):
+
+- Authorization at `https://www.etsy.com/oauth/connect` with `response_type=code`, `client_id` (the keystring), `redirect_uri`, space-separated `scope`, `state`, `code_challenge`, `code_challenge_method=S256`.
+- Token endpoint `POST https://api.etsy.com/v3/public/oauth/token` (the spec also names `openapi.etsy.com`), form-encoded: `authorization_code` with `client_id`, `redirect_uri`, `code`, `code_verifier`; `refresh_token` with `client_id`, `refresh_token`. The answer: `access_token` prefixed with the numeric user ID and a dot, `token_type` `Bearer`, `expires_in` 3600, `refresh_token` (90 days), sometimes `scope`.
+- `GET /v3/application/users/{user_id}/shops` (`getShopByOwnerUserId`) returns the user's shop; 404 when the account has no shop. `getMe` (`shops_r`) would also give `shop_id`, but needs a second call for the name.
+- **UNCONFIRMED:** whether a refresh returns a new refresh token every time and whether that resets the 90 days (the platform stores whatever comes back and keeps the old expiry when the token is unchanged); the exact error body of a revoked refresh token (assumed `{"error": "invalid_grant"}` with 400, as in OAuth 2.0).
 
 ## Known limits
 
