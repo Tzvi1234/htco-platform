@@ -269,3 +269,9 @@ def test_admin_bootstrap__owner_dispatch_only_inputs_via_env_and_no_password_in_
     assert "${{" not in run["run"]
     assert run["env"]["PGPASSWORD"] == "${{ secrets.SUPABASE_DB_PASSWORD }}"
     assert ":${" not in run["env"]["HTCO_DATABASE_URL"].split("@")[0]
+
+
+def test_deploy_never_puts_the_whole_app_object_in_a_step_environment() -> None:
+    """GitHub prints every step's environment in the run log. DigitalOcean's app object holds the
+    account's email, internal IDs and every (encrypted) secret, so only the URLs are passed on."""
+    assert "${{ steps.deploy.outputs.app }}" not in DEPLOY_TEXT
