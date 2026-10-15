@@ -156,6 +156,26 @@ async def test_invite__someone_already_in_the_organization__conflict() -> None:
     assert store.audit == []
 
 
+async def test_invite__a_member_again__refused_without_replacing_the_delivered_link() -> None:
+    """A retried invitation (its first response lost) must not ask the sign-in service for a new
+    link: that would replace the pending token and break the link already sent."""
+    store = Store(registered={"s@x.test": SUPPORT})
+    inviter = Inviter(SUPPORT)
+    with pytest.raises(MemberAlreadyExistsError):
+        await invite_member(
+            AS_OWNER,
+            store,
+            inviter,
+            ORG,
+            email="s@x.test",
+            role=Role.VIEWER,
+            now=NOW,
+            correlation_id="c",
+        )
+    assert inviter.invited == []
+    assert store.audit == []
+
+
 async def test_invite__already_registered_user__is_reported() -> None:
     with pytest.raises(InviteeAlreadyRegisteredError):
         await invite_member(
