@@ -51,7 +51,7 @@ Email verification at sign-up is not needed: accounts are invite-only (an Owner 
 | `HTCO_SUPABASE_PUBLISHABLE_KEY` | The project's publishable key (`sb_publishable_…`), sent to Supabase Auth. Not secret. |
 | `HTCO_WEB_ORIGINS` | Comma-separated origins allowed to send cookie requests, e.g. `https://dash.ht-co.app`. |
 | `HTCO_INVITE_REDIRECT_URL` | Where invitation links land: the web app's accept page (`https://dash.ht-co.app/accept-invite` in production, set in the app spec). Must be in Supabase Auth's redirect allow-list. |
-| `HTCO_PASSWORD_RESET_REDIRECT_URL` | Where password reset links land: the web app's reset page (`https://dash.ht-co.app/reset-password` in production, set in the app spec). Must be in Supabase Auth's redirect allow-list. Without it, `POST /v1/auth/password/forgot` answers 503. |
+| `HTCO_PASSWORD_RESET_REDIRECT_URL` | Where password reset links land: the web app's reset page (`https://dash.ht-co.app/reset-password` in production, set in the app spec). Must be in Supabase Auth's redirect allow-list. Without it, `POST /v1/auth/password/forgot` answers 503. Must use HTTPS in staging and production (the recovery tokens ride in the fragment). |
 
 Web sign-in is on when the two keys are set (with the Supabase and database URLs); `api.starting` logs `web_sign_in`.
 

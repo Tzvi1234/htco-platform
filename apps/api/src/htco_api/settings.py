@@ -151,6 +151,17 @@ class ApiSettings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _deployed_reset_redirect_uses_https(self) -> Self:
+        # The recovery tokens ride in the URL fragment: an HTTP page could be replaced on path.
+        deployed = self.environment in {Environment.STAGING, Environment.PRODUCTION}
+        url = self.password_reset_redirect_url
+        if deployed and url is not None and url.scheme != "https":
+            raise ValueError(
+                "HTCO_PASSWORD_RESET_REDIRECT_URL must use HTTPS in staging and production"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _token_vault_keys_are_valid(self) -> Self:
         check_token_vault_keys(self.token_vault_key, self.token_vault_previous_keys)
         return self
