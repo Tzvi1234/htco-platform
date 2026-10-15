@@ -390,7 +390,8 @@ async def test_accept_invitation__refresh_token_refused__refused_without_a_sessi
     with pytest.raises(InvitationRefusedError):
         await accept(store, auth, refresh_token="unknown-refresh")  # noqa: S106 - test value
     assert store.sessions == {}
-    assert [a[2] for a in store.attempts] == [False]
+    # The password changed before the refresh failed, so the link stays claimed (a success row).
+    assert [a[2] for a in store.attempts] == [True, False]
 
 
 async def test_accept_invitation__weak_password__reported_and_not_counted_as_a_failure() -> None:

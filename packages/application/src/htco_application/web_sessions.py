@@ -325,7 +325,8 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
 
     # The claim is the link's success record. Taken atomically before the password changes, it
     # stops a replay of a used link (its access token can outlive it) and two requests racing
-    # with the same link; it is released when nothing was spent, so the page can try again.
+    # with the same link. It is released only while the password is unchanged, so the page can
+    # try again.
     if not await store.claim_link(link_hash, now - LINK_REUSE_WINDOW, now):
         await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
         raise link.refused("the link was already used")
@@ -335,8 +336,6 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
         if elevated is not None:
             access_token, refresh_token = elevated.access_token, elevated.refresh_token
         await auth.set_password(access_token, password)
-        issued = await auth.refresh(refresh_token)
-        user = await tokens.read(issued.access_token)
     except SessionEndedError, CredentialsRefusedError:
         raise await failed(link.refused("the link is not valid")) from None
     except MfaCodeRefusedError:
@@ -344,8 +343,16 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
     except BaseException:
         await store.release_link(link_hash)
         raise
+    # The password changed: from here on the link stays claimed, whatever happens.
+    try:
+        issued = await auth.refresh(refresh_token)
+        user = await tokens.read(issued.access_token)
+    except SessionEndedError, CredentialsRefusedError:
+        await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
+        raise link.refused("the link is not valid") from None
     if user.user_id != linked.user_id:
-        raise await failed(link.refused("the link is not valid"))
+        await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
+        raise link.refused("the link is not valid")
     return await _open_session(issued, user, client=client, store=store, now=now)
 
 
