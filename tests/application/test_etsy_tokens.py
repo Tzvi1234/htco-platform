@@ -17,6 +17,7 @@ from htco_application.etsy_connect import TokenGrant
 from htco_application.etsy_tokens import (
     MAX_REFRESH_FAILURES,
     REFRESH_MARGIN,
+    REFRESH_RETRY_INTERVAL,
     VaultAccessTokenProvider,
 )
 from htco_application.marketplace import MarketplaceAuthError, MarketplaceUnavailableError
@@ -163,6 +164,7 @@ async def test_access_token__three_failed_refreshes__needs_reauth_after_the_thir
     for attempt in range(1, MAX_REFRESH_FAILURES + 1):
         with pytest.raises(MarketplaceUnavailableError if attempt < 3 else MarketplaceAuthError):
             await world.provider.access_token(ETSY_SHOP)
+        world.clock.now += REFRESH_RETRY_INTERVAL  # failed attempts are spaced out
         assert world.row.failure_count == attempt
         expected = IntegrationStatus.NEEDS_REAUTH if attempt == 3 else IntegrationStatus.CONNECTED
         assert world.row.status is expected
@@ -174,6 +176,65 @@ async def test_access_token__three_failed_refreshes__needs_reauth_after_the_thir
     assert len(world.server.refreshed) == 3
     [record] = world.vault.audit
     assert record.after == {"reason": "refresh_failed", "provider": "etsy"}
+
+
+@pytest.mark.ac("AC-4.4.2")
+async def test_access_token__callers_waiting_during_one_failed_refresh__share_its_result() -> None:
+    """One Etsy outage seen by many queued callers counts once, not once per caller."""
+    world = World(access_left=-timedelta(minutes=1))
+    world.server.refresh_outcome = "unavailable"
+    world.server.refresh_delay = 0.01
+    outcomes: list[str] = []
+
+    async def call() -> None:
+        try:
+            await world.provider.access_token(ETSY_SHOP)
+        except MarketplaceUnavailableError:
+            outcomes.append("unavailable")
+
+    async with anyio.create_task_group() as group:
+        for _ in range(5):
+            group.start_soon(call)
+
+    assert len(world.server.refreshed) == 1
+    assert world.row.failure_count == 1
+    assert world.row.status is IntegrationStatus.CONNECTED
+    assert outcomes == ["unavailable"] * 5
+
+
+async def test_access_token__after_a_failed_refresh__no_new_attempt_for_a_minute() -> None:
+    world = World(access_left=timedelta(minutes=2))
+    world.server.refresh_outcome = "unavailable"
+    first = await world.provider.access_token(ETSY_SHOP)
+
+    world.clock.now += REFRESH_RETRY_INTERVAL - timedelta(seconds=1)
+    second = await world.provider.access_token(ETSY_SHOP)
+    world.clock.now += timedelta(seconds=1)
+    await world.provider.access_token(ETSY_SHOP)
+
+    assert timedelta(minutes=1) == REFRESH_RETRY_INTERVAL
+    assert first == second == OLD_ACCESS  # still valid, served without a new attempt
+    assert len(world.server.refreshed) == 2
+    assert world.row.failure_count == 2
+
+
+async def test_access_token__expired_and_refresh_failed_recently__unavailable_without_attempt() -> (
+    None
+):
+    world = World(access_left=-timedelta(minutes=1))
+    world.server.refresh_outcome = "unavailable"
+    with pytest.raises(MarketplaceUnavailableError):
+        await world.provider.access_token(ETSY_SHOP)
+
+    world.server.refresh_outcome = "ok"
+    with pytest.raises(MarketplaceUnavailableError):
+        await world.provider.access_token(ETSY_SHOP)
+    world.clock.now += REFRESH_RETRY_INTERVAL
+    token = await world.provider.access_token(ETSY_SHOP)
+
+    assert len(world.server.refreshed) == 2
+    assert token != OLD_ACCESS
+    assert world.row.last_refresh_failed_at is None
 
 
 async def test_access_token__refresh_failed_but_the_token_still_works__stored_token() -> None:

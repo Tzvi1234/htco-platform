@@ -249,14 +249,20 @@ class Vault:
         if row.status is not IntegrationStatus.CONNECTED:
             return False
         self.updates.append(tokens)
-        self.rows[shop_id] = replace(row, tokens=tokens, failure_count=0)
+        self.rows[shop_id] = replace(
+            row, tokens=tokens, failure_count=0, last_refresh_failed_at=None
+        )
         return True
 
-    async def record_refresh_failure(self, shop_id: uuid.UUID) -> int:
+    async def record_refresh_failure(
+        self, shop_id: uuid.UUID, *, at: datetime | None = None
+    ) -> int:
         row = self.rows[shop_id]
         if row.status is not IntegrationStatus.CONNECTED:
             return 0
-        self.rows[shop_id] = replace(row, failure_count=row.failure_count + 1)
+        self.rows[shop_id] = replace(
+            row, failure_count=row.failure_count + 1, last_refresh_failed_at=at or NOW
+        )
         return row.failure_count + 1
 
     async def mark_needs_reauth(

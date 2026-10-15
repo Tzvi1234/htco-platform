@@ -449,6 +449,27 @@ async def test_mark_needs_reauth__with_audit__once_and_atomically(database: Data
     assert count == 1
 
 
+@pytest.mark.ac("AC-4.4.2")
+async def test_refresh_failure__records_when_and_a_new_token_clears_it(database: Database) -> None:
+    tenant = Tenant(database)
+    the_vault = vault(database)
+    connected = await PostgresShopConnector(database, the_vault).connect(
+        request_for(tenant, etsy_ids())
+    )
+    failed_at = NOW + timedelta(minutes=3)
+
+    count = await the_vault.record_refresh_failure(connected.shop.id, at=failed_at)
+    after_failure = await the_vault.load(connected.shop.id)
+    await the_vault.update_tokens(connected.shop.id, tokens("new"))
+    after_success = await the_vault.load(connected.shop.id)
+
+    assert count == 1
+    assert after_failure is not None
+    assert after_failure.last_refresh_failed_at == failed_at
+    assert after_success is not None
+    assert (after_success.failure_count, after_success.last_refresh_failed_at) == (0, None)
+
+
 async def test_find_by_marketplace_shop__the_connected_row_or_none(database: Database) -> None:
     tenant = Tenant(database)
     the_vault = vault(database)
