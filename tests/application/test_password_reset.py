@@ -5,10 +5,12 @@ and per address. The link lands on the web app with a recovery session's tokens;
 is set exactly like accepting an invitation, and every other session of the user is ended.
 """
 
+import contextlib
 import hashlib
 import uuid
 from dataclasses import replace
 
+import anyio
 import pytest
 
 from htco_application.mfa import MAX_CODE_FAILURES
@@ -439,3 +441,42 @@ async def test_reset__the_current_password__reported_and_not_counted() -> None:
 
     assert store.attempts == []
     assert RESET_REFRESH in auth.valid_refresh
+
+
+async def test_reset__the_same_link_twice_at_once__only_one_changes_the_password() -> None:
+    store, auth = Store(), Auth()
+    auth.recovery()
+    outcomes: list[str] = []
+
+    async def attempt(password: str) -> None:
+        try:
+            await reset(store, auth, password=password)
+            outcomes.append("reset")
+        except ResetLinkRefusedError:
+            outcomes.append("refused")
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(attempt, "first long passphrase")
+        group.start_soon(attempt, "second long passphrase")
+
+    assert sorted(outcomes) == ["refused", "reset"]
+    assert len(auth.passwords_set) == 1
+
+
+async def test_admit__a_burst_at_once__admits_only_the_limit() -> None:
+    store = Store()
+    admitted: list[str] = []
+
+    async def ask(n: int) -> None:
+        client = ClientInfo(ip=f"198.51.100.{n}", user_agent=None)
+        with contextlib.suppress(TooManyAttemptsError):
+            address = await admit_password_reset(
+                "owner@example.test", client=client, store=store, now=NOW
+            )
+            admitted.append(address)
+
+    async with anyio.create_task_group() as group:
+        for n in range(MAX_RESET_REQUESTS_PER_EMAIL * 2):
+            group.start_soon(ask, n)
+
+    assert len(admitted) == MAX_RESET_REQUESTS_PER_EMAIL

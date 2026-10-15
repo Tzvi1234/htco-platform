@@ -4,6 +4,8 @@ import uuid
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
+import anyio
+
 from htco_application.access.authentication import AuthenticatedUser
 from htco_application.mfa import Enrollment, Factor
 from htco_application.web_sessions import (
@@ -73,6 +75,7 @@ class Auth:
 
     async def set_password(self, access_token: str, password: str) -> None:
         """Supabase refuses an ended session, and a password its policy calls weak."""
+        await anyio.lowlevel.checkpoint()  # a network call: concurrent requests interleave here
         if access_token.startswith("revoked"):
             raise CredentialsRefusedError
         if self.mfa_enrolled and not access_token.startswith("aal2"):
@@ -198,10 +201,41 @@ class Store:
     ) -> None:
         self.attempts.append((email_hash, ip_hash, succeeded, at))
 
-    async def succeeded_since(self, key: bytes, since: datetime) -> bool:
-        return any(a[0] == key and a[2] and a[3] >= since for a in self.attempts)
+    async def claim_link(self, key: bytes, since: datetime, at: datetime) -> bool:
+        """Atomic, like the database's: no await between the check and the claim."""
+        if any(a[0] == key and a[2] and a[3] >= since for a in self.attempts):
+            return False
+        self.attempts.append((key, None, True, at))
+        return True
+
+    async def release_link(self, key: bytes) -> None:
+        self.attempts = [a for a in self.attempts if not (a[0] == key and a[2])]
+
+    async def admit_attempt(  # noqa: PLR0913 - the keys, the limits and the moments
+        self,
+        key: bytes,
+        ip_hash: bytes | None,
+        *,
+        max_by_key: int,
+        max_by_ip: int,
+        since: datetime,
+        at: datetime,
+    ) -> bool:
+        """Atomic, like the database's: no await between the count and the insert."""
+        by_key, by_ip = self._failures(key, ip_hash, since)
+        if by_key >= max_by_key or by_ip >= max_by_ip:
+            return False
+        self.attempts.append((key, ip_hash, False, at))
+        return True
 
     async def recent_failures(
+        self, email_hash: bytes, ip_hash: bytes | None, since: datetime
+    ) -> tuple[int, int]:
+        # Yields like a real query, so check-then-act code can interleave under concurrency.
+        await anyio.lowlevel.checkpoint()
+        return self._failures(email_hash, ip_hash, since)
+
+    def _failures(
         self, email_hash: bytes, ip_hash: bytes | None, since: datetime
     ) -> tuple[int, int]:
         failed = [a for a in self.attempts if not a[2] and a[3] >= since]
