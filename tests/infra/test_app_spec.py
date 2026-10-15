@@ -244,7 +244,9 @@ def test_deploy__checks_health_on_the_default_ingress() -> None:
     [check] = [
         s for s in job["steps"] if s.get("name") == "The deployed API answers its health checks"
     ]
-    assert ".default_ingress" in check["run"]
+    # The URLs arrive through the step's environment; the platform URL is tried first.
+    assert ".default_ingress" in check["env"]["INGRESS"]
+    assert 'url="${INGRESS:-$LIVE_URL}"' in check["run"]
 
 
 def test_deploy__refuses_a_spec_that_costs_more_than_the_budget() -> None:
