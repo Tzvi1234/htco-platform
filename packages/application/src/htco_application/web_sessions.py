@@ -9,6 +9,12 @@ that Supabase refuses (the session was revoked elsewhere) ends the session (AC-3
 Sign-in failures are counted per email and per client address over a short window; past the
 limit, sign-in is refused before Supabase is asked, and the refusal is the same whether or not
 the email exists (AC-3.5.5).
+
+Accepting an invitation opens the same kind of session. The invitation link lands on the web app
+with the invited user's Supabase tokens; the web app posts them once with the chosen password.
+The access token is verified, the password set as that user, the refresh token exchanged for fresh
+tokens, and the session opened as at sign-in. Failures are counted per link and per client address
+in the same attempt log as sign-ins, so failed sign-ins and refused links share the address limit.
 """
 
 import base64
@@ -37,6 +43,14 @@ class CredentialsRefusedError(Exception):
 
 class SignInRefusedError(Exception):
     """Wrong email or password. Deliberately says nothing about which."""
+
+
+class InvitationRefusedError(Exception):
+    """The invitation link's tokens are not valid (forged, expired, used, or the user is gone)."""
+
+
+class WeakPasswordError(Exception):
+    """The auth provider's password policy refused the new password."""
 
 
 class TooManyAttemptsError(Exception):
@@ -110,9 +124,14 @@ class AuthProvider(Protocol):
 
     async def sign_out(self, access_token: str) -> None: ...
 
+    async def set_password(self, access_token: str, password: str) -> None:
+        """As the token's user. Raises WeakPasswordError, or CredentialsRefusedError when the
+        user's session is not valid any more."""
+        ...
+
 
 class TokenReader(Protocol):
-    """Verifies an access token and says who it belongs to."""
+    """Verifies an access token and says who it belongs to; SessionEndedError when not valid."""
 
     async def read(self, access_token: str) -> AuthenticatedUser: ...
 
@@ -171,6 +190,55 @@ async def sign_in(  # noqa: PLR0913 - the credentials, the client and the collab
         await store.record_attempt(email_hash, ip_hash, succeeded=False, at=now)
         raise SignInRefusedError("wrong email or password") from None
     user = await tokens.read(issued.access_token)
+    signed_in = await _open_session(issued, user, client=client, store=store, now=now)
+    await store.record_attempt(email_hash, ip_hash, succeeded=True, at=now)
+    return signed_in
+
+
+async def accept_invitation(  # noqa: PLR0913 - the link's tokens, the password and the collaborators
+    access_token: str,
+    refresh_token: str,
+    password: str,
+    *,
+    client: ClientInfo,
+    auth: AuthProvider,
+    tokens: TokenReader,
+    store: SessionStore,
+    now: datetime,
+) -> SignedIn:
+    """Sets the invited user's password and signs them in on this browser."""
+    link_hash = _hash(f"invitation:{access_token}")
+    ip_hash = _hash(client.ip) if client.ip else None
+    by_link, by_ip = await store.recent_failures(link_hash, ip_hash, now - THROTTLE_WINDOW)
+    if by_link >= MAX_FAILURES_PER_EMAIL or by_ip >= MAX_FAILURES_PER_IP:
+        raise TooManyAttemptsError("too many failed attempts")
+
+    async def refused() -> InvitationRefusedError:
+        await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
+        return InvitationRefusedError("the invitation link is not valid")
+
+    try:
+        invited = await tokens.read(access_token)
+        await auth.set_password(access_token, password)
+        issued = await auth.refresh(refresh_token)
+        user = await tokens.read(issued.access_token)
+    except SessionEndedError, CredentialsRefusedError:
+        raise await refused() from None
+    if user.user_id != invited.user_id:
+        raise await refused()
+    signed_in = await _open_session(issued, user, client=client, store=store, now=now)
+    await store.record_attempt(link_hash, ip_hash, succeeded=True, at=now)
+    return signed_in
+
+
+async def _open_session(
+    issued: IssuedTokens,
+    user: AuthenticatedUser,
+    *,
+    client: ClientInfo,
+    store: SessionStore,
+    now: datetime,
+) -> SignedIn:
     cookie_value = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode("ascii")
     session = NewSession(
         id=uuid.uuid7(),
@@ -183,7 +251,6 @@ async def sign_in(  # noqa: PLR0913 - the credentials, the client and the collab
         user_agent=(client.user_agent or "")[:300] or None,
     )
     await store.create(session)
-    await store.record_attempt(email_hash, ip_hash, succeeded=True, at=now)
     return SignedIn(
         cookie_value=cookie_value,
         session_id=session.id,

@@ -6,7 +6,7 @@
 | **Phase / slices** | Phase 2 — slices 2.1 to 2.6 |
 | **Requirements** | [FR-IAM-01 to FR-IAM-04, FR-ADM-01, FR-AUD-01](../../product/PRD.md) |
 | **Status** | In progress (slices 2.1, 2.2 and 2.4 part 1 merged; slice 2.3 authentication in the API) |
-| **Last updated** | 2026-10-14 |
+| **Last updated** | 2026-10-15 |
 
 ## What and why
 
@@ -36,6 +36,7 @@ The security spine: who belongs to which organization, with which role, on which
 | AC-2.6.2 | An Admin cannot grant the Owner role or remove the Owner. | 2.6 | Pass (nobody changes or removes the Owner's membership through the API) |
 | AC-2.6.3 | Revoking a membership or a shop grant takes effect on the user's next request, even with an unexpired token. | 2.6 | Pass |
 | AC-2.6.4 | Each change writes one audit record with actor, target, before and after. | 2.6 | Pass |
+| AC-2.6.5 | An invitation returns a one-time invitation link once, uncached (`no-store`) and never logged; an email that already has an account is added without a link. | 2.6 | Pass |
 | AC-2.4.1 | For every role in the matrix, a parametrized test asserts allowed and denied capabilities. | 2.4 | Pass |
 | AC-2.4.2 | `GET /v1/shops` never returns a shop the user is not granted, including when a `shop_id` filter names another tenant's shop (404, not 403). | 2.4 (part 2) | Pass |
 | AC-2.4.3 | Pagination returns stable, non-overlapping pages and rejects limits above the maximum. | 2.4 (part 2) | Pass |
@@ -48,10 +49,21 @@ The criteria of slices 2.1, 2.2, 2.3, 2.5 and 2.6 join here when they start.
 - **In (2.2):** tables `app.organizations`, `app.user_profiles`, `app.memberships` (seven roles, one active membership per user and organization), `app.shops` (shell), `app.shop_access` (composite keys keep a grant inside one organization), `audit.audit_log` (five actor kinds, append-only); RLS on every table with security-definer helpers in `private`; writes to owner-administered tables need Owner or Admin and an `aal2` session; `supabase/seed.sql` (`just seed`); a unit test keeps the SQL role and actor lists equal to the domain enums.
 - **In (2.4, part 1):** `Role` and `AssuranceLevel` (domain), `Capability`, `Grant`, `Principal`, `Decision` and `decide` (application), the matrix as data.
 - **In (2.3):** `htco_platform.jwt` (ES256 only, issuer, audience, expiry, `role = authenticated`, JWKS cache with refresh on an unknown key ID, fail-closed when the key set is unreachable); `htco_application.access.authentication` (`AuthContext` and `Principal` from **database** memberships, never token claims); `htco_persistence.database` (pool; user-scoped transactions with `set local role authenticated` and the verified claims) and `PostgresMembershipReader`; `htco_api.auth` (`CurrentAuth` dependency and eight problem types: `unauthenticated`, `token-expired`, `token-wrong-audience`, `token-wrong-issuer`, `token-bad-signature`, `token-invalid`, `no-membership`, `auth-unavailable`); `HTCO_SUPABASE_URL`.
-- **In (2.6):** `/v1/organizations/{organization_id}/members` (list), `/invitations` (POST), `/members/{membership_id}` (PATCH role, DELETE), `/members/{membership_id}/shops/{shop_id}` (PUT grant, DELETE revoke); `htco_application.access.management` (use cases on `manage_access`, Owner-only Owner role, the Owner's membership untouchable, one audit record per change, idempotent grants); `PostgresAccessStore` (user-scoped transactions, so RLS and its `aal2` policies apply too; a write RLS filters out raises); `htco_platform.supabase_admin.SupabaseInviter` (Auth admin `invite` with `HTCO_SUPABASE_SECRET_KEY`); `Allow` on 405 lists every method of the path.
+- **In (2.6):** `/v1/organizations/{organization_id}/members` (list), `/invitations` (POST), `/members/{membership_id}` (PATCH role, DELETE), `/members/{membership_id}/shops/{shop_id}` (PUT grant, DELETE revoke); `htco_application.access.management` (use cases on `manage_access`, Owner-only Owner role, the Owner's membership untouchable, one audit record per change, idempotent grants); `PostgresAccessStore` (user-scoped transactions, so RLS and its `aal2` policies apply too; a write RLS filters out raises); `htco_platform.supabase_admin.SupabaseInviter` (Auth admin `generate_link`, type `invite`, with `HTCO_SUPABASE_SECRET_KEY`: returns a one-time invitation link instead of sending an email); `Allow` on 405 lists every method of the path.
 - **In (2.5):** `htco_application.audit` (`AuditRecord` with an `ActorRef` actor, `AuditWriter`), `htco_application.bootstrap` (one unit of work: find the signed-up user, reuse an existing owner membership or create organization, profile and owner membership, two audit records by `system:bootstrap`), `htco_persistence.audit.append_audit` (inside the caller's transaction), `PostgresBootstrapStore` (one transaction behind an advisory lock), the `htco admin bootstrap` command.
 - **In (2.4, part 2):** `GET /v1/me` (user, session strength, role per organization) and `GET /v1/shops` (filters `organization_id` and `shop_id`; opaque cursor; `limit` 1 to 100, default 50); `htco_application.shops.list_shops` (scope from the policy engine, carried to the repository as an explicit filter; a shop or organization the caller cannot see is 404); `PostgresShopReader` under the caller's RLS; the bearer scheme in the OpenAPI contract; a missing token is 401 even when sign-in is unavailable.
 - **Out:** approvals (Phase 7), worker and agent permissions (Phases 5 and 8).
+
+## Invitation links
+
+There is no email provider (custom SMTP) yet, and Supabase's built-in email delivers only to the project team's addresses, so the API does not ask Supabase to send an invitation email. Instead:
+
+1. An Owner or Admin with an `aal2` session calls `POST /v1/organizations/{organization_id}/invitations` with `{"email", "role"}`.
+2. The API calls Supabase Auth's admin `generate_link` (`{"type": "invite", "email", "redirect_to": HTCO_INVITE_REDIRECT_URL}`), which creates the user (or refreshes a pending invitation) and returns a one-time `action_link`. The membership is created and audited as before.
+3. The answer (201) is the member plus `invite_link`, with `Cache-Control: no-store`. The caller copies the link and sends it to the invitee over a channel they trust. When the email already had an account, the user is added and `invite_link` is `null` (they sign in as usual).
+4. The invitee opens the link: Supabase verifies it and redirects to the web app's accept page (`https://dash.ht-co.app/accept-invite` in production) with the user's tokens in the URL fragment. The page asks for a password and posts it with the tokens to `POST /v1/auth/invitations/accept` ([auth-bff](../auth-bff/overview.md)); the invitee is then signed in.
+
+The link is a bearer credential for the invitee's new account: it is shown once to an Owner or Admin who signed in with MFA, the response is `no-store`, it is never logged or audited (and hidden from `repr`), and it is not stored by HTCO, so it cannot be fetched again (inviting again issues a new link). It expires with Supabase's email OTP expiry (Auth settings) and works once. The redirect URL must be in Supabase Auth's redirect allow-list. When an email provider arrives, Supabase can send the same invitation by email instead.
 
 ## Known limits
 

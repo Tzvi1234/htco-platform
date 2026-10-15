@@ -106,6 +106,11 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: ${HTCO_SUPABASE_SECRET_KEY}
+      # Invitation links land on the web app's accept page, which posts the link's tokens and the
+      # new password to /v1/auth/invitations/accept. Must be in Supabase's redirect allow-list.
+      - key: HTCO_INVITE_REDIRECT_URL
+        scope: RUN_TIME
+        value: https://dash.ht-co.app/accept-invite
       # Web sign-in (slice 3.5): off until the session key secret exists (blank means unset).
       - key: HTCO_SESSION_KEY
         scope: RUN_TIME

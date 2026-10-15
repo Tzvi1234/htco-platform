@@ -103,7 +103,9 @@ Role × capability table from the [permission matrix](../../architecture/PERMISS
 
 ### 2.6 — User and shop-access management (API)
 
-Invite a user by email (Supabase invite sent through the custom SMTP), assign or change a role, grant or revoke shop access, remove a member. Owner and Admin only, with an `aal2` session; every change audited. Screens arrive in slice 3.9.
+Invite a user by email, assign or change a role, grant or revoke shop access, remove a member. Owner and Admin only, with an `aal2` session; every change audited. Screens arrive in slice 3.9.
+
+There is no email provider (custom SMTP) yet, and Supabase's built-in email delivers only to the project team's addresses, so the API does not ask Supabase to send an invitation email. Instead, the invitation answers with a one-time invitation link (Supabase Auth admin `generate_link`, type `invite`) that the Owner or Admin sends to the invitee; the invitee accepts it in the web app (`POST /v1/auth/invitations/accept`, slice 3.5). When an email provider arrives, Supabase can send the same link by email.
 
 | ID | Acceptance criterion |
 |---|---|
@@ -111,6 +113,7 @@ Invite a user by email (Supabase invite sent through the custom SMTP), assign or
 | AC-2.6.2 | An Admin cannot grant the Owner role or remove the Owner. |
 | AC-2.6.3 | Revoking a membership or a shop grant takes effect on the user's next request, even with an unexpired token (authorization reads memberships from the database). |
 | AC-2.6.4 | Each change writes one audit record with actor, target, before and after. |
+| AC-2.6.5 | An invitation returns a one-time invitation link once, uncached (`no-store`) and never logged; an email that already has an account is added without a link. |
 
 ## Test plan
 
@@ -119,7 +122,7 @@ pgTAP for RLS, grants and constraints; repository integration tests against the 
 ## Security checklist
 
 - [ ] ASVS V8 (authorization) 8.2.2 and 8.4.1 covered by tests; V9 token validation; V6 MFA for owners.
-- [x] Request path never uses the Supabase secret or `service_role` key for data; request role lacks `BYPASSRLS`. (The secret key is used only for the Auth admin `invite` call of slice 2.6, never for database queries.)
+- [x] Request path never uses the Supabase secret or `service_role` key for data; request role lacks `BYPASSRLS`. (The secret key is used only for the Auth admin `generate_link` invitation call of slice 2.6, never for database queries.)
 - [ ] Tenant context set with `set local` in every transaction; missing context fails closed.
 - [ ] JWT verification rejects `alg: none` and HS256 when asymmetric keys are configured.
 

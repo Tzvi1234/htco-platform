@@ -10,11 +10,15 @@ another organization do not exist for the caller (404).
 Because authorization reads memberships from the database on every request (slice 2.3), a revoked
 membership or shop grant stops working on the user's next request, even while their access token
 is still valid (AC-2.6.3).
+
+An invitation does not send an email (there is no email provider yet): the sign-in service creates
+the user and a one-time invitation link, which is returned to the inviting Owner or Admin to pass
+on. The link is a bearer credential: it is never logged or audited, and its `repr` is hidden.
 """
 
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -61,6 +65,21 @@ class MemberRow:
     role: Role
     display_name: str | None
     shop_ids: frozenset[uuid.UUID]
+
+
+@dataclass(frozen=True)
+class InvitedUser:
+    """The user the sign-in service created (or refreshed) and their one-time invitation link."""
+
+    user_id: uuid.UUID
+    link: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class InvitationResult:
+    member: MemberRow
+    # The link the inviter passes on; None when the email already had an account and was added.
+    invite_link: str | None = field(repr=False)
 
 
 class AccessUnitOfWork(AuditWriter, Protocol):
@@ -110,9 +129,12 @@ class AccessStore(Protocol):
 
 
 class Inviter(Protocol):
-    """Sends the sign-in service's invitation email and returns the new user's ID."""
+    """Creates the invited user at the sign-in service and returns a one-time invitation link.
 
-    async def invite(self, email: str) -> uuid.UUID: ...
+    Raises InviteeAlreadyRegisteredError when the email already has an account.
+    """
+
+    async def invite(self, email: str) -> InvitedUser: ...
 
 
 def _authorize(auth: AuthContext, organization_id: uuid.UUID, now: datetime) -> Principal:
@@ -198,12 +220,12 @@ async def invite_member(  # noqa: PLR0913 - the request's fields plus the collab
     now: datetime,
     correlation_id: str,
     new_id: Callable[[], uuid.UUID] = uuid.uuid7,
-) -> MemberRow:
+) -> InvitationResult:
     address = _valid_email(email)
     principal = _authorize(auth, organization_id, now)
     _may_assign(principal, role)
     try:
-        invited: uuid.UUID | None = await inviter.invite(address)
+        invited: InvitedUser | None = await inviter.invite(address)
     except InviteeAlreadyRegisteredError:
         # The email already has an account: an earlier invitation that did not reach the
         # database, or a member of another organization. Add that user instead.
@@ -211,7 +233,11 @@ async def invite_member(  # noqa: PLR0913 - the request's fields plus the collab
     membership_id = new_id()
 
     def work(uow: AccessUnitOfWork) -> MemberRow:
-        user_id = invited or uow.registered_user_id(organization_id, address)
+        user_id = (
+            invited.user_id
+            if invited is not None
+            else uow.registered_user_id(organization_id, address)
+        )
         if user_id is None:
             raise InviteeAlreadyRegisteredError(address)
         if uow.active_member_by_user(organization_id, user_id):
@@ -228,7 +254,8 @@ async def invite_member(  # noqa: PLR0913 - the request's fields plus the collab
         )
         return MemberRow(membership_id, organization_id, user_id, role, None, frozenset())
 
-    return await store.run(auth.claims, work)
+    member = await store.run(auth.claims, work)
+    return InvitationResult(member, invited.link if invited is not None else None)
 
 
 async def change_role(  # noqa: PLR0913 - the request's fields plus the collaborators

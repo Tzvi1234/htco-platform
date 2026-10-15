@@ -2,7 +2,6 @@
 
 import contextlib
 import sys
-import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
@@ -18,13 +17,18 @@ from htco_api.auth import Authenticator, VerifiedTokenReader
 from htco_api.problems import AUTH_UNAVAILABLE, ProblemError
 from htco_api.settings import ApiSettings, Environment
 from htco_api.web_auth import WebAuth
-from htco_application.access.management import AccessStore, InviteeAlreadyRegisteredError
+from htco_application.access.management import (
+    AccessStore,
+    InvitedUser,
+    InviteeAlreadyRegisteredError,
+)
 from htco_application.mfa import Enrollment, Factor
 from htco_application.shops import ShopReader
 from htco_application.web_sessions import (
     CredentialsRefusedError,
     IssuedTokens,
     TooManyAttemptsError,
+    WeakPasswordError,
 )
 from htco_persistence.access import PostgresAccessStore
 from htco_persistence.database import Database
@@ -50,6 +54,7 @@ from htco_platform.supabase_auth import (
     RateLimitedError,
     SupabaseAuth,
 )
+from htco_platform.supabase_auth import WeakPasswordError as SupabaseWeakPasswordError
 from htco_platform.tracing import new_tracer_provider
 
 # Supabase access tokens for signed-in users carry this audience.
@@ -146,13 +151,14 @@ class _Inviter:
     def __init__(self, inviter: SupabaseInviter) -> None:
         self._inviter = inviter
 
-    async def invite(self, email: str) -> uuid.UUID:
+    async def invite(self, email: str) -> InvitedUser:
         try:
-            return await self._inviter.invite(email)
+            invited = await self._inviter.invite(email)
         except AlreadyRegisteredError:
             raise InviteeAlreadyRegisteredError(email) from None
         except SupabaseInvitationError as error:
             raise InvitationFailedError(str(error)) from None
+        return InvitedUser(invited.user_id, invited.link)
 
 
 class _AuthProvider:
@@ -170,6 +176,18 @@ class _AuthProvider:
     async def sign_out(self, access_token: str) -> None:
         with contextlib.suppress(AuthServiceError):  # best effort: our session is already gone
             await self._auth.sign_out(access_token)
+
+    async def set_password(self, access_token: str, password: str) -> None:
+        try:
+            await self._auth.set_password(access_token, password)
+        except SupabaseWeakPasswordError:
+            raise WeakPasswordError("the password is too weak") from None
+        except InvalidCredentialsError:
+            raise CredentialsRefusedError from None
+        except RateLimitedError:
+            raise TooManyAttemptsError("the sign-in service is rate limiting") from None
+        except AuthServiceError:
+            raise ProblemError(AUTH_UNAVAILABLE) from None
 
     async def enroll_totp(self, access_token: str, *, friendly_name: str) -> Enrollment:
         try:

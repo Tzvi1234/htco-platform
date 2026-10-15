@@ -4,6 +4,10 @@ Owner and Admin, from an `aal2` session, list the organization's members, invite
 change a member's role, remove a member, and grant or revoke a member's access to a shop. Every
 change is audited with the request ID as its correlation ID. Members and shops of another
 organization answer 404; a caller outside the organization, or without the capability, 403.
+
+There is no email provider yet, so an invitation answers with a one-time invitation link that the
+caller sends to the invitee themselves. The link is a bearer credential: the response is
+`no-store` and the link is never logged.
 """
 
 import uuid
@@ -79,6 +83,12 @@ class MemberView(BaseModel):
     display_name: str | None
     role: Role
     shop_ids: list[uuid.UUID]
+
+
+class InvitationView(MemberView):
+    # The one-time link to send to the invitee; null when the email already had an account and
+    # was simply added. Shown once: it is not stored here and cannot be fetched again.
+    invite_link: str | None
 
 
 class MemberList(BaseModel):
@@ -186,15 +196,16 @@ def access_router(*, clock: Callable[[], datetime]) -> APIRouter:
         organization_id: uuid.UUID,
         body: Invitation,
         request: Request,
+        response: Response,
         auth: CurrentAuth,
         store: StoreDep,
         inviter: Annotated[Inviter, Depends(_inviter)],
-    ) -> MemberView:
-        """Sends the sign-in service's invitation and adds the membership. Only the Owner may
-        invite another Owner."""
+    ) -> InvitationView:
+        """Adds the membership and returns a one-time invitation link to send to the invitee
+        (`no-store`; never logged). Only the Owner may invite another Owner."""
         try:
             with _problems():
-                member = await invite_member(
+                invited = await invite_member(
                     auth,
                     store,
                     inviter,
@@ -208,7 +219,8 @@ def access_router(*, clock: Callable[[], datetime]) -> APIRouter:
             raise RequestValidationError(
                 [{"loc": ("body", "email"), "msg": "Invalid email address", "type": "value_error"}]
             ) from None
-        return _view(member)
+        response.headers["Cache-Control"] = "no-store"
+        return InvitationView(**_view(invited.member).model_dump(), invite_link=invited.invite_link)
 
     @router.patch(
         "/members/{membership_id}",
