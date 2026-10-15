@@ -17,7 +17,8 @@ insert into app.memberships (id, organization_id, user_id, role) values
   ('5f000000-0000-0000-0000-000000000001', '5b000000-0000-0000-0000-000000000000', '52222222-0000-0000-0000-000000000001', 'owner');
 insert into app.shops (id, organization_id, name, marketplace, status) values
   ('5c000000-0000-0000-0000-000000000001', '5a000000-0000-0000-0000-000000000000', 'Shop V', 'etsy', 'active'),
-  ('5d000000-0000-0000-0000-000000000001', '5b000000-0000-0000-0000-000000000000', 'Shop W', 'etsy', 'active');
+  ('5d000000-0000-0000-0000-000000000001', '5b000000-0000-0000-0000-000000000000', 'Shop W', 'etsy', 'active'),
+  ('5d000000-0000-0000-0000-000000000002', '5b000000-0000-0000-0000-000000000000', 'Shop W2', 'etsy', 'pending');
 insert into app.shop_access (id, organization_id, membership_id, shop_id) values
   ('5e100000-0000-0000-0000-000000000002', '5a000000-0000-0000-0000-000000000000', '5e000000-0000-0000-0000-000000000002', '5c000000-0000-0000-0000-000000000001');
 insert into app.shop_integrations
@@ -107,8 +108,8 @@ select throws_ok(
        (id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id,
         wrapped_data_key, access_token_ciphertext, refresh_token_ciphertext, access_expires_at,
         refresh_expires_at, status)
-     values (gen_random_uuid(), '5b000000-0000-0000-0000-000000000000',
-       '5c000000-0000-0000-0000-000000000001', 'etsy', 101, 201, 'key-a', '\x01aa', '\x01bb',
+     values (gen_random_uuid(), '5a000000-0000-0000-0000-000000000000',
+       '5d000000-0000-0000-0000-000000000002', 'etsy', 101, 201, 'key-a', '\x01aa', '\x01bb',
        '\x01cc', now(), now(), 'connected') $$,
   '23503', null, 'the shop must belong to the same organization'
 );
