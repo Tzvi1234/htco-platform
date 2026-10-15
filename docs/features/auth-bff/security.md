@@ -33,7 +33,7 @@ Trust boundaries: the browser and the inbox are untrusted; the API and Supabase 
 | Logs | Information disclosure: emails or tokens in logs | The forgot route logs only `auth.password_reset_email_sent` / `_failed`; the Supabase client's errors never carry the email; tokens are never logged | `test_forgot__sent__logged_without_the_email`, `test_send_password_reset__failure__is_an_auth_service_error` |
 | Configuration | Tampering: our own misconfiguration hidden behind the generic 202 | A missing `HTCO_PASSWORD_RESET_REDIRECT_URL` answers 503 `auth-unavailable` | `test_forgot__redirect_not_configured__503` |
 
-Known limits: a recovery link is a bearer credential until it is used or expires (Supabase's email OTP expiry); the URL fragment is never sent to a server, and the web page strips it on load. Native apps holding a bearer token from Supabase directly are not ended by the session revocation (they have no web session row); they are ended when their refresh token is refused.
+Known limits: the failure counters for sign-in, invitation and reset links, step-up and reset codes check and then count, so a concurrent burst can pass a limit by the number of requests in flight. Only the reset-email admission and the link claim are atomic. Making every counter reserve atomically is a follow-up hardening slice. a recovery link is a bearer credential until it is used or expires (Supabase's email OTP expiry); the URL fragment is never sent to a server, and the web page strips it on load. Native apps holding a bearer token from Supabase directly are not ended by the session revocation (they have no web session row); they are ended when their refresh token is refused.
 
 ## ASVS 5.0 requirements covered
 
