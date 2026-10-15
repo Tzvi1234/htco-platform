@@ -319,7 +319,6 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
         raise TooManyAttemptsError("too many failed attempts")
 
     async def failed(error: Exception) -> Exception:
-        await store.release_link(link_hash)
         await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
         return error
 
@@ -331,7 +330,9 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
         await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
         raise link.refused("the link was already used")
     try:
-        # Nothing changes before the password call: any failure here releases the claim.
+        # Nothing changes before the password call: any failure here releases the claim. Each
+        # path releases once; the handlers below only count the failure (a second release could
+        # drop the fresh claim of a concurrent retry).
         try:
             linked = await tokens.read(access_token)
             elevated = None if elevate is None else await elevate(access_token, linked)
@@ -342,7 +343,13 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
             access_token, refresh_token = elevated.access_token, elevated.refresh_token
         try:
             await auth.set_password(access_token, password)
-        except WeakPasswordError, SamePasswordError, MfaCodeRequiredError, TooManyAttemptsError:
+        except (
+            WeakPasswordError,
+            SamePasswordError,
+            MfaCodeRequiredError,
+            TooManyAttemptsError,
+            CredentialsRefusedError,
+        ):
             # Refused before any change: the page can try again with the same link.
             await store.release_link(link_hash)
             raise
