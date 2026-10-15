@@ -15,6 +15,7 @@ from htco_platform.supabase_auth import (
     InvalidCredentialsError,
     MfaRequiredError,
     RateLimitedError,
+    SamePasswordError,
     SupabaseAuth,
     WeakPasswordError,
 )
@@ -409,3 +410,11 @@ async def test_send_password_reset__unreachable__is_an_auth_service_error() -> N
     async with client:
         with pytest.raises(AuthServiceError):
             await subject.send_password_reset("owner@example.test", REDIRECT)
+
+
+async def test_set_password__the_current_password__is_a_same_password_error() -> None:
+    body = {"error_code": "same_password", "msg": "New password should be different"}
+    subject, client = auth(lambda _: httpx.Response(422, json=body))
+    async with client:
+        with pytest.raises(SamePasswordError):
+            await subject.set_password("access-1", "a long new passphrase")

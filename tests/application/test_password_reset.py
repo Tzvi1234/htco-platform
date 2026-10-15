@@ -26,6 +26,7 @@ from htco_application.web_sessions import (
     MfaCodeRefusedError,
     MfaCodeRequiredError,
     ResetLinkRefusedError,
+    SamePasswordError,
     SignInRefusedError,
     TooManyAttemptsError,
     WeakPasswordError,
@@ -391,3 +392,50 @@ async def test_reset__code_for_a_user_without_an_authenticator__ignored() -> Non
 
     assert mfa.verified == []
     assert auth.passwords_set == [(RESET_ACCESS, NEW_PASSWORD)]
+
+
+async def test_reset__replayed_link__refused_before_any_change() -> None:
+    store, auth = Store(), Auth()
+    auth.recovery()
+    await reset(store, auth)
+    auth.valid_refresh.add(RESET_REFRESH)  # even if the refresh token were somehow usable again
+
+    with pytest.raises(ResetLinkRefusedError):
+        await reset(store, auth, password="another long passphrase")  # noqa: S106 - test value
+
+    assert auth.passwords_set == [(RESET_ACCESS, NEW_PASSWORD)]
+    assert len(store.sessions) == 1
+
+
+async def test_reset__second_authenticator_app__its_code_works() -> None:
+    store, auth = Store(), Auth(mfa_enrolled=True)
+    auth.recovery()
+    mfa = Authenticator(auth, codes={"factor-1": "111111", "factor-2": RIGHT_CODE})
+
+    await reset(store, auth, code=RIGHT_CODE, mfa=mfa)
+
+    assert mfa.verified == [(RESET_ACCESS, "factor-2")]
+    assert auth.passwords_set == [("aal2-access", NEW_PASSWORD)]
+
+
+async def test_reset__wrong_code_for_every_authenticator__counted_once_for_the_user() -> None:
+    store, auth = Store(), Auth(mfa_enrolled=True)
+    auth.recovery()
+    mfa = Authenticator(auth, codes={"factor-1": "111111", "factor-2": "222222"})
+
+    with pytest.raises(MfaCodeRefusedError):
+        await reset(store, auth, code="000000", mfa=mfa)
+
+    user_key = hashlib.sha256(f"mfa:{USER}".encode()).digest()
+    assert [a[0] for a in store.attempts if not a[2]].count(user_key) == 1
+
+
+async def test_reset__the_current_password__reported_and_not_counted() -> None:
+    store, auth = Store(), Auth()
+    auth.recovery()
+
+    with pytest.raises(SamePasswordError):
+        await reset(store, auth, password=auth.password)
+
+    assert store.attempts == []
+    assert RESET_REFRESH in auth.valid_refresh

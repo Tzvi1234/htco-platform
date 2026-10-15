@@ -13,6 +13,7 @@ from htco_application.web_sessions import (
     MfaCodeRequiredError,
     NewSession,
     ResetEmailNotSentError,
+    SamePasswordError,
     SessionEndedError,
     StoredSession,
     WeakPasswordError,
@@ -78,6 +79,8 @@ class Auth:
             raise MfaCodeRequiredError("an aal2 session is required")
         if "weak" in password:
             raise WeakPasswordError("too weak")
+        if password == self.password:
+            raise SamePasswordError("the same password")
         self.passwords_set.append((access_token, password))
 
     async def send_password_reset(self, email: str, redirect_to: str) -> None:
@@ -104,24 +107,27 @@ class Auth:
 
 @dataclass
 class Authenticator:
-    """Supabase MFA in memory for one user with a verified authenticator app (or none)."""
+    """Supabase MFA in memory: verified authenticator apps and each one's right code."""
 
     auth: Auth
     enrolled: bool = True
     verified: list[tuple[str, str]] = field(default_factory=list)
+    codes: dict[str, str] = field(default_factory=lambda: {"factor-1": RIGHT_CODE})
 
     async def enroll_totp(self, access_token: str, *, friendly_name: str) -> Enrollment:
         raise NotImplementedError
 
     async def verify_totp(self, access_token: str, factor_id: str, code: str) -> IssuedTokens:
-        if code != RIGHT_CODE:
+        if self.codes.get(factor_id) != code:
             raise CredentialsRefusedError
         self.verified.append((access_token, factor_id))
         self.auth.valid_refresh.add("aal2-refresh")
         return IssuedTokens("aal2-access", "aal2-refresh", NOW + timedelta(hours=1))
 
     async def factors_of(self, access_token: str) -> list[Factor]:  # noqa: ARG002 - fake
-        return [Factor(id="factor-1", verified=True, name="Phone")] if self.enrolled else []
+        if not self.enrolled:
+            return []
+        return [Factor(id=factor, verified=True, name=factor) for factor in self.codes]
 
     async def remove_factor(self, access_token: str, factor_id: str) -> None:
         raise NotImplementedError
@@ -191,6 +197,9 @@ class Store:
         self, email_hash: bytes, ip_hash: bytes | None, *, succeeded: bool, at: datetime
     ) -> None:
         self.attempts.append((email_hash, ip_hash, succeeded, at))
+
+    async def succeeded_since(self, key: bytes, since: datetime) -> bool:
+        return any(a[0] == key and a[2] and a[3] >= since for a in self.attempts)
 
     async def recent_failures(
         self, email_hash: bytes, ip_hash: bytes | None, since: datetime

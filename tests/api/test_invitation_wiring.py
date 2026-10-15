@@ -19,6 +19,7 @@ from htco_application.web_sessions import (
     CredentialsRefusedError,
     MfaCodeRequiredError,
     ResetEmailNotSentError,
+    SamePasswordError,
     TooManyAttemptsError,
     WeakPasswordError,
 )
@@ -104,6 +105,13 @@ async def test_provider__set_password_needing_aal2__asks_for_the_code() -> None:
     subject, client = provider(httpx.Response(401, json={"error_code": "insufficient_aal"}))
     async with client:
         with pytest.raises(MfaCodeRequiredError):
+            await subject.set_password("access-1", "a long new passphrase")
+
+
+async def test_provider__set_password_the_same__is_the_applications() -> None:
+    subject, client = provider(httpx.Response(422, json={"error_code": "same_password"}))
+    async with client:
+        with pytest.raises(SamePasswordError):
             await subject.set_password("access-1", "a long new passphrase")
 
 

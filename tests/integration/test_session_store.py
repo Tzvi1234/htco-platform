@@ -114,6 +114,19 @@ async def test_attempts__counted_per_email_and_per_address_within_the_window(
     assert await store.recent_failures(email, None, NOW - timedelta(minutes=15)) == (2, 0)
 
 
+async def test_attempts__a_success_for_a_key_since_a_moment(database: Database) -> None:
+    store = PostgresSessionStore(database, SEALER)
+    used, failed_only, old = os.urandom(32), os.urandom(32), os.urandom(32)
+    await store.record_attempt(used, None, succeeded=True, at=NOW)
+    await store.record_attempt(failed_only, None, succeeded=False, at=NOW)
+    await store.record_attempt(old, None, succeeded=True, at=NOW - timedelta(days=2))
+
+    since = NOW - timedelta(days=1)
+    assert await store.succeeded_since(used, since) is True
+    assert await store.succeeded_since(failed_only, since) is False
+    assert await store.succeeded_since(old, since) is False
+
+
 async def test_step_up_get_and_list_active(database: Database) -> None:
     store = PostgresSessionStore(database, SEALER)
     user = new_user(database)

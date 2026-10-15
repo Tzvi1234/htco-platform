@@ -352,3 +352,26 @@ async def test_reset__not_configured__503(body: dict[str, str]) -> None:
     ) as http:
         response = await http.post(RESET, json=body, headers=CSRF)
     assert response.status_code == 503
+
+
+async def test_reset__the_current_password__422_same_password(
+    client: httpx.AsyncClient, auth: Auth, body: dict[str, str]
+) -> None:
+    response = await client.post(RESET, json=body | {"password": auth.password}, headers=CSRF)
+
+    assert response.status_code == 422
+    assert response.json()["type"] == PROBLEMS + "same-password"
+
+
+async def test_reset__replayed_link__401_reset_link_refused(
+    client: httpx.AsyncClient, auth: Auth, body: dict[str, str]
+) -> None:
+    first = await client.post(RESET, json=body, headers=CSRF)
+    replay = await client.post(
+        RESET, json=body | {"password": "another long passphrase"}, headers=CSRF
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 401
+    assert replay.json()["type"] == PROBLEMS + "reset-link-refused"
+    assert len(auth.passwords_set) == 1
