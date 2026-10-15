@@ -27,16 +27,24 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 
 ## Scope
 
-**Etsy buyer messages (owner, 2026-10-15).** Etsy has no messages API ([capabilities](../../architecture/etsy-api-capabilities.md)).
-- **Default path:**
-  - Dana reads Etsy's message notifications from the owner's mailbox.
-  - She gathers the context: the order, its shipment and the conversation's history.
-  - She drafts a reply. A person approves it with one click.
-  - "Open in Etsy" opens the conversation with the reply copied, ready to paste and send.
-- **Opt-in path (the owner's decision, one pilot shop first):** Dana sends only approved replies herself, from an isolated browser session.
-  - Human pace and no disguise of any kind: no proxies, no fingerprint changes, no CAPTCHA solving.
-  - Off by default, per shop.
-  - This is automated use of etsy.com, which Etsy's terms restrict. The owner accepts that risk per shop. It is recorded as a decision with its own kill switch, and buyer-facing sends always need approval.
+**Etsy buyer messages (owner, 2026-10-15, revised).** Etsy has no messages API ([capabilities](../../architecture/etsy-api-capabilities.md)). One shared pipeline, two ways to deliver the reply.
+
+- **Shared pipeline:**
+  1. Etsy emails a notification for every buyer message. HTCO receives it, either forwarded from Gmail or through the Gmail API (read-only scope).
+  2. HTCO extracts the buyer's name, the conversation link and the message text.
+  3. It matches the message to the order through the official API.
+  4. Dana drafts a reply under the shop's policies.
+  5. A person approves the draft in the dashboard.
+- **Delivery A, tried first (the owner's decision, one pilot shop):** an AI agent sends approved replies itself in an isolated browser session.
+  - Human pace, and no disguise of any kind: no proxies, no fingerprint changes, no CAPTCHA solving.
+  - Off by default, per shop, with a kill switch.
+  - This is automated use of etsy.com, which Etsy's terms restrict. The owner accepts that risk per shop, and it is recorded as a decision.
+  - If it causes any trouble (warnings, challenges, a restriction), it is switched off and the shop moves to delivery B.
+- **Delivery B, assisted reply:**
+  - The dashboard's "Reply in Etsy" button opens the conversation on etsy.com in the owner's own browser.
+  - A small HTCO Chrome extension pastes the approved reply into the message box, and the owner clicks Send.
+  - Nothing signs in to Etsy from our servers, and no automated browser or automatic send is involved.
+  - The extension fills the box only on the owner's click. It holds no Etsy credentials and reads nothing else from the page.
 
 
 **In:** MX for `office.ht-co.app` to Resend inbound (addresses `support@`, `info@` and `security@`); the `email.received` webhook (signed, idempotent), content fetch, attachment copy within the provider's one-hour URL window, attachment policy and scanning, HTML sandboxing with remote content off; threads and tickets; a quarantined extractor (no tools) that turns an email into a validated schema; Dana drafting replies (L2: sending needs approval); the assisted-reply workflow for Etsy conversations with a "sent manually" record; consent ledger; retention for messages (data class DC2).
