@@ -34,6 +34,15 @@ By this phase nine employees (Eitan, Noa, Daniel, Noam, Shon, Nika, Tom, Roni, D
 
 ## Scope
 
+**The home overview (owner, 2026-10-15).** The web app's home screen grows into the business's cockpit, and its space must be used fully:
+- key numbers: orders, revenue, profit, average order, late shipments, review average, out of stock;
+- trends over time;
+- important messages and decisions that pop up there;
+- the office live: who is working on what right now, with their latest activity.
+
+Each block lands with the phase that brings its data (Phases 5–14). This phase completes the layout and the live office view. Until then the overview shows only real data and says what will appear.
+
+
 **In:** live-update transport (decided by a spike: server-sent events with reconnects through DigitalOcean's request timeout, or Supabase Realtime private channels, A-12); employee states `IDLE`, `RUNNING`, `WAITING`, `NEEDS_APPROVAL`, `BLOCKED`, `OFFLINE` derived only from recorded activity and heartbeats; the office areas listed in the goal, each with an accessible list view; Office Communication (conversations with Lia, Maya, one employee or a department; internal employee-to-employee messages; task threads and handoff history; search; approval cards inline); web push with consent; optional Hermes channel through the Action API (D-10); per-employee email aliases only after abuse tests (FR-EML-04); Maya's and Lia's activation; daily and weekly office reviews.
 
 **Out:** the animated office canvas (a later iteration once the list and grid views prove useful); write actions in the Engineering Console ([Phase 19](phase-19-engineering.md)); Omer's proposals (the Executive Office shows the area empty until [Phase 18](phase-18-optimization.md)).

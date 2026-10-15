@@ -47,6 +47,14 @@ Self-improvement is the riskiest capability of the office. It comes after superv
 
 ## Owner prerequisites
 
+[ADR-0017](../../adr/0017-engineering-on-claude-code-subscription.md): Alex, Amir and Iris run as Claude Code (`anthropics/claude-code-action`) on the owner's Claude subscription, not on API billing. Additional prerequisites:
+- a Claude Max plan;
+- the owner runs `claude setup-token` himself and saves it with `gh secret set CLAUDE_CODE_OAUTH_TOKEN`;
+- the Claude GitHub App (or a custom app with Contents, Issues and Pull requests) is installed.
+
+The credential stays swappable to an API key.
+
+
 - D-08 decided (machine account for agent pull requests); GitHub App installed with the agreed permissions.
 - The remediation allowlist reviewed (reversible, idempotent actions only).
 - Approval of Alex's, Amir's and Iris's autonomy levels (proposed L1 each).
