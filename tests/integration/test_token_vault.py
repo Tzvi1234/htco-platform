@@ -173,6 +173,25 @@ async def test_store__reconnecting__updates_the_one_row_with_new_tokens_and_scop
     assert leaked(row_text(database, shop[1]), newer) == []
 
 
+async def test_store__existing_shop_with_another_organization__is_refused_and_changes_nothing(
+    database: Database,
+) -> None:
+    """Codex review on #43: the upsert must not let another tenant overwrite a shop's row."""
+    subject = vault(database, key_id("a"))
+    shop = new_shop(database)
+    other_organization = new_shop(database)[0]
+    owned = unique_tokens("owned")
+    await subject.store(connection_for(shop, owned))
+
+    with pytest.raises(TokenVaultError, match=str(shop[1])):
+        await subject.store(connection_for((other_organization, shop[1]), unique_tokens("x")))
+
+    loaded = await subject.load(shop[1])
+    assert loaded is not None
+    assert loaded.organization_id == shop[0]
+    assert loaded.tokens == owned
+
+
 async def test_update_tokens__after_a_refresh__stores_the_newest_and_resets_failures(
     database: Database,
 ) -> None:
