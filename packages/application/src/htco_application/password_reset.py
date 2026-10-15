@@ -9,7 +9,8 @@ whose limit is shared with failed sign-ins.
 The emailed link lands on the web app with a recovery session's tokens; the new password is set
 exactly like accepting an invitation (`set_password_from_link`). A user with an authenticator app
 must also enter a code: the auth provider changes the password only from an `aal2` session. Wrong
-codes count per user, like at step-up. After the reset, every other session of the user is
+codes count per user, like at step-up, and each code is reserved against that limit before it is
+verified. After the reset, every other session of the user is
 ended, here and at the auth provider, since whoever knew the old password may hold one.
 """
 
@@ -35,6 +36,7 @@ from htco_application.web_sessions import (
     MfaCodeRefusedError,
     ResetEmailNotSentError,
     SignedIn,
+    Throttled,
     TokenReader,
     TooManyAttemptsError,
     set_password_from_link,
@@ -94,25 +96,29 @@ async def reset_password(  # noqa: PLR0913 - the link's tokens, the password, th
 
     def elevate_with(entered: str) -> Elevate:
         async def elevate(link_access_token: str, user: AuthenticatedUser) -> IssuedTokens | None:
-            key = mfa_failure_key(user.user_id)
-            failures, _ = await store.recent_failures(key, None, now - THROTTLE_WINDOW)
-            if failures >= MAX_CODE_FAILURES:
-                raise TooManyAttemptsError("too many wrong codes")
             factors = await mfa.factors_of(link_access_token)
             verified = [factor for factor in factors if factor.verified]
             if not verified:
                 return None  # no authenticator app: the password changes without a code
-            # The request names no factor: the code may come from any of the user's apps (one
-            # may be the lost one). One wrong code counts once, however many apps were tried.
-            for factor in verified:
-                try:
-                    return await mfa.verify_totp(link_access_token, factor.id, entered)
-                except CredentialsRefusedError:
-                    continue
             # Counted against the user only; the link's failure row carries the address, so one
             # wrong code counts once against the address limit.
-            await store.record_attempt(key, None, succeeded=False, at=now)
-            raise MfaCodeRefusedError("wrong code")
+            async with Throttled(
+                store,
+                mfa_failure_key(user.user_id),
+                None,
+                max_by_key=MAX_CODE_FAILURES,
+                max_by_ip=None,
+                now=now,
+                failures=(MfaCodeRefusedError,),
+            ):
+                # The request names no factor: the code may come from any of the user's apps (one
+                # may be the lost one). One wrong code counts once, however many apps were tried.
+                for factor in verified:
+                    try:
+                        return await mfa.verify_totp(link_access_token, factor.id, entered)
+                    except CredentialsRefusedError:
+                        continue
+                raise MfaCodeRefusedError("wrong code")
 
         return elevate
 

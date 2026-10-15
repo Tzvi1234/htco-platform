@@ -1,6 +1,7 @@
 """In-memory fakes for web sessions, shared by the application and API tests (slice 3.5)."""
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
@@ -9,6 +10,7 @@ import anyio
 from htco_application.access.authentication import AuthenticatedUser
 from htco_application.mfa import Enrollment, Factor
 from htco_application.web_sessions import (
+    AttemptOutcome,
     ClientInfo,
     CredentialsRefusedError,
     IssuedTokens,
@@ -60,6 +62,7 @@ class Auth:
     mfa_enrolled: bool = False
 
     async def sign_in_with_password(self, email: str, password: str) -> IssuedTokens:
+        await anyio.lowlevel.checkpoint()  # a network call: concurrent requests interleave here
         if (email, password) != ("owner@example.test", self.password):
             raise CredentialsRefusedError
         return self._issue(timedelta(hours=1))
@@ -121,6 +124,7 @@ class Authenticator:
         raise NotImplementedError
 
     async def verify_totp(self, access_token: str, factor_id: str, code: str) -> IssuedTokens:
+        await anyio.lowlevel.checkpoint()  # a network call
         if self.codes.get(factor_id) != code:
             raise CredentialsRefusedError
         self.verified.append((access_token, factor_id))
@@ -140,6 +144,7 @@ class Tokens:
     """Reads the user out of an access token (the JWT verifier in production)."""
 
     async def read(self, access_token: str) -> AuthenticatedUser:
+        await anyio.lowlevel.checkpoint()  # may fetch the signing keys
         if access_token.startswith("invalid"):  # forged, expired or for another project
             raise SessionEndedError("not a valid access token")
         return AuthenticatedUser(
@@ -151,6 +156,9 @@ class Tokens:
 class Store:
     sessions: dict[uuid.UUID, StoredSession] = field(default_factory=dict)
     attempts: list[tuple[bytes, bytes | None, bool, datetime]] = field(default_factory=list)
+    # Reserved attempts not settled yet, by ID: they count as failures, like the database's rows.
+    pending: dict[int, tuple[bytes, bytes | None, datetime]] = field(default_factory=dict)
+    reserved: int = 0
 
     async def create(self, session: NewSession) -> None:
         self.sessions[session.id] = StoredSession(
@@ -228,6 +236,30 @@ class Store:
         self.attempts.append((key, ip_hash, False, at))
         return True
 
+    async def reserve_attempt(  # noqa: PLR0913 - the keys, the limits and the moments
+        self,
+        key: bytes,
+        ip_hash: bytes | None,
+        *,
+        max_by_key: int,
+        max_by_ip: int | None,
+        since: datetime,
+        at: datetime,
+    ) -> int | None:
+        """Atomic, like the database's: no await between the count and the reservation."""
+        await anyio.lowlevel.checkpoint()  # a query: concurrent requests interleave before it
+        by_key, by_ip = self._failures(key, ip_hash, since)
+        if by_key >= max_by_key or (max_by_ip is not None and by_ip >= max_by_ip):
+            return None
+        self.reserved += 1
+        self.pending[self.reserved] = (key, ip_hash, at)
+        return self.reserved
+
+    async def settle_attempt(self, attempt_id: int, outcome: AttemptOutcome) -> None:
+        key, ip_hash, at = self.pending.pop(attempt_id)
+        if outcome is not AttemptOutcome.NOT_COUNTED:
+            self.attempts.append((key, ip_hash, outcome is AttemptOutcome.SUCCEEDED, at))
+
     async def recent_failures(
         self, email_hash: bytes, ip_hash: bytes | None, since: datetime
     ) -> tuple[int, int]:
@@ -238,7 +270,27 @@ class Store:
     def _failures(
         self, email_hash: bytes, ip_hash: bytes | None, since: datetime
     ) -> tuple[int, int]:
-        failed = [a for a in self.attempts if not a[2] and a[3] >= since]
+        failed = [a for a in self.attempts if not a[2] and a[3] >= since] + [
+            (key, ip, False, at) for key, ip, at in self.pending.values() if at >= since
+        ]
         by_email = sum(1 for a in failed if a[0] == email_hash)
         by_ip = sum(1 for a in failed if ip_hash is not None and a[1] == ip_hash)
         return by_email, by_ip
+
+
+async def at_once(count: int, attempt: Callable[[int], Awaitable[object]]) -> list[str]:
+    """Runs `count` attempts concurrently; each outcome is "ok" or the error's class name."""
+    outcomes: list[str] = []
+
+    async def run(n: int) -> None:
+        try:
+            await attempt(n)
+        except Exception as error:
+            outcomes.append(type(error).__name__)
+        else:
+            outcomes.append("ok")
+
+    async with anyio.create_task_group() as group:
+        for n in range(count):
+            group.start_soon(run, n)
+    return outcomes

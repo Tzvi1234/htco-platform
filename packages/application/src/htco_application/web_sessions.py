@@ -8,7 +8,10 @@ that Supabase refuses (the session was revoked elsewhere) ends the session (AC-3
 
 Sign-in failures are counted per email and per client address over a short window; past the
 limit, sign-in is refused before Supabase is asked, and the refusal is the same whether or not
-the email exists (AC-3.5.5).
+the email exists (AC-3.5.5). Every throttled attempt (sign-in, a password link, an authenticator
+code) is reserved in the attempt log atomically before the provider is asked, and settled when
+the outcome is known (`Throttled`): attempts in flight count against the limits, so a parallel
+burst cannot pass them.
 
 Accepting an invitation opens the same kind of session. The invitation link lands on the web app
 with the invited user's Supabase tokens; the web app posts them once with the chosen password.
@@ -25,6 +28,8 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from enum import Enum
+from types import TracebackType
 from typing import Protocol
 
 from htco_application.access.authentication import AuthenticatedUser
@@ -85,6 +90,14 @@ class TooManyAttemptsError(Exception):
 
 class SessionEndedError(Exception):
     """No usable session: unknown cookie, revoked, expired, or refused by the auth provider."""
+
+
+class AttemptOutcome(Enum):
+    """How a reserved attempt ends in the attempt log."""
+
+    FAILED = "failed"  # kept: counts against the limits for the rest of the window
+    SUCCEEDED = "succeeded"  # recorded as a success: never counts
+    NOT_COUNTED = "not-counted"  # dropped, as if it had not been made
 
 
 @dataclass(frozen=True)
@@ -214,6 +227,88 @@ class SessionStore(Protocol):
         reached its limit since `since`."""
         ...
 
+    async def reserve_attempt(  # noqa: PLR0913 - the keys, the limits and the moments
+        self,
+        key: bytes,
+        ip_hash: bytes | None,
+        *,
+        max_by_key: int,
+        max_by_ip: int | None,
+        since: datetime,
+        at: datetime,
+    ) -> int | None:
+        """Atomically records a pending attempt, counted as a failure until it is settled, unless
+        the key or the address already reached its limit since `since`; None when refused, else
+        the attempt's ID. `max_by_ip=None` records the address without limiting by it."""
+        ...
+
+    async def settle_attempt(self, attempt_id: int, outcome: AttemptOutcome) -> None:
+        """Ends a reserved attempt: kept as a failure, made a success, or dropped."""
+        ...
+
+
+class Throttled:
+    """Reserves one attempt under a key and an address for the duration of an `async with`.
+
+    Entering raises TooManyAttemptsError when a limit is reached, counting the attempts still in
+    flight. Leaving settles the attempt: one of the `failures` keeps it as a failure, a normal exit
+    settles it as `succeeded`, and any other error drops it (an unknown outcome, such as the
+    provider being down, never locks anyone out). If the task is cancelled the attempt stays
+    counted until the window passes.
+    """
+
+    def __init__(  # noqa: PLR0913 - the keys, the limits, the moment and the outcomes
+        self,
+        store: SessionStore,
+        key: bytes,
+        ip_hash: bytes | None,
+        *,
+        max_by_key: int,
+        max_by_ip: int | None,
+        now: datetime,
+        failures: tuple[type[Exception], ...],
+        succeeded: AttemptOutcome = AttemptOutcome.SUCCEEDED,
+    ) -> None:
+        self._store = store
+        self._key = key
+        self._ip_hash = ip_hash
+        self._max_by_key = max_by_key
+        self._max_by_ip = max_by_ip
+        self._now = now
+        self._failures = failures
+        self._succeeded = succeeded
+        self._attempt: int | None = None
+
+    async def __aenter__(self) -> None:
+        self._attempt = await self._store.reserve_attempt(
+            self._key,
+            self._ip_hash,
+            max_by_key=self._max_by_key,
+            max_by_ip=self._max_by_ip,
+            since=self._now - THROTTLE_WINDOW,
+            at=self._now,
+        )
+        if self._attempt is None:
+            raise TooManyAttemptsError("too many failed attempts")
+
+    async def __aexit__(
+        self,
+        kind: type[BaseException] | None,
+        error: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        if self._attempt is None:  # pragma: no cover - entering raised, so there is no exit
+            return
+        if kind is None:
+            outcome = self._succeeded
+        elif issubclass(kind, self._failures):
+            outcome = AttemptOutcome.FAILED
+        elif issubclass(kind, Exception):
+            outcome = AttemptOutcome.NOT_COUNTED
+        else:
+            return  # cancelled or interrupted: the reservation stays counted
+        await self._store.settle_attempt(self._attempt, outcome)
+
 
 def hash_cookie(cookie_value: str) -> bytes:
     return hashlib.sha256(cookie_value.encode("utf-8")).digest()
@@ -236,18 +331,21 @@ async def sign_in(  # noqa: PLR0913 - the credentials, the client and the collab
     address = email.strip().lower()
     email_hash = _hash(address)
     ip_hash = _hash(client.ip) if client.ip else None
-    by_email, by_ip = await store.recent_failures(email_hash, ip_hash, now - THROTTLE_WINDOW)
-    if by_email >= MAX_FAILURES_PER_EMAIL or by_ip >= MAX_FAILURES_PER_IP:
-        raise TooManyAttemptsError("too many failed sign-ins")
-    try:
-        issued = await auth.sign_in_with_password(address, password)
-    except CredentialsRefusedError:
-        await store.record_attempt(email_hash, ip_hash, succeeded=False, at=now)
-        raise SignInRefusedError("wrong email or password") from None
-    user = await tokens.read(issued.access_token)
-    signed_in = await _open_session(issued, user, client=client, store=store, now=now)
-    await store.record_attempt(email_hash, ip_hash, succeeded=True, at=now)
-    return signed_in
+    async with Throttled(
+        store,
+        email_hash,
+        ip_hash,
+        max_by_key=MAX_FAILURES_PER_EMAIL,
+        max_by_ip=MAX_FAILURES_PER_IP,
+        now=now,
+        failures=(SignInRefusedError,),
+    ):
+        try:
+            issued = await auth.sign_in_with_password(address, password)
+        except CredentialsRefusedError:
+            raise SignInRefusedError("wrong email or password") from None
+        user = await tokens.read(issued.access_token)
+        return await _open_session(issued, user, client=client, store=store, now=now)
 
 
 async def accept_invitation(  # noqa: PLR0913 - the link's tokens, the password and the collaborators
@@ -314,24 +412,56 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
     """
     link_hash = _hash(f"{link.namespace}:{access_token}")
     ip_hash = _hash(client.ip) if client.ip else None
-    by_link, by_ip = await store.recent_failures(link_hash, ip_hash, now - THROTTLE_WINDOW)
-    if by_link >= MAX_FAILURES_PER_EMAIL or by_ip >= MAX_FAILURES_PER_IP:
-        raise TooManyAttemptsError("too many failed attempts")
+    # Refused links and wrong codes count; anything else (including success, which the link's
+    # claim records) does not.
+    async with Throttled(
+        store,
+        link_hash,
+        ip_hash,
+        max_by_key=MAX_FAILURES_PER_EMAIL,
+        max_by_ip=MAX_FAILURES_PER_IP,
+        now=now,
+        failures=(link.refused, MfaCodeRefusedError),
+        succeeded=AttemptOutcome.NOT_COUNTED,
+    ):
+        return await _set_password_with_claim(
+            access_token,
+            refresh_token,
+            password,
+            link=link,
+            link_hash=link_hash,
+            client=client,
+            auth=auth,
+            tokens=tokens,
+            store=store,
+            now=now,
+            elevate=elevate,
+        )
 
-    async def failed(error: Exception) -> Exception:
-        await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
-        return error
 
+async def _set_password_with_claim(  # noqa: PLR0913 - the link's tokens, the password and the collaborators
+    access_token: str,
+    refresh_token: str,
+    password: str,
+    *,
+    link: PasswordLink,
+    link_hash: bytes,
+    client: ClientInfo,
+    auth: AuthProvider,
+    tokens: TokenReader,
+    store: SessionStore,
+    now: datetime,
+    elevate: Elevate | None,
+) -> SignedIn:
     # The claim is the link's success record. Taken atomically before the password changes, it
     # stops a replay of a used link (its access token can outlive it) and two requests racing
     # with the same link. It is released only while the password is unchanged, so the page can
     # try again.
     if not await store.claim_link(link_hash, now - LINK_REUSE_WINDOW, now):
-        await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
         raise link.refused("the link was already used")
     try:
         # Nothing changes before the password call: any failure here releases the claim. Each
-        # path releases once; the handlers below only count the failure (a second release could
+        # path releases once; the handlers below only map the refusal (a second release could
         # drop the fresh claim of a concurrent retry).
         try:
             linked = await tokens.read(access_token)
@@ -354,19 +484,15 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
             await store.release_link(link_hash)
             raise
     except SessionEndedError, CredentialsRefusedError:
-        raise await failed(link.refused("the link is not valid")) from None
-    except MfaCodeRefusedError:
-        raise await failed(MfaCodeRefusedError("wrong code")) from None
+        raise link.refused("the link is not valid") from None
     # The password changed, or might have (an unknown outcome keeps the claim too): from here on
     # the link stays claimed, whatever happens.
     try:
         issued = await auth.refresh(refresh_token)
         user = await tokens.read(issued.access_token)
     except SessionEndedError, CredentialsRefusedError:
-        await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
         raise link.refused("the link is not valid") from None
     if user.user_id != linked.user_id:
-        await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
         raise link.refused("the link is not valid")
     return await _open_session(issued, user, client=client, store=store, now=now)
 

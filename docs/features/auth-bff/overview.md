@@ -15,7 +15,7 @@ The web app signs in through the API, never directly with Supabase. The API chec
 
 ## Flow
 
-1. `POST /v1/auth/sign-in` with email and password, the `X-HTCO-CSRF` header and the web app's `Origin`. The API throttles failed attempts per email and per client address, asks Supabase Auth (password grant), verifies the access token like a bearer token, stores the session and sets `__Host-htco_session` (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no `Domain`).
+1. `POST /v1/auth/sign-in` with email and password, the `X-HTCO-CSRF` header and the web app's `Origin`. The API throttles failed attempts per email and per client address (each attempt is reserved atomically before Supabase is asked and settled afterwards, so attempts in flight count and a parallel burst cannot pass the limits; the same applies to invitation and reset links and to authenticator codes), asks Supabase Auth (password grant), verifies the access token like a bearer token, stores the session and sets `__Host-htco_session` (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no `Domain`).
 2. Every later request with the cookie resumes the session: known, not revoked, inside its idle (12 hours, extended by activity) and absolute (14 days) lifetimes. An access token within two minutes of expiry is refreshed on the server. Unsafe methods must pass the CSRF checks.
 3. `CurrentAuth` accepts either a bearer token (native apps) or the cookie (web); memberships are read from the database either way.
 4. `POST /v1/auth/sign-out` revokes the session here and at Supabase and clears the cookie. `GET /v1/auth/session` says who is signed in.

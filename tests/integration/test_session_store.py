@@ -10,10 +10,18 @@ from datetime import UTC, datetime, timedelta
 import anyio
 import pytest
 
-from htco_application.web_sessions import IssuedTokens, NewSession
+from htco_application.web_sessions import (
+    MAX_FAILURES_PER_EMAIL,
+    AttemptOutcome,
+    ClientInfo,
+    IssuedTokens,
+    NewSession,
+    sign_in,
+)
 from htco_persistence.database import Database
 from htco_persistence.web_sessions import PostgresSessionStore
 from htco_platform.crypto import Sealer
+from tests.session_fakes import Auth, Tokens, at_once
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -161,6 +169,102 @@ async def test_admit_attempt__concurrent_burst__admits_only_the_limit(database: 
 
     assert admitted.count(True) == 3
     assert await store.recent_failures(key, ip, since) == (3, 3)
+
+
+async def test_reserve_attempt__concurrent_burst__reserves_only_the_limit(
+    database: Database,
+) -> None:
+    store = PostgresSessionStore(database, SEALER)
+    key, ip = os.urandom(32), os.urandom(32)
+    since = NOW - timedelta(minutes=15)
+    reserved: list[int | None] = []
+
+    async def reserve() -> None:
+        reserved.append(
+            await store.reserve_attempt(key, ip, max_by_key=3, max_by_ip=20, since=since, at=NOW)
+        )
+
+    async with anyio.create_task_group() as group:
+        for _ in range(8):
+            group.start_soon(reserve)
+
+    ids = [attempt for attempt in reserved if attempt is not None]
+    assert len(set(ids)) == 3
+    assert await store.recent_failures(key, ip, since) == (3, 3)  # in flight, they count
+
+
+async def test_reserve_attempt__concurrent_burst_from_one_address__reserves_only_its_limit(
+    database: Database,
+) -> None:
+    store = PostgresSessionStore(database, SEALER)
+    ip = os.urandom(32)
+    since = NOW - timedelta(minutes=15)
+    reserved: list[int | None] = []
+
+    async def reserve() -> None:
+        reserved.append(
+            await store.reserve_attempt(
+                os.urandom(32), ip, max_by_key=5, max_by_ip=3, since=since, at=NOW
+            )
+        )
+
+    async with anyio.create_task_group() as group:
+        for _ in range(8):
+            group.start_soon(reserve)
+
+    assert len([attempt for attempt in reserved if attempt is not None]) == 3
+
+
+async def test_settle_attempt__failed_is_kept_the_others_free_their_place(
+    database: Database,
+) -> None:
+    store = PostgresSessionStore(database, SEALER)
+    key, ip = os.urandom(32), os.urandom(32)
+    since = NOW - timedelta(minutes=15)
+
+    async def reserve() -> int | None:
+        return await store.reserve_attempt(key, ip, max_by_key=3, max_by_ip=20, since=since, at=NOW)
+
+    failed, succeeded, dropped = await reserve(), await reserve(), await reserve()
+    assert None not in (failed, succeeded, dropped)
+    assert await reserve() is None
+    await store.settle_attempt(failed, AttemptOutcome.FAILED)  # type: ignore[arg-type]
+    await store.settle_attempt(succeeded, AttemptOutcome.SUCCEEDED)  # type: ignore[arg-type]
+    await store.settle_attempt(dropped, AttemptOutcome.NOT_COUNTED)  # type: ignore[arg-type]
+
+    assert await store.recent_failures(key, ip, since) == (1, 1)
+    with database.connection() as connection:
+        rows = connection.execute(
+            "select succeeded from private.sign_in_attempts where email_hash = %s order by id",
+            [key],
+        ).fetchall()
+    assert [row[0] for row in rows] == [False, True]
+    assert await reserve() is not None
+
+
+async def test_sign_in__concurrent_wrong_passwords__only_the_limit_reaches_supabase(
+    database: Database,
+) -> None:
+    """The burst the check-then-count throttle let through, against the real attempt log."""
+    store = PostgresSessionStore(database, SEALER)
+    email = f"burst-{uuid.uuid4().hex[:12]}@example.test"
+    run = uuid.uuid4().hex[:4]
+
+    async def wrong(n: int) -> None:
+        await sign_in(
+            email,
+            "x",
+            client=ClientInfo(f"2001:db8::{run}:{n}", None),
+            auth=Auth(),
+            tokens=Tokens(),
+            store=store,
+            now=NOW,
+        )
+
+    outcomes = await at_once(MAX_FAILURES_PER_EMAIL * 3, wrong)
+
+    assert outcomes.count("SignInRefusedError") == MAX_FAILURES_PER_EMAIL
+    assert outcomes.count("TooManyAttemptsError") == MAX_FAILURES_PER_EMAIL * 2
 
 
 async def test_step_up_get_and_list_active(database: Database) -> None:

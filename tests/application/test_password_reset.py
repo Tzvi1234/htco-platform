@@ -50,6 +50,7 @@ from tests.session_fakes import (
     Authenticator,
     Store,
     Tokens,
+    at_once,
 )
 
 pytestmark = pytest.mark.anyio
@@ -293,6 +294,23 @@ async def test_reset__repeated_failures_of_one_link__throttled() -> None:
         )
 
 
+async def test_reset__a_burst_with_one_bad_link__only_the_limit_is_tried() -> None:
+    store, auth = Store(), Auth()
+
+    async def bad(n: int) -> None:
+        await reset(
+            store,
+            auth,
+            access_token="invalid-same-link",  # noqa: S106 - test value
+            client=ClientInfo(f"198.51.100.{n}", None),
+        )
+
+    outcomes = await at_once(MAX_FAILURES_PER_EMAIL * 3, bad)
+
+    assert outcomes.count("ResetLinkRefusedError") == MAX_FAILURES_PER_EMAIL
+    assert outcomes.count("TooManyAttemptsError") == MAX_FAILURES_PER_EMAIL * 2
+
+
 async def test_reset__link_failures_are_not_the_invitations() -> None:
     store, auth = Store(), Auth()
     for _ in range(MAX_FAILURES_PER_EMAIL):
@@ -385,6 +403,29 @@ async def test_reset__too_many_wrong_codes_for_the_user__throttled_before_verify
     with pytest.raises(TooManyAttemptsError):
         await reset(store, auth, code=RIGHT_CODE, mfa=mfa, client=ClientInfo("192.0.2.1", None))
     assert mfa.verified == []
+
+
+async def test_reset__a_burst_of_wrong_codes_over_many_links__only_the_users_limit() -> None:
+    """Wrong codes are reserved against the user before Supabase verifies them, whatever link."""
+    store, auth = Store(), Auth(mfa_enrolled=True)
+    mfa = Authenticator(auth)
+
+    async def wrong(n: int) -> None:
+        access, _ = auth.recovery()
+        await reset(
+            store,
+            auth,
+            access_token=f"{access}-{n}",
+            code="000000",
+            mfa=mfa,
+            client=ClientInfo(f"198.51.100.{n}", None),
+        )
+
+    outcomes = await at_once(MAX_CODE_FAILURES * 3, wrong)
+
+    assert outcomes.count("MfaCodeRefusedError") == MAX_CODE_FAILURES
+    assert outcomes.count("TooManyAttemptsError") == MAX_CODE_FAILURES * 2
+    assert auth.passwords_set == []
 
 
 async def test_reset__code_for_a_user_without_an_authenticator__ignored() -> None:
