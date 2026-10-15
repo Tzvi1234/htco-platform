@@ -340,10 +340,12 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
         raise await failed(link.refused("the link is not valid")) from None
     except MfaCodeRefusedError:
         raise await failed(MfaCodeRefusedError("wrong code")) from None
-    except BaseException:
+    except WeakPasswordError, SamePasswordError, MfaCodeRequiredError, TooManyAttemptsError:
+        # Refused before any change: the page can try again with the same link.
         await store.release_link(link_hash)
         raise
-    # The password changed: from here on the link stays claimed, whatever happens.
+    # The password changed, or might have (an unknown outcome keeps the claim too): from here on
+    # the link stays claimed, whatever happens.
     try:
         issued = await auth.refresh(refresh_token)
         user = await tokens.read(issued.access_token)
