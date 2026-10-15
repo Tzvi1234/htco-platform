@@ -54,10 +54,16 @@ async def admit_password_reset(
     address = email.strip().lower()
     key = hash_value(f"password-reset-request:{address}")
     ip_hash = hash_value(client.ip) if client.ip else None
-    by_email, by_ip = await store.recent_failures(key, ip_hash, now - THROTTLE_WINDOW)
-    if by_email >= MAX_RESET_REQUESTS_PER_EMAIL or by_ip >= MAX_FAILURES_PER_IP:
+    admitted = await store.admit_attempt(
+        key,
+        ip_hash,
+        max_by_key=MAX_RESET_REQUESTS_PER_EMAIL,
+        max_by_ip=MAX_FAILURES_PER_IP,
+        since=now - THROTTLE_WINDOW,
+        at=now,
+    )
+    if not admitted:
         raise TooManyAttemptsError("too many password reset requests")
-    await store.record_attempt(key, ip_hash, succeeded=False, at=now)
     return address
 
 

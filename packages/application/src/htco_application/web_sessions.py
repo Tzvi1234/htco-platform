@@ -191,8 +191,27 @@ class SessionStore(Protocol):
         self, email_hash: bytes, ip_hash: bytes | None, since: datetime
     ) -> tuple[int, int]: ...
 
-    async def succeeded_since(self, key: bytes, since: datetime) -> bool:
-        """Whether an attempt under `key` succeeded at or after `since`."""
+    async def claim_link(self, key: bytes, since: datetime, at: datetime) -> bool:
+        """Atomically records a success under `key` unless one exists at or after `since`;
+        False when the link is already claimed."""
+        ...
+
+    async def release_link(self, key: bytes) -> None:
+        """Drops the claim, so the link can be tried again."""
+        ...
+
+    async def admit_attempt(  # noqa: PLR0913 - the keys, the limits and the moments
+        self,
+        key: bytes,
+        ip_hash: bytes | None,
+        *,
+        max_by_key: int,
+        max_by_ip: int,
+        since: datetime,
+        at: datetime,
+    ) -> bool:
+        """Atomically counts an attempt (as a failure) unless the key or the address already
+        reached its limit since `since`."""
         ...
 
 
@@ -300,13 +319,16 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
         raise TooManyAttemptsError("too many failed attempts")
 
     async def failed(error: Exception) -> Exception:
+        await store.release_link(link_hash)
         await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
         return error
 
-    # A used link's access token can outlive it; refuse before the password changes again.
-    if await store.succeeded_since(link_hash, now - LINK_REUSE_WINDOW):
-        raise await failed(link.refused("the link was already used"))
-
+    # The claim is the link's success record. Taken atomically before the password changes, it
+    # stops a replay of a used link (its access token can outlive it) and two requests racing
+    # with the same link; it is released when nothing was spent, so the page can try again.
+    if not await store.claim_link(link_hash, now - LINK_REUSE_WINDOW, now):
+        await store.record_attempt(link_hash, ip_hash, succeeded=False, at=now)
+        raise link.refused("the link was already used")
     try:
         linked = await tokens.read(access_token)
         elevated = None if elevate is None else await elevate(access_token, linked)
@@ -319,11 +341,12 @@ async def set_password_from_link(  # noqa: PLR0913 - the link's tokens, the pass
         raise await failed(link.refused("the link is not valid")) from None
     except MfaCodeRefusedError:
         raise await failed(MfaCodeRefusedError("wrong code")) from None
+    except BaseException:
+        await store.release_link(link_hash)
+        raise
     if user.user_id != linked.user_id:
         raise await failed(link.refused("the link is not valid"))
-    signed_in = await _open_session(issued, user, client=client, store=store, now=now)
-    await store.record_attempt(link_hash, ip_hash, succeeded=True, at=now)
-    return signed_in
+    return await _open_session(issued, user, client=client, store=store, now=now)
 
 
 async def _open_session(

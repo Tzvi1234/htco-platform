@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 import anyio
+import psycopg
 
 from htco_application.web_sessions import IssuedTokens, NewSession, StoredSession
 from htco_persistence.database import Database
@@ -91,9 +92,10 @@ class PostgresSessionStore:
     ) -> tuple[int, int]:
         return await anyio.to_thread.run_sync(self._recent_failures, email_hash, ip_hash, since)
 
-    async def succeeded_since(self, key: bytes, since: datetime) -> bool:
+    async def claim_link(self, key: bytes, since: datetime, at: datetime) -> bool:
         def run() -> bool:
-            with self._database.connection() as connection:
+            with self._database.connection() as connection, connection.transaction():
+                _lock(connection, key)
                 row = connection.execute(
                     """
                     select exists (
@@ -103,7 +105,53 @@ class PostgresSessionStore:
                     """,
                     [key, since],
                 ).fetchone()
-            return row is not None and bool(row[0])
+                if row is not None and bool(row[0]):
+                    return False
+                connection.execute(
+                    """
+                    insert into private.sign_in_attempts
+                      (email_hash, ip_hash, succeeded, attempted_at)
+                    values (%s, null, true, %s)
+                    """,
+                    [key, at],
+                )
+                return True
+
+        return await anyio.to_thread.run_sync(run)
+
+    async def release_link(self, key: bytes) -> None:
+        await self._execute(
+            "delete from private.sign_in_attempts where email_hash = %s and succeeded", [key]
+        )
+
+    async def admit_attempt(  # noqa: PLR0913 - the keys, the limits and the moments
+        self,
+        key: bytes,
+        ip_hash: bytes | None,
+        *,
+        max_by_key: int,
+        max_by_ip: int,
+        since: datetime,
+        at: datetime,
+    ) -> bool:
+        def run() -> bool:
+            with self._database.connection() as connection, connection.transaction():
+                # Always the key first, then the address: no two requests wait on each other.
+                _lock(connection, key)
+                if ip_hash is not None:
+                    _lock(connection, ip_hash)
+                by_key, by_ip = _count_failures(connection, key, ip_hash, since)
+                if by_key >= max_by_key or by_ip >= max_by_ip:
+                    return False
+                connection.execute(
+                    """
+                    insert into private.sign_in_attempts
+                      (email_hash, ip_hash, succeeded, attempted_at)
+                    values (%s, %s, false, %s)
+                    """,
+                    [key, ip_hash, at],
+                )
+                return True
 
         return await anyio.to_thread.run_sync(run)
 
@@ -191,18 +239,7 @@ class PostgresSessionStore:
         self, email_hash: bytes, ip_hash: bytes | None, since: datetime
     ) -> tuple[int, int]:
         with self._database.connection() as connection:
-            row = connection.execute(
-                """
-                select
-                  count(*) filter (where email_hash = %(email)s),
-                  count(*) filter (where %(ip)s::bytea is not null and ip_hash = %(ip)s::bytea)
-                from private.sign_in_attempts
-                where not succeeded and attempted_at >= %(since)s
-                  and (email_hash = %(email)s or ip_hash = %(ip)s::bytea)
-                """,
-                {"email": email_hash, "ip": ip_hash, "since": since},
-            ).fetchone()
-        return (0, 0) if row is None else (int(row[0]), int(row[1]))
+            return _count_failures(connection, email_hash, ip_hash, since)
 
     async def _execute(self, sql: str, params: list[object]) -> None:
         def run() -> None:
@@ -210,3 +247,27 @@ class PostgresSessionStore:
                 connection.execute(sql, params)
 
         await anyio.to_thread.run_sync(run)
+
+
+def _lock(connection: psycopg.Connection[Any], key: bytes) -> None:
+    """Serialises the transactions that check and write attempts under this key."""
+    connection.execute(
+        "select pg_advisory_xact_lock(hashtextextended(encode(%s, 'hex'), 0))", [key]
+    )
+
+
+def _count_failures(
+    connection: psycopg.Connection[Any], email_hash: bytes, ip_hash: bytes | None, since: datetime
+) -> tuple[int, int]:
+    row = connection.execute(
+        """
+        select
+          count(*) filter (where email_hash = %(email)s),
+          count(*) filter (where %(ip)s::bytea is not null and ip_hash = %(ip)s::bytea)
+        from private.sign_in_attempts
+        where not succeeded and attempted_at >= %(since)s
+          and (email_hash = %(email)s or ip_hash = %(ip)s::bytea)
+        """,
+        {"email": email_hash, "ip": ip_hash, "since": since},
+    ).fetchone()
+    return (0, 0) if row is None else (int(row[0]), int(row[1]))
