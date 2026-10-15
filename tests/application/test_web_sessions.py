@@ -1,24 +1,42 @@
 """Web sessions for the BFF (slice 3.5, AC-3.5.1, AC-3.5.4, AC-3.5.5)."""
 
 import hashlib
+import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
 
+from htco_application.access.authentication import AuthenticatedUser
 from htco_application.web_sessions import (
     ABSOLUTE_LIFETIME,
     IDLE_LIFETIME,
     MAX_FAILURES_PER_EMAIL,
     MAX_FAILURES_PER_IP,
+    ClientInfo,
+    InvitationRefusedError,
     SessionEndedError,
     SignInRefusedError,
     TooManyAttemptsError,
+    WeakPasswordError,
+    accept_invitation,
     resume_session,
     sign_in,
     sign_out,
 )
-from tests.session_fakes import CLIENT, NOW, USER, Auth, Store, Tokens, tokens
+from htco_domain.identity import AssuranceLevel
+from tests.session_fakes import (
+    CLIENT,
+    INVITE_ACCESS,
+    INVITE_REFRESH,
+    NEW_PASSWORD,
+    NOW,
+    USER,
+    Auth,
+    Store,
+    Tokens,
+    tokens,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -300,3 +318,158 @@ async def test_resume__carries_the_sessions_step_up_time() -> None:
 
     assert active.user.reauthenticated_at == NOW
     assert active.tokens.access_token == "access-1"  # noqa: S105 - test value
+
+
+# Accepting an invitation ----------------------------------------------------------------------
+
+
+async def accept(  # noqa: PLR0913 - the request plus the collaborators
+    store: Store,
+    auth: Auth,
+    access_token: str = INVITE_ACCESS,
+    refresh_token: str = INVITE_REFRESH,
+    password: str = NEW_PASSWORD,
+    *,
+    reader: Tokens | None = None,
+) -> str:
+    result = await accept_invitation(
+        access_token,
+        refresh_token,
+        password,
+        client=CLIENT,
+        auth=auth,
+        tokens=reader or Tokens(),
+        store=store,
+        now=NOW,
+    )
+    return result.cookie_value
+
+
+async def test_accept_invitation__sets_the_password_and_opens_a_session_with_fresh_tokens() -> None:
+    store, auth = Store(), Auth()
+    auth.invitation()
+
+    cookie = await accept(store, auth)
+
+    assert auth.passwords_set == [(INVITE_ACCESS, NEW_PASSWORD)]
+    assert INVITE_REFRESH not in auth.valid_refresh  # refreshed: the link's tokens are spent
+    [session] = store.sessions.values()
+    assert session.token_hash == hashlib.sha256(cookie.encode()).digest()
+    assert session.user_id == USER
+    assert session.tokens == tokens(1)
+    assert session.idle_expires_at == NOW + IDLE_LIFETIME
+    assert session.absolute_expires_at == NOW + ABSOLUTE_LIFETIME
+    assert session.user_agent == "Firefox"
+    assert [a[2] for a in store.attempts] == [True]
+    active = await resume_session(cookie, auth=auth, tokens=Tokens(), store=store, now=NOW)
+    assert active.user.user_id == USER
+
+
+async def test_accept_invitation__invalid_access_token__refused_before_any_change() -> None:
+    store, auth = Store(), Auth()
+    auth.invitation()
+    with pytest.raises(InvitationRefusedError):
+        await accept(store, auth, access_token="invalid-token")  # noqa: S106 - test value
+    assert auth.passwords_set == []
+    assert store.sessions == {}
+    assert [a[2] for a in store.attempts] == [False]
+
+
+async def test_accept_invitation__session_ended_at_supabase__refused() -> None:
+    store, auth = Store(), Auth()
+    auth.invitation()
+    with pytest.raises(InvitationRefusedError):
+        await accept(store, auth, access_token="revoked-access")  # noqa: S106 - test value
+    assert store.sessions == {}
+    assert [a[2] for a in store.attempts] == [False]
+
+
+async def test_accept_invitation__refresh_token_refused__refused_without_a_session() -> None:
+    store, auth = Store(), Auth()
+    with pytest.raises(InvitationRefusedError):
+        await accept(store, auth, refresh_token="unknown-refresh")  # noqa: S106 - test value
+    assert store.sessions == {}
+    assert [a[2] for a in store.attempts] == [False]
+
+
+async def test_accept_invitation__weak_password__reported_and_not_counted_as_a_failure() -> None:
+    store, auth = Store(), Auth()
+    auth.invitation()
+    with pytest.raises(WeakPasswordError):
+        await accept(store, auth, password="weak but long enough")  # noqa: S106 - test value
+    assert store.sessions == {}
+    assert store.attempts == []
+    assert INVITE_REFRESH in auth.valid_refresh  # the link's session can try again
+
+
+async def test_accept_invitation__refreshed_tokens_of_another_user__refused() -> None:
+    class Switching(Tokens):
+        async def read(self, access_token: str) -> AuthenticatedUser:
+            user = await super().read(access_token)
+            if access_token == INVITE_ACCESS:
+                return user
+            other = uuid.UUID("11111111-0000-0000-0000-00000000000f")
+            return AuthenticatedUser(other, AssuranceLevel.AAL1, None, user.claims)
+
+    store, auth = Store(), Auth()
+    auth.invitation()
+    with pytest.raises(InvitationRefusedError):
+        await accept(store, auth, reader=Switching())
+    assert store.sessions == {}
+
+
+async def test_accept_invitation__too_many_failures_from_an_address__throttled() -> None:
+    store, auth = Store(), Auth()
+    auth.invitation()
+    for n in range(MAX_FAILURES_PER_IP):
+        with pytest.raises(InvitationRefusedError):
+            await accept(store, auth, access_token=f"invalid-{n}")
+    with pytest.raises(TooManyAttemptsError):
+        await accept(store, auth)
+    assert auth.passwords_set == []  # Supabase was not even asked
+
+
+async def test_accept_invitation__sign_in_failures_from_the_address_count_too() -> None:
+    store, auth = Store(), Auth()
+    auth.invitation()
+    for n in range(MAX_FAILURES_PER_IP):
+        with pytest.raises(SignInRefusedError):
+            await sign_in(
+                f"user{n}@example.test",
+                "x",
+                client=CLIENT,
+                auth=auth,
+                tokens=Tokens(),
+                store=store,
+                now=NOW,
+            )
+    with pytest.raises(TooManyAttemptsError):
+        await accept(store, auth)
+
+
+async def test_accept_invitation__repeated_failures_of_one_link__throttled() -> None:
+    store, auth = Store(), Auth()
+    other_addresses = [ClientInfo(ip=f"198.51.100.{n}", user_agent=None) for n in range(10)]
+    for client in other_addresses[:MAX_FAILURES_PER_EMAIL]:
+        with pytest.raises(InvitationRefusedError):
+            await accept_invitation(
+                "invalid-same-link",
+                INVITE_REFRESH,
+                NEW_PASSWORD,
+                client=client,
+                auth=auth,
+                tokens=Tokens(),
+                store=store,
+                now=NOW,
+            )
+    with pytest.raises(TooManyAttemptsError):
+        await accept_invitation(
+            "invalid-same-link",
+            INVITE_REFRESH,
+            NEW_PASSWORD,
+            client=other_addresses[-1],
+            auth=auth,
+            tokens=Tokens(),
+            store=store,
+            now=NOW,
+        )

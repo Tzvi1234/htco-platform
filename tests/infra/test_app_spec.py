@@ -69,6 +69,10 @@ def test_spec__frankfurt_production_with_the_supabase_project() -> None:
     assert envs["HTCO_RELEASE"]["value"] == "${IMAGE_TAG}"
 
 
+def test_spec__invitation_links_land_on_the_web_apps_accept_page() -> None:
+    assert _envs()["HTCO_INVITE_REDIRECT_URL"]["value"] == "https://dash.ht-co.app/accept-invite"
+
+
 def test_spec__health_checks_and_alerts() -> None:
     api = _api()
     assert api["http_port"] == 8080

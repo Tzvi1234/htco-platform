@@ -21,6 +21,7 @@ from htco_application.access.authentication import (
 )
 from htco_application.access.management import (
     AccessDeniedError,
+    InvitedUser,
     InviteeAlreadyRegisteredError,
     change_role,
     grant_shop,
@@ -59,9 +60,9 @@ class FixedInviter:
     def __init__(self, user_id: uuid.UUID) -> None:
         self.user_id = user_id
 
-    async def invite(self, email: str) -> uuid.UUID:
+    async def invite(self, email: str) -> InvitedUser:
         assert "@" in email
-        return self.user_id
+        return InvitedUser(self.user_id, "https://example.test/one-time")
 
 
 @pytest.fixture
@@ -100,16 +101,18 @@ async def test_invite_change_grant_revoke_remove__audited_and_effective_at_once(
         claims=claims(newcomer, "aal1"),
     )
 
-    member = await invite_member(
-        OWNER_AAL2,
-        store,
-        FixedInviter(newcomer),
-        DEMO,
-        email="new@example.test",
-        role=Role.VIEWER,
-        now=NOW,
-        correlation_id="it-1",
-    )
+    member = (
+        await invite_member(
+            OWNER_AAL2,
+            store,
+            FixedInviter(newcomer),
+            DEMO,
+            email="new@example.test",
+            role=Role.VIEWER,
+            now=NOW,
+            correlation_id="it-1",
+        )
+    ).member
     await change_role(
         OWNER_AAL2, store, DEMO, member.id, Role.SUPPORT, now=NOW, correlation_id="it-2"
     )
@@ -178,7 +181,7 @@ async def test_rls__rejects_membership_writes_from_an_aal1_session_even_past_the
 class RegisteredInviter:
     """The sign-in service already knows the email."""
 
-    async def invite(self, email: str) -> uuid.UUID:
+    async def invite(self, email: str) -> InvitedUser:
         raise InviteeAlreadyRegisteredError(email)
 
 
@@ -189,32 +192,36 @@ async def test_invite__an_already_registered_email__attaches_that_user(database:
         row = connection.execute("select email from auth.users where id = %s", [known]).fetchone()
     assert row is not None
 
-    member = await invite_member(
-        OWNER_AAL2,
-        store,
-        RegisteredInviter(),
-        DEMO,
-        email=str(row[0]).upper(),
-        role=Role.VIEWER,
-        now=NOW,
-        correlation_id="it-registered",
-    )
+    member = (
+        await invite_member(
+            OWNER_AAL2,
+            store,
+            RegisteredInviter(),
+            DEMO,
+            email=str(row[0]).upper(),
+            role=Role.VIEWER,
+            now=NOW,
+            correlation_id="it-registered",
+        )
+    ).member
     assert member.user_id == known
 
 
 async def test_admin__removes_their_own_membership(database: Database) -> None:
     store = PostgresAccessStore(database)
     admin = signed_up_user(database)
-    member = await invite_member(
-        OWNER_AAL2,
-        store,
-        FixedInviter(admin),
-        DEMO,
-        email="a@example.test",
-        role=Role.ADMIN,
-        now=NOW,
-        correlation_id="it-self-1",
-    )
+    member = (
+        await invite_member(
+            OWNER_AAL2,
+            store,
+            FixedInviter(admin),
+            DEMO,
+            email="a@example.test",
+            role=Role.ADMIN,
+            now=NOW,
+            correlation_id="it-self-1",
+        )
+    ).member
     as_admin = AuthContext(
         user_id=admin,
         assurance=AssuranceLevel.AAL2,
@@ -252,16 +259,18 @@ async def test_owner_rows__refuse_role_changes_and_revocation_in_the_database(
 async def test_create_grant__twice__second_is_a_no_op(database: Database) -> None:
     store = PostgresAccessStore(database)
     newcomer = signed_up_user(database)
-    member = await invite_member(
-        OWNER_AAL2,
-        store,
-        FixedInviter(newcomer),
-        DEMO,
-        email="g@example.test",
-        role=Role.SUPPORT,
-        now=NOW,
-        correlation_id="it-grant",
-    )
+    member = (
+        await invite_member(
+            OWNER_AAL2,
+            store,
+            FixedInviter(newcomer),
+            DEMO,
+            email="g@example.test",
+            role=Role.SUPPORT,
+            now=NOW,
+            correlation_id="it-grant",
+        )
+    ).member
 
     def grant_twice(uow: Any) -> tuple[bool, bool]:
         first = uow.create_grant(uuid.uuid4(), DEMO, member.id, SHOP_ONE)

@@ -1,4 +1,4 @@
-"""Inviting users through Supabase Auth's admin API (slice 2.6)."""
+"""Inviting users through Supabase Auth's admin API (slice 2.6): a one-time invitation link."""
 
 import json
 import uuid
@@ -12,6 +12,7 @@ from htco_platform.http import new_async_http_client
 from htco_platform.supabase_admin import (
     AlreadyRegisteredError,
     InvitationFailedError,
+    Invited,
     SupabaseInviter,
 )
 
@@ -19,6 +20,7 @@ pytestmark = pytest.mark.anyio
 
 URL = "https://abc.supabase.co"
 NEW_USER = uuid.UUID("11111111-0000-0000-0000-000000000009")
+LINK = "https://abc.supabase.co/auth/v1/verify?token=one-time&type=invite"
 
 
 def inviter(
@@ -35,16 +37,18 @@ async def test_invite__posts_the_email_and_returns_the_new_user_id() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(200, json={"id": str(NEW_USER), "email": "n@x.test"})
+        return httpx.Response(
+            200, json={"id": str(NEW_USER), "email": "n@x.test", "action_link": LINK}
+        )
 
     subject, client = inviter(handler)
     async with client:
-        assert await subject.invite("n@x.test") == NEW_USER
+        assert (await subject.invite("n@x.test")).user_id == NEW_USER
 
     [request] = seen
     assert request.method == "POST"
-    assert str(request.url) == f"{URL}/auth/v1/invite"
-    assert json.loads(request.content) == {"email": "n@x.test"}
+    assert str(request.url) == f"{URL}/auth/v1/admin/generate_link"
+    assert json.loads(request.content) == {"type": "invite", "email": "n@x.test"}
     assert request.headers["apikey"] == "sb_secret_abc"
     assert "authorization" not in request.headers
 
@@ -54,7 +58,7 @@ async def test_invite__legacy_service_role_jwt__is_also_sent_as_bearer() -> None
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(200, json={"id": str(NEW_USER)})
+        return httpx.Response(200, json={"id": str(NEW_USER), "action_link": LINK})
 
     subject, client = inviter(handler, key="eyJhbGciOi.legacy.jwt")
     async with client:
@@ -67,7 +71,7 @@ async def test_invite__redirect_is_passed_when_configured() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(200, json={"id": str(NEW_USER)})
+        return httpx.Response(200, json={"id": str(NEW_USER), "action_link": LINK})
 
     client = new_async_http_client(
         tracer_provider=TracerProvider(), transport=httpx.MockTransport(handler)
@@ -80,10 +84,8 @@ async def test_invite__redirect_is_passed_when_configured() -> None:
     )
     async with client:
         await subject.invite("n@x.test")
-    assert (
-        str(seen[0].url)
-        == f"{URL}/auth/v1/invite?redirect_to=https%3A%2F%2Fdash.ht-co.app%2Fwelcome"
-    )
+    assert str(seen[0].url) == f"{URL}/auth/v1/admin/generate_link"
+    assert json.loads(seen[0].content)["redirect_to"] == "https://dash.ht-co.app/welcome"
 
 
 @pytest.mark.parametrize("code", ["email_exists", "user_already_exists"])
@@ -100,10 +102,22 @@ async def test_invite__existing_account__already_registered(code: str) -> None:
         httpx.Response(500),
         httpx.Response(401, json={"msg": "invalid key"}),
         httpx.Response(422, json={"error_code": "validation_failed"}),
-        httpx.Response(200, json={"no": "id"}),
+        httpx.Response(200, json={"no": "id", "action_link": LINK}),
         httpx.Response(200, content=b"not json"),
+        httpx.Response(200, json={"id": str(NEW_USER)}),
+        httpx.Response(200, json={"id": str(NEW_USER), "action_link": ""}),
+        httpx.Response(200, json=[]),
     ],
-    ids=["server-error", "bad-key", "other-422", "no-id", "not-json"],
+    ids=[
+        "server-error",
+        "bad-key",
+        "other-422",
+        "no-id",
+        "not-json",
+        "no-link",
+        "empty-link",
+        "list",
+    ],
 )
 async def test_invite__failures__are_invitation_failed(response: httpx.Response) -> None:
     subject, client = inviter(lambda _: response)
@@ -126,3 +140,23 @@ async def test_inviter__repr__hides_the_secret_key() -> None:
     subject, client = inviter(lambda _: httpx.Response(200), key="sb_secret_very_private")
     async with client:
         assert "very_private" not in repr(subject)
+
+
+async def test_invite__returns_the_one_time_link() -> None:
+    subject, client = inviter(
+        lambda _: httpx.Response(200, json={"id": str(NEW_USER), "action_link": LINK})
+    )
+    async with client:
+        assert await subject.invite("n@x.test") == Invited(NEW_USER, LINK)
+
+
+async def test_invite__link_under_properties__is_accepted() -> None:
+    """supabase-js wraps the link in `properties`; accept that shape as well."""
+    body = {"id": str(NEW_USER), "properties": {"action_link": LINK}}
+    subject, client = inviter(lambda _: httpx.Response(200, json=body))
+    async with client:
+        assert await subject.invite("n@x.test") == Invited(NEW_USER, LINK)
+
+
+async def test_invited__repr__hides_the_link() -> None:
+    assert LINK not in repr(Invited(NEW_USER, LINK))
