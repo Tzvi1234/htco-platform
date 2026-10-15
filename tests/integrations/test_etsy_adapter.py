@@ -11,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import anyio
 import httpx
 import pytest
 from opentelemetry.sdk.metrics import MeterProvider
@@ -102,9 +103,13 @@ class FakeTime:
 class FakeTokens:
     def __init__(self) -> None:
         self.asked_for: list[int] = []
+        # When set, every call waits for it: holds a request "in flight" for concurrency tests.
+        self.gate: anyio.Event | None = None
 
     async def access_token(self, shop_id: int) -> str:
         self.asked_for.append(shop_id)
+        if self.gate is not None:
+            await self.gate.wait()
         return ACCESS_TOKEN
 
 
@@ -753,6 +758,65 @@ async def test_daily_quota_below_floor__stale_snapshot__lets_a_routine_call_refr
     snapshot = harness.adapter.last_seen_quota()
     assert snapshot is not None
     assert snapshot.remaining_today == 9_000
+
+
+@pytest.mark.ac("AC-4.1.2")
+async def test_daily_quota_below_floor__stale_snapshot__admits_one_refresh_at_a_time(
+    make: Callable[..., Harness],
+) -> None:
+    script = _low_quota_then_shop(today=100)
+    harness = make(script, daily_quota_floor=500, quota_snapshot_ttl=timedelta(minutes=15))
+
+    async with harness.client:
+        await harness.adapter.get_shop(SHOP_ID)
+        harness.time.advance(15 * 60 + 1)
+        harness.tokens.gate = anyio.Event()
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(harness.adapter.get_shop, SHOP_ID)
+            await anyio.wait_all_tasks_blocked()
+            # The refresh is in flight: other routine calls stay deferred meanwhile.
+            try:
+                with anyio.fail_after(1), pytest.raises(QuotaDeferredError):
+                    await harness.adapter.get_shop(SHOP_ID)
+            finally:
+                harness.tokens.gate.set()
+        harness.tokens.gate = None
+        await harness.adapter.get_shop(SHOP_ID)
+
+    assert len(script.requests) == 3
+
+
+@pytest.mark.ac("AC-4.1.2")
+async def test_daily_quota_below_floor__failed_refresh__frees_the_next_refresh(
+    make: Callable[..., Harness],
+) -> None:
+    script = Scripted(
+        httpx.Response(200, json=fixture("shop.json"), headers=quota_headers(today=100)),
+        httpx.Response(404, json=error_body(404), headers=quota_headers(today=100)),
+        ok(fixture("shop.json")),
+    )
+    harness = make(script, daily_quota_floor=500, quota_snapshot_ttl=timedelta(minutes=15))
+
+    async with harness.client:
+        await harness.adapter.get_shop(SHOP_ID)
+        harness.time.advance(15 * 60 + 1)
+        with pytest.raises(MarketplaceNotFoundError):
+            await harness.adapter.get_shop(SHOP_ID)
+        harness.time.advance(15 * 60 + 1)
+        await harness.adapter.get_shop(SHOP_ID)
+
+    assert len(script.requests) == 3
+
+
+async def test_get_shop__timestamp_out_of_range__is_a_response_error(
+    make: Callable[..., Harness],
+) -> None:
+    body = fixture("shop.json") | {"created_timestamp": 10**20}
+    harness = make(Scripted(ok(body)))
+
+    async with harness.client:
+        with pytest.raises(MarketplaceResponseError):
+            await harness.adapter.get_shop(SHOP_ID)
 
 
 @pytest.mark.ac("AC-4.1.2")
