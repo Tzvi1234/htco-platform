@@ -136,7 +136,7 @@ def _workflow(name: str) -> dict[Any, Any]:
 
 
 @pytest.mark.ac("AC-2.1.4")
-@pytest.mark.parametrize("name", ["migrate.yml", "deploy.yml"])
+@pytest.mark.parametrize("name", ["migrate.yml", "deploy.yml", "admin-bootstrap.yml"])
 def test_production_workflows__refuse_anyone_but_the_repository_owner(name: str) -> None:
     """Write access is enough to start a dispatched workflow; the first step stops non-owners."""
     for job in _workflow(name)["jobs"].values():
@@ -222,3 +222,16 @@ def test_deploy__refuses_a_spec_that_costs_more_than_the_budget() -> None:
     assert budget["env"]["BUDGET_USD"] == "5"
     assert "/v2/apps/propose" in budget["run"]
     assert ".app_cost" in budget["run"]
+
+
+def test_admin_bootstrap__owner_dispatch_only_inputs_via_env_and_no_password_in_the_url() -> None:
+    """Slice 2.5 in production: the owner runs `htco admin bootstrap` from Actions."""
+    workflow = _workflow("admin-bootstrap.yml")
+    triggers = workflow[True] if True in workflow else workflow["on"]
+    assert set(triggers) == {"workflow_dispatch"}
+    [job] = workflow["jobs"].values()
+    [run] = [step for step in job["steps"] if "htco admin bootstrap" in str(step.get("run", ""))]
+    # Inputs reach the shell as environment variables, never interpolated into the script.
+    assert "${{" not in run["run"]
+    assert run["env"]["PGPASSWORD"] == "${{ secrets.SUPABASE_DB_PASSWORD }}"
+    assert ":${" not in run["env"]["HTCO_DATABASE_URL"].split("@")[0]
