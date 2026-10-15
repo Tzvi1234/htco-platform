@@ -165,6 +165,8 @@ class EtsyAdapter:
         )
         self._quota: QuotaSnapshot | None = None
         self._low_quota_reported = False
+        # One routine call may refresh a stale low snapshot; the others wait for its answer.
+        self._refresh_in_flight = False
         self._sent: deque[float] = deque()
         self._throttle = anyio.Lock()
 
@@ -232,7 +234,16 @@ class EtsyAdapter:
         *,
         urgent: bool,
     ) -> Any:
-        self._defer_if_over_budget(operation, shop_id, urgent=urgent)
+        refreshing = self._admit(operation, shop_id, urgent=urgent)
+        try:
+            return await self._send(operation, shop_id, path, params)
+        finally:
+            if refreshing:
+                self._refresh_in_flight = False
+
+    async def _send(
+        self, operation: str, shop_id: int, path: str, params: Mapping[str, str | int]
+    ) -> Any:
         token = await self._tokens.access_token(shop_id)
         headers = {
             "x-api-key": self._credentials.api_key_header(),
@@ -340,15 +351,22 @@ class EtsyAdapter:
         elif snapshot.remaining_today is not None:
             self._low_quota_reported = False
 
-    def _defer_if_over_budget(self, operation: str, shop_id: int, *, urgent: bool) -> None:
+    def _admit(self, operation: str, shop_id: int, *, urgent: bool) -> bool:
+        """Defer a routine call below the floor, or return True if it is the one refresh call.
+
+        Runs without awaiting, so the check and the claim of the refresh slot are atomic for
+        concurrent tasks on the event loop.
+        """
         snapshot, floor = self._quota, self._config.daily_quota_floor
         if urgent or snapshot is None:
-            return
+            return False
         remaining = snapshot.remaining_today
         if remaining is None or remaining >= floor:
-            return
-        if self._time.now() - snapshot.observed_at >= self._config.quota_snapshot_ttl:
-            return
+            return False
+        stale = self._time.now() - snapshot.observed_at >= self._config.quota_snapshot_ttl
+        if stale and not self._refresh_in_flight:
+            self._refresh_in_flight = True
+            return True
         self._deferred_calls.add(1, {"operation": operation})
         _log.warning(
             "etsy.call_deferred",
@@ -440,7 +458,8 @@ def _epoch(moment: datetime, name: str) -> int:
 def _parse[ResultT](operation: str, parser: Callable[[Any], ResultT], body: Any) -> ResultT:
     try:
         return parser(body)
-    except (KeyError, TypeError, ValueError) as error:
+    # OverflowError and OSError: a timestamp outside the platform's datetime range.
+    except (KeyError, TypeError, ValueError, OverflowError, OSError) as error:
         raise MarketplaceResponseError(
             f"Etsy answered {operation} with an unexpected payload"
         ) from error
