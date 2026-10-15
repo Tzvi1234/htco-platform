@@ -480,3 +480,20 @@ async def test_admit__a_burst_at_once__admits_only_the_limit() -> None:
             group.start_soon(ask, n)
 
     assert len(admitted) == MAX_RESET_REQUESTS_PER_EMAIL
+
+
+async def test_reset__refused_refresh_after_the_password_changed__the_link_stays_claimed() -> None:
+    store, auth = Store(), Auth()
+    auth.recovery()
+    with pytest.raises(ResetLinkRefusedError):
+        await reset(store, auth, refresh_token="spent-refresh")  # noqa: S106 - test value
+
+    with pytest.raises(ResetLinkRefusedError):
+        await reset(
+            store,
+            auth,
+            refresh_token="another-spent-refresh",  # noqa: S106 - test value
+            password="another long passphrase",  # noqa: S106 - test value
+        )
+
+    assert auth.passwords_set == [(RESET_ACCESS, NEW_PASSWORD)]
