@@ -84,6 +84,8 @@ class MfaProvider(Protocol):
 
     async def factors_of(self, access_token: str) -> list[Factor]: ...
 
+    async def remove_factor(self, access_token: str, factor_id: str) -> None: ...
+
 
 class SessionDirectory(SessionStore, Protocol):
     async def get(self, session_id: uuid.UUID) -> StoredSession | None: ...
@@ -101,7 +103,20 @@ async def mfa_status(session: ActiveSession, mfa: MfaProvider) -> MfaStatus:
 async def start_enrollment(
     session: ActiveSession, mfa: MfaProvider, *, friendly_name: str
 ) -> Enrollment:
-    return await mfa.enroll_totp(session.tokens.access_token, friendly_name=friendly_name)
+    """Unfinished factors (a QR code shown but never confirmed) are removed first: Supabase refuses
+    a second factor with the same name, which would block every later attempt. A name already
+    used by a verified factor gets a number."""
+    access_token = session.tokens.access_token
+    kept: set[str | None] = set()
+    for factor in await mfa.factors_of(access_token):
+        if factor.verified:
+            kept.add(factor.name)
+        else:
+            await mfa.remove_factor(access_token, factor.id)
+    name, number = friendly_name, 2
+    while name in kept:
+        name, number = f"{friendly_name} ({number})", number + 1
+    return await mfa.enroll_totp(access_token, friendly_name=name)
 
 
 async def verify_enrollment(  # noqa: PLR0913 - the code, its factor and the collaborators
