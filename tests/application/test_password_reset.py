@@ -9,6 +9,7 @@ import contextlib
 import hashlib
 import uuid
 from dataclasses import replace
+from typing import override
 
 import anyio
 import pytest
@@ -495,5 +496,44 @@ async def test_reset__refused_refresh_after_the_password_changed__the_link_stays
             refresh_token="another-spent-refresh",  # noqa: S106 - test value
             password="another long passphrase",  # noqa: S106 - test value
         )
+
+    assert auth.passwords_set == [(RESET_ACCESS, NEW_PASSWORD)]
+
+
+async def test_reset__unknown_outcome_of_the_password_change__the_link_stays_claimed() -> None:
+    class LostAnswer(Auth):
+        @override
+        async def set_password(self, access_token: str, password: str) -> None:
+            await super().set_password(access_token, password)
+            raise ConnectionError("the answer was lost")  # the change may have happened
+
+    store, auth = Store(), LostAnswer()
+    auth.recovery()
+    with pytest.raises(ConnectionError):
+        await reset(store, auth)
+
+    with pytest.raises(ResetLinkRefusedError):
+        await reset(store, auth, password="another long passphrase")  # noqa: S106 - test value
+
+    assert auth.passwords_set == [(RESET_ACCESS, NEW_PASSWORD)]
+
+
+async def test_reset__supabase_rate_limit_before_the_change__the_link_can_be_tried_again() -> None:
+    class Busy(Auth):
+        calls: int = 0
+
+        @override
+        async def set_password(self, access_token: str, password: str) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise TooManyAttemptsError("rate limited")
+            await super().set_password(access_token, password)
+
+    store, auth = Store(), Busy()
+    auth.recovery()
+    with pytest.raises(TooManyAttemptsError):
+        await reset(store, auth)
+
+    await reset(store, auth)
 
     assert auth.passwords_set == [(RESET_ACCESS, NEW_PASSWORD)]
