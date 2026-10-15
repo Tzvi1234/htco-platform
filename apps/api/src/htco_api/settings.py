@@ -46,6 +46,12 @@ class ApiSettings(BaseSettings):
     session_key: SecretStr | None = None
     supabase_publishable_key: str | None = None
     web_origins: str = ""
+    # Etsy app credentials (slice 4.1, ADR-0008): the keystring and shared secret, sent together
+    # as `x-api-key`. Both are secrets and both or neither are set; they become required when
+    # Phase 4 connects a shop. Below the daily floor of requests left, routine Etsy calls wait.
+    etsy_keystring: SecretStr | None = None
+    etsy_shared_secret: SecretStr | None = None
+    etsy_daily_quota_floor: int = Field(default=500, ge=0)
 
     @property
     def web_origin_list(self) -> tuple[str, ...]:
@@ -70,6 +76,8 @@ class ApiSettings(BaseSettings):
         "invite_redirect_url",
         "session_key",
         "supabase_publishable_key",
+        "etsy_keystring",
+        "etsy_shared_secret",
         mode="before",
     )
     @classmethod
@@ -91,6 +99,12 @@ class ApiSettings(BaseSettings):
             if len(raw) != 32:  # noqa: PLR2004 - AES-256 key size
                 raise ValueError("HTCO_SESSION_KEY must be 32 random bytes, base64-encoded")
         return value
+
+    @model_validator(mode="after")
+    def _etsy_credentials_come_in_pairs(self) -> Self:
+        if (self.etsy_keystring is None) != (self.etsy_shared_secret is None):
+            raise ValueError("HTCO_ETSY_KEYSTRING and HTCO_ETSY_SHARED_SECRET must be set together")
+        return self
 
     @model_validator(mode="after")
     def _deployed_needs_a_database(self) -> Self:

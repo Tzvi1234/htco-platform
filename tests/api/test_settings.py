@@ -75,3 +75,54 @@ def test_web_sign_in_settings__origins_and_keys() -> None:
 def test_session_key__must_be_a_32_byte_base64_key(key: str) -> None:
     with pytest.raises(ValidationError, match="HTCO_SESSION_KEY"):
         ApiSettings.model_validate({"environment": "local", "session_key": key})
+
+
+def test_etsy_settings__are_optional__with_a_default_quota_floor() -> None:
+    settings = ApiSettings.model_validate({"environment": "production", **_DEPLOYED})
+
+    assert settings.etsy_keystring is None
+    assert settings.etsy_shared_secret is None
+    assert settings.etsy_daily_quota_floor == 500
+
+
+def test_etsy_settings__secrets__never_appear_in_repr() -> None:
+    settings = ApiSettings.model_validate(
+        {
+            "environment": "local",
+            "etsy_keystring": "fakekeystring",
+            "etsy_shared_secret": "fake-shared-secret",
+        }
+    )
+
+    assert settings.etsy_keystring is not None
+    assert settings.etsy_shared_secret is not None
+    assert settings.etsy_keystring.get_secret_value() == "fakekeystring"
+    assert "fakekeystring" not in repr(settings)
+    assert "fake-shared-secret" not in repr(settings)
+    assert "fake-shared-secret" not in str(settings.model_dump())
+
+
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_etsy_settings__blank__are_unset(blank: str) -> None:
+    settings = ApiSettings.model_validate(
+        {"environment": "local", "etsy_keystring": blank, "etsy_shared_secret": blank}
+    )
+
+    assert settings.etsy_keystring is None
+    assert settings.etsy_shared_secret is None
+
+
+@pytest.mark.parametrize(
+    "given", [{"etsy_keystring": "fakekeystring"}, {"etsy_shared_secret": "fake-shared-secret"}]
+)
+def test_etsy_settings__one_without_the_other__is_refused(given: dict[str, str]) -> None:
+    with pytest.raises(ValidationError, match="HTCO_ETSY_KEYSTRING and HTCO_ETSY_SHARED_SECRET"):
+        ApiSettings.model_validate({"environment": "local", **given})
+
+
+def test_etsy_settings__negative_quota_floor__is_refused() -> None:
+    with pytest.raises(ValidationError, match="etsy_daily_quota_floor"):
+        ApiSettings.model_validate({"environment": "local", "etsy_daily_quota_floor": -1})
+
+
+_DEPLOYED = {"database_url": "postgresql://x@db.invalid/x", "supabase_url": "https://a.b"}
