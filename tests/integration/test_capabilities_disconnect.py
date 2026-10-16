@@ -442,3 +442,49 @@ async def test_capability_store__results_and_their_audit_commit_together(
     assert loaded is not None
     assert loaded.last_successful_call_at is None
     assert scalar(database, "select count(*) from audit.audit_log where id = %s", [record.id]) == 1
+
+
+async def test_capability_store__an_older_probe_of_the_same_connection_leaves_no_trace(
+    database: Database,
+) -> None:
+    """Codex review of #49: a probe that a newer one overtook (same connection) stores nothing,
+    sets no success time and writes no audit; its caller is told it was superseded."""
+    tenant = Tenant(database)
+    the_vault = vault(database)
+    connected = await PostgresShopConnector(database, the_vault).connect(
+        request_for(tenant, etsy_ids())
+    )
+    store = PostgresCapabilityStore(database)
+    shop = connected.shop.id
+    generation = connected.integration.generation
+    newer = NOW + timedelta(minutes=1)
+    assert await store.save(tenant.organization_id, shop, results(newer), generation=generation)
+    late = AuditRecord.new(
+        organization_id=tenant.organization_id,
+        actor=ActorRef(ActorKind.USER, str(tenant.owner)),
+        action="shop.capabilities_checked",
+        entity_type="shop",
+        entity_id=str(shop),
+        after={"trigger": "recheck"},
+    )
+
+    saved = await store.save(
+        tenant.organization_id,
+        shop,
+        results(NOW),
+        generation=generation,
+        successful_call_at=NOW,
+        audit=late,
+    )
+
+    assert saved is False
+    assert (
+        scalar(
+            database, "select min(checked_at) from app.shop_capabilities where shop_id = %s", [shop]
+        )
+        == newer
+    )
+    loaded = await the_vault.load(shop)
+    assert loaded is not None
+    assert loaded.last_successful_call_at is None
+    assert scalar(database, "select count(*) from audit.audit_log where id = %s", [late.id]) == 0

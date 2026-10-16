@@ -437,3 +437,26 @@ async def test_probe__superseded_by_a_disconnect_or_reconnect__leaves_no_trace()
 
 def test_probe_superseded__is_a_not_connected_answer() -> None:
     assert issubclass(ProbeSupersededError, ShopNotConnectedError)
+
+
+async def test_probe__overtaken_by_a_newer_probe__leaves_no_trace() -> None:
+    """Codex review of #49: the store refuses results older than what it holds."""
+    world = World()
+    await world.store.save(
+        ORG,
+        SHOP,
+        [
+            CapabilityResult(
+                ShopCapability.SHOP_DETAILS,
+                CapabilityState.AVAILABLE,
+                "read_ok",
+                NOW + timedelta(minutes=1),
+            )
+        ],
+        generation=world.integration.generation,
+    )
+
+    with pytest.raises(ProbeSupersededError):
+        await world.probe_now()
+
+    assert len(world.store.audits) == 0
