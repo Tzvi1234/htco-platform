@@ -460,3 +460,15 @@ async def test_probe__overtaken_by_a_newer_probe__leaves_no_trace() -> None:
         await world.probe_now()
 
     assert len(world.store.audits) == 0
+
+
+async def test_recheck__connection_replaced_before_the_claim__no_etsy_call() -> None:
+    """Codex review of #49: the cooldown claim is bound to the connection that was loaded."""
+    world = World()
+    world.store.superseded_on_reserve = True
+
+    with pytest.raises(ProbeSupersededError):
+        await recheck_capabilities(world.checks, auth(), SHOP, now=NOW, correlation_id=None)
+
+    assert world.probe.calls == []
+    assert world.store.reserved_generations == []

@@ -11,6 +11,7 @@ import anyio
 import pytest
 
 from htco_application.audit import AuditRecord
+from htco_application.shop_capabilities import ProbeSupersededError
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.integrations import (
     CapabilityResult,
@@ -172,10 +173,15 @@ async def test_capability_store__reserve_check__one_winner_then_the_wait(
     )
     store = PostgresCapabilityStore(database)
     cooldown = timedelta(seconds=30)
+    generation = connected.integration.generation
     answers: list[timedelta | None] = []
 
     async def reserve() -> None:
-        answers.append(await store.reserve_check(connected.shop.id, now=NOW, cooldown=cooldown))
+        answers.append(
+            await store.reserve_check(
+                connected.shop.id, now=NOW, cooldown=cooldown, generation=generation
+            )
+        )
 
     async with anyio.create_task_group() as group:
         for _ in range(4):
@@ -183,7 +189,9 @@ async def test_capability_store__reserve_check__one_winner_then_the_wait(
 
     assert answers.count(None) == 1
     assert sorted(a for a in answers if a is not None) == [cooldown] * 3
-    later = await store.reserve_check(connected.shop.id, now=NOW + cooldown, cooldown=cooldown)
+    later = await store.reserve_check(
+        connected.shop.id, now=NOW + cooldown, cooldown=cooldown, generation=generation
+    )
     assert later is None
 
 
@@ -488,3 +496,25 @@ async def test_capability_store__an_older_probe_of_the_same_connection_leaves_no
     assert loaded is not None
     assert loaded.last_successful_call_at is None
     assert scalar(database, "select count(*) from audit.audit_log where id = %s", [late.id]) == 0
+
+
+async def test_capability_store__reserve_check__only_for_the_loaded_connection(
+    database: Database,
+) -> None:
+    """Codex review of #49: a re-check whose connection was replaced makes no Etsy call."""
+    tenant = Tenant(database)
+    the_vault = vault(database)
+    connected = await PostgresShopConnector(database, the_vault).connect(
+        request_for(tenant, etsy_ids())
+    )
+    store = PostgresCapabilityStore(database)
+    shop = connected.shop.id
+    await the_vault.disconnect(shop, purge_after=NOW + timedelta(days=30))
+
+    with pytest.raises(ProbeSupersededError):
+        await store.reserve_check(
+            shop,
+            now=NOW,
+            cooldown=timedelta(seconds=30),
+            generation=connected.integration.generation,
+        )
