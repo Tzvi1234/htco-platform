@@ -445,19 +445,18 @@ def _advisory(connection: psycopg.Connection[Any], function: str, key: str) -> N
 
 # Runs as the caller: the policy `shop_integrations_select` limits rows to Owner and Admin, and
 # the sealed columns are not even granted to `authenticated`.
+# One statement, so the connection and its probe results (slice 4.5, `shop_capabilities_select`)
+# come from one snapshot: a reconnect between two reads cannot mix them (Codex review of #49).
 _LIST_INTEGRATIONS = """
-select shop_id, organization_id, provider, status, etsy_shop_id, scopes, access_expires_at,
-       refresh_expires_at, failure_count, last_successful_call_at, created_at, updated_at,
-       disconnected_at, purge_after
-from app.shop_integrations
-where organization_id = %s
-order by shop_id
-"""
-# The latest probe results (slice 4.5), also read as the caller (`shop_capabilities_select`).
-_LIST_CAPABILITIES = """
-select shop_id, capability, state, detail, checked_at
-from app.shop_capabilities
-where organization_id = %s
+select i.shop_id, i.organization_id, i.provider, i.status, i.etsy_shop_id, i.scopes,
+       i.access_expires_at, i.refresh_expires_at, i.failure_count, i.last_successful_call_at,
+       i.created_at, i.updated_at, i.disconnected_at, i.purge_after,
+       (select coalesce(json_agg(json_build_array(c.capability, c.state, c.detail, c.checked_at)),
+                        '[]'::json)
+        from app.shop_capabilities c where c.shop_id = i.shop_id) as capabilities
+from app.shop_integrations i
+where i.organization_id = %s
+order by i.shop_id
 """
 
 
@@ -471,8 +470,6 @@ class PostgresIntegrationReader:
         def run() -> list[IntegrationSummary]:
             with self._database.user_transaction(claims) as connection:
                 rows = connection.execute(_LIST_INTEGRATIONS, [organization_id]).fetchall()
-                probed = connection.execute(_LIST_CAPABILITIES, [organization_id]).fetchall()
-            capabilities = _capabilities_by_shop(probed)
             return [
                 IntegrationSummary(
                     shop_id=row[0],
@@ -489,7 +486,7 @@ class PostgresIntegrationReader:
                     updated_at=row[11],
                     disconnected_at=row[12],
                     purge_after=row[13],
-                    capabilities=capabilities.get(row[0], ()),
+                    capabilities=_capabilities(row[14]),
                 )
                 for row in rows
             ]
@@ -497,16 +494,18 @@ class PostgresIntegrationReader:
         return await anyio.to_thread.run_sync(run)
 
 
-def _capabilities_by_shop(
-    rows: Sequence[tuple[Any, ...]],
-) -> dict[uuid.UUID, tuple[CapabilityResult, ...]]:
-    found: dict[uuid.UUID, dict[ShopCapability, CapabilityResult]] = {}
-    for shop_id, capability, state, detail, checked_at in rows:
+def _capabilities(rows: Sequence[Sequence[Any]]) -> tuple[CapabilityResult, ...]:
+    """A shop's probe results from the aggregated JSON, in `ShopCapability` order."""
+    found: dict[ShopCapability, CapabilityResult] = {}
+    for capability, state, detail, checked_at in rows:
         result = CapabilityResult(
-            ShopCapability(capability), CapabilityState(state), detail, checked_at
+            ShopCapability(capability),
+            CapabilityState(state),
+            detail,
+            datetime.fromisoformat(checked_at),
         )
-        found.setdefault(shop_id, {})[result.capability] = result
-    return {shop: tuple(by[c] for c in ShopCapability if c in by) for shop, by in found.items()}
+        found[result.capability] = result
+    return tuple(found[c] for c in ShopCapability if c in found)
 
 
 # --- Capability probe results (slice 4.5) --------------------------------------------------------
