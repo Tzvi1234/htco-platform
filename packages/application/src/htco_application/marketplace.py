@@ -99,6 +99,19 @@ class Listing:
 
 
 @dataclass(frozen=True)
+class ReceiptAddressCheck:
+    """Whether the newest receipt carries the buyer's shipping address (slice 4.5).
+
+    Presence only: the address itself is never read into HTCO, stored or logged. Etsy hides the
+    address fields for some new keys and countries (2026-07-20 restriction); this tells the shop
+    card whether it does so for this shop. `address_present` is None when there is no receipt.
+    """
+
+    receipts_seen: int
+    address_present: bool | None
+
+
+@dataclass(frozen=True)
 class Page[ItemT]:
     """One page of an offset-paginated list."""
 
@@ -175,6 +188,15 @@ class MarketplaceUnavailableError(MarketplaceError):
 
 class MarketplaceResponseError(MarketplaceError):
     """The marketplace answered successfully but with a payload we cannot read."""
+
+
+class MarketplaceWriteRefusedError(MarketplaceError):
+    """A request that could change shop data was stopped before it left HTCO.
+
+    HTCO only reads from marketplaces (the owner's rule for live shops with real buyers): any
+    method but GET towards the shop API is refused unless a caller passes an explicit per-call
+    allow flag, which no code path does today.
+    """
 
 
 class QuotaDeferredError(MarketplaceError):

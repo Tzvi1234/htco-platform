@@ -83,13 +83,34 @@ class VaultAccessTokenProvider:
         found = await self._vault.find_by_marketplace_shop(shop_id)
         if found is None:
             raise MarketplaceAuthError(f"Etsy shop {shop_id} is not connected")
+        return await self._token_of(found, shop_id, generation=None)
+
+    async def access_token_for(
+        self, shop_id: uuid.UUID, *, generation: int, etsy_shop_id: int
+    ) -> str:
+        """The token of one connection: the shop's integration with this `generation`, never
+        whichever connection holds the Etsy shop now (Codex review of #49)."""
+        found = await self._vault.load(shop_id)
+        if found is None or not _same(found, generation, etsy_shop_id):
+            raise MarketplaceAuthError(f"Etsy shop {etsy_shop_id} is not connected")
+        return await self._token_of(found, etsy_shop_id, generation=generation)
+
+    def pinned(self, shop_id: uuid.UUID, *, generation: int) -> PinnedTokens:
+        """An `AccessTokenProvider` bound to one connection, for calls made on its behalf."""
+        return PinnedTokens(self, shop_id, generation=generation)
+
+    async def _token_of(
+        self, found: ShopIntegration, shop_id: int, *, generation: int | None
+    ) -> str:
         tokens = _usable(found, shop_id)
         if self._fresh(tokens):
             return tokens.access_token
         local = self._local.setdefault(found.shop_id, asyncio.Lock())
         async with local, self._lock.hold(found.shop_id):
             current = await self._vault.load(found.shop_id)
-            if current is None:
+            if current is None or (
+                generation is not None and not _same(current, generation, shop_id)
+            ):
                 raise MarketplaceAuthError(f"Etsy shop {shop_id} is not connected")
             tokens = _usable(current, shop_id)
             if self._fresh(tokens):  # refreshed by another caller while we waited
@@ -152,6 +173,28 @@ class VaultAccessTokenProvider:
                 after={"reason": reason, "provider": integration.provider.value},
             ),
         )
+
+
+class PinnedTokens:
+    """`AccessTokenProvider` for calls made on behalf of one connection (shop and generation):
+    refuses once that connection is disconnected or replaced, even when the same Etsy shop is
+    connected again, possibly by another organization."""
+
+    def __init__(
+        self, provider: VaultAccessTokenProvider, shop_id: uuid.UUID, *, generation: int
+    ) -> None:
+        self._provider = provider
+        self._shop_id = shop_id
+        self._generation = generation
+
+    async def access_token(self, shop_id: int) -> str:
+        return await self._provider.access_token_for(
+            self._shop_id, generation=self._generation, etsy_shop_id=shop_id
+        )
+
+
+def _same(integration: ShopIntegration, generation: int, etsy: int) -> bool:
+    return integration.generation == generation and integration.etsy_shop_id == etsy
 
 
 def _usable(integration: ShopIntegration, etsy: int) -> OAuthTokens:

@@ -15,9 +15,9 @@
 - [x] 4.2 Token vault
 - [x] 4.3 OAuth connect flow ([connect flow](../../features/etsy-integration/connect-flow.md))
 - [x] 4.4 Token refresh (platform; the shop card warning and overview banner are shown by slice 4.6)
-- [ ] 4.5 Capability probes
+- [x] 4.5 Capability probes (platform; the shop card shows them in `htco-clients`; [operations](../../features/etsy-integration/operations.md#capability-probes))
 - [ ] 4.6 Shops UI
-- [ ] 4.7 Disconnect and data protection baseline
+- [ ] 4.7 Disconnect and data protection baseline (disconnect done at the platform; the restore rehearsal waits for the owner, see [operations](../../features/etsy-integration/operations.md#rehearsal-record))
 
 ## Goal
 

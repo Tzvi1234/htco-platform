@@ -5,9 +5,15 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from htco_domain.integrations import (
+    DISCONNECTED_DATA_RETENTION,
     REFRESH_EXPIRY_WARNING,
+    CapabilityResult,
+    CapabilityState,
     IntegrationStatus,
+    ShopCapability,
     TokenHealth,
+    capability_state,
+    purge_after,
     token_health,
 )
 
@@ -52,3 +58,60 @@ def test_token_health__disconnected__disconnected() -> None:
 def test_token_health__connected_without_an_expiry__needs_reauth() -> None:
     """A connected row always has an expiry (database check); missing data is not trusted."""
     assert token_health(IntegrationStatus.CONNECTED, None, now=NOW) is TokenHealth.NEEDS_REAUTH
+
+
+# --- Capabilities and the purge date (slices 4.5 and 4.7) ------------------------------------
+
+
+def test_capability_state__never_available_without_a_successful_probe() -> None:
+    assert capability_state(probed_ok=True, present=True) is CapabilityState.AVAILABLE
+    assert capability_state(probed_ok=True, present=False) is CapabilityState.UNAVAILABLE
+    assert capability_state(probed_ok=False, present=True) is CapabilityState.UNKNOWN
+    assert capability_state(probed_ok=False, present=False) is CapabilityState.UNKNOWN
+
+
+def test_shop_capabilities__are_the_probed_ones_in_display_order() -> None:
+    assert [c.value for c in ShopCapability] == [
+        "granted_scopes",
+        "shop_details",
+        "receipts_read",
+        "buyer_address",
+        "listings_read",
+        "webhooks",
+        "shipment_write",
+    ]
+
+
+def test_purge_after__is_thirty_days_after_the_disconnect() -> None:
+    assert timedelta(days=30) == DISCONNECTED_DATA_RETENTION
+    assert purge_after(NOW) == NOW + timedelta(days=30)
+
+
+def test_purge_after__needs_a_timezone() -> None:
+    with pytest.raises(ValueError, match="timezone"):
+        purge_after(datetime(2026, 10, 15, 12, 0))  # noqa: DTZ001 - the case under test
+
+
+def test_capability_result__keeps_a_machine_detail_and_an_aware_time() -> None:
+    result = CapabilityResult(
+        ShopCapability.WEBHOOKS, CapabilityState.UNAVAILABLE, "not_configured", NOW
+    )
+
+    assert result.detail == "not_configured"
+
+
+@pytest.mark.parametrize("detail", ["", "Has Spaces", "x" * 65, "addr: 1 Main St"])
+def test_capability_result__free_text_detail__refused(detail: str) -> None:
+    """Details are codes, never text that could carry buyer data."""
+    with pytest.raises(ValueError, match="detail"):
+        CapabilityResult(ShopCapability.WEBHOOKS, CapabilityState.UNKNOWN, detail, NOW)
+
+
+def test_capability_result__naive_time__refused() -> None:
+    with pytest.raises(ValueError, match="timezone"):
+        CapabilityResult(
+            ShopCapability.WEBHOOKS,
+            CapabilityState.UNKNOWN,
+            "x",
+            datetime(2026, 10, 15, 12, 0),  # noqa: DTZ001 - the case under test
+        )

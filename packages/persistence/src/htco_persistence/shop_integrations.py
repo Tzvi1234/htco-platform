@@ -16,7 +16,7 @@ Nothing here logs a token or a key; errors name the shop only (AC-4.2.3).
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import anyio
@@ -24,6 +24,7 @@ import psycopg
 import structlog
 
 from htco_application.audit import AuditRecord
+from htco_application.shop_capabilities import ProbeSupersededError
 from htco_application.shop_integrations import (
     EtsyConnection,
     IntegrationSummary,
@@ -31,7 +32,13 @@ from htco_application.shop_integrations import (
     ShopIntegration,
     TokenVaultError,
 )
-from htco_domain.integrations import IntegrationProvider, IntegrationStatus
+from htco_domain.integrations import (
+    CapabilityResult,
+    CapabilityState,
+    IntegrationProvider,
+    IntegrationStatus,
+    ShopCapability,
+)
 from htco_persistence.audit import append_audit
 from htco_persistence.database import Database
 from htco_platform.crypto import Envelope, EnvelopeSealer, SealingError
@@ -40,7 +47,8 @@ _PROVIDER = IntegrationProvider.ETSY
 _COLUMNS = """
 id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id, wrapped_data_key,
 access_token_ciphertext, refresh_token_ciphertext, scopes, access_expires_at, refresh_expires_at,
-status, failure_count, last_successful_call_at, created_at, updated_at, last_refresh_failed_at
+status, failure_count, last_successful_call_at, created_at, updated_at, last_refresh_failed_at,
+disconnected_at, purge_after, connection_generation
 """
 
 _log = structlog.get_logger(__name__)
@@ -60,6 +68,10 @@ class PostgresTokenVault:
 
     async def load(self, shop_id: uuid.UUID) -> ShopIntegration | None:
         return await anyio.to_thread.run_sync(self._load, shop_id)
+
+    async def describe(self, shop_id: uuid.UUID) -> ShopIntegration | None:
+        """Like `load`, without opening the tokens: works even when they cannot be opened."""
+        return await anyio.to_thread.run_sync(self._load, shop_id, False)
 
     async def update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool:
         return await anyio.to_thread.run_sync(self._update_tokens, shop_id, tokens)
@@ -130,17 +142,49 @@ class PostgresTokenVault:
 
         return await anyio.to_thread.run_sync(run)
 
-    async def disconnect(self, shop_id: uuid.UUID) -> None:
-        await self._execute(
-            """
-            update app.shop_integrations
-            set status = 'disconnected', key_id = null, wrapped_data_key = null,
-                access_token_ciphertext = null, refresh_token_ciphertext = null,
-                access_expires_at = null, refresh_expires_at = null
-            where shop_id = %s and provider = %s
-            """,
-            [shop_id, _PROVIDER.value],
-        )
+    async def disconnect(
+        self,
+        shop_id: uuid.UUID,
+        *,
+        purge_after: datetime | None = None,
+        audit: AuditRecord | None = None,
+    ) -> bool:
+        """Delete the tokens, mark the integration and the shop disconnected, keep the purge date
+        and write `audit`, in one transaction. False when it was already disconnected."""
+
+        def run() -> bool:
+            with self._database.connection() as connection, connection.transaction():
+                row = connection.execute(
+                    """
+                    update app.shop_integrations
+                    set status = 'disconnected', key_id = null, wrapped_data_key = null,
+                        access_token_ciphertext = null, refresh_token_ciphertext = null,
+                        access_expires_at = null, refresh_expires_at = null,
+                        disconnected_at = now(), purge_after = %s,
+                        connection_generation = connection_generation + 1
+                    where shop_id = %s and provider = %s and status <> 'disconnected'
+                    returning organization_id
+                    """,
+                    [purge_after, shop_id, _PROVIDER.value],
+                ).fetchone()
+                if row is None:
+                    return False
+                connection.execute(
+                    """
+                    update app.shops set status = 'disconnected'
+                    where id = %s and organization_id = %s
+                    """,
+                    [shop_id, row[0]],
+                )
+                # Probe results describe a connection that no longer exists.
+                connection.execute(
+                    "delete from app.shop_capabilities where shop_id = %s", [shop_id]
+                )
+                if audit is not None:
+                    append_audit(connection, audit)
+            return True
+
+        return await anyio.to_thread.run_sync(run)
 
     async def rotate_keys(self, *, batch_size: int) -> int:
         """Re-wrap batch after batch until no row on a previous key is left; returns the count."""
@@ -194,8 +238,8 @@ class PostgresTokenVault:
             insert into app.shop_integrations
               (id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id,
                wrapped_data_key, access_token_ciphertext, refresh_token_ciphertext, scopes,
-               access_expires_at, refresh_expires_at, status, failure_count)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'connected', 0)
+               access_expires_at, refresh_expires_at, status, failure_count, connection_generation)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'connected', 0, 1)
             on conflict (shop_id, provider) do update set
               etsy_shop_id = excluded.etsy_shop_id,
               etsy_user_id = excluded.etsy_user_id,
@@ -208,7 +252,10 @@ class PostgresTokenVault:
               refresh_expires_at = excluded.refresh_expires_at,
               status = 'connected',
               failure_count = 0,
-              last_refresh_failed_at = null
+              last_refresh_failed_at = null,
+              disconnected_at = null,
+              purge_after = null,
+              connection_generation = app.shop_integrations.connection_generation + 1
             -- Never across tenants: a shop's row stays with its organization.
             where app.shop_integrations.organization_id = excluded.organization_id
             returning {_COLUMNS}
@@ -231,9 +278,12 @@ class PostgresTokenVault:
         ).fetchone()
         if row is None:  # the conflict update was skipped: another organization's shop
             raise TokenVaultError.wrong_organization(connection.shop_id)
+        # A new connection starts without the previous one's probe results (Codex review of
+        # #49): they may describe other scopes or permissions. The connect probe adds new ones.
+        db.execute("delete from app.shop_capabilities where shop_id = %s", [connection.shop_id])
         return self._row(row)
 
-    def _load(self, shop_id: uuid.UUID) -> ShopIntegration | None:
+    def _load(self, shop_id: uuid.UUID, open_tokens: bool = True) -> ShopIntegration | None:
         with self._database.connection() as connection:
             row = connection.execute(
                 f"""
@@ -242,7 +292,7 @@ class PostgresTokenVault:
                 """,  # noqa: S608 - constant column list
                 [shop_id, _PROVIDER.value],
             ).fetchone()
-        return None if row is None else self._row(row)
+        return None if row is None else self._row(row, open_tokens=open_tokens)
 
     def _update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool:
         envelope = self._seal(shop_id, tokens)
@@ -302,12 +352,12 @@ class PostgresTokenVault:
                 )
         return len(rows)
 
-    def _row(self, row: tuple[Any, ...]) -> ShopIntegration:
+    def _row(self, row: tuple[Any, ...], *, open_tokens: bool = True) -> ShopIntegration:
         shop_id: uuid.UUID = row[2]
         provider = IntegrationProvider(row[3])
         key_id: str | None = row[6]
         tokens = None
-        if key_id is not None:
+        if key_id is not None and open_tokens:
             envelope = Envelope(
                 key_id=key_id,
                 wrapped_key=bytes(row[7]),
@@ -339,6 +389,9 @@ class PostgresTokenVault:
             created_at=row[16],
             updated_at=row[17],
             last_refresh_failed_at=row[18],
+            disconnected_at=row[19],
+            purge_after=row[20],
+            generation=int(row[21]),
         )
 
     async def _execute(self, sql: str, params: list[object]) -> None:
@@ -393,12 +446,18 @@ def _advisory(connection: psycopg.Connection[Any], function: str, key: str) -> N
 
 # Runs as the caller: the policy `shop_integrations_select` limits rows to Owner and Admin, and
 # the sealed columns are not even granted to `authenticated`.
+# One statement, so the connection and its probe results (slice 4.5, `shop_capabilities_select`)
+# come from one snapshot: a reconnect between two reads cannot mix them (Codex review of #49).
 _LIST_INTEGRATIONS = """
-select shop_id, organization_id, provider, status, etsy_shop_id, scopes, access_expires_at,
-       refresh_expires_at, failure_count, last_successful_call_at, created_at, updated_at
-from app.shop_integrations
-where organization_id = %s
-order by shop_id
+select i.shop_id, i.organization_id, i.provider, i.status, i.etsy_shop_id, i.scopes,
+       i.access_expires_at, i.refresh_expires_at, i.failure_count, i.last_successful_call_at,
+       i.created_at, i.updated_at, i.disconnected_at, i.purge_after,
+       (select coalesce(json_agg(json_build_array(c.capability, c.state, c.detail, c.checked_at)),
+                        '[]'::json)
+        from app.shop_capabilities c where c.shop_id = i.shop_id) as capabilities
+from app.shop_integrations i
+where i.organization_id = %s
+order by i.shop_id
 """
 
 
@@ -426,8 +485,157 @@ class PostgresIntegrationReader:
                     last_successful_call_at=row[9],
                     created_at=row[10],
                     updated_at=row[11],
+                    disconnected_at=row[12],
+                    purge_after=row[13],
+                    capabilities=_capabilities(row[14]),
                 )
                 for row in rows
             ]
+
+        return await anyio.to_thread.run_sync(run)
+
+
+def _capabilities(rows: Sequence[Sequence[Any]]) -> tuple[CapabilityResult, ...]:
+    """A shop's probe results from the aggregated JSON, in `ShopCapability` order."""
+    found: dict[ShopCapability, CapabilityResult] = {}
+    for capability, state, detail, checked_at in rows:
+        result = CapabilityResult(
+            ShopCapability(capability),
+            CapabilityState(state),
+            detail,
+            datetime.fromisoformat(checked_at),
+        )
+        found[result.capability] = result
+    return tuple(found[c] for c in ShopCapability if c in found)
+
+
+# --- Capability probe results (slice 4.5) --------------------------------------------------------
+
+
+class PostgresCapabilityStore:
+    """The latest probe result per shop and capability, written with the API's login role."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def save(  # noqa: PLR0913 - the results and what commits with them
+        self,
+        organization_id: uuid.UUID,
+        shop_id: uuid.UUID,
+        results: Sequence[CapabilityResult],
+        *,
+        generation: int,
+        successful_call_at: datetime | None = None,
+        audit: AuditRecord | None = None,
+    ) -> bool:
+        def run() -> bool:
+            with self._database.connection() as connection, connection.transaction():
+                owned = connection.execute(
+                    "select 1 from app.shops where id = %s and organization_id = %s",
+                    [shop_id, organization_id],
+                ).fetchone()
+                if owned is None:
+                    raise ValueError(
+                        f"shop {shop_id} belongs to another organization; nothing was stored"
+                    )
+                # The integration row is locked like disconnect and reconnect lock it, so a probe
+                # of an earlier connection can never store results after either (Codex, #49).
+                current = connection.execute(
+                    """
+                    select 1 from app.shop_integrations
+                    where shop_id = %s and provider = %s and status = 'connected'
+                      and connection_generation = %s
+                    for update
+                    """,
+                    [shop_id, _PROVIDER.value, generation],
+                ).fetchone()
+                if current is None:
+                    return False
+                # A probe a newer one overtook (same connection) leaves no trace either.
+                newest = connection.execute(
+                    "select max(checked_at) from app.shop_capabilities where shop_id = %s",
+                    [shop_id],
+                ).fetchone()
+                started = min((r.checked_at for r in results), default=None)
+                if (
+                    newest is not None
+                    and newest[0] is not None
+                    and started is not None
+                    and newest[0] > started
+                ):
+                    return False
+                if successful_call_at is not None:
+                    connection.execute(
+                        """
+                        update app.shop_integrations set last_successful_call_at = %s
+                        where shop_id = %s and provider = %s
+                        """,
+                        [successful_call_at, shop_id, _PROVIDER.value],
+                    )
+                for result in results:
+                    # An older probe finishing late never replaces a newer result.
+                    connection.execute(
+                        """
+                        insert into app.shop_capabilities
+                          (id, organization_id, shop_id, capability, state, detail, checked_at)
+                        values (%s, %s, %s, %s, %s, %s, %s)
+                        on conflict (shop_id, capability) do update set
+                          state = excluded.state,
+                          detail = excluded.detail,
+                          checked_at = excluded.checked_at
+                        where app.shop_capabilities.organization_id = excluded.organization_id
+                          and app.shop_capabilities.checked_at <= excluded.checked_at
+                        """,
+                        [
+                            uuid.uuid7(),
+                            organization_id,
+                            shop_id,
+                            result.capability.value,
+                            result.state.value,
+                            result.detail,
+                            result.checked_at,
+                        ],
+                    )
+                if audit is not None:
+                    append_audit(connection, audit)
+            return True
+
+        return await anyio.to_thread.run_sync(run)
+
+    async def reserve_check(
+        self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta, generation: int
+    ) -> timedelta | None:
+        """One conditional update: the row lock makes concurrent claims (any process) serial."""
+
+        def run() -> timedelta | None:
+            with self._database.connection() as connection, connection.transaction():
+                claimed = connection.execute(
+                    """
+                    update app.shop_integrations set capability_check_reserved_at = %s
+                    where shop_id = %s and provider = %s
+                      and status = 'connected' and connection_generation = %s
+                      and (capability_check_reserved_at is null
+                           or capability_check_reserved_at <= %s)
+                    returning id
+                    """,
+                    [now, shop_id, _PROVIDER.value, generation, now - cooldown],
+                ).fetchone()
+                if claimed is not None:
+                    return None
+                row = connection.execute(
+                    """
+                    select capability_check_reserved_at, status, connection_generation
+                    from app.shop_integrations
+                    where shop_id = %s and provider = %s
+                    """,
+                    [shop_id, _PROVIDER.value],
+                ).fetchone()
+            # Bound to the loaded connection: a replaced one makes no Etsy call (Codex, #49).
+            if row is None or row[1] != "connected" or row[2] != generation:
+                raise ProbeSupersededError(f"shop {shop_id} changed before it was probed")
+            if row[0] is None:  # pragma: no cover - the update above would have claimed it
+                return None
+            reserved_at: datetime = row[0]
+            return max(cooldown - (now - reserved_at), timedelta(0))
 
         return await anyio.to_thread.run_sync(run)
