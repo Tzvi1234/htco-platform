@@ -21,7 +21,7 @@ Turning a write on later (for example tracking upload in Phase 6) needs the owne
 |---|---|
 | When | Right after a connection completes (best effort: a failing probe never undoes the connection), and when an Owner or Admin presses "Re-check" (`POST /v1/shop-integrations/{shop_id}/capability-checks`, at most once per 30 seconds per shop). Daily runs arrive with the job scheduler in Phase 5. |
 | Etsy calls | Three GETs: getShop, one receipt (`limit=1`), one active listing (`limit=1`), all urgent (the owner is waiting). |
-| Stored | `app.shop_capabilities`: per shop and capability a state, a short detail code and `checked_at` (an older probe finishing late never replaces a newer result); `last_successful_call_at` on the integration when a read succeeded; audit `shop.capabilities_checked` with the states only. Reconnecting or disconnecting deletes the previous connection's results and moves `connection_generation` on; a probe still running from before stores nothing (its save checks the generation under the row lock), so old results never describe a new connection. |
+| Stored | `app.shop_capabilities`: per shop and capability a state, a short detail code and `checked_at` (an older probe finishing late never replaces a newer result); `last_successful_call_at` on the integration when a read succeeded; audit `shop.capabilities_checked` with the states only. Reconnecting or disconnecting deletes the previous connection's results and moves `connection_generation` on; a probe still running from before stores nothing, sets no success time, writes no audit and answers 409 (its save checks the generation under the row lock), so old results never describe a new connection. |
 | Cooldown | A re-check first claims `shop_integrations.capability_check_reserved_at` in one conditional update, so two presses at once (any process) make one probe; the other gets 429 with `Retry-After` rounded up. |
 | Never stored or logged | Anything Etsy answered. The receipt check looks only at whether `first_line` and `city` hold text; the values are dropped at once. |
 
@@ -47,7 +47,7 @@ Runbook:
 
 `POST /v1/shop-integrations/{shop_id}/disconnect` (Owner, `aal2`, step-up within 10 minutes, web app with CSRF):
 
-1. The tokens are deleted (envelope columns set to null; the database check refuses a disconnected row with any token part).
+1. The tokens are deleted (envelope columns set to null; the database check refuses a disconnected row with any token part). The tokens are never opened on the way, so a shop whose vault key was lost can still be disconnected.
 2. The integration and the shop are marked `disconnected`; `disconnected_at` and `purge_after` (30 days later) are stored, with the audit record `shop.disconnected`, in one transaction.
 3. No Etsy call is made for the shop afterwards: the token provider finds no usable integration and refuses before any request (AC-4.7.1), and a re-check answers 409 `shop-not-connected`.
 4. Repeating it changes nothing (no second record).
