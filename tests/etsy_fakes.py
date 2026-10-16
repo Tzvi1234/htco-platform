@@ -357,6 +357,9 @@ class Capabilities:
     ) -> bool:
         if not self.accept:
             return False
+        held = [r.checked_at for r in self.rows.get(shop_id, {}).values()]
+        if held and results and max(held) > min(r.checked_at for r in results):
+            return False  # overtaken by a newer probe
         if audit is not None:
             self.audits.append(audit)
         self.saved.append((organization_id, shop_id, tuple(results)))

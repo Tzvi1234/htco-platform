@@ -551,6 +551,19 @@ class PostgresCapabilityStore:
                 ).fetchone()
                 if current is None:
                     return False
+                # A probe a newer one overtook (same connection) leaves no trace either.
+                newest = connection.execute(
+                    "select max(checked_at) from app.shop_capabilities where shop_id = %s",
+                    [shop_id],
+                ).fetchone()
+                started = min((r.checked_at for r in results), default=None)
+                if (
+                    newest is not None
+                    and newest[0] is not None
+                    and started is not None
+                    and newest[0] > started
+                ):
+                    return False
                 if successful_call_at is not None:
                     connection.execute(
                         """

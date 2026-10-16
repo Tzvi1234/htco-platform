@@ -71,8 +71,8 @@ class ShopNotConnectedError(Exception):
 
 
 class ProbeSupersededError(ShopNotConnectedError):
-    """The shop was disconnected or reconnected while the probe ran: its results were dropped,
-    and nothing else of it (audit, success time, answer) remains."""
+    """The shop was disconnected or reconnected, or a newer probe finished first, while this one
+    ran: its results were dropped, and nothing else of it (audit, success time, answer) remains."""
 
 
 class RecheckTooSoonError(Exception):
@@ -121,7 +121,8 @@ class CapabilityStore(Protocol):
         """Keep the latest result per shop and capability, `successful_call_at` as the
         integration's last successful call and the `audit` record, in one transaction and only
         while the shop is still connected with the connection `generation` the probe started
-        under. False: dropped (the shop was disconnected or reconnected meanwhile)."""
+        under, and no newer probe has stored results. False: dropped (the shop was disconnected or
+        reconnected, or a newer probe finished first)."""
         ...
 
     async def reserve_check(
