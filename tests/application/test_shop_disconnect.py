@@ -26,6 +26,8 @@ from htco_application.shop_integrations import (
     DisconnectNotAllowedError,
     EtsyConnection,
     OAuthTokens,
+    ShopIntegration,
+    TokenVaultError,
     disconnect_shop,
 )
 from htco_application.shops import ShopNotFoundError
@@ -207,3 +209,22 @@ async def test_after_disconnect__no_etsy_call_is_made_for_the_shop() -> None:
 
     assert etsy.requests == []
     assert server.refreshed == []
+
+
+class LostKeyVault(Vault):
+    """The stored tokens cannot be opened any more (the wrapping key was lost)."""
+
+    async def load(self, shop_id: uuid.UUID) -> ShopIntegration | None:
+        raise TokenVaultError.unreadable(shop_id)
+
+
+async def test_disconnect__tokens_that_cannot_be_opened__still_disconnects() -> None:
+    """Codex review of #49: disconnecting is the recovery after a lost key, so it reads only the
+    connection's metadata and never opens the tokens."""
+    vault = LostKeyVault()
+    vault.rows = connected_vault().rows
+
+    after = await disconnect_shop(vault, owner(), SHOP, now=NOW, correlation_id=None)
+
+    assert after.status is IntegrationStatus.DISCONNECTED
+    assert [record.action for record in vault.audit] == ["shop.disconnected"]

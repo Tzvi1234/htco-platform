@@ -377,3 +377,22 @@ async def test_capability_store__success_time_only_with_the_current_generation(
     loaded = await the_vault.load(shop)
     assert loaded is not None
     assert loaded.last_successful_call_at == NOW
+
+
+async def test_describe__never_opens_the_tokens_so_a_lost_key_can_still_disconnect(
+    database: Database,
+) -> None:
+    """Codex review of #49."""
+    tenant = Tenant(database)
+    connected = await PostgresShopConnector(database, vault(database)).connect(
+        request_for(tenant, etsy_ids())
+    )
+    shop = connected.shop.id
+    stranger = vault(database)  # a vault whose key ring does not hold this row's key
+
+    described = await stranger.describe(shop)
+
+    assert described is not None
+    assert (described.status, described.tokens) == (IntegrationStatus.CONNECTED, None)
+    assert described.organization_id == tenant.organization_id
+    assert await stranger.disconnect(shop, purge_after=NOW + timedelta(days=30))
