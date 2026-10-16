@@ -109,8 +109,12 @@ class CapabilityStore(Protocol):
         organization_id: uuid.UUID,
         shop_id: uuid.UUID,
         results: Sequence[CapabilityResult],
-    ) -> None:
-        """Keep the latest result per shop and capability."""
+        *,
+        generation: int,
+    ) -> bool:
+        """Keep the latest result per shop and capability, only while the shop is still connected
+        with the same connection `generation` the probe started under. False: dropped (the shop
+        was disconnected or reconnected meanwhile)."""
         ...
 
     async def reserve_check(
@@ -156,7 +160,12 @@ async def probe_capabilities(  # noqa: PLR0913 - the shop, who asked, and why
     results = await _probe(checks, integration, now)
     if any(r.state is CapabilityState.AVAILABLE and r.detail == "read_ok" for r in results):
         await checks.vault.record_successful_call(integration.shop_id, at=now)
-    await checks.store.save(integration.organization_id, integration.shop_id, results)
+    await checks.store.save(
+        integration.organization_id,
+        integration.shop_id,
+        results,
+        generation=integration.generation,
+    )
     await checks.audit.append(
         AuditRecord.new(
             organization_id=integration.organization_id,

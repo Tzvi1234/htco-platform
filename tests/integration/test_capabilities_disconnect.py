@@ -44,11 +44,11 @@ async def database() -> AsyncIterator[Database]:
         await db.stop()
 
 
-async def the_generation(store_vault: Database, shop_id: uuid.UUID) -> int:
+async def the_generation(database: Database, shop_id: uuid.UUID) -> int:
     """The shop's current connection generation, as a probe would have read it."""
     return int(
         scalar(
-            store_vault,
+            database,
             "select connection_generation from app.shop_integrations where shop_id = %s",
             [shop_id],
         )
@@ -149,10 +149,8 @@ async def test_capability_store__an_older_probe_never_overwrites_a_newer_one(
     await store.save(
         tenant.organization_id,
         connected.shop.id,
-        results(
-            NOW - timedelta(hours=1),
-            generation=(await the_generation(database, connected.shop.id)),
-        ),
+        results(NOW - timedelta(hours=1)),
+        generation=(await the_generation(database, connected.shop.id)),
     )
 
     assert (

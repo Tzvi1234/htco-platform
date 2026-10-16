@@ -331,17 +331,23 @@ class Capabilities:
     )
     # When each shop's last re-check was claimed.
     reserved: dict[uuid.UUID, datetime] = field(default_factory=dict)
+    # The connection generation each save named.
+    generations: list[int] = field(default_factory=list)
 
     async def save(
         self,
         organization_id: uuid.UUID,
         shop_id: uuid.UUID,
         results: Sequence[CapabilityResult],
-    ) -> None:
+        *,
+        generation: int,
+    ) -> bool:
         self.saved.append((organization_id, shop_id, tuple(results)))
+        self.generations.append(generation)
         current = self.rows.setdefault(shop_id, {})
         for result in results:
             current[result.capability] = result
+        return True
 
     async def reserve_check(
         self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta

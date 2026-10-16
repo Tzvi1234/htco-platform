@@ -496,7 +496,9 @@ def _add_connection_routes(router: APIRouter, *, clock: Callable[[], datetime]) 
     async def disconnect_etsy_shop(
         shop_id: uuid.UUID,
         request: Request,
-        auth: _Owner,
+        # The use case authorizes `connect_shop` for the shop's own organization, so an owner of
+        # several organizations needs no default one (Codex review of #49).
+        auth: CurrentAuth,
         vault: Annotated[DisconnectingVault, Depends(_vault)],
     ) -> IntegrationView:
         """Deletes the tokens, marks the shop disconnected with a purge date 30 days ahead and

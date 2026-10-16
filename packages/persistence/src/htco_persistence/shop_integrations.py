@@ -47,7 +47,7 @@ _COLUMNS = """
 id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id, wrapped_data_key,
 access_token_ciphertext, refresh_token_ciphertext, scopes, access_expires_at, refresh_expires_at,
 status, failure_count, last_successful_call_at, created_at, updated_at, last_refresh_failed_at,
-disconnected_at, purge_after
+disconnected_at, purge_after, connection_generation
 """
 
 _log = structlog.get_logger(__name__)
@@ -155,7 +155,8 @@ class PostgresTokenVault:
                     set status = 'disconnected', key_id = null, wrapped_data_key = null,
                         access_token_ciphertext = null, refresh_token_ciphertext = null,
                         access_expires_at = null, refresh_expires_at = null,
-                        disconnected_at = now(), purge_after = %s
+                        disconnected_at = now(), purge_after = %s,
+                        connection_generation = connection_generation + 1
                     where shop_id = %s and provider = %s and status <> 'disconnected'
                     returning organization_id
                     """,
@@ -232,8 +233,8 @@ class PostgresTokenVault:
             insert into app.shop_integrations
               (id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id,
                wrapped_data_key, access_token_ciphertext, refresh_token_ciphertext, scopes,
-               access_expires_at, refresh_expires_at, status, failure_count)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'connected', 0)
+               access_expires_at, refresh_expires_at, status, failure_count, connection_generation)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'connected', 0, 1)
             on conflict (shop_id, provider) do update set
               etsy_shop_id = excluded.etsy_shop_id,
               etsy_user_id = excluded.etsy_user_id,
@@ -248,7 +249,8 @@ class PostgresTokenVault:
               failure_count = 0,
               last_refresh_failed_at = null,
               disconnected_at = null,
-              purge_after = null
+              purge_after = null,
+              connection_generation = app.shop_integrations.connection_generation + 1
             -- Never across tenants: a shop's row stays with its organization.
             where app.shop_integrations.organization_id = excluded.organization_id
             returning {_COLUMNS}
@@ -384,6 +386,7 @@ class PostgresTokenVault:
             last_refresh_failed_at=row[18],
             disconnected_at=row[19],
             purge_after=row[20],
+            generation=int(row[21]),
         )
 
     async def _execute(self, sql: str, params: list[object]) -> None:
@@ -516,8 +519,10 @@ class PostgresCapabilityStore:
         organization_id: uuid.UUID,
         shop_id: uuid.UUID,
         results: Sequence[CapabilityResult],
-    ) -> None:
-        def run() -> None:
+        *,
+        generation: int,
+    ) -> bool:
+        def run() -> bool:
             with self._database.connection() as connection, connection.transaction():
                 owned = connection.execute(
                     "select 1 from app.shops where id = %s and organization_id = %s",
@@ -527,6 +532,19 @@ class PostgresCapabilityStore:
                     raise ValueError(
                         f"shop {shop_id} belongs to another organization; nothing was stored"
                     )
+                # The integration row is locked like disconnect and reconnect lock it, so a probe
+                # of an earlier connection can never store results after either (Codex, #49).
+                current = connection.execute(
+                    """
+                    select 1 from app.shop_integrations
+                    where shop_id = %s and provider = %s and status = 'connected'
+                      and connection_generation = %s
+                    for update
+                    """,
+                    [shop_id, _PROVIDER.value, generation],
+                ).fetchone()
+                if current is None:
+                    return False
                 for result in results:
                     # An older probe finishing late never replaces a newer result.
                     connection.execute(
@@ -551,8 +569,9 @@ class PostgresCapabilityStore:
                             result.checked_at,
                         ],
                     )
+            return True
 
-        await anyio.to_thread.run_sync(run)
+        return await anyio.to_thread.run_sync(run)
 
     async def reserve_check(
         self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta

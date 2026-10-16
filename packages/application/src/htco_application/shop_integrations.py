@@ -107,6 +107,9 @@ class ShopIntegration:
     disconnected_at: datetime | None = None
     # The disconnected shop's data is purged after this (the purge job runs from Phase 5).
     purge_after: datetime | None = None
+    # Grows with every connect, reconnect and disconnect: results of a probe that started under
+    # an earlier generation are dropped (slice 4.5).
+    generation: int = 0
 
     @property
     def is_usable(self) -> bool:

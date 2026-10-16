@@ -50,6 +50,12 @@ create policy shop_capabilities_select on app.shop_capabilities for select to au
 -- one re-check per shop every 30 seconds). Not granted to any client role.
 alter table app.shop_integrations add column capability_check_reserved_at timestamptz;
 
+-- Grows with every connect, reconnect and disconnect. Probe results are stored only while the
+-- generation a probe started under is still the connected one, so a late probe of an earlier
+-- connection never shows. Not granted to any client role.
+alter table app.shop_integrations add column connection_generation integer not null default 0
+  constraint shop_integrations_connection_generation_check check (connection_generation >= 0);
+
 -- Disconnect (slice 4.7).
 alter table app.shop_integrations
   add column disconnected_at timestamptz,
