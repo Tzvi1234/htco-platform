@@ -126,6 +126,11 @@ class TokenVault(Protocol):
         """The shop's integration with its tokens opened; raises `TokenVaultError`."""
         ...
 
+    async def describe(self, shop_id: uuid.UUID) -> ShopIntegration | None:
+        """The shop's integration without opening the tokens (`tokens` is None): works even when
+        they cannot be opened any more, so a disconnect can always remove them."""
+        ...
+
     async def update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool:
         """After a refresh: store the newest tokens. False when the shop is no longer connected,
         so a refresh that finishes after a disconnect never brings tokens back."""
@@ -261,9 +266,10 @@ class DisconnectNotAllowedError(Exception):
 
 
 class DisconnectingVault(Protocol):
-    """The part of the token vault a disconnect uses."""
+    """The part of the token vault a disconnect uses. Tokens are never opened: disconnecting is
+    also the way out when they cannot be (a lost key, Codex review of #49)."""
 
-    async def load(self, shop_id: uuid.UUID) -> ShopIntegration | None: ...
+    async def describe(self, shop_id: uuid.UUID) -> ShopIntegration | None: ...
 
     async def disconnect(
         self,
@@ -288,7 +294,7 @@ async def disconnect_shop(
     organization. A shop the caller cannot see raises `ShopNotFoundError`; a refusal raises
     `DisconnectNotAllowedError`. Disconnecting twice changes nothing the second time.
     """
-    integration = await vault.load(shop_id)
+    integration = await vault.describe(shop_id)
     if integration is None:
         raise ShopNotFoundError("no such shop connection")
     try:
@@ -321,7 +327,7 @@ async def disconnect_shop(
             correlation_id=correlation_id,
         ),
     )
-    after = await vault.load(shop_id)
+    after = await vault.describe(shop_id)
     if after is None:  # pragma: no cover - the row is kept on disconnect
         raise ShopNotFoundError("no such shop connection")
     return after

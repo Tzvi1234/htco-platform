@@ -68,6 +68,10 @@ class PostgresTokenVault:
     async def load(self, shop_id: uuid.UUID) -> ShopIntegration | None:
         return await anyio.to_thread.run_sync(self._load, shop_id)
 
+    async def describe(self, shop_id: uuid.UUID) -> ShopIntegration | None:
+        """Like `load`, without opening the tokens: works even when they cannot be opened."""
+        return await anyio.to_thread.run_sync(self._load, shop_id, False)
+
     async def update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool:
         return await anyio.to_thread.run_sync(self._update_tokens, shop_id, tokens)
 
@@ -278,7 +282,7 @@ class PostgresTokenVault:
         db.execute("delete from app.shop_capabilities where shop_id = %s", [connection.shop_id])
         return self._row(row)
 
-    def _load(self, shop_id: uuid.UUID) -> ShopIntegration | None:
+    def _load(self, shop_id: uuid.UUID, open_tokens: bool = True) -> ShopIntegration | None:
         with self._database.connection() as connection:
             row = connection.execute(
                 f"""
@@ -287,7 +291,7 @@ class PostgresTokenVault:
                 """,  # noqa: S608 - constant column list
                 [shop_id, _PROVIDER.value],
             ).fetchone()
-        return None if row is None else self._row(row)
+        return None if row is None else self._row(row, open_tokens=open_tokens)
 
     def _update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool:
         envelope = self._seal(shop_id, tokens)
@@ -347,12 +351,12 @@ class PostgresTokenVault:
                 )
         return len(rows)
 
-    def _row(self, row: tuple[Any, ...]) -> ShopIntegration:
+    def _row(self, row: tuple[Any, ...], *, open_tokens: bool = True) -> ShopIntegration:
         shop_id: uuid.UUID = row[2]
         provider = IntegrationProvider(row[3])
         key_id: str | None = row[6]
         tokens = None
-        if key_id is not None:
+        if key_id is not None and open_tokens:
             envelope = Envelope(
                 key_id=key_id,
                 wrapped_key=bytes(row[7]),

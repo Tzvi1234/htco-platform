@@ -250,6 +250,10 @@ class Vault:
     async def load(self, shop_id: uuid.UUID) -> ShopIntegration | None:
         return self.rows.get(shop_id)
 
+    async def describe(self, shop_id: uuid.UUID) -> ShopIntegration | None:
+        row = self.rows.get(shop_id)
+        return None if row is None else replace(row, tokens=None)
+
     async def find_by_marketplace_shop(self, etsy_shop_id: int) -> ShopIntegration | None:
         return next(
             (

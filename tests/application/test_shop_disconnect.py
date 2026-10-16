@@ -8,6 +8,7 @@ Etsy documents no token revocation endpoint (authentication docs and the OpenAPI
 
 import uuid
 from datetime import timedelta
+from typing import override
 
 import httpx
 import pytest
@@ -214,6 +215,7 @@ async def test_after_disconnect__no_etsy_call_is_made_for_the_shop() -> None:
 class LostKeyVault(Vault):
     """The stored tokens cannot be opened any more (the wrapping key was lost)."""
 
+    @override
     async def load(self, shop_id: uuid.UUID) -> ShopIntegration | None:
         raise TokenVaultError.unreadable(shop_id)
 
