@@ -2673,6 +2673,8 @@ paths:
 
         audits it; no Etsy call is made for the shop afterwards. Repeating it changes nothing.'
       operationId: disconnect_etsy_shop
+      security:
+      - HTTPBearer: []
       parameters:
       - name: shop_id
         in: path
