@@ -521,6 +521,7 @@ class PostgresCapabilityStore:
         results: Sequence[CapabilityResult],
         *,
         generation: int,
+        successful_call_at: datetime | None = None,
     ) -> bool:
         def run() -> bool:
             with self._database.connection() as connection, connection.transaction():
@@ -545,6 +546,14 @@ class PostgresCapabilityStore:
                 ).fetchone()
                 if current is None:
                     return False
+                if successful_call_at is not None:
+                    connection.execute(
+                        """
+                        update app.shop_integrations set last_successful_call_at = %s
+                        where shop_id = %s and provider = %s
+                        """,
+                        [successful_call_at, shop_id, _PROVIDER.value],
+                    )
                 for result in results:
                     # An older probe finishing late never replaces a newer result.
                     connection.execute(

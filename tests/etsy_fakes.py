@@ -331,8 +331,13 @@ class Capabilities:
     )
     # When each shop's last re-check was claimed.
     reserved: dict[uuid.UUID, datetime] = field(default_factory=dict)
-    # The connection generation each save named.
+    # The connection generation and success time each save named.
     generations: list[int] = field(default_factory=list)
+    successful_calls: list[datetime | None] = field(default_factory=list)
+    # False: every save is refused, as for a probe a disconnect or reconnect overtook.
+    accept: bool = True
+    # When set, a save's success time lands on the vault's row, as in the database.
+    vault: Vault | None = None
 
     async def save(
         self,
@@ -341,9 +346,16 @@ class Capabilities:
         results: Sequence[CapabilityResult],
         *,
         generation: int,
+        successful_call_at: datetime | None = None,
     ) -> bool:
+        if not self.accept:
+            return False
         self.saved.append((organization_id, shop_id, tuple(results)))
         self.generations.append(generation)
+        self.successful_calls.append(successful_call_at)
+        if self.vault is not None and successful_call_at is not None:
+            row = self.vault.rows[shop_id]
+            self.vault.rows[shop_id] = replace(row, last_successful_call_at=successful_call_at)
         current = self.rows.setdefault(shop_id, {})
         for result in results:
             current[result.capability] = result

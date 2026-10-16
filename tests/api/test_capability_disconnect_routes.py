@@ -152,7 +152,8 @@ async def _world(
     probes_on: bool = True,
 ) -> AsyncIterator[World]:
     clock = Clock()
-    vault, store, audit = Vault(), Capabilities(), AuditLog()
+    vault, audit = Vault(), AuditLog()
+    store = Capabilities(vault=vault)
     probe = probe or Probe()
     memberships = TwoOrganizations(Role.OWNER)
     connect = EtsyConnect(
