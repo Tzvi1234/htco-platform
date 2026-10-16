@@ -16,7 +16,7 @@ Nothing here logs a token or a key; errors name the shop only (AC-4.2.3).
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import anyio
@@ -170,6 +170,10 @@ class PostgresTokenVault:
                     """,
                     [shop_id, row[0]],
                 )
+                # Probe results describe a connection that no longer exists.
+                connection.execute(
+                    "delete from app.shop_capabilities where shop_id = %s", [shop_id]
+                )
                 if audit is not None:
                     append_audit(connection, audit)
             return True
@@ -267,6 +271,9 @@ class PostgresTokenVault:
         ).fetchone()
         if row is None:  # the conflict update was skipped: another organization's shop
             raise TokenVaultError.wrong_organization(connection.shop_id)
+        # A new connection starts without the previous one's probe results (Codex review of
+        # #49): they may describe other scopes or permissions. The connect probe adds new ones.
+        db.execute("delete from app.shop_capabilities where shop_id = %s", [connection.shop_id])
         return self._row(row)
 
     def _load(self, shop_id: uuid.UUID) -> ShopIntegration | None:
@@ -512,7 +519,16 @@ class PostgresCapabilityStore:
     ) -> None:
         def run() -> None:
             with self._database.connection() as connection, connection.transaction():
+                owned = connection.execute(
+                    "select 1 from app.shops where id = %s and organization_id = %s",
+                    [shop_id, organization_id],
+                ).fetchone()
+                if owned is None:
+                    raise ValueError(
+                        f"shop {shop_id} belongs to another organization; nothing was stored"
+                    )
                 for result in results:
+                    # An older probe finishing late never replaces a newer result.
                     connection.execute(
                         """
                         insert into app.shop_capabilities
@@ -523,6 +539,7 @@ class PostgresCapabilityStore:
                           detail = excluded.detail,
                           checked_at = excluded.checked_at
                         where app.shop_capabilities.organization_id = excluded.organization_id
+                          and app.shop_capabilities.checked_at <= excluded.checked_at
                         """,
                         [
                             uuid.uuid7(),
@@ -537,13 +554,35 @@ class PostgresCapabilityStore:
 
         await anyio.to_thread.run_sync(run)
 
-    async def last_checked_at(self, shop_id: uuid.UUID) -> datetime | None:
-        def run() -> datetime | None:
-            with self._database.connection() as connection:
-                row = connection.execute(
-                    "select max(checked_at) from app.shop_capabilities where shop_id = %s",
-                    [shop_id],
+    async def reserve_check(
+        self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta
+    ) -> timedelta | None:
+        """One conditional update: the row lock makes concurrent claims (any process) serial."""
+
+        def run() -> timedelta | None:
+            with self._database.connection() as connection, connection.transaction():
+                claimed = connection.execute(
+                    """
+                    update app.shop_integrations set capability_check_reserved_at = %s
+                    where shop_id = %s and provider = %s
+                      and (capability_check_reserved_at is null
+                           or capability_check_reserved_at <= %s)
+                    returning id
+                    """,
+                    [now, shop_id, _PROVIDER.value, now - cooldown],
                 ).fetchone()
-            return None if row is None else row[0]
+                if claimed is not None:
+                    return None
+                row = connection.execute(
+                    """
+                    select capability_check_reserved_at from app.shop_integrations
+                    where shop_id = %s and provider = %s
+                    """,
+                    [shop_id, _PROVIDER.value],
+                ).fetchone()
+            if row is None or row[0] is None:  # no such integration: nothing to wait for
+                return None
+            reserved_at: datetime = row[0]
+            return max(cooldown - (now - reserved_at), timedelta(0))
 
         return await anyio.to_thread.run_sync(run)

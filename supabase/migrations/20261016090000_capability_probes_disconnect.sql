@@ -46,6 +46,10 @@ grant select (
 create policy shop_capabilities_select on app.shop_capabilities for select to authenticated
   using (organization_id = any (array(select private.user_admin_org_ids())));
 
+-- Re-checks are claimed here before probing, so two presses at once cannot both call Etsy (at most
+-- one re-check per shop every 30 seconds). Not granted to any client role.
+alter table app.shop_integrations add column capability_check_reserved_at timestamptz;
+
 -- Disconnect (slice 4.7).
 alter table app.shop_integrations
   add column disconnected_at timestamptz,

@@ -23,6 +23,7 @@ remaining reads (the token is the problem, not the capability). Results are stor
 check is audited with the states only. Details are short codes, never anything Etsy answered.
 """
 
+import math
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -112,7 +113,12 @@ class CapabilityStore(Protocol):
         """Keep the latest result per shop and capability."""
         ...
 
-    async def last_checked_at(self, shop_id: uuid.UUID) -> datetime | None: ...
+    async def reserve_check(
+        self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta
+    ) -> timedelta | None:
+        """Atomically claim the shop's next re-check: None when claimed (no check started within
+        `cooldown`), otherwise how long to wait. Concurrent callers have exactly one winner."""
+        ...
 
 
 class AuditAppender(Protocol):
@@ -192,10 +198,10 @@ async def recheck_capabilities(
         raise ShopAccessDeniedError("only organization-wide roles re-check a connection")
     if not integration.is_usable:
         raise ShopNotConnectedError(f"shop {shop_id} is not connected")
-    last = await checks.store.last_checked_at(shop_id)
-    if last is not None and now - last < RECHECK_COOLDOWN:
-        wait = RECHECK_COOLDOWN - (now - last)
-        raise RecheckTooSoonError(max(1, int(wait.total_seconds())))
+    # Claimed before probing, so two presses at once cannot both call Etsy (Codex review of #49).
+    wait = await checks.store.reserve_check(shop_id, now=now, cooldown=RECHECK_COOLDOWN)
+    if wait is not None:
+        raise RecheckTooSoonError(max(1, math.ceil(wait.total_seconds())))
     return await probe_capabilities(
         checks,
         integration,

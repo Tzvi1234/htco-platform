@@ -329,6 +329,8 @@ class Capabilities:
     saved: list[tuple[uuid.UUID, uuid.UUID, tuple[CapabilityResult, ...]]] = field(
         default_factory=list
     )
+    # When each shop's last re-check was claimed.
+    reserved: dict[uuid.UUID, datetime] = field(default_factory=dict)
 
     async def save(
         self,
@@ -341,9 +343,14 @@ class Capabilities:
         for result in results:
             current[result.capability] = result
 
-    async def last_checked_at(self, shop_id: uuid.UUID) -> datetime | None:
-        found = self.rows.get(shop_id)
-        return None if not found else max(r.checked_at for r in found.values())
+    async def reserve_check(
+        self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta
+    ) -> timedelta | None:
+        last = self.reserved.get(shop_id)
+        if last is not None and now - last < cooldown:
+            return cooldown - (now - last)
+        self.reserved[shop_id] = now
+        return None
 
 
 @dataclass

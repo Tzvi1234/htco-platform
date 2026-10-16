@@ -3,7 +3,7 @@
 -- text; disconnect dates only on disconnected integrations.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(18);
+select plan(19);
 
 insert into auth.users (id, email) values
   ('71111111-0000-0000-0000-000000000001', 'owner-c@example.test'),
@@ -50,6 +50,8 @@ select ok(not has_table_privilege('service_role', 'app.shop_capabilities', 'sele
   'service_role cannot read probe results either');
 select ok(has_column_privilege('authenticated', 'app.shop_integrations', 'purge_after', 'select'),
   'authenticated may read the purge date (RLS decides which rows)');
+select ok(not has_column_privilege('authenticated', 'app.shop_integrations', 'capability_check_reserved_at', 'select'),
+  'the re-check claim is the API''s own bookkeeping');
 
 -- Owner C: their organization's results only.
 select set_config('request.jwt.claims', '{"sub":"71111111-0000-0000-0000-000000000001","role":"authenticated","aal":"aal1"}', true);

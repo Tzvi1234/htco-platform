@@ -20,6 +20,7 @@ from htco_application.marketplace import (
     MarketplacePermissionError,
     MarketplaceRateLimitedError,
     MarketplaceResponseError,
+    MarketplaceShop,
     MarketplaceUnavailableError,
     QuotaDeferredError,
     ReceiptAddressCheck,
@@ -376,7 +377,7 @@ async def test_recheck__two_at_once__one_probes_and_the_other_is_told_to_wait() 
     gate = anyio.Event()
     original = world.probe.get_shop
 
-    async def slow_get_shop(shop_id: int, *, urgent: bool = False) -> object:
+    async def slow_get_shop(shop_id: int, *, urgent: bool = False) -> MarketplaceShop:
         await gate.wait()
         return await original(shop_id, urgent=urgent)
 
