@@ -191,9 +191,11 @@ class EtsyAdapter:
 
     # --- MarketplacePort ----------------------------------------------------------------------
 
-    async def get_shop(self, shop_id: int, *, urgent: bool = False) -> MarketplaceShop:
+    async def get_shop(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> MarketplaceShop:
         body = await self._request(
-            "GET", "get_shop", shop_id, f"/shops/{shop_id}", {}, urgent=urgent
+            "GET", "get_shop", shop_id, f"/shops/{shop_id}", {}, urgent=urgent, tokens=tokens
         )
         return _parse("get_shop", _shop, body)
 
@@ -225,7 +227,7 @@ class EtsyAdapter:
         )
         return _parse("list_receipts", lambda data: _page(data, _receipt, offset), body)
 
-    async def list_listings(
+    async def list_listings(  # noqa: PLR0913 - the query and its token source
         self,
         shop_id: int,
         *,
@@ -233,11 +235,18 @@ class EtsyAdapter:
         limit: int = 25,
         offset: int = 0,
         urgent: bool = False,
+        tokens: AccessTokenProvider | None = None,
     ) -> Page[Listing]:
         _check_page(limit, offset)
         params: dict[str, str | int] = {"state": state.value, "limit": limit, "offset": offset}
         body = await self._request(
-            "GET", "list_listings", shop_id, f"/shops/{shop_id}/listings", params, urgent=urgent
+            "GET",
+            "list_listings",
+            shop_id,
+            f"/shops/{shop_id}/listings",
+            params,
+            urgent=urgent,
+            tokens=tokens,
         )
         return _parse("list_listings", lambda data: _page(data, _listing, offset), body)
 
@@ -265,7 +274,7 @@ class EtsyAdapter:
     # --- Capability probes (slice 4.5) -------------------------------------------------------
 
     async def check_receipt_addresses(
-        self, shop_id: int, *, urgent: bool = True
+        self, shop_id: int, *, urgent: bool = True, tokens: AccessTokenProvider | None = None
     ) -> ReceiptAddressCheck:
         """Read the newest receipt (one, `limit=1`) and report only whether its address fields
         hold anything. No value is kept, returned or logged."""
@@ -276,6 +285,7 @@ class EtsyAdapter:
             f"/shops/{shop_id}/receipts",
             {"limit": 1, "offset": 0},
             urgent=urgent,
+            tokens=tokens,
         )
         return _parse("check_receipt_addresses", _address_check, body)
 
@@ -291,6 +301,7 @@ class EtsyAdapter:
         *,
         urgent: bool,
         access_token: str | None = None,
+        tokens: AccessTokenProvider | None = None,
         allow_write: bool = False,
     ) -> Any:
         """The only way the adapter calls Etsy. A method other than GET is refused here, before
@@ -302,7 +313,14 @@ class EtsyAdapter:
         refreshing = self._admit(operation, shop_id, urgent=urgent)
         try:
             return await self._send(
-                verb, operation, shop_id, path, params, access_token=access_token, write=write
+                verb,
+                operation,
+                shop_id,
+                path,
+                params,
+                access_token=access_token,
+                tokens=tokens or self._tokens,
+                write=write,
             )
         finally:
             if refreshing:
@@ -317,6 +335,7 @@ class EtsyAdapter:
         params: Mapping[str, str | int],
         *,
         access_token: str | None,
+        tokens: AccessTokenProvider,
         write: bool,
     ) -> Any:
         url = self._config.base_url.rstrip("/") + path
@@ -330,7 +349,7 @@ class EtsyAdapter:
             await self._wait_for_slot()
             # Asked again before every attempt, after any wait: once the shop is disconnected the
             # provider refuses, so a call backing off never sends its retry (Codex review of #49).
-            token = access_token or await self._tokens.access_token(shop_id)
+            token = access_token or await tokens.access_token(shop_id)
             headers = {
                 "x-api-key": self._credentials.api_key_header(),
                 "authorization": f"Bearer {token}",

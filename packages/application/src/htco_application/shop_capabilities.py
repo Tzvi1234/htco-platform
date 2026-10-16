@@ -35,6 +35,7 @@ from htco_application.access.authentication import AuthContext, NoMembershipErro
 from htco_application.access.policy import Capability, Outcome, Scope, ShopRef, decide
 from htco_application.audit import AuditRecord
 from htco_application.marketplace import (
+    AccessTokenProvider,
     Listing,
     ListingState,
     MarketplaceAuthError,
@@ -82,15 +83,18 @@ class RecheckTooSoonError(Exception):
 
 
 class CapabilityProbe(Protocol):
-    """The marketplace reads the probes make (the Etsy adapter)."""
+    """The marketplace reads the probes make (the Etsy adapter), each with the token source of
+    the probed connection."""
 
-    async def get_shop(self, shop_id: int, *, urgent: bool = False) -> MarketplaceShop: ...
+    async def get_shop(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> MarketplaceShop: ...
 
     async def check_receipt_addresses(
-        self, shop_id: int, *, urgent: bool = True
+        self, shop_id: int, *, urgent: bool = True, tokens: AccessTokenProvider | None = None
     ) -> ReceiptAddressCheck: ...
 
-    async def list_listings(
+    async def list_listings(  # noqa: PLR0913 - the adapter's read and its token source
         self,
         shop_id: int,
         *,
@@ -98,7 +102,14 @@ class CapabilityProbe(Protocol):
         limit: int = 25,
         offset: int = 0,
         urgent: bool = False,
+        tokens: AccessTokenProvider | None = None,
     ) -> Page[Listing]: ...
+
+
+class TokenPinning(Protocol):
+    """Token sources bound to one connection (`VaultAccessTokenProvider.pinned`)."""
+
+    def pinned(self, shop_id: uuid.UUID, *, generation: int) -> AccessTokenProvider: ...
 
 
 class ProbedConnections(Protocol):
@@ -142,6 +153,9 @@ class CapabilityChecks:
     vault: ProbedConnections
     marketplace: CapabilityProbe
     store: CapabilityStore
+    # Every probe call uses a token pinned to the probed connection, never the token of whichever
+    # connection holds the Etsy shop by then (Codex review of #49).
+    tokens: TokenPinning
     # True once Etsy webhooks are set up (Phase 5); configuration alone never makes them available.
     webhooks_configured: bool = False
 
@@ -256,6 +270,7 @@ async def _probe(
 ) -> tuple[CapabilityResult, ...]:
     etsy, scopes = integration.etsy_shop_id, integration.scopes
     market = checks.marketplace
+    pinned = checks.tokens.pinned(integration.shop_id, generation=integration.generation)
     found: dict[ShopCapability, tuple[CapabilityState, str]] = {}
     token_refused = False
     address: tuple[CapabilityState, str] = (CapabilityState.UNKNOWN, "receipts_unreadable")
@@ -272,12 +287,12 @@ async def _probe(
             continue
         try:
             if capability is ShopCapability.SHOP_DETAILS:
-                await market.get_shop(etsy, urgent=True)
+                await market.get_shop(etsy, urgent=True, tokens=pinned)
             elif capability is ShopCapability.RECEIPTS_READ:
-                check = await market.check_receipt_addresses(etsy, urgent=True)
+                check = await market.check_receipt_addresses(etsy, urgent=True, tokens=pinned)
                 address = _address(check)
             else:
-                await market.list_listings(etsy, limit=1, urgent=True)
+                await market.list_listings(etsy, limit=1, urgent=True, tokens=pinned)
         except MarketplaceError as error:
             found[capability] = _failure(error)
             token_refused = isinstance(error, MarketplaceAuthError)

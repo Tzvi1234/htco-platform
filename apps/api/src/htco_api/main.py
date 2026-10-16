@@ -378,12 +378,13 @@ def _etsy_wiring(
         shared_secret=settings.etsy_shared_secret.get_secret_value(),
     )
     oauth = EtsyOAuthClient(http, credentials=credentials)
+    tokens = VaultAccessTokenProvider(
+        vault, oauth, PostgresRefreshLock(database), clock=lambda: datetime.now(UTC)
+    )
     adapter = EtsyAdapter(
         http,
         credentials=credentials,
-        access_tokens=VaultAccessTokenProvider(
-            vault, oauth, PostgresRefreshLock(database), clock=lambda: datetime.now(UTC)
-        ),
+        access_tokens=tokens,
         config=EtsyConfig(daily_quota_floor=settings.etsy_daily_quota_floor),
     )
     etsy = EtsyConnect(
@@ -400,6 +401,7 @@ def _etsy_wiring(
         vault=vault,
         marketplace=adapter,
         store=PostgresCapabilityStore(database),
+        tokens=tokens,
         # Etsy webhooks arrive with Phase 5 (signing secret, endpoint); until then not configured.
         webhooks_configured=False,
     )

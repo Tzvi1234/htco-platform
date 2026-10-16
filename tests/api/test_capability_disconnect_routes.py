@@ -85,7 +85,7 @@ class Integrations:
 
 class Exploding(Probe):
     @override
-    async def get_shop(self, shop_id: int, *, urgent: bool = False) -> Any:
+    async def get_shop(self, shop_id: int, *, urgent: bool = False, tokens: object = None) -> Any:
         raise RuntimeError("probe bug")
 
 
