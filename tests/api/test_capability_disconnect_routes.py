@@ -46,6 +46,7 @@ from tests.etsy_fakes import (
     Connector,
     Directory,
     Pending,
+    Pinning,
     Probe,
     Vault,
 )
@@ -164,7 +165,7 @@ async def _world(
         audit=audit,
         redirect_uri=REDIRECT_URI,
     )
-    checks = CapabilityChecks(vault=vault, marketplace=probe, store=store)
+    checks = CapabilityChecks(vault=vault, marketplace=probe, store=store, tokens=Pinning())
     app = create_app(
         AppOptions(
             authenticator=Authenticator(

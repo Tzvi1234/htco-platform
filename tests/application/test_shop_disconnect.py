@@ -186,12 +186,13 @@ async def test_after_disconnect__no_etsy_call_is_made_for_the_shop() -> None:
     client = new_async_http_client(
         tracer_provider=TracerProvider(), transport=httpx.MockTransport(etsy)
     )
+    tokens = VaultAccessTokenProvider(vault, server, Lock(), clock=lambda: NOW)
     adapter = EtsyAdapter(
         client,
         credentials=EtsyCredentials(keystring="fakekeystring", shared_secret="fake"),  # noqa: S106
-        access_tokens=VaultAccessTokenProvider(vault, server, Lock(), clock=lambda: NOW),
+        access_tokens=tokens,
     )
-    checks = CapabilityChecks(vault=vault, marketplace=adapter, store=Capabilities())
+    checks = CapabilityChecks(vault=vault, marketplace=adapter, store=Capabilities(), tokens=tokens)
 
     await disconnect_shop(vault, owner(), SHOP, now=NOW, correlation_id=None)
 

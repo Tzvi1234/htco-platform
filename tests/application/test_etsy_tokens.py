@@ -18,6 +18,7 @@ from htco_application.etsy_tokens import (
     MAX_REFRESH_FAILURES,
     REFRESH_MARGIN,
     REFRESH_RETRY_INTERVAL,
+    PinnedTokens,
     VaultAccessTokenProvider,
 )
 from htco_application.marketplace import MarketplaceAuthError, MarketplaceUnavailableError
@@ -313,3 +314,61 @@ async def test_access_token__errors_never_carry_a_token() -> None:
     text = f"{raised.value!s} {raised.value!r}"
     assert OLD_ACCESS not in text
     assert OLD_REFRESH not in text
+
+
+# --- Codex review of #49: tokens pinned to the connection a probe started under --------------
+
+
+async def test_pinned_tokens__the_loaded_connection__its_token() -> None:
+    world = World(access_left=REFRESH_MARGIN + timedelta(minutes=1))
+    pinned = PinnedTokens(world.provider, SHOP, generation=world.row.generation)
+
+    assert await pinned.access_token(ETSY_SHOP) == OLD_ACCESS
+
+
+async def test_pinned_tokens__connection_replaced__refused_without_another_tenants_token() -> None:
+    """The same Etsy shop now connected by another organization: a probe of the old connection
+    must not borrow the new one's token, although the Etsy shop ID matches."""
+    world = World(access_left=REFRESH_MARGIN + timedelta(minutes=1))
+    old_generation = world.row.generation
+    world.vault.rows[SHOP] = replace(world.row, status=IntegrationStatus.DISCONNECTED, tokens=None)
+    other_shop = uuid.UUID("b3000000-0000-0000-0000-000000000001")
+    world.vault.add(
+        EtsyConnection(
+            organization_id=uuid.UUID("b0000000-0000-0000-0000-000000000000"),
+            shop_id=other_shop,
+            etsy_shop_id=ETSY_SHOP,
+            etsy_user_id=12345678,
+            scopes=frozenset({"shops_r"}),
+            tokens=OAuthTokens(
+                access_token="12345678.other-tenant-token",  # noqa: S106 - fake
+                refresh_token="12345678.other-tenant-refresh",  # noqa: S106 - fake
+                access_expires_at=NOW + timedelta(hours=1),
+                refresh_expires_at=NOW + timedelta(days=30),
+            ),
+        )
+    )
+    pinned = PinnedTokens(world.provider, SHOP, generation=old_generation)
+
+    assert await world.provider.access_token(ETSY_SHOP) == "12345678.other-tenant-token"
+    with pytest.raises(MarketplaceAuthError):
+        await pinned.access_token(ETSY_SHOP)
+
+
+async def test_pinned_tokens__generation_moved_on__refused() -> None:
+    world = World(access_left=REFRESH_MARGIN + timedelta(minutes=1))
+    pinned = PinnedTokens(world.provider, SHOP, generation=world.row.generation + 1)
+
+    with pytest.raises(MarketplaceAuthError):
+        await pinned.access_token(ETSY_SHOP)
+    assert world.server.refreshed == []
+
+
+async def test_pinned_tokens__expired__refreshed_once_like_the_provider() -> None:
+    world = World(access_left=timedelta(minutes=1))
+    pinned = PinnedTokens(world.provider, SHOP, generation=world.row.generation)
+
+    token = await pinned.access_token(ETSY_SHOP)
+
+    assert token != OLD_ACCESS
+    assert world.server.refreshed == [OLD_REFRESH]

@@ -302,3 +302,32 @@ async def test_retry_after_a_disconnect__no_further_request() -> None:
 
     assert len(etsy.requests) == 1
     assert tokens.asked == 2
+
+
+async def test_reads__a_per_call_token_source__is_used_instead_of_the_adapters(
+    make: Callable[..., Harness],
+) -> None:
+    class Pinned:
+        def __init__(self) -> None:
+            self.asked: list[int] = []
+
+        async def access_token(self, shop_id: int) -> str:
+            self.asked.append(shop_id)
+            return "pinned-token"
+
+    etsy = StrictEtsy(
+        ok(fixture("shop.json")),
+        ok({"count": 0, "results": []}),
+        ok(fixture("listings_page.json")),
+    )
+    harness = make(etsy)
+    pinned = Pinned()
+
+    async with harness.client:
+        await harness.adapter.get_shop(SHOP_ID, urgent=True, tokens=pinned)
+        await harness.adapter.check_receipt_addresses(SHOP_ID, tokens=pinned)
+        await harness.adapter.list_listings(SHOP_ID, limit=1, tokens=pinned)
+
+    assert pinned.asked == [SHOP_ID] * 3
+    assert harness.tokens.asked_for == []
+    assert {r.headers["authorization"] for r in etsy.requests} == {"Bearer pinned-token"}

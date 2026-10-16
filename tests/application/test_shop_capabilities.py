@@ -44,7 +44,7 @@ from htco_domain.integrations import (
     IntegrationStatus,
     ShopCapability,
 )
-from tests.etsy_fakes import ETSY_SHOP, NOW, AuditLog, Capabilities, Probe, Vault
+from tests.etsy_fakes import ETSY_SHOP, NOW, AuditLog, Capabilities, Pinning, Probe, Vault
 
 pytestmark = pytest.mark.anyio
 
@@ -87,6 +87,7 @@ class World:
             vault=self.vault,
             marketplace=self.probe,
             store=self.store,
+            tokens=Pinning(),
             webhooks_configured=webhooks_configured,
         )
 
@@ -472,3 +473,12 @@ async def test_recheck__connection_replaced_before_the_claim__no_etsy_call() -> 
 
     assert world.probe.calls == []
     assert world.store.reserved_generations == []
+
+
+async def test_probe__every_etsy_call_uses_tokens_pinned_to_the_probed_connection() -> None:
+    """Codex review of #49: never the token of whichever connection holds the Etsy shop now."""
+    world = World()
+
+    await world.probe_now()
+
+    assert world.probe.token_sources == [("pinned", SHOP, world.integration.generation)] * 3

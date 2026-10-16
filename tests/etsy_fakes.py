@@ -402,22 +402,31 @@ class Probe:
         default_factory=lambda: Page(items=(), total_count=4, offset=0)
     )
     calls: list[str] = field(default_factory=list)
+    # Which token source each call was given (a pinned one, or the adapter's own: None).
+    token_sources: list[tuple[str, uuid.UUID, int] | None] = field(default_factory=list)
 
-    async def get_shop(self, shop_id: int, *, urgent: bool = False) -> MarketplaceShop:
+    def _source(self, tokens: object) -> None:
+        self.token_sources.append(tokens.describe() if isinstance(tokens, Pinned) else None)
+
+    async def get_shop(
+        self, shop_id: int, *, urgent: bool = False, tokens: object = None
+    ) -> MarketplaceShop:
+        self._source(tokens)
         self.calls.append(f"get_shop:{shop_id}:{urgent}")
         if isinstance(self.shop, MarketplaceError):
             raise self.shop
         return self.shop
 
     async def check_receipt_addresses(
-        self, shop_id: int, *, urgent: bool = True
+        self, shop_id: int, *, urgent: bool = True, tokens: object = None
     ) -> ReceiptAddressCheck:
+        self._source(tokens)
         self.calls.append(f"check_receipt_addresses:{shop_id}:{urgent}")
         if isinstance(self.addresses, MarketplaceError):
             raise self.addresses
         return self.addresses
 
-    async def list_listings(
+    async def list_listings(  # noqa: PLR0913 - mirrors the adapter
         self,
         shop_id: int,
         *,
@@ -425,7 +434,9 @@ class Probe:
         limit: int = 25,
         offset: int = 0,
         urgent: bool = False,
+        tokens: object = None,
     ) -> Page[Listing]:
+        self._source(tokens)
         self.calls.append(f"list_listings:{shop_id}:{state.value}:{limit}:{offset}:{urgent}")
         if isinstance(self.listings, MarketplaceError):
             raise self.listings
@@ -445,3 +456,24 @@ class Lock:
         async with lock:
             self.taken += 1
             yield
+
+
+@dataclass(frozen=True)
+class Pinned:
+    """A token source pinned to one connection (shop and generation)."""
+
+    shop_id: uuid.UUID
+    generation: int
+
+    def describe(self) -> tuple[str, uuid.UUID, int]:
+        return ("pinned", self.shop_id, self.generation)
+
+    async def access_token(self, shop_id: int) -> str:
+        return f"{shop_id}.pinned-fake-token"
+
+
+class Pinning:
+    """Hands out token sources pinned to a connection, as the vault's provider does."""
+
+    def pinned(self, shop_id: uuid.UUID, *, generation: int) -> Pinned:
+        return Pinned(shop_id, generation)
