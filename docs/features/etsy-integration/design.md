@@ -9,7 +9,7 @@
 | Platform | `htco_platform.http` | The outgoing client (timeouts, no redirects, trace propagation) the composition root passes in |
 | Transport | `htco_api.settings` | `HTCO_ETSY_KEYSTRING`, `HTCO_ETSY_SHARED_SECRET`, `HTCO_ETSY_DAILY_QUOTA_FLOOR` |
 
-Slices 4.3 and 4.4 add the OAuth connect flow, on-demand refresh and the shop card's connection health; see [connect flow and refresh](connect-flow.md). Slice 4.2's vault is described in [token vault](token-vault.md).
+Slices 4.3 and 4.4 add the OAuth connect flow, on-demand refresh and the shop card's connection health; see [connect flow and refresh](connect-flow.md). Slice 4.2's vault is described in [token vault](token-vault.md). Slices 4.5 and 4.7 add the capability probes (`htco_application.shop_capabilities`, `EtsyAdapter.check_receipt_addresses`, `PostgresCapabilityStore`), disconnect (`disconnect_shop`) and the read-only guards; see [operations](operations.md).
 
 `htco_integrations` sits beside `htco_persistence` and `htco_agent_runtime` in the import-linter layers contract: it imports the application layer, never another adapter. Slice 4.3 builds it in the composition root with `VaultAccessTokenProvider`; only the callback's shop lookup (`shop_of_user`) calls it so far.
 
@@ -64,6 +64,8 @@ class MarketplacePort(Protocol):
 | Timeout, connection or protocol failure | `MarketplaceUnavailableError` (`status=None`) | Yes, with backoff |
 | 2xx with unreadable JSON or missing fields | `MarketplaceResponseError` | No |
 | Daily budget below the floor (routine call) | `QuotaDeferredError` (`remaining_today`, `floor`) | Not called |
+
+| Any method but GET towards the shop API | `MarketplaceWriteRefusedError` | Not sent (see [the read-only rule](operations.md#the-read-only-rule)) |
 
 All derive from `MarketplaceError` with a `status` attribute. Backoff is `0.5 s × 2^(attempt−1)`, capped at 8 s, for at most 4 attempts (configurable). Only reads exist; Etsy writes have no idempotency and must not reuse this retry loop.
 

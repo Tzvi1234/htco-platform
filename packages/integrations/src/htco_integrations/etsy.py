@@ -12,6 +12,15 @@ floor, routine calls are deferred with a warning and a metric; urgent calls stil
 older than `quota_snapshot_ttl` no longer defers, so one routine call can refresh it after Etsy's
 window has moved on.
 
+Read only (the owner's rule: connected shops are live, with real buyers). Every call goes through
+one choke point, `_request`, which refuses any method but GET before a token is fetched unless
+the caller sets the `allow_write` flag for that call; no code path does. As a second, independent
+guard the adapter installs a request hook on its HTTP client that stops any non-GET request to
+Etsy's shop API (`ETSY_BASE_URL`) before it leaves the process, even if some code used the
+client directly. The OAuth token endpoint (`api.etsy.com/v3/public/oauth/token`) is outside that
+API and unaffected. Etsy's `tokenScopes` is a POST, so it is not used: the capability probes
+read the stored scopes.
+
 Retries: only GETs are made here, so 429 (honouring `retry-after`), 5xx and transport failures
 (timeouts, refused connections) are retried with capped exponential backoff. Other 4xx answers
 map to typed errors at once. Write operations, which are not idempotent at Etsy, must not reuse
@@ -27,7 +36,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, NoReturn
 
 import anyio
 import httpx
@@ -49,15 +58,23 @@ from htco_application.marketplace import (
     MarketplaceResponseError,
     MarketplaceShop,
     MarketplaceUnavailableError,
+    MarketplaceWriteRefusedError,
     Page,
     QuotaDeferredError,
     QuotaSnapshot,
     Receipt,
+    ReceiptAddressCheck,
     ReceiptLine,
 )
 
 ETSY_BASE_URL = "https://openapi.etsy.com/v3/application"
 MAX_PAGE_SIZE = 100
+# The only methods sent to Etsy's shop API. Anything else needs an explicit per-call allow flag.
+READ_ONLY_METHODS = frozenset({"GET"})
+# Request extension that lets one request past the hook; set only when `allow_write` is set.
+_WRITE_ALLOWED = "htco.etsy.write_allowed"
+# Fields whose presence on a receipt shows Etsy shares the buyer's shipping address.
+_ADDRESS_FIELDS = ("first_line", "city")
 
 _QUOTA_HEADERS = (
     "x-limit-per-second",
@@ -170,11 +187,14 @@ class EtsyAdapter:
         self._refresh_in_flight = False
         self._sent: deque[float] = deque()
         self._throttle = anyio.Lock()
+        _install_write_guard(client, self._config.base_url)
 
     # --- MarketplacePort ----------------------------------------------------------------------
 
     async def get_shop(self, shop_id: int, *, urgent: bool = False) -> MarketplaceShop:
-        body = await self._get("get_shop", shop_id, f"/shops/{shop_id}", {}, urgent=urgent)
+        body = await self._request(
+            "GET", "get_shop", shop_id, f"/shops/{shop_id}", {}, urgent=urgent
+        )
         return _parse("get_shop", _shop, body)
 
     async def list_receipts(  # noqa: PLR0913 - each keyword is one filter of the same query
@@ -200,8 +220,8 @@ class EtsyAdapter:
         ):
             raise ValueError("min_last_modified must not be after max_last_modified")
         params |= {"limit": limit, "offset": offset}
-        body = await self._get(
-            "list_receipts", shop_id, f"/shops/{shop_id}/receipts", params, urgent=urgent
+        body = await self._request(
+            "GET", "list_receipts", shop_id, f"/shops/{shop_id}/receipts", params, urgent=urgent
         )
         return _parse("list_receipts", lambda data: _page(data, _receipt, offset), body)
 
@@ -216,8 +236,8 @@ class EtsyAdapter:
     ) -> Page[Listing]:
         _check_page(limit, offset)
         params: dict[str, str | int] = {"state": state.value, "limit": limit, "offset": offset}
-        body = await self._get(
-            "list_listings", shop_id, f"/shops/{shop_id}/listings", params, urgent=urgent
+        body = await self._request(
+            "GET", "list_listings", shop_id, f"/shops/{shop_id}/listings", params, urgent=urgent
         )
         return _parse("list_listings", lambda data: _page(data, _listing, offset), body)
 
@@ -231,7 +251,8 @@ class EtsyAdapter:
         owner is waiting for the connection to finish."""
         if user_id <= 0:
             raise ValueError("the Etsy user ID must be positive")
-        body = await self._get(
+        body = await self._request(
+            "GET",
             "shop_of_user",
             user_id,
             f"/users/{user_id}/shops",
@@ -241,10 +262,28 @@ class EtsyAdapter:
         )
         return _parse("shop_of_user", _shop, body)
 
-    # --- One call: floor, throttle, retries ---------------------------------------------------
+    # --- Capability probes (slice 4.5) -------------------------------------------------------
 
-    async def _get(  # noqa: PLR0913 - the call, its budget class and an optional token
+    async def check_receipt_addresses(
+        self, shop_id: int, *, urgent: bool = True
+    ) -> ReceiptAddressCheck:
+        """Read the newest receipt (one, `limit=1`) and report only whether its address fields
+        hold anything. No value is kept, returned or logged."""
+        body = await self._request(
+            "GET",
+            "check_receipt_addresses",
+            shop_id,
+            f"/shops/{shop_id}/receipts",
+            {"limit": 1, "offset": 0},
+            urgent=urgent,
+        )
+        return _parse("check_receipt_addresses", _address_check, body)
+
+    # --- One call: write guard, floor, throttle, retries ------------------------------------
+
+    async def _request(  # noqa: PLR0913 - the call, its budget class, optional token and flag
         self,
+        method: str,
         operation: str,
         shop_id: int,
         path: str,
@@ -252,17 +291,31 @@ class EtsyAdapter:
         *,
         urgent: bool,
         access_token: str | None = None,
+        allow_write: bool = False,
     ) -> Any:
+        """The only way the adapter calls Etsy. A method other than GET is refused here, before
+        the budget or a token is touched, unless `allow_write` is set for this one call."""
+        verb = method.upper()
+        write = verb not in READ_ONLY_METHODS
+        if write and not allow_write:
+            _refuse_write(verb, path)
         refreshing = self._admit(operation, shop_id, urgent=urgent)
         try:
             token = access_token or await self._tokens.access_token(shop_id)
-            return await self._send(operation, path, params, token)
+            return await self._send(verb, operation, path, params, token, write=write)
         finally:
             if refreshing:
                 self._refresh_in_flight = False
 
-    async def _send(
-        self, operation: str, path: str, params: Mapping[str, str | int], token: str
+    async def _send(  # noqa: PLR0913 - one request's parts
+        self,
+        method: str,
+        operation: str,
+        path: str,
+        params: Mapping[str, str | int],
+        token: str,
+        *,
+        write: bool,
     ) -> Any:
         headers = {
             "x-api-key": self._credentials.api_key_header(),
@@ -270,14 +323,22 @@ class EtsyAdapter:
             "accept": "application/json",
         }
         url = self._config.base_url.rstrip("/") + path
+        # Writes are not idempotent at Etsy: one attempt, never the retry loop.
+        max_attempts = 1 if write else self._config.max_attempts
+        extensions = {_WRITE_ALLOWED: True} if write else {}
         attempt = 0
         while True:
             attempt += 1
-            last = attempt >= self._config.max_attempts
+            last = attempt >= max_attempts
             await self._wait_for_slot()
             try:
-                response = await self._client.get(
-                    url, params=params, headers=headers, timeout=self._timeout
+                response = await self._client.request(
+                    method,
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=self._timeout,
+                    extensions=extensions,
                 )
             except httpx.TransportError as error:
                 if last:
@@ -399,6 +460,45 @@ class EtsyAdapter:
             remaining_today=remaining,
             floor=floor,
         )
+
+
+# --- The write guard ---------------------------------------------------------------------------
+
+
+def _refuse_write(method: str, path: str) -> NoReturn:
+    # The path names the operation (shop and receipt IDs, no buyer data); never the body.
+    _log.warning("etsy.write_refused", method=method, path=path)
+    raise MarketplaceWriteRefusedError(f"HTCO does not write to Etsy: {method} refused")
+
+
+def _install_write_guard(client: httpx.AsyncClient, base_url: str) -> None:
+    """Add (once per client and base URL) a request hook that refuses non-GET shop API calls."""
+    hooks = client.event_hooks
+    requests = list(hooks.get("request", []))
+    if any(getattr(hook, "etsy_base_url", None) == base_url for hook in requests):
+        return
+    hooks["request"] = [*requests, _WriteGuard(base_url)]
+    client.event_hooks = hooks
+
+
+class _WriteGuard:
+    """httpx request hook: the second guard, below the adapter, on the client itself."""
+
+    def __init__(self, base_url: str) -> None:
+        self.etsy_base_url = base_url
+        self._root = base_url.rstrip("/")
+
+    async def __call__(self, request: httpx.Request) -> None:
+        method = request.method.upper()
+        if method in READ_ONLY_METHODS or request.extensions.get(_WRITE_ALLOWED) is True:
+            return
+        url = str(request.url)
+        if (
+            url == self._root
+            or url.startswith(self._root + "/")
+            or url.startswith(self._root + "?")
+        ):
+            _refuse_write(method, request.url.path)
 
 
 # --- HTTP helpers -----------------------------------------------------------------------------
@@ -557,6 +657,21 @@ def _shop(body: object) -> MarketplaceShop:
         created_at=_timestamp(data, "created_timestamp"),
         updated_at=_timestamp(data, "updated_timestamp"),
     )
+
+
+def _address_check(body: object) -> ReceiptAddressCheck:
+    data = _object(body)
+    results = data["results"]
+    if not isinstance(results, list):
+        raise TypeError("results must be a list")
+    if not results:
+        return ReceiptAddressCheck(receipts_seen=0, address_present=None)
+    receipt = _object(results[0])
+    present = True
+    for name in _ADDRESS_FIELDS:
+        value = receipt.get(name)
+        present = present and isinstance(value, str) and bool(value.strip())
+    return ReceiptAddressCheck(receipts_seen=1, address_present=present)
 
 
 def _receipt_line(value: object) -> ReceiptLine:

@@ -31,7 +31,13 @@ from htco_application.shop_integrations import (
     ShopIntegration,
     TokenVaultError,
 )
-from htco_domain.integrations import IntegrationProvider, IntegrationStatus
+from htco_domain.integrations import (
+    CapabilityResult,
+    CapabilityState,
+    IntegrationProvider,
+    IntegrationStatus,
+    ShopCapability,
+)
 from htco_persistence.audit import append_audit
 from htco_persistence.database import Database
 from htco_platform.crypto import Envelope, EnvelopeSealer, SealingError
@@ -40,7 +46,8 @@ _PROVIDER = IntegrationProvider.ETSY
 _COLUMNS = """
 id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id, wrapped_data_key,
 access_token_ciphertext, refresh_token_ciphertext, scopes, access_expires_at, refresh_expires_at,
-status, failure_count, last_successful_call_at, created_at, updated_at, last_refresh_failed_at
+status, failure_count, last_successful_call_at, created_at, updated_at, last_refresh_failed_at,
+disconnected_at, purge_after
 """
 
 _log = structlog.get_logger(__name__)
@@ -130,17 +137,44 @@ class PostgresTokenVault:
 
         return await anyio.to_thread.run_sync(run)
 
-    async def disconnect(self, shop_id: uuid.UUID) -> None:
-        await self._execute(
-            """
-            update app.shop_integrations
-            set status = 'disconnected', key_id = null, wrapped_data_key = null,
-                access_token_ciphertext = null, refresh_token_ciphertext = null,
-                access_expires_at = null, refresh_expires_at = null
-            where shop_id = %s and provider = %s
-            """,
-            [shop_id, _PROVIDER.value],
-        )
+    async def disconnect(
+        self,
+        shop_id: uuid.UUID,
+        *,
+        purge_after: datetime | None = None,
+        audit: AuditRecord | None = None,
+    ) -> bool:
+        """Delete the tokens, mark the integration and the shop disconnected, keep the purge date
+        and write `audit`, in one transaction. False when it was already disconnected."""
+
+        def run() -> bool:
+            with self._database.connection() as connection, connection.transaction():
+                row = connection.execute(
+                    """
+                    update app.shop_integrations
+                    set status = 'disconnected', key_id = null, wrapped_data_key = null,
+                        access_token_ciphertext = null, refresh_token_ciphertext = null,
+                        access_expires_at = null, refresh_expires_at = null,
+                        disconnected_at = now(), purge_after = %s
+                    where shop_id = %s and provider = %s and status <> 'disconnected'
+                    returning organization_id
+                    """,
+                    [purge_after, shop_id, _PROVIDER.value],
+                ).fetchone()
+                if row is None:
+                    return False
+                connection.execute(
+                    """
+                    update app.shops set status = 'disconnected'
+                    where id = %s and organization_id = %s
+                    """,
+                    [shop_id, row[0]],
+                )
+                if audit is not None:
+                    append_audit(connection, audit)
+            return True
+
+        return await anyio.to_thread.run_sync(run)
 
     async def rotate_keys(self, *, batch_size: int) -> int:
         """Re-wrap batch after batch until no row on a previous key is left; returns the count."""
@@ -208,7 +242,9 @@ class PostgresTokenVault:
               refresh_expires_at = excluded.refresh_expires_at,
               status = 'connected',
               failure_count = 0,
-              last_refresh_failed_at = null
+              last_refresh_failed_at = null,
+              disconnected_at = null,
+              purge_after = null
             -- Never across tenants: a shop's row stays with its organization.
             where app.shop_integrations.organization_id = excluded.organization_id
             returning {_COLUMNS}
@@ -339,6 +375,8 @@ class PostgresTokenVault:
             created_at=row[16],
             updated_at=row[17],
             last_refresh_failed_at=row[18],
+            disconnected_at=row[19],
+            purge_after=row[20],
         )
 
     async def _execute(self, sql: str, params: list[object]) -> None:
@@ -395,10 +433,17 @@ def _advisory(connection: psycopg.Connection[Any], function: str, key: str) -> N
 # the sealed columns are not even granted to `authenticated`.
 _LIST_INTEGRATIONS = """
 select shop_id, organization_id, provider, status, etsy_shop_id, scopes, access_expires_at,
-       refresh_expires_at, failure_count, last_successful_call_at, created_at, updated_at
+       refresh_expires_at, failure_count, last_successful_call_at, created_at, updated_at,
+       disconnected_at, purge_after
 from app.shop_integrations
 where organization_id = %s
 order by shop_id
+"""
+# The latest probe results (slice 4.5), also read as the caller (`shop_capabilities_select`).
+_LIST_CAPABILITIES = """
+select shop_id, capability, state, detail, checked_at
+from app.shop_capabilities
+where organization_id = %s
 """
 
 
@@ -412,6 +457,8 @@ class PostgresIntegrationReader:
         def run() -> list[IntegrationSummary]:
             with self._database.user_transaction(claims) as connection:
                 rows = connection.execute(_LIST_INTEGRATIONS, [organization_id]).fetchall()
+                probed = connection.execute(_LIST_CAPABILITIES, [organization_id]).fetchall()
+            capabilities = _capabilities_by_shop(probed)
             return [
                 IntegrationSummary(
                     shop_id=row[0],
@@ -426,8 +473,77 @@ class PostgresIntegrationReader:
                     last_successful_call_at=row[9],
                     created_at=row[10],
                     updated_at=row[11],
+                    disconnected_at=row[12],
+                    purge_after=row[13],
+                    capabilities=capabilities.get(row[0], ()),
                 )
                 for row in rows
             ]
+
+        return await anyio.to_thread.run_sync(run)
+
+
+def _capabilities_by_shop(
+    rows: Sequence[tuple[Any, ...]],
+) -> dict[uuid.UUID, tuple[CapabilityResult, ...]]:
+    found: dict[uuid.UUID, dict[ShopCapability, CapabilityResult]] = {}
+    for shop_id, capability, state, detail, checked_at in rows:
+        result = CapabilityResult(
+            ShopCapability(capability), CapabilityState(state), detail, checked_at
+        )
+        found.setdefault(shop_id, {})[result.capability] = result
+    return {shop: tuple(by[c] for c in ShopCapability if c in by) for shop, by in found.items()}
+
+
+# --- Capability probe results (slice 4.5) --------------------------------------------------------
+
+
+class PostgresCapabilityStore:
+    """The latest probe result per shop and capability, written with the API's login role."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def save(
+        self,
+        organization_id: uuid.UUID,
+        shop_id: uuid.UUID,
+        results: Sequence[CapabilityResult],
+    ) -> None:
+        def run() -> None:
+            with self._database.connection() as connection, connection.transaction():
+                for result in results:
+                    connection.execute(
+                        """
+                        insert into app.shop_capabilities
+                          (id, organization_id, shop_id, capability, state, detail, checked_at)
+                        values (%s, %s, %s, %s, %s, %s, %s)
+                        on conflict (shop_id, capability) do update set
+                          state = excluded.state,
+                          detail = excluded.detail,
+                          checked_at = excluded.checked_at
+                        where app.shop_capabilities.organization_id = excluded.organization_id
+                        """,
+                        [
+                            uuid.uuid7(),
+                            organization_id,
+                            shop_id,
+                            result.capability.value,
+                            result.state.value,
+                            result.detail,
+                            result.checked_at,
+                        ],
+                    )
+
+        await anyio.to_thread.run_sync(run)
+
+    async def last_checked_at(self, shop_id: uuid.UUID) -> datetime | None:
+        def run() -> datetime | None:
+            with self._database.connection() as connection:
+                row = connection.execute(
+                    "select max(checked_at) from app.shop_capabilities where shop_id = %s",
+                    [shop_id],
+                ).fetchone()
+            return None if row is None else row[0]
 
         return await anyio.to_thread.run_sync(run)
