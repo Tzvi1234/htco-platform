@@ -39,7 +39,6 @@ from htco_platform.http import new_async_http_client
 from tests.etsy_fakes import (
     ETSY_SHOP,
     NOW,
-    AuditLog,
     AuthorizationServer,
     Capabilities,
     Lock,
@@ -192,9 +191,7 @@ async def test_after_disconnect__no_etsy_call_is_made_for_the_shop() -> None:
         credentials=EtsyCredentials(keystring="fakekeystring", shared_secret="fake"),  # noqa: S106
         access_tokens=VaultAccessTokenProvider(vault, server, Lock(), clock=lambda: NOW),
     )
-    checks = CapabilityChecks(
-        vault=vault, marketplace=adapter, store=Capabilities(), audit=AuditLog()
-    )
+    checks = CapabilityChecks(vault=vault, marketplace=adapter, store=Capabilities())
 
     await disconnect_shop(vault, owner(), SHOP, now=NOW, correlation_id=None)
 

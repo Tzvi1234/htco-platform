@@ -518,7 +518,7 @@ class PostgresCapabilityStore:
     def __init__(self, database: Database) -> None:
         self._database = database
 
-    async def save(
+    async def save(  # noqa: PLR0913 - the results and what commits with them
         self,
         organization_id: uuid.UUID,
         shop_id: uuid.UUID,
@@ -526,6 +526,7 @@ class PostgresCapabilityStore:
         *,
         generation: int,
         successful_call_at: datetime | None = None,
+        audit: AuditRecord | None = None,
     ) -> bool:
         def run() -> bool:
             with self._database.connection() as connection, connection.transaction():
@@ -582,6 +583,8 @@ class PostgresCapabilityStore:
                             result.checked_at,
                         ],
                     )
+                if audit is not None:
+                    append_audit(connection, audit)
             return True
 
         return await anyio.to_thread.run_sync(run)

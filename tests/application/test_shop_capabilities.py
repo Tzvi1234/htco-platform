@@ -87,7 +87,6 @@ class World:
             vault=self.vault,
             marketplace=self.probe,
             store=self.store,
-            audit=self.audit,
             webhooks_configured=webhooks_configured,
         )
 

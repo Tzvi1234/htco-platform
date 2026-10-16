@@ -108,7 +108,7 @@ class ProbedConnections(Protocol):
 
 
 class CapabilityStore(Protocol):
-    async def save(
+    async def save(  # noqa: PLR0913 - the results and what commits with them
         self,
         organization_id: uuid.UUID,
         shop_id: uuid.UUID,
@@ -116,11 +116,12 @@ class CapabilityStore(Protocol):
         *,
         generation: int,
         successful_call_at: datetime | None = None,
+        audit: AuditRecord | None = None,
     ) -> bool:
-        """Keep the latest result per shop and capability, and `successful_call_at` as the
-        integration's last successful call, in one transaction and only while the shop is still
-        connected with the connection `generation` the probe started under. False: dropped (the
-        shop was disconnected or reconnected meanwhile)."""
+        """Keep the latest result per shop and capability, `successful_call_at` as the
+        integration's last successful call and the `audit` record, in one transaction and only
+        while the shop is still connected with the connection `generation` the probe started
+        under. False: dropped (the shop was disconnected or reconnected meanwhile)."""
         ...
 
     async def reserve_check(
@@ -131,10 +132,6 @@ class CapabilityStore(Protocol):
         ...
 
 
-class AuditAppender(Protocol):
-    async def append(self, record: AuditRecord) -> None: ...
-
-
 @dataclass(frozen=True)
 class CapabilityChecks:
     """The probes' collaborators, built by the composition root."""
@@ -142,7 +139,6 @@ class CapabilityChecks:
     vault: ProbedConnections
     marketplace: CapabilityProbe
     store: CapabilityStore
-    audit: AuditAppender
     # True once Etsy webhooks are set up (Phase 5); configuration alone never makes them available.
     webhooks_configured: bool = False
 
@@ -165,17 +161,14 @@ async def probe_capabilities(  # noqa: PLR0913 - the shop, who asked, and why
         raise ShopNotConnectedError(f"shop {integration.shop_id} is not connected")
     results = await _probe(checks, integration, now)
     read_ok = any(r.state is CapabilityState.AVAILABLE and r.detail == "read_ok" for r in results)
+    # Results, success time and audit commit together, or not at all (Codex review of #49).
     saved = await checks.store.save(
         integration.organization_id,
         integration.shop_id,
         results,
         generation=integration.generation,
         successful_call_at=now if read_ok else None,
-    )
-    if not saved:  # superseded: no audit, no answer (Codex review of #49)
-        raise ProbeSupersededError(f"shop {integration.shop_id} changed while it was probed")
-    await checks.audit.append(
-        AuditRecord.new(
+        audit=AuditRecord.new(
             organization_id=integration.organization_id,
             actor=actor,
             action="shop.capabilities_checked",
@@ -186,8 +179,10 @@ async def probe_capabilities(  # noqa: PLR0913 - the shop, who asked, and why
                 "states": {r.capability.value: r.state.value for r in results},
             },
             correlation_id=correlation_id,
-        )
+        ),
     )
+    if not saved:  # superseded: no audit, no answer (Codex review of #49)
+        raise ProbeSupersededError(f"shop {integration.shop_id} changed while it was probed")
     return results
 
 

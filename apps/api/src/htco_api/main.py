@@ -400,7 +400,6 @@ def _etsy_wiring(
         vault=vault,
         marketplace=adapter,
         store=PostgresCapabilityStore(database),
-        audit=PostgresAuditLog(database),
         # Etsy webhooks arrive with Phase 5 (signing secret, endpoint); until then not configured.
         webhooks_configured=False,
     )

@@ -164,7 +164,7 @@ async def _world(
         audit=audit,
         redirect_uri=REDIRECT_URI,
     )
-    checks = CapabilityChecks(vault=vault, marketplace=probe, store=store, audit=audit)
+    checks = CapabilityChecks(vault=vault, marketplace=probe, store=store)
     app = create_app(
         AppOptions(
             authenticator=Authenticator(

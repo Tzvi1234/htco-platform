@@ -340,10 +340,12 @@ class Capabilities:
     successful_calls: list[datetime | None] = field(default_factory=list)
     # False: every save is refused, as for a probe a disconnect or reconnect overtook.
     accept: bool = True
+    # Audit records written with the saves (in the same transaction in the database).
+    audits: list[AuditRecord] = field(default_factory=list)
     # When set, a save's success time lands on the vault's row, as in the database.
     vault: Vault | None = None
 
-    async def save(
+    async def save(  # noqa: PLR0913 - the results and what commits with them
         self,
         organization_id: uuid.UUID,
         shop_id: uuid.UUID,
@@ -351,9 +353,12 @@ class Capabilities:
         *,
         generation: int,
         successful_call_at: datetime | None = None,
+        audit: AuditRecord | None = None,
     ) -> bool:
         if not self.accept:
             return False
+        if audit is not None:
+            self.audits.append(audit)
         self.saved.append((organization_id, shop_id, tuple(results)))
         self.generations.append(generation)
         self.successful_calls.append(successful_call_at)
