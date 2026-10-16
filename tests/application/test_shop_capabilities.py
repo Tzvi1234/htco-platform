@@ -9,6 +9,7 @@ import uuid
 from dataclasses import replace
 from datetime import timedelta
 
+import anyio
 import pytest
 
 from htco_application.access.authentication import AuthContext, Membership
@@ -364,3 +365,52 @@ async def test_recheck__disconnected__refused_without_any_etsy_call() -> None:
         await recheck_capabilities(world.checks, auth(), SHOP, now=NOW, correlation_id=None)
 
     assert world.probe.calls == []
+
+
+# --- Codex review of #49 -----------------------------------------------------------------------
+
+
+async def test_recheck__two_at_once__one_probes_and_the_other_is_told_to_wait() -> None:
+    """The cooldown is reserved before probing, so two presses cannot both call Etsy."""
+    world = World()
+    gate = anyio.Event()
+    original = world.probe.get_shop
+
+    async def slow_get_shop(shop_id: int, *, urgent: bool = False) -> object:
+        await gate.wait()
+        return await original(shop_id, urgent=urgent)
+
+    world.probe.get_shop = slow_get_shop  # type: ignore[method-assign]
+    outcomes: list[str] = []
+
+    async def press() -> None:
+        try:
+            await recheck_capabilities(world.checks, auth(), SHOP, now=NOW, correlation_id=None)
+            outcomes.append("probed")
+        except RecheckTooSoonError:
+            outcomes.append("wait")
+            gate.set()
+
+    with anyio.fail_after(5):  # both probing at once would wait on the gate forever
+        async with anyio.create_task_group() as group:
+            group.start_soon(press)
+            group.start_soon(press)
+
+    assert sorted(outcomes) == ["probed", "wait"]
+    assert len(world.store.saved) == 1
+
+
+async def test_recheck__fractional_wait__rounds_retry_after_up() -> None:
+    world = World()
+    await recheck_capabilities(world.checks, auth(), SHOP, now=NOW, correlation_id=None)
+
+    with pytest.raises(RecheckTooSoonError) as too_soon:
+        await recheck_capabilities(
+            world.checks,
+            auth(),
+            SHOP,
+            now=NOW + timedelta(seconds=10, milliseconds=400),
+            correlation_id=None,
+        )
+
+    assert too_soon.value.retry_after_seconds == 20

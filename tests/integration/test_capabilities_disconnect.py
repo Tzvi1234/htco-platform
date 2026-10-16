@@ -7,6 +7,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 
+import anyio
 import pytest
 
 from htco_application.audit import AuditRecord
@@ -66,7 +67,6 @@ async def test_capability_store__keeps_the_latest_per_capability_and_owner_reads
     await store.save(tenant.organization_id, shop, results(NOW - timedelta(hours=1)))
     await store.save(tenant.organization_id, shop, results(NOW))
 
-    assert await store.last_checked_at(shop) == NOW
     assert scalar(
         database, "select count(*) from app.shop_capabilities where shop_id = %s", [shop]
     ) == len(results())
@@ -94,12 +94,82 @@ async def test_capability_store__never_moves_a_row_to_another_organization(
     store = PostgresCapabilityStore(database)
     await store.save(tenant.organization_id, connected.shop.id, results())
 
-    with pytest.raises(Exception, match="foreign key"):
-        await store.save(other.organization_id, connected.shop.id, results())
+    with pytest.raises(ValueError, match="another organization"):
+        await store.save(other.organization_id, connected.shop.id, results(NOW + timedelta(1)))
+
+    assert (
+        scalar(
+            database,
+            "select max(checked_at) from app.shop_capabilities where shop_id = %s",
+            [connected.shop.id],
+        )
+        == NOW
+    )
 
 
-async def test_capability_store__never_checked__none(database: Database) -> None:
-    assert await PostgresCapabilityStore(database).last_checked_at(uuid.uuid4()) is None
+async def test_capability_store__an_older_probe_never_overwrites_a_newer_one(
+    database: Database,
+) -> None:
+    tenant = Tenant(database)
+    connected = await PostgresShopConnector(database, vault(database)).connect(
+        request_for(tenant, etsy_ids())
+    )
+    store = PostgresCapabilityStore(database)
+    await store.save(tenant.organization_id, connected.shop.id, results(NOW))
+
+    await store.save(tenant.organization_id, connected.shop.id, results(NOW - timedelta(hours=1)))
+
+    assert (
+        scalar(
+            database,
+            "select min(checked_at) from app.shop_capabilities where shop_id = %s",
+            [connected.shop.id],
+        )
+        == NOW
+    )
+
+
+async def test_capability_store__reserve_check__one_winner_then_the_wait(
+    database: Database,
+) -> None:
+    tenant = Tenant(database)
+    connected = await PostgresShopConnector(database, vault(database)).connect(
+        request_for(tenant, etsy_ids())
+    )
+    store = PostgresCapabilityStore(database)
+    cooldown = timedelta(seconds=30)
+    answers: list[timedelta | None] = []
+
+    async def reserve() -> None:
+        answers.append(await store.reserve_check(connected.shop.id, now=NOW, cooldown=cooldown))
+
+    async with anyio.create_task_group() as group:
+        for _ in range(4):
+            group.start_soon(reserve)
+
+    assert answers.count(None) == 1
+    assert sorted(a for a in answers if a is not None) == [cooldown] * 3
+    later = await store.reserve_check(connected.shop.id, now=NOW + cooldown, cooldown=cooldown)
+    assert later is None
+
+
+async def test_reconnect_and_disconnect__drop_the_old_probe_results(database: Database) -> None:
+    """Results of an earlier connection never show for a new one (Codex review of #49)."""
+    tenant = Tenant(database)
+    the_vault = vault(database)
+    etsy = etsy_ids()
+    connector = PostgresShopConnector(database, the_vault)
+    connected = await connector.connect(request_for(tenant, etsy))
+    store = PostgresCapabilityStore(database)
+    count = "select count(*) from app.shop_capabilities where shop_id = %s"
+
+    await store.save(tenant.organization_id, connected.shop.id, results())
+    await connector.connect(request_for(tenant, etsy))
+    assert scalar(database, count, [connected.shop.id]) == 0
+
+    await store.save(tenant.organization_id, connected.shop.id, results())
+    await the_vault.disconnect(connected.shop.id, purge_after=NOW + timedelta(days=30))
+    assert scalar(database, count, [connected.shop.id]) == 0
 
 
 def disconnect_record(tenant: Tenant, shop: uuid.UUID) -> AuditRecord:
