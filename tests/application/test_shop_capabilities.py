@@ -28,6 +28,7 @@ from htco_application.marketplace import (
 from htco_application.shop_capabilities import (
     RECHECK_COOLDOWN,
     CapabilityChecks,
+    ProbeSupersededError,
     RecheckTooSoonError,
     ShopNotConnectedError,
     probe_capabilities,
@@ -163,7 +164,7 @@ async def test_probe__saves_the_results_records_the_successful_call_and_audits()
     assert (organization, shop) == (ORG, SHOP)
     assert world.store.generations == [world.integration.generation]
     assert saved == tuple(found.values())
-    assert world.integration.last_successful_call_at == NOW
+    assert world.store.successful_calls == [NOW]
     [record] = world.audit.records
     assert record.action == "shop.capabilities_checked"
     assert record.entity_id == str(SHOP)
@@ -260,7 +261,7 @@ async def test_probe__token_refused__stops_after_the_first_call() -> None:
     for capability in ("shop_details", "receipts_read", "buyer_address", "listings_read"):
         assert states(found)[capability] == ("unknown", "auth_failed")
     assert states(found)["granted_scopes"] == ("unknown", "not_verified")
-    assert world.integration.last_successful_call_at is None
+    assert world.store.successful_calls == [None]
 
 
 async def test_probe__no_successful_call__last_successful_call_untouched() -> None:
@@ -270,7 +271,7 @@ async def test_probe__no_successful_call__last_successful_call_untouched() -> No
     found = await world.probe_now()
 
     assert all(r.state is not CapabilityState.AVAILABLE for r in found.values())
-    assert world.integration.last_successful_call_at is None
+    assert world.store.successful_calls == [None]
 
 
 @pytest.mark.parametrize("status", [IntegrationStatus.NEEDS_REAUTH, IntegrationStatus.DISCONNECTED])
@@ -416,3 +417,21 @@ async def test_recheck__fractional_wait__rounds_retry_after_up() -> None:
         )
 
     assert too_soon.value.retry_after_seconds == 20
+
+
+async def test_probe__superseded_by_a_disconnect_or_reconnect__leaves_no_trace() -> None:
+    """Codex review of #49: when the store refuses the results (the connection generation moved
+    on), nothing else happens either: no audit, no success time, no results answered."""
+    world = World()
+    world.store.accept = False
+
+    with pytest.raises(ProbeSupersededError):
+        await world.probe_now()
+
+    assert world.audit.records == []
+    assert world.integration.last_successful_call_at is None
+    assert world.store.rows == {}
+
+
+def test_probe_superseded__is_a_not_connected_answer() -> None:
+    assert issubclass(ProbeSupersededError, ShopNotConnectedError)

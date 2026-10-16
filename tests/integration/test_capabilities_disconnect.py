@@ -346,3 +346,34 @@ async def test_capability_store__a_probe_of_an_earlier_connection_is_dropped(
         tenant.organization_id, shop, results(), generation=again.integration.generation
     )
     assert scalar(database, count, [shop]) == len(results())
+
+
+async def test_capability_store__success_time_only_with_the_current_generation(
+    database: Database,
+) -> None:
+    tenant = Tenant(database)
+    the_vault = vault(database)
+    connected = await PostgresShopConnector(database, the_vault).connect(
+        request_for(tenant, etsy_ids())
+    )
+    store = PostgresCapabilityStore(database)
+    shop = connected.shop.id
+    stale = connected.integration.generation - 1
+
+    assert not await store.save(
+        tenant.organization_id, shop, results(), generation=stale, successful_call_at=NOW
+    )
+    loaded = await the_vault.load(shop)
+    assert loaded is not None
+    assert loaded.last_successful_call_at is None
+
+    assert await store.save(
+        tenant.organization_id,
+        shop,
+        results(),
+        generation=connected.integration.generation,
+        successful_call_at=NOW,
+    )
+    loaded = await the_vault.load(shop)
+    assert loaded is not None
+    assert loaded.last_successful_call_at == NOW
