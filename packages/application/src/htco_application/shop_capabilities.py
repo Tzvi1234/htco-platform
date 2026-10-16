@@ -126,10 +126,12 @@ class CapabilityStore(Protocol):
         ...
 
     async def reserve_check(
-        self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta
+        self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta, generation: int
     ) -> timedelta | None:
-        """Atomically claim the shop's next re-check: None when claimed (no check started within
-        `cooldown`), otherwise how long to wait. Concurrent callers have exactly one winner."""
+        """Atomically claim the shop's next re-check for the connection `generation` that was
+        loaded: None when claimed (no check started within `cooldown`), otherwise how long to
+        wait. Concurrent callers have exactly one winner. Raises `ProbeSupersededError` when that
+        connection is no longer the connected one, before any marketplace call."""
         ...
 
 
@@ -212,7 +214,9 @@ async def recheck_capabilities(
     if not integration.is_usable:
         raise ShopNotConnectedError(f"shop {shop_id} is not connected")
     # Claimed before probing, so two presses at once cannot both call Etsy (Codex review of #49).
-    wait = await checks.store.reserve_check(shop_id, now=now, cooldown=RECHECK_COOLDOWN)
+    wait = await checks.store.reserve_check(
+        shop_id, now=now, cooldown=RECHECK_COOLDOWN, generation=integration.generation
+    )
     if wait is not None:
         raise RecheckTooSoonError(max(1, math.ceil(wait.total_seconds())))
     return await probe_capabilities(

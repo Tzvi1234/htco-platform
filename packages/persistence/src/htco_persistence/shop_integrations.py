@@ -24,6 +24,7 @@ import psycopg
 import structlog
 
 from htco_application.audit import AuditRecord
+from htco_application.shop_capabilities import ProbeSupersededError
 from htco_application.shop_integrations import (
     EtsyConnection,
     IntegrationSummary,
@@ -602,7 +603,7 @@ class PostgresCapabilityStore:
         return await anyio.to_thread.run_sync(run)
 
     async def reserve_check(
-        self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta
+        self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta, generation: int
     ) -> timedelta | None:
         """One conditional update: the row lock makes concurrent claims (any process) serial."""
 
@@ -612,22 +613,27 @@ class PostgresCapabilityStore:
                     """
                     update app.shop_integrations set capability_check_reserved_at = %s
                     where shop_id = %s and provider = %s
+                      and status = 'connected' and connection_generation = %s
                       and (capability_check_reserved_at is null
                            or capability_check_reserved_at <= %s)
                     returning id
                     """,
-                    [now, shop_id, _PROVIDER.value, now - cooldown],
+                    [now, shop_id, _PROVIDER.value, generation, now - cooldown],
                 ).fetchone()
                 if claimed is not None:
                     return None
                 row = connection.execute(
                     """
-                    select capability_check_reserved_at from app.shop_integrations
+                    select capability_check_reserved_at, status, connection_generation
+                    from app.shop_integrations
                     where shop_id = %s and provider = %s
                     """,
                     [shop_id, _PROVIDER.value],
                 ).fetchone()
-            if row is None or row[0] is None:  # no such integration: nothing to wait for
+            # Bound to the loaded connection: a replaced one makes no Etsy call (Codex, #49).
+            if row is None or row[1] != "connected" or row[2] != generation:
+                raise ProbeSupersededError(f"shop {shop_id} changed before it was probed")
+            if row[0] is None:  # pragma: no cover - the update above would have claimed it
                 return None
             reserved_at: datetime = row[0]
             return max(cooldown - (now - reserved_at), timedelta(0))

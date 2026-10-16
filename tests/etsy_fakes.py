@@ -32,6 +32,7 @@ from htco_application.marketplace import (
     Page,
     ReceiptAddressCheck,
 )
+from htco_application.shop_capabilities import ProbeSupersededError
 from htco_application.shop_integrations import (
     EtsyConnection,
     OAuthTokens,
@@ -333,8 +334,11 @@ class Capabilities:
     saved: list[tuple[uuid.UUID, uuid.UUID, tuple[CapabilityResult, ...]]] = field(
         default_factory=list
     )
-    # When each shop's last re-check was claimed.
+    # When each shop's last re-check was claimed, and for which connection generation.
     reserved: dict[uuid.UUID, datetime] = field(default_factory=dict)
+    reserved_generations: list[int] = field(default_factory=list)
+    # True: the loaded connection was replaced before the claim.
+    superseded_on_reserve: bool = False
     # The connection generation and success time each save named.
     generations: list[int] = field(default_factory=list)
     successful_calls: list[datetime | None] = field(default_factory=list)
@@ -374,8 +378,11 @@ class Capabilities:
         return True
 
     async def reserve_check(
-        self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta
+        self, shop_id: uuid.UUID, *, now: datetime, cooldown: timedelta, generation: int
     ) -> timedelta | None:
+        if self.superseded_on_reserve:
+            raise ProbeSupersededError(f"shop {shop_id} changed")
+        self.reserved_generations.append(generation)
         last = self.reserved.get(shop_id)
         if last is not None and now - last < cooldown:
             return cooldown - (now - last)
