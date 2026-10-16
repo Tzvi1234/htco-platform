@@ -301,8 +301,9 @@ class EtsyAdapter:
             _refuse_write(verb, path)
         refreshing = self._admit(operation, shop_id, urgent=urgent)
         try:
-            token = access_token or await self._tokens.access_token(shop_id)
-            return await self._send(verb, operation, path, params, token, write=write)
+            return await self._send(
+                verb, operation, shop_id, path, params, access_token=access_token, write=write
+            )
         finally:
             if refreshing:
                 self._refresh_in_flight = False
@@ -311,17 +312,13 @@ class EtsyAdapter:
         self,
         method: str,
         operation: str,
+        shop_id: int,
         path: str,
         params: Mapping[str, str | int],
-        token: str,
         *,
+        access_token: str | None,
         write: bool,
     ) -> Any:
-        headers = {
-            "x-api-key": self._credentials.api_key_header(),
-            "authorization": f"Bearer {token}",
-            "accept": "application/json",
-        }
         url = self._config.base_url.rstrip("/") + path
         # Writes are not idempotent at Etsy: one attempt, never the retry loop.
         max_attempts = 1 if write else self._config.max_attempts
@@ -331,6 +328,14 @@ class EtsyAdapter:
             attempt += 1
             last = attempt >= max_attempts
             await self._wait_for_slot()
+            # Asked again before every attempt, after any wait: once the shop is disconnected the
+            # provider refuses, so a call backing off never sends its retry (Codex review of #49).
+            token = access_token or await self._tokens.access_token(shop_id)
+            headers = {
+                "x-api-key": self._credentials.api_key_header(),
+                "authorization": f"Bearer {token}",
+                "accept": "application/json",
+            }
             try:
                 response = await self._client.request(
                     method,

@@ -49,7 +49,7 @@ Runbook:
 
 1. The tokens are deleted (envelope columns set to null; the database check refuses a disconnected row with any token part). The tokens are never opened on the way, so a shop whose vault key was lost can still be disconnected.
 2. The integration and the shop are marked `disconnected`; `disconnected_at` and `purge_after` (30 days later) are stored, with the audit record `shop.disconnected`, in one transaction.
-3. No Etsy call is made for the shop afterwards: the token provider finds no usable integration and refuses before any request (AC-4.7.1), and a re-check answers 409 `shop-not-connected`.
+3. No Etsy call is made for the shop afterwards: the token provider finds no usable integration and refuses before any request (AC-4.7.1), and a re-check answers 409 `shop-not-connected`. The adapter asks for the token again before every attempt, after any throttle or backoff wait, so a call that was retrying when the shop was disconnected stops too; only a request already on the wire at that moment can still complete.
 4. Repeating it changes nothing (no second record).
 5. Reconnecting clears `disconnected_at` and `purge_after` and marks the shop active again.
 
