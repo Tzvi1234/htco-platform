@@ -5,7 +5,7 @@ numeric Etsy user ID, a dot, then random text), so leak checks can search for th
 """
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -23,14 +23,27 @@ from htco_application.etsy_connect import (
     ShopConnectionRequest,
     TokenGrant,
 )
-from htco_application.marketplace import MarketplaceNotFoundError, MarketplaceShop
+from htco_application.marketplace import (
+    Listing,
+    ListingState,
+    MarketplaceError,
+    MarketplaceNotFoundError,
+    MarketplaceShop,
+    Page,
+    ReceiptAddressCheck,
+)
 from htco_application.shop_integrations import (
     EtsyConnection,
     OAuthTokens,
     ShopIntegration,
 )
 from htco_application.shops import ShopSummary
-from htco_domain.integrations import IntegrationProvider, IntegrationStatus
+from htco_domain.integrations import (
+    CapabilityResult,
+    IntegrationProvider,
+    IntegrationStatus,
+    ShopCapability,
+)
 
 NOW = datetime(2026, 10, 15, 9, 0, tzinfo=UTC)
 ETSY_USER = 12345678
@@ -160,6 +173,8 @@ class Connector:
     integrations: dict[uuid.UUID, ShopIntegration] = field(default_factory=dict)
     grants: list[tuple[uuid.UUID, uuid.UUID]] = field(default_factory=list)
     requests: list[ShopConnectionRequest] = field(default_factory=list)
+    # When set, connected integrations are also stored here (the vault behind the probes).
+    vault: Vault | None = None
 
     async def connect(self, request: ShopConnectionRequest) -> ConnectedShop:
         self.requests.append(request)
@@ -194,6 +209,8 @@ class Connector:
         )
         integration = stored_integration(connection)
         self.integrations[shop_id] = integration
+        if self.vault is not None:
+            self.vault.rows[shop_id] = integration
         await self.audit.append(request.audit_record(shop_id, reconnected=existing is not None))
         return ConnectedShop(shop=shop, integration=integration, reconnected=existing is not None)
 
@@ -275,6 +292,100 @@ class Vault:
         if audit is not None:
             self.audit.append(audit)
         return True
+
+    async def record_successful_call(self, shop_id: uuid.UUID, *, at: datetime) -> None:
+        row = self.rows[shop_id]
+        if row.status is IntegrationStatus.CONNECTED:
+            self.rows[shop_id] = replace(row, last_successful_call_at=at)
+
+    async def disconnect(
+        self,
+        shop_id: uuid.UUID,
+        *,
+        purge_after: datetime | None = None,
+        audit: AuditRecord | None = None,
+    ) -> bool:
+        row = self.rows[shop_id]
+        if row.status is IntegrationStatus.DISCONNECTED:
+            return False
+        self.rows[shop_id] = replace(
+            row,
+            status=IntegrationStatus.DISCONNECTED,
+            tokens=None,
+            key_id=None,
+            disconnected_at=NOW if purge_after is None else purge_after - timedelta(days=30),
+            purge_after=purge_after,
+        )
+        if audit is not None:
+            self.audit.append(audit)
+        return True
+
+
+@dataclass
+class Capabilities:
+    """The capability store in memory: the latest result per shop and capability."""
+
+    rows: dict[uuid.UUID, dict[ShopCapability, CapabilityResult]] = field(default_factory=dict)
+    saved: list[tuple[uuid.UUID, uuid.UUID, tuple[CapabilityResult, ...]]] = field(
+        default_factory=list
+    )
+
+    async def save(
+        self,
+        organization_id: uuid.UUID,
+        shop_id: uuid.UUID,
+        results: Sequence[CapabilityResult],
+    ) -> None:
+        self.saved.append((organization_id, shop_id, tuple(results)))
+        current = self.rows.setdefault(shop_id, {})
+        for result in results:
+            current[result.capability] = result
+
+    async def last_checked_at(self, shop_id: uuid.UUID) -> datetime | None:
+        found = self.rows.get(shop_id)
+        return None if not found else max(r.checked_at for r in found.values())
+
+
+@dataclass
+class Probe:
+    """The marketplace's read calls the capability probes make; each answer or error scripted."""
+
+    shop: MarketplaceShop | MarketplaceError = field(default_factory=etsy_shop)
+    addresses: ReceiptAddressCheck | MarketplaceError = field(
+        default_factory=lambda: ReceiptAddressCheck(receipts_seen=1, address_present=True)
+    )
+    listings: Page[Listing] | MarketplaceError = field(
+        default_factory=lambda: Page(items=(), total_count=4, offset=0)
+    )
+    calls: list[str] = field(default_factory=list)
+
+    async def get_shop(self, shop_id: int, *, urgent: bool = False) -> MarketplaceShop:
+        self.calls.append(f"get_shop:{shop_id}:{urgent}")
+        if isinstance(self.shop, MarketplaceError):
+            raise self.shop
+        return self.shop
+
+    async def check_receipt_addresses(
+        self, shop_id: int, *, urgent: bool = True
+    ) -> ReceiptAddressCheck:
+        self.calls.append(f"check_receipt_addresses:{shop_id}:{urgent}")
+        if isinstance(self.addresses, MarketplaceError):
+            raise self.addresses
+        return self.addresses
+
+    async def list_listings(
+        self,
+        shop_id: int,
+        *,
+        state: ListingState = ListingState.ACTIVE,
+        limit: int = 25,
+        offset: int = 0,
+        urgent: bool = False,
+    ) -> Page[Listing]:
+        self.calls.append(f"list_listings:{shop_id}:{state.value}:{limit}:{offset}:{urgent}")
+        if isinstance(self.listings, MarketplaceError):
+            raise self.listings
+        return self.listings
 
 
 class Lock:
