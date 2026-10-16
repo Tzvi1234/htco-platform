@@ -226,7 +226,7 @@ async def test_callback__probes_the_new_shop_and_answers_the_results() -> None:
         capabilities = connected.json()["integration"]["capabilities"]
         assert [c["capability"] for c in capabilities] == CAPABILITIES
         assert {c["capability"]: c["state"] for c in capabilities}["shipment_write"] == "unknown"
-        assert [r.action for r in world.audit.records][-1] == "shop.capabilities_checked"
+        assert [r.action for r in world.store.audits] == ["shop.capabilities_checked"]
 
 
 async def test_callback__a_failing_probe__still_connects_with_no_results() -> None:

@@ -396,3 +396,49 @@ async def test_describe__never_opens_the_tokens_so_a_lost_key_can_still_disconne
     assert (described.status, described.tokens) == (IntegrationStatus.CONNECTED, None)
     assert described.organization_id == tenant.organization_id
     assert await stranger.disconnect(shop, purge_after=NOW + timedelta(days=30))
+
+
+async def test_capability_store__results_and_their_audit_commit_together(
+    database: Database,
+) -> None:
+    """Codex review of #49: if the audit record cannot be written, nothing of the save stays."""
+    tenant = Tenant(database)
+    the_vault = vault(database)
+    connected = await PostgresShopConnector(database, the_vault).connect(
+        request_for(tenant, etsy_ids())
+    )
+    store = PostgresCapabilityStore(database)
+    shop = connected.shop.id
+    record = AuditRecord.new(
+        organization_id=tenant.organization_id,
+        actor=ActorRef(ActorKind.USER, str(tenant.owner)),
+        action="shop.capabilities_checked",
+        entity_type="shop",
+        entity_id=str(shop),
+        after={"trigger": "recheck"},
+    )
+    generation = connected.integration.generation
+    assert await store.save(
+        tenant.organization_id, shop, results(NOW), generation=generation, audit=record
+    )
+
+    with pytest.raises(Exception, match="audit_log_pkey"):  # the same record twice
+        await store.save(
+            tenant.organization_id,
+            shop,
+            results(NOW + timedelta(hours=1)),
+            generation=generation,
+            successful_call_at=NOW + timedelta(hours=1),
+            audit=record,
+        )
+
+    assert (
+        scalar(
+            database, "select max(checked_at) from app.shop_capabilities where shop_id = %s", [shop]
+        )
+        == NOW
+    )
+    loaded = await the_vault.load(shop)
+    assert loaded is not None
+    assert loaded.last_successful_call_at is None
+    assert scalar(database, "select count(*) from audit.audit_log where id = %s", [record.id]) == 1

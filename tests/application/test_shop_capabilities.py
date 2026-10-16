@@ -165,7 +165,9 @@ async def test_probe__saves_the_results_records_the_successful_call_and_audits()
     assert world.store.generations == [world.integration.generation]
     assert saved == tuple(found.values())
     assert world.store.successful_calls == [NOW]
-    [record] = world.audit.records
+    # Written by the store in the same transaction as the results (Codex review of #49).
+    assert world.audit.records == []
+    [record] = world.store.audits
     assert record.action == "shop.capabilities_checked"
     assert record.entity_id == str(SHOP)
     assert record.actor == ACTOR
@@ -300,7 +302,7 @@ async def test_recheck__owner_or_admin__probes_and_answers_the_results(role: Rol
     )
 
     assert [r.capability for r in results] == list(ShopCapability)
-    [record] = world.audit.records
+    [record] = world.store.audits
     assert record.after is not None
     assert record.after["trigger"] == "recheck"
     assert record.actor == ACTOR
@@ -429,6 +431,7 @@ async def test_probe__superseded_by_a_disconnect_or_reconnect__leaves_no_trace()
         await world.probe_now()
 
     assert world.audit.records == []
+    assert world.store.audits == []
     assert world.integration.last_successful_call_at is None
     assert world.store.rows == {}
 
