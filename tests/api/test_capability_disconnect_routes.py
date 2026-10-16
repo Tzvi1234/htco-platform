@@ -18,6 +18,7 @@ import pytest
 from htco_api.app import AppOptions, create_app
 from htco_api.auth import Authenticator
 from htco_api.web_auth import WebAuth
+from htco_application.access.authentication import Membership
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_integrations import IntegrationSummary
@@ -129,9 +130,23 @@ class World:
         return response
 
 
+class TwoOrganizations(Memberships):
+    """The caller owns a second organization too: no default organization."""
+
+    several = False
+
+    @override
+    async def memberships_of(self, user: Any) -> Sequence[Membership]:
+        first = await super().memberships_of(user)
+        if not self.several:
+            return first
+        return [*first, Membership(uuid.UUID(int=7), Role.OWNER, frozenset())]
+
+
 async def _world(
     *,
     role: Role = Role.OWNER,
+    several_organizations: bool = False,
     mfa: bool = True,
     probe: Probe | None = None,
     probes_on: bool = True,
@@ -139,7 +154,7 @@ async def _world(
     clock = Clock()
     vault, store, audit = Vault(), Capabilities(), AuditLog()
     probe = probe or Probe()
-    memberships = Memberships(Role.OWNER)
+    memberships = TwoOrganizations(Role.OWNER)
     connect = EtsyConnect(
         authorization_server=AuthorizationServer(),
         directory=Directory(),
@@ -177,10 +192,13 @@ async def _world(
             "/v1/auth/mfa/verify", json={"factor_id": "f1", "code": "123456"}, headers=CSRF
         )
         assert verified.status_code == 200
+        # Connecting names no organization yet: the shop is created with one organization, then
+        # the caller becomes an owner of a second one.
         world.shop_id = (await world.connect_shop())["shop"]["id"]
         world.probe.calls.clear()
         world.clock.now = NOW + timedelta(minutes=1)
         memberships.role = role
+        memberships.several = several_organizations
         if not mfa:
             # A new sign-in without the second factor: aal1 from here on.
             await http.post("/v1/auth/sign-out", headers=CSRF)
@@ -369,3 +387,12 @@ async def test_no_response__ever_carries_a_token(world: World) -> None:
     for response in world.responses:
         assert "fake-access" not in response.text
         assert "fake-refresh" not in response.text
+
+
+async def test_disconnect__owner_of_several_organizations__authorized_for_the_shops_own() -> None:
+    """Codex review of #49: the route must not need a default organization."""
+    async for world in _world(several_organizations=True):
+        response = await world.disconnect(shop_of(world))
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "disconnected"

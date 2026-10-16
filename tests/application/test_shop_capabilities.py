@@ -161,6 +161,7 @@ async def test_probe__saves_the_results_records_the_successful_call_and_audits()
 
     [(organization, shop, saved)] = world.store.saved
     assert (organization, shop) == (ORG, SHOP)
+    assert world.store.generations == [world.integration.generation]
     assert saved == tuple(found.values())
     assert world.integration.last_successful_call_at == NOW
     [record] = world.audit.records

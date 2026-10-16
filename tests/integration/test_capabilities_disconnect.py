@@ -44,6 +44,17 @@ async def database() -> AsyncIterator[Database]:
         await db.stop()
 
 
+async def the_generation(store_vault: Database, shop_id: uuid.UUID) -> int:
+    """The shop's current connection generation, as a probe would have read it."""
+    return int(
+        scalar(
+            store_vault,
+            "select connection_generation from app.shop_integrations where shop_id = %s",
+            [shop_id],
+        )
+    )
+
+
 def results(at: datetime = NOW) -> list[CapabilityResult]:
     return [
         CapabilityResult(ShopCapability.SHOP_DETAILS, CapabilityState.AVAILABLE, "read_ok", at),
@@ -64,8 +75,11 @@ async def test_capability_store__keeps_the_latest_per_capability_and_owner_reads
     store = PostgresCapabilityStore(database)
     shop = connected.shop.id
 
-    await store.save(tenant.organization_id, shop, results(NOW - timedelta(hours=1)))
-    await store.save(tenant.organization_id, shop, results(NOW))
+    generation = connected.integration.generation
+    await store.save(
+        tenant.organization_id, shop, results(NOW - timedelta(hours=1)), generation=generation
+    )
+    await store.save(tenant.organization_id, shop, results(NOW), generation=generation)
 
     assert scalar(
         database, "select count(*) from app.shop_capabilities where shop_id = %s", [shop]
@@ -92,10 +106,20 @@ async def test_capability_store__never_moves_a_row_to_another_organization(
         request_for(tenant, etsy_ids())
     )
     store = PostgresCapabilityStore(database)
-    await store.save(tenant.organization_id, connected.shop.id, results())
+    await store.save(
+        tenant.organization_id,
+        connected.shop.id,
+        results(),
+        generation=(await the_generation(database, connected.shop.id)),
+    )
 
     with pytest.raises(ValueError, match="another organization"):
-        await store.save(other.organization_id, connected.shop.id, results(NOW + timedelta(1)))
+        await store.save(
+            other.organization_id,
+            connected.shop.id,
+            results(NOW + timedelta(1)),
+            generation=connected.integration.generation,
+        )
 
     assert (
         scalar(
@@ -115,9 +139,21 @@ async def test_capability_store__an_older_probe_never_overwrites_a_newer_one(
         request_for(tenant, etsy_ids())
     )
     store = PostgresCapabilityStore(database)
-    await store.save(tenant.organization_id, connected.shop.id, results(NOW))
+    await store.save(
+        tenant.organization_id,
+        connected.shop.id,
+        results(NOW),
+        generation=(await the_generation(database, connected.shop.id)),
+    )
 
-    await store.save(tenant.organization_id, connected.shop.id, results(NOW - timedelta(hours=1)))
+    await store.save(
+        tenant.organization_id,
+        connected.shop.id,
+        results(
+            NOW - timedelta(hours=1),
+            generation=(await the_generation(database, connected.shop.id)),
+        ),
+    )
 
     assert (
         scalar(
@@ -163,11 +199,21 @@ async def test_reconnect_and_disconnect__drop_the_old_probe_results(database: Da
     store = PostgresCapabilityStore(database)
     count = "select count(*) from app.shop_capabilities where shop_id = %s"
 
-    await store.save(tenant.organization_id, connected.shop.id, results())
+    await store.save(
+        tenant.organization_id,
+        connected.shop.id,
+        results(),
+        generation=(await the_generation(database, connected.shop.id)),
+    )
     await connector.connect(request_for(tenant, etsy))
     assert scalar(database, count, [connected.shop.id]) == 0
 
-    await store.save(tenant.organization_id, connected.shop.id, results())
+    await store.save(
+        tenant.organization_id,
+        connected.shop.id,
+        results(),
+        generation=(await the_generation(database, connected.shop.id)),
+    )
     await the_vault.disconnect(connected.shop.id, purge_after=NOW + timedelta(days=30))
     assert scalar(database, count, [connected.shop.id]) == 0
 
@@ -269,3 +315,36 @@ async def test_disconnect_dates__only_on_a_disconnected_row(database: Database) 
             "update app.shop_integrations set purge_after = now() where shop_id = %s",
             [connected.shop.id],
         )
+
+
+async def test_capability_store__a_probe_of_an_earlier_connection_is_dropped(
+    database: Database,
+) -> None:
+    """A probe still running when the shop is disconnected or reconnected never stores its
+    results for the new state (Codex review of #49)."""
+    tenant = Tenant(database)
+    the_vault = vault(database)
+    etsy = etsy_ids()
+    connector = PostgresShopConnector(database, the_vault)
+    first = await connector.connect(request_for(tenant, etsy))
+    store = PostgresCapabilityStore(database)
+    shop = first.shop.id
+    count = "select count(*) from app.shop_capabilities where shop_id = %s"
+
+    await the_vault.disconnect(shop, purge_after=NOW + timedelta(days=30))
+    late = await store.save(
+        tenant.organization_id, shop, results(), generation=first.integration.generation
+    )
+    assert late is False
+    assert scalar(database, count, [shop]) == 0
+
+    again = await connector.connect(request_for(tenant, etsy))
+    assert again.integration.generation > first.integration.generation
+    assert not await store.save(
+        tenant.organization_id, shop, results(), generation=first.integration.generation
+    )
+    assert scalar(database, count, [shop]) == 0
+    assert await store.save(
+        tenant.organization_id, shop, results(), generation=again.integration.generation
+    )
+    assert scalar(database, count, [shop]) == len(results())
