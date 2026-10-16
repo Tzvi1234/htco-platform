@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from htco_application.marketplace import (
+    MarketplaceAuthError,
     MarketplacePermissionError,
     MarketplaceWriteRefusedError,
     ReceiptAddressCheck,
@@ -26,6 +27,7 @@ from htco_integrations.etsy import (
     EtsyAdapter,
     EtsyConfig,
     EtsyCredentials,
+    Timekeeping,
 )
 from tests.integrations.test_etsy_adapter import (
     SHOP_ID,
@@ -260,3 +262,43 @@ async def test_check_receipt_addresses__forbidden__typed_error(
     async with harness.client:
         with pytest.raises(MarketplacePermissionError):
             await harness.adapter.check_receipt_addresses(SHOP_ID)
+
+
+# --- Codex review of #49: a disconnect stops calls already under way ----------------------------
+
+
+class DisconnectedAfterFirstToken:
+    """Hands out one token, then answers as the provider does once the shop is disconnected."""
+
+    def __init__(self) -> None:
+        self.asked = 0
+
+    async def access_token(self, shop_id: int) -> str:
+        self.asked += 1
+        if self.asked > 1:
+            raise MarketplaceAuthError(f"Etsy shop {shop_id} is not connected")
+        return "fake-access-token"
+
+
+@pytest.mark.ac("AC-4.7.1")
+async def test_retry_after_a_disconnect__no_further_request() -> None:
+    """Each attempt asks for the token again (after the throttle wait), so a call that is backing
+    off when the shop is disconnected never sends its retry."""
+    etsy = StrictEtsy(httpx.Response(503, json={"error": "x"}, headers=quota_headers()))
+    harness = Harness(etsy, EtsyConfig())
+    tokens = DisconnectedAfterFirstToken()
+    adapter = EtsyAdapter(
+        harness.client,
+        credentials=EtsyCredentials(keystring="k", shared_secret="s"),  # noqa: S106 - fake
+        access_tokens=tokens,
+        timekeeping=Timekeeping(
+            now=harness.time.now, monotonic=harness.time.monotonic, sleep=harness.time.sleep
+        ),
+    )
+
+    async with harness.client:
+        with pytest.raises(MarketplaceAuthError):
+            await adapter.get_shop(SHOP_ID, urgent=True)
+
+    assert len(etsy.requests) == 1
+    assert tokens.asked == 2
