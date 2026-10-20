@@ -266,9 +266,11 @@ class Vault:
             None,
         )
 
-    async def update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool:
+    async def update_tokens(
+        self, shop_id: uuid.UUID, tokens: OAuthTokens, *, generation: int | None = None
+    ) -> bool:
         row = self.rows[shop_id]
-        if row.status is not IntegrationStatus.CONNECTED:
+        if row.status is not IntegrationStatus.CONNECTED or not _current(row, generation):
             return False
         self.updates.append(tokens)
         self.rows[shop_id] = replace(
@@ -277,10 +279,10 @@ class Vault:
         return True
 
     async def record_refresh_failure(
-        self, shop_id: uuid.UUID, *, at: datetime | None = None
+        self, shop_id: uuid.UUID, *, at: datetime | None = None, generation: int | None = None
     ) -> int:
         row = self.rows[shop_id]
-        if row.status is not IntegrationStatus.CONNECTED:
+        if row.status is not IntegrationStatus.CONNECTED or not _current(row, generation):
             return 0
         self.rows[shop_id] = replace(
             row, failure_count=row.failure_count + 1, last_refresh_failed_at=at or NOW
@@ -288,10 +290,14 @@ class Vault:
         return row.failure_count + 1
 
     async def mark_needs_reauth(
-        self, shop_id: uuid.UUID, *, audit: AuditRecord | None = None
+        self,
+        shop_id: uuid.UUID,
+        *,
+        audit: AuditRecord | None = None,
+        generation: int | None = None,
     ) -> bool:
         row = self.rows[shop_id]
-        if row.status is not IntegrationStatus.CONNECTED:
+        if row.status is not IntegrationStatus.CONNECTED or not _current(row, generation):
             return False
         self.rows[shop_id] = replace(row, status=IntegrationStatus.NEEDS_REAUTH)
         if audit is not None:
@@ -441,6 +447,10 @@ class Probe:
         if isinstance(self.listings, MarketplaceError):
             raise self.listings
         return self.listings
+
+
+def _current(row: ShopIntegration, generation: int | None) -> bool:
+    return generation is None or row.generation == generation
 
 
 class Lock:

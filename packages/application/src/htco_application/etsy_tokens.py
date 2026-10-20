@@ -47,14 +47,20 @@ class RefreshableTokens(Protocol):
 
     async def find_by_marketplace_shop(self, etsy_shop_id: int) -> ShopIntegration | None: ...
 
-    async def update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool: ...
+    async def update_tokens(
+        self, shop_id: uuid.UUID, tokens: OAuthTokens, *, generation: int | None = None
+    ) -> bool: ...
 
     async def record_refresh_failure(
-        self, shop_id: uuid.UUID, *, at: datetime | None = None
+        self, shop_id: uuid.UUID, *, at: datetime | None = None, generation: int | None = None
     ) -> int: ...
 
     async def mark_needs_reauth(
-        self, shop_id: uuid.UUID, *, audit: AuditRecord | None = None
+        self,
+        shop_id: uuid.UUID,
+        *,
+        audit: AuditRecord | None = None,
+        generation: int | None = None,
     ) -> bool: ...
 
 
@@ -141,7 +147,13 @@ class VaultAccessTokenProvider:
                 f"Etsy refused the refresh token of shop {etsy}; reconnect the shop"
             ) from None
         except OAuthUnavailableError:
-            failures = await self._vault.record_refresh_failure(integration.shop_id, at=now)
+            failures = await self._vault.record_refresh_failure(
+                integration.shop_id, at=now, generation=integration.generation
+            )
+            if failures == 0:  # this connection is gone (disconnected or reconnected meanwhile)
+                raise MarketplaceAuthError(
+                    f"Etsy shop {etsy} was disconnected or reconnected"
+                ) from None
             if failures >= MAX_REFRESH_FAILURES:
                 await self._needs_reauth(integration, "refresh_failed")
                 raise MarketplaceAuthError(
@@ -157,13 +169,18 @@ class VaultAccessTokenProvider:
         fresh = grant.tokens(
             now, refresh_expires_at=tokens.refresh_expires_at if same_refresh else None
         )
-        if not await self._vault.update_tokens(integration.shop_id, fresh):
-            raise MarketplaceAuthError(f"Etsy shop {etsy} was disconnected")
+        # Only the connection this refresh started under (Codex review of #49): a disconnect and
+        # reconnect during the OAuth call leave the new connection's tokens alone.
+        if not await self._vault.update_tokens(
+            integration.shop_id, fresh, generation=integration.generation
+        ):
+            raise MarketplaceAuthError(f"Etsy shop {etsy} was disconnected or reconnected")
         return fresh.access_token
 
     async def _needs_reauth(self, integration: ShopIntegration, reason: str) -> None:
         await self._vault.mark_needs_reauth(
             integration.shop_id,
+            generation=integration.generation,
             audit=AuditRecord.new(
                 organization_id=integration.organization_id,
                 actor=_ACTOR,

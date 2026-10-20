@@ -73,11 +73,13 @@ class PostgresTokenVault:
         """Like `load`, without opening the tokens: works even when they cannot be opened."""
         return await anyio.to_thread.run_sync(self._load, shop_id, False)
 
-    async def update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool:
-        return await anyio.to_thread.run_sync(self._update_tokens, shop_id, tokens)
+    async def update_tokens(
+        self, shop_id: uuid.UUID, tokens: OAuthTokens, *, generation: int | None = None
+    ) -> bool:
+        return await anyio.to_thread.run_sync(self._update_tokens, shop_id, tokens, generation)
 
     async def record_refresh_failure(
-        self, shop_id: uuid.UUID, *, at: datetime | None = None
+        self, shop_id: uuid.UUID, *, at: datetime | None = None, generation: int | None = None
     ) -> int:
         def run() -> int:
             with self._database.connection() as connection:
@@ -87,9 +89,10 @@ class PostgresTokenVault:
                     set failure_count = failure_count + 1,
                         last_refresh_failed_at = coalesce(%s, now())
                     where shop_id = %s and provider = %s and status = 'connected'
+                      and (%s::integer is null or connection_generation = %s::integer)
                     returning failure_count
                     """,
-                    [at, shop_id, _PROVIDER.value],
+                    [at, shop_id, _PROVIDER.value, generation, generation],
                 ).fetchone()
             return 0 if row is None else int(row[0])
 
@@ -105,7 +108,11 @@ class PostgresTokenVault:
         )
 
     async def mark_needs_reauth(
-        self, shop_id: uuid.UUID, *, audit: AuditRecord | None = None
+        self,
+        shop_id: uuid.UUID,
+        *,
+        audit: AuditRecord | None = None,
+        generation: int | None = None,
     ) -> bool:
         def run() -> bool:
             with self._database.connection() as connection, connection.transaction():
@@ -113,9 +120,10 @@ class PostgresTokenVault:
                     """
                     update app.shop_integrations set status = 'needs_reauth'
                     where shop_id = %s and provider = %s and status = 'connected'
+                      and (%s::integer is null or connection_generation = %s::integer)
                     returning id
                     """,
-                    [shop_id, _PROVIDER.value],
+                    [shop_id, _PROVIDER.value, generation, generation],
                 ).fetchone()
                 if row is not None and audit is not None:
                     append_audit(connection, audit)
@@ -294,7 +302,9 @@ class PostgresTokenVault:
             ).fetchone()
         return None if row is None else self._row(row, open_tokens=open_tokens)
 
-    def _update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool:
+    def _update_tokens(
+        self, shop_id: uuid.UUID, tokens: OAuthTokens, generation: int | None = None
+    ) -> bool:
         envelope = self._seal(shop_id, tokens)
         access, refresh = envelope.ciphertexts
         with self._database.connection() as connection:
@@ -305,6 +315,7 @@ class PostgresTokenVault:
                     refresh_token_ciphertext = %s, access_expires_at = %s,
                     refresh_expires_at = %s, failure_count = 0, last_refresh_failed_at = null
                 where shop_id = %s and provider = %s and status = 'connected'
+                  and (%s::integer is null or connection_generation = %s::integer)
                 """,
                 [
                     envelope.key_id,
@@ -315,6 +326,8 @@ class PostgresTokenVault:
                     tokens.refresh_expires_at,
                     shop_id,
                     _PROVIDER.value,
+                    generation,
+                    generation,
                 ],
             )
             return cursor.rowcount == 1

@@ -131,13 +131,16 @@ class TokenVault(Protocol):
         they cannot be opened any more, so a disconnect can always remove them."""
         ...
 
-    async def update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool:
-        """After a refresh: store the newest tokens. False when the shop is no longer connected,
-        so a refresh that finishes after a disconnect never brings tokens back."""
+    async def update_tokens(
+        self, shop_id: uuid.UUID, tokens: OAuthTokens, *, generation: int | None = None
+    ) -> bool:
+        """After a refresh: store the newest tokens. False when the shop is no longer connected
+        (with `generation`: no longer that connection), so a refresh that finishes after a
+        disconnect or reconnect never writes over what replaced it."""
         ...
 
     async def record_refresh_failure(
-        self, shop_id: uuid.UUID, *, at: datetime | None = None
+        self, shop_id: uuid.UUID, *, at: datetime | None = None, generation: int | None = None
     ) -> int:
         """Count a failed refresh made `at` (default: the database's now); returns the failures
         since the last success."""
@@ -146,7 +149,11 @@ class TokenVault(Protocol):
     async def record_successful_call(self, shop_id: uuid.UUID, *, at: datetime) -> None: ...
 
     async def mark_needs_reauth(
-        self, shop_id: uuid.UUID, *, audit: AuditRecord | None = None
+        self,
+        shop_id: uuid.UUID,
+        *,
+        audit: AuditRecord | None = None,
+        generation: int | None = None,
     ) -> bool:
         """Status `needs_reauth`, with `audit` written in the same transaction. False (and no
         record) when the shop was not connected, so repeated failures audit once."""
