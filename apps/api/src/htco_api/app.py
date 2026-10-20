@@ -21,7 +21,8 @@ from htco_api.problems import PROBLEM_MEDIA_TYPE, UNEXPECTED_ERROR_RESPONSES, ad
 from htco_api.web_auth import WebAuth, web_auth_router
 from htco_application.access.management import AccessStore, Inviter
 from htco_application.etsy_connect import EtsyConnect
-from htco_application.shop_integrations import IntegrationReader
+from htco_application.shop_capabilities import CapabilityChecks
+from htco_application.shop_integrations import DisconnectingVault, IntegrationReader
 from htco_application.shops import ShopReader
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter
 from htco_platform.readiness import ReadinessCheck
@@ -104,6 +105,10 @@ class AppOptions:
     etsy: EtsyConnect | None = None
     # Connection health for the shop card (slice 4.4); without it, that route answers 503.
     integrations: IntegrationReader | None = None
+    # Capability probes (slice 4.5); without them, re-checking answers 503.
+    capability_checks: CapabilityChecks | None = None
+    # Disconnect (slice 4.7) deletes tokens through the vault; without it, disconnect answers 503.
+    token_vault: DisconnectingVault | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -144,6 +149,8 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.web_auth = options.web_auth
     app.state.etsy = options.etsy
     app.state.integrations = options.integrations
+    app.state.capability_checks = options.capability_checks
+    app.state.token_vault = options.token_vault
     app.state.clock = options.clock
     app.include_router(
         health_router(

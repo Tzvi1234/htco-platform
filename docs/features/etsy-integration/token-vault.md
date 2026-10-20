@@ -60,12 +60,13 @@ Port in `htco_application.shop_integrations` (`TokenVault`), adapter `htco_persi
 |---|---|
 | `store(connection: EtsyConnection) -> ShopIntegration` | Connect or reconnect: upsert by shop and provider, new envelope, status `connected`, failures reset, scopes replaced; a shop of another organization raises `TokenVaultError` and changes nothing |
 | `load(shop_id) -> ShopIntegration \| None` | The row with tokens opened (`tokens` is `None` once disconnected); raises `TokenVaultError` naming the shop only |
+| `describe(shop_id) -> ShopIntegration \| None` | The row without opening the tokens (slice 4.7): disconnect uses it, so a row whose key was lost can still be disconnected |
 | `update_tokens(shop_id, tokens: OAuthTokens) -> bool` | After a refresh: new envelope, failures reset; `False` if the shop is no longer `connected`, so a refresh finishing after a disconnect never restores tokens |
 | `record_refresh_failure(shop_id, *, at=None) -> int` | Increment and return `failure_count`; set `last_refresh_failed_at` |
 | `find_by_marketplace_shop(etsy_shop_id)` | The integration (not disconnected) of an Etsy shop, tokens opened (slice 4.4) |
 | `record_successful_call(shop_id, *, at)` | Set `last_successful_call_at` |
 | `mark_needs_reauth(shop_id)` | Status `needs_reauth` (tokens kept until reconnect or disconnect) |
-| `disconnect(shop_id)` | Delete key ID, wrapped key, ciphertexts and expiry; status `disconnected`; the row stays |
+| `disconnect(shop_id, *, purge_after, audit) -> bool` | Delete key ID, wrapped key, ciphertexts and expiry; status `disconnected`, `disconnected_at`, `purge_after`; the shop marked disconnected, its probe results deleted, the connection generation moved on and `audit` written, in one transaction; the row stays (slice 4.7). False when already disconnected |
 | `rotate_keys(*, batch_size) -> int` | Re-wrap every row on a previous key (see Operations) |
 | `rotate_batch(*, limit) -> int` | One batch of the above, in one transaction with the rows locked (adapter only) |
 | `key_usage() -> dict[str, int]` | Rows per key ID (IDs are not secret) |

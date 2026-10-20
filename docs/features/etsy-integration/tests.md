@@ -33,7 +33,23 @@ Fixtures (`tests/fixtures/etsy/`): `shop.json`, `receipts_page.json`, `listings_
 
 Slices 4.2 to 4.4 have their own test maps in [token vault](token-vault.md#tests) and [connect flow](connect-flow.md#tests).
 
+### Slices 4.5 and 4.7
+
+| Acceptance criterion | Tests |
+|---|---|
+| AC-4.5.1 | `tests/application/test_shop_capabilities.py` (`test_probe__everything_readable__*`, `test_probe__a_failed_read__never_available`, `test_probe__webhooks_configured__still_unknown_until_one_arrives`, `test_probe__scope_missing__*`, `test_probe__token_refused__*`), `tests/domain/test_integrations.py::test_capability_state__never_available_without_a_successful_probe`, `tests/api/test_capability_disconnect_routes.py::test_recheck__owner__probes_and_the_card_shows_results_with_checked_at`, `tests/integration/test_capabilities_disconnect.py::test_capability_store__*`, pgTAP `07_capabilities_disconnect` |
+| AC-4.5.2 | `tests/integrations/test_etsy_read_only.py` (every write method refused by the adapter and by the client hook with a strict mock that fails on any non-GET; no code sets the allow flag; the address check reads one receipt with GET and keeps no value), `test_probe__reads_one_receipt_and_one_listing_urgently_and_nothing_else` |
+| AC-4.7.1 | `tests/application/test_shop_disconnect.py::test_after_disconnect__no_etsy_call_is_made_for_the_shop` (real adapter, strict HTTP mock), `tests/api/test_capability_disconnect_routes.py::test_disconnect__afterwards_no_marketplace_call_for_the_shop`, `tests/integration/test_capabilities_disconnect.py::test_disconnect__tokens_gone_shop_disconnected_purge_date_and_audit_at_once` |
+| AC-4.7.2 | Procedure in [operations](operations.md#backups-and-the-restore-rehearsal-ac-472); rehearsal record pending (owner) |
+
+
 ## Verification evidence
+
+### Slices 4.5 and 4.7 — 2026-10-16
+
+- **Automated:** `ruff format --check`, `ruff check`, `mypy` (strict), `lint-imports` and `pytest` pass locally; database tests (`tests/integration`, pgTAP `07`) run in CI's `database` job (Docker was not available locally).
+- **Real run:** none against Etsy, deliberately: the agent never calls the real API. The probes' first real run is the owner's next connection or "Re-check"; they only send GETs.
+- **Restore rehearsal:** not performed (needs Docker and the production connection string, both with the owner); see the record in [operations](operations.md#rehearsal-record).
 
 ### Slice 4.1 — 2026-10-15
 
