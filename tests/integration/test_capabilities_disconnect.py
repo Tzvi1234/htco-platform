@@ -29,6 +29,7 @@ from tests.integration.test_etsy_connection import (
     etsy_ids,
     request_for,
     scalar,
+    tokens,
     vault,
 )
 
@@ -518,3 +519,27 @@ async def test_capability_store__reserve_check__only_for_the_loaded_connection(
             cooldown=timedelta(seconds=30),
             generation=connected.integration.generation,
         )
+
+
+async def test_refresh_writes__name_the_generation__a_new_connection_is_never_touched(
+    database: Database,
+) -> None:
+    """Codex review of #49: token updates, failure counts and needs-reauth after a refresh only
+    apply to the connection generation the refresh started under."""
+    tenant = Tenant(database)
+    the_vault = vault(database)
+    etsy = etsy_ids()
+    connector = PostgresShopConnector(database, the_vault)
+    first = await connector.connect(request_for(tenant, etsy))
+    shop = first.shop.id
+    old = first.integration.generation
+    await connector.connect(request_for(tenant, etsy))  # reconnected: a new generation
+
+    assert not await the_vault.update_tokens(shop, tokens("-late"), generation=old)
+    assert await the_vault.record_refresh_failure(shop, generation=old) == 0
+    assert not await the_vault.mark_needs_reauth(shop, generation=old)
+    loaded = await the_vault.load(shop)
+    assert loaded is not None
+    assert (loaded.status, loaded.failure_count) == (IntegrationStatus.CONNECTED, 0)
+    assert loaded.tokens is not None
+    assert "-late" not in loaded.tokens.access_token

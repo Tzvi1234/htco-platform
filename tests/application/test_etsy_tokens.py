@@ -9,6 +9,7 @@ the integration `needs_reauth`, audited, with no retry loop (AC-4.4.2).
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta
+from typing import override
 
 import anyio
 import pytest
@@ -372,3 +373,45 @@ async def test_pinned_tokens__expired__refreshed_once_like_the_provider() -> Non
 
     assert token != OLD_ACCESS
     assert world.server.refreshed == [OLD_REFRESH]
+
+
+class ReconnectDuringRefresh(AuthorizationServer):
+    """While Etsy answers the refresh, the shop is disconnected and connected again."""
+
+    def __init__(self, world: World, outcome: str = "ok") -> None:
+        super().__init__(refresh_outcome=outcome)
+        self.world = world
+
+    @override
+    async def refresh(self, refresh_token: str) -> TokenGrant:
+        row = self.world.row
+        assert row.tokens is not None
+        self.world.vault.rows[SHOP] = replace(
+            row,
+            generation=row.generation + 2,
+            tokens=replace(row.tokens, access_token="12345678.new-connection-token"),  # noqa: S106
+        )
+        return await super().refresh(refresh_token)
+
+
+@pytest.mark.parametrize("outcome", ["ok", "invalid_grant", "unavailable"])
+async def test_refresh__connection_replaced_meanwhile__never_touches_the_new_one(
+    outcome: str,
+) -> None:
+    """Codex review of #49: every vault write after the OAuth call names the generation the
+    refresh started under, so the new connection keeps its tokens, failures and status."""
+    world = World(access_left=timedelta(minutes=1))
+    world.server = ReconnectDuringRefresh(world, outcome)
+    world.provider = VaultAccessTokenProvider(
+        world.vault, world.server, world.lock, clock=world.clock
+    )
+
+    with pytest.raises((MarketplaceAuthError, MarketplaceUnavailableError)):
+        await world.provider.access_token(ETSY_SHOP)
+
+    row = world.row
+    assert row.tokens is not None
+    assert row.tokens.access_token == "12345678.new-connection-token"  # noqa: S105 - fake
+    assert row.status is IntegrationStatus.CONNECTED
+    assert row.failure_count == 0
+    assert world.vault.updates == []
