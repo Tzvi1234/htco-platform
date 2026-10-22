@@ -4353,7 +4353,11 @@ components:
     ListingsView:
       properties:
         source:
-          $ref: '#/components/schemas/DataSource'
+          type: string
+          title: DataSource
+          x-extensible-enum:
+          - etsy_live
+          - htco_store
         fetched_at:
           type: string
           format: date-time
@@ -4728,7 +4732,11 @@ components:
     OrdersView:
       properties:
         source:
-          $ref: '#/components/schemas/DataSource'
+          type: string
+          title: DataSource
+          x-extensible-enum:
+          - etsy_live
+          - htco_store
         fetched_at:
           type: string
           format: date-time
@@ -4983,7 +4991,11 @@ components:
     ReviewsView:
       properties:
         source:
-          $ref: '#/components/schemas/DataSource'
+          type: string
+          title: DataSource
+          x-extensible-enum:
+          - etsy_live
+          - htco_store
         fetched_at:
           type: string
           format: date-time
@@ -5234,7 +5246,11 @@ components:
     ShippingView:
       properties:
         source:
-          $ref: '#/components/schemas/DataSource'
+          type: string
+          title: DataSource
+          x-extensible-enum:
+          - etsy_live
+          - htco_store
         fetched_at:
           type: string
           format: date-time
@@ -5304,7 +5320,11 @@ components:
     ShopOverviewView:
       properties:
         source:
-          $ref: '#/components/schemas/DataSource'
+          type: string
+          title: DataSource
+          x-extensible-enum:
+          - etsy_live
+          - htco_store
         fetched_at:
           type: string
           format: date-time
@@ -5435,7 +5455,11 @@ components:
     ShopStatsView:
       properties:
         source:
-          $ref: '#/components/schemas/DataSource'
+          type: string
+          title: DataSource
+          x-extensible-enum:
+          - etsy_live
+          - htco_store
         fetched_at:
           type: string
           format: date-time

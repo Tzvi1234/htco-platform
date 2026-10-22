@@ -27,7 +27,7 @@ from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, WithJsonSchema
 
 from htco_api.auth import CurrentAuth
 from htco_api.etsy import SHOP_NOT_CONNECTED
@@ -99,8 +99,22 @@ class MoneyView(BaseModel):
     currency: str
 
 
+# The set of sources grows (the stored order history added `htco_store`): declared as an
+# extensible enum, so a client handles a value it does not know yet.
+_Source = Annotated[
+    DataSource,
+    WithJsonSchema(
+        {
+            "type": "string",
+            "title": "DataSource",
+            "x-extensible-enum": [source.value for source in DataSource],
+        }
+    ),
+]
+
+
 class FreshnessView(BaseModel):
-    source: DataSource
+    source: _Source
     fetched_at: datetime
     stale: bool
 
