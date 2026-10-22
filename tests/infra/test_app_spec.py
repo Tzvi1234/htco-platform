@@ -255,7 +255,7 @@ def test_deploy__refuses_a_spec_that_costs_more_than_the_budget() -> None:
     names = [step.get("name") for step in job["steps"]]
     assert names.index(BUDGET_STEP) < names.index("Deploy")
     [budget] = [step for step in job["steps"] if step.get("name") == BUDGET_STEP]
-    assert budget["env"]["BUDGET_USD"] == "5"
+    assert budget["env"]["BUDGET_USD"] == "20"
     assert "/v2/apps/propose" in budget["run"]
     assert ".app_cost" in budget["run"]
 
@@ -277,3 +277,48 @@ def test_deploy_never_puts_the_whole_app_object_in_a_step_environment() -> None:
     """GitHub prints every step's environment in the run log. DigitalOcean's app object holds the
     account's email, internal IDs and every (encrypted) secret, so only the URLs are passed on."""
     assert "${{ steps.deploy.outputs.app }}" not in DEPLOY_TEXT
+
+
+WORKER_SECRETS = {
+    "PGPASSWORD",
+    "HTCO_TOKEN_VAULT_KEY",
+    "HTCO_TOKEN_VAULT_PREVIOUS_KEYS",
+    "HTCO_ETSY_KEYSTRING",
+    "HTCO_ETSY_SHARED_SECRET",
+}
+
+
+def _worker() -> dict[str, Any]:
+    [worker] = SPEC["workers"]
+    assert worker["name"] == "agent-worker"
+    found: dict[str, Any] = worker
+    return found
+
+
+def test_worker__the_apis_image_running_the_worker_on_one_fixed_instance() -> None:
+    """Slice 5.1: $5 a month that cannot grow by itself."""
+    worker = _worker()
+    assert worker["image"] == _api()["image"]
+    assert worker["run_command"] == "python -m htco_worker"
+    assert (worker["instance_size_slug"], worker["instance_count"]) == ("apps-s-1vcpu-0.5gb", 1)
+    assert "autoscaling" not in worker
+    assert worker["liveness_health_check"]["http_path"] == "/healthz"
+
+
+def test_worker__secrets_are_placeholders_and_the_database_url_has_no_password() -> None:
+    envs = {env["key"]: env for env in _worker()["envs"]}
+    for key in WORKER_SECRETS:
+        assert envs[key]["type"] == "SECRET", key
+        assert PLACEHOLDER.match(envs[key]["value"]), key
+    assert envs["HTCO_DATABASE_URL"]["value"] == _envs()["HTCO_DATABASE_URL"]["value"]
+    assert envs["HTCO_ENVIRONMENT"]["value"] == "production"
+
+
+def test_worker__runs_only_the_named_maintenance_schedules() -> None:
+    envs = {env["key"]: env for env in _worker()["envs"]}
+    assert set(envs["HTCO_WORKER_SCHEDULES"]["value"].split(",")) == {
+        "maintenance.capability_probes",
+        "maintenance.refresh_token_expiry",
+        "maintenance.purge_disconnected_shops",
+        "maintenance.prune_finished_jobs",
+    }

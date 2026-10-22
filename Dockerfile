@@ -17,12 +17,12 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable --package htco-api
+    uv sync --locked --no-dev --no-editable --package htco-api --package htco-worker
 
 # Runtime: the virtual environment only, owned by root and run by an unprivileged user.
 FROM ${PYTHON_IMAGE} AS runtime
 LABEL org.opencontainers.image.title="htco-api" \
-      org.opencontainers.image.description="HTCO OS HTTP API" \
+      org.opencontainers.image.description="HTCO OS HTTP API and agent-worker (python -m htco_worker)" \
       org.opencontainers.image.source="https://github.com/Tzvi1234/htco-platform"
 RUN groupadd --system --gid 10001 htco \
  && useradd --system --uid 10001 --gid htco --no-create-home --home-dir /nonexistent \
