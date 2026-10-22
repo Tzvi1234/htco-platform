@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Slug** | `job-queue` |
-| **Phase / slices** | Phase 5 — slice 5.1 (queue, worker, schedules, maintenance jobs); the inbox and outbox (5.2) and the durable automation engine (5.10) run on it |
+| **Phase / slices** | Phase 5 — slice 5.1 (queue, worker, schedules, maintenance jobs), slice 5.2 (inbox, outbox, `Idempotency-Key`); the durable automation engine (5.10) runs on it |
 | **Requirements** | [FR-AUT-03](../../product/PRD.md) (retries, dead letters), [FR-SHOP-04](../../product/PRD.md) (purge after disconnect), ER-REL-01, ER-REL-05 |
 | **Decision** | [ADR-0007](../../adr/0007-job-queue.md) (accepted 2026-10-22: in-house Postgres queue) |
 | **Status** | Built and tested in CI; aligned with the unified execution plan (5.0: migration `20261023120000`, correlation and causation IDs); the `agent-worker` deployment is #54 (see [operations](operations.md#deployment)) |
@@ -28,11 +28,15 @@ Background work (maintenance today; receipt ingest, outbox delivery and automati
 | AC-5.1.4 | Given a worker running a job, when it receives SIGTERM, then it claims nothing new, lets the job finish within the grace period and exits 0; a job past the grace period is left to its lease. | 5.1 | Pass in CI (real process signalled) |
 | AC-5.1.5 | ADR-0007 is Accepted with the spike results. | 5.1 | Done |
 | AC-5.1.6 | Given two worker instances, when a schedule's period comes, then its job runs once; the purge deletes only the disconnected shop's data and only after its purge date. | 5.1 | Pass in CI and in memory |
+| AC-5.2.1 | Given an external event, when it is recorded twice (also at the same time), then there is one inbox row and one job. | 5.2 | Pass in CI |
+| AC-5.2.2 | Given a business change committed with its outbox message, when the worker crashes before delivering, then after restart the effect is delivered exactly once. | 5.2 | Pass in CI (real process killed) |
+| AC-5.2.3 | Given a POST with an `Idempotency-Key`, when it is repeated with the same body, then the stored response comes back with no second effect; the same key with another body is refused (422). | 5.2 | Pass (API and Postgres store) |
 
 ## Scope
 
 - **In (5.1):** `JobQueue` port and Postgres adapter; the worker loop (claim and lease, heartbeat, retries with backoff and jitter, dead letter, per-resource locks, graceful SIGTERM, scheduled jobs); `jobs.jobs` and `jobs.worker_heartbeats`; the `htco_worker` database role; the health port; maintenance schedules: daily capability probes (GET-only), refresh-token expiry checks, purge of disconnected shops after their purge date, pruning of finished jobs; `htco admin dead-letters`; the app-spec change for the `agent-worker` component (separate, unmerged pull request until the owner approves the cost).
-- **Out:** inbox and outbox (5.2), webhook ingress (5.3), receipt ingest and reconciliation (5.4, 5.5), queue metrics, alerts and the admin view with retry (5.9).
+- **In (5.2):** `jobs.inbox` (unique `(source, event_id)`, recorded with its job in one transaction), `jobs.outbox` (unique idempotency key, status, attempts, next attempt, written with its `outbox.deliver` job inside the business transaction), the delivery job, `private.idempotency_keys` and `run_idempotently` for unsafe routes (first used by `POST /v1/automations/{id}/executions` in slice 5.10).
+- **Out:** webhook ingress (5.3; every Etsy event type, only if the Seller App offers webhooks), any outbox destination (HTCO writes nothing to Etsy; email arrives in Phase 6), receipt ingest and reconciliation (5.4, 5.5), queue metrics, alerts and the admin view with retry (5.9).
 
 ## External facts learned
 

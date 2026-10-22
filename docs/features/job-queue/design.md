@@ -62,3 +62,23 @@ Retry delays use "equal jitter": between half and all of the policy's capped exp
 | Fan-out to per-shop jobs | One job looping over all shops | Each shop's job runs in its own tenant scope, is retried alone and holds the shop's lock |
 | Polling every second | `LISTEN/NOTIFY` | Works through the session pooler and keeps the loop simple; at pilot volume a poll is one indexed query |
 | `last_error` keeps the exception type only, unless the code marks the message safe (`JobError`) | The full message | Messages from libraries can carry buyer data or tokens |
+
+## Inbox, outbox and Idempotency-Key (slice 5.2)
+
+- **`jobs.inbox`** (`source`, `event_id` unique together, `event_type`, optional `organization_id`/`shop_id`, `payload` ≤ 64 KB, `payload_hash` SHA-256 of the canonical JSON, `received_at`, `processed_at`, `job_id`). `PostgresInbox.record(event, job)` inserts the row and enqueues the processing job in one transaction; a duplicate returns the first row and job. Cross-tenant for the worker (events may arrive before their organization is known).
+- **`jobs.outbox`** (`organization_id`, `shop_id`, `destination` `<system>.<effect>`, `idempotency_key` unique, `payload` ≤ 16 KB, `status` `pending`/`delivered`/`dead`, `attempts`, `next_attempt_at`, `last_error`, `delivered_at`, and the gateway's optional `action_execution_id` and `correlation_id`, ADR-0019). The `destination` of an Etsy write is its action name (for example `etsy.inventory.update`); the API channel registers one `Deliverer` per write action in 5.13. `add_outbox_in(connection, message)` writes it inside the business transaction with the `outbox.deliver` job (`outbox:<id>`). The worker reaches a message only inside its organization's job.
+- **Delivery** (`deliver_outbox_message`): a delivered message is skipped (a replayed job); otherwise the destination's `Deliverer` gets the message with its idempotency key; a failure is recorded on the message and re-raised so the job retries, and the job's last attempt marks the message `dead`. No destination is registered yet. A trigger on `jobs.jobs` keeps the message's `next_attempt_at` equal to its delivery job's next run and marks the message `dead` when the job dies, also when a crash on the last attempt bypassed the delivery code.
+- **`private.idempotency_keys`** (`user_id`, `key` unique together, `method`, `path`, `request_hash`, `state`, `response_status` < 500, `response_body`, `expires_at` = `created_at` + 24 h). `run_idempotently` (API) claims the key with one insert, replays a completed response with `Idempotent-Replayed: true`, refuses another body with 422 `idempotency-key-reused`, answers 409 `idempotency-in-progress` while the first runs, and releases the key when the work raises or answers 5xx. Each claim also drops up to 100 expired rows.
+
+```mermaid
+sequenceDiagram
+  participant UC as Use case
+  participant DB as Postgres
+  participant W as Worker
+  participant D as Destination
+  UC->>DB: business change + outbox row + outbox.deliver job (one transaction)
+  W->>DB: claim outbox.deliver
+  W->>D: deliver(idempotency key)
+  W->>DB: delivered
+  Note over W,D: crash before delivered: the job runs again with the same key
+```
