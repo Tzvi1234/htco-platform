@@ -524,3 +524,24 @@ async def test_orders__the_look_past_the_cap_is_cached_with_the_period(world: Wo
     await shop_orders(world.dashboard, auth(), SHOP, now=NOW, state=OrderFilter.PAID)
 
     assert world.source.operations().count("list_order_receipts") == 6
+
+
+async def test_orders__the_look_past_the_cap_fails__partial_rather_than_whole(
+    world: World,
+) -> None:
+    world.source.receipts = [
+        receipt(10_000 + n, created=NOW - timedelta(minutes=n)) for n in range(501)
+    ]
+    original = world.source.list_order_receipts
+
+    async def failing_peek(shop_id: int, **kwargs: object) -> object:
+        if kwargs.get("limit") == 1:
+            raise MarketplaceUnavailableError("down", status=503)
+        return await original(shop_id, **kwargs)  # type: ignore[arg-type]
+
+    world.source.list_order_receipts = failing_peek  # type: ignore[method-assign,assignment]
+
+    page = await shop_orders(world.dashboard, auth(), SHOP, now=NOW)
+
+    assert page.partial is True
+    assert page.total == 500
