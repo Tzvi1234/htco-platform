@@ -16,7 +16,7 @@
 
 ## Catalog
 
-Events are published through the outbox, which arrives in Phase 5. Shop connections in Phase 4 write audit records only; their events start in Phase 5.
+Events are published through the outbox (`jobs.outbox`, slice 5.2); the first producers arrive with slices 5.4 and 5.10. Shop connections in Phase 4 write audit records only; their events start in Phase 5.
 
 | Event | Producer | Consumers | Phase |
 |---|---|---|---|

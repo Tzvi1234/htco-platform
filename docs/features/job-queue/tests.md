@@ -12,6 +12,10 @@
 | Integration (processes) | A worker process killed with SIGKILL mid-job and a second one completing it exactly once; SIGTERM finishing the job; SIGTERM past the grace period | `tests/integration/test_worker_process.py` (with `worker_harness.py`) |
 | Database (pgTAP) | Schema hidden from client roles; RLS on; the role cannot log in or bypass RLS; constraints; one running job per lock key; the worker role's scope | `supabase/tests/database/09_job_queue.test.sql` |
 | CLI | `htco admin dead-letters` output, filter, limits, missing configuration | `tests/api/test_cli_dead_letters.py` |
+| Application (5.2) | Payload hash, inbox and outbox values, the delivery job: once only, failures recorded and retried, dead on the last attempt, unknown destination | `tests/application/test_messaging.py` |
+| API (5.2) | `run_idempotently`: replay without a second effect, another body 422, in progress 409, per user, 24 hours, 5xx and exceptions not stored, key format, fingerprints | `tests/api/test_idempotency.py` |
+| Integration (5.2) | Inbox twice and concurrently: one row, one job; outbox once per key with one delivery job; the worker reaches outbox rows of its organization only; the idempotency store (replay, reuse, in progress, expiry, concurrent first requests); a crash after the business commit delivers exactly once | `tests/integration/test_messaging.py`, `tests/integration/test_worker_process.py` |
+| Database (5.2) | RLS, no client access, unique inbox events and outbox keys, delivered needs its time, worker scope | `supabase/tests/database/10_inbox_outbox.test.sql` |
 
 ## Acceptance criteria → tests
 
@@ -23,6 +27,9 @@
 | AC-5.1.4 | `test_sigterm__the_current_job_finishes_before_the_worker_exits`; `test_sigterm__a_job_beyond_the_grace_period__is_left_to_its_lease`; `test_stop__lets_the_current_job_finish_then_exits_and_says_so`; `test_stop__a_job_past_the_grace_period__is_abandoned_to_its_lease` |
 | AC-5.1.5 | [ADR-0007](../../adr/0007-job-queue.md) status Accepted with the spike table |
 | AC-5.1.6 | `test_schedule__two_workers_in_one_period__one_job_runs_once` (Postgres); `test_schedules__two_workers_in_one_period__enqueue_and_run_one_job`; `test_enqueue_capability_probes__twice_on_one_day__one_job_per_shop`; `test_purge__deletes_only_the_disconnected_shops_data_and_only_after_its_date`; `test_purge__in_another_organizations_scope__finds_nothing_to_purge`; `test_reconnect_before_the_purge__keeps_the_shops_data` |
+| AC-5.2.1 | `test_inbox__same_event_twice__one_row_and_one_job`; `test_inbox__same_event_at_the_same_time__one_row_and_one_job`; pgTAP `10_inbox_outbox` |
+| AC-5.2.2 | `test_crash_after_the_business_commit__the_effect_is_delivered_exactly_once` (real process, SIGKILL); `test_deliver__replayed_job__delivers_once` |
+| AC-5.2.3 | `test_same_key_same_body__returns_the_stored_response_without_a_second_effect`; `test_same_key_other_body__is_refused_without_an_effect`; `test_idempotency_store__replays_refuses_and_expires`; `test_idempotency_store__concurrent_first_requests__one_runs` |
 | Security checklist: worker role with explicit tenant filters | `test_worker_role__sees_only_the_jobs_organization`; `test_worker_role__cannot_write_another_organizations_rows`; `test_worker_role__has_no_access_to_sessions_identities_or_audit_history`; pgTAP worker-role checks |
 | AC-4.5.2 (kept): probes only read | `test_daily_probe_job__reaches_etsy_with_gets_only`; `test_probe_shop_daily__reads_the_shop_and_stores_results_as_the_scheduler` |
 

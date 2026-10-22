@@ -12,7 +12,7 @@ import random
 import signal
 import sys
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 
 import anyio
@@ -42,6 +42,12 @@ from htco_application.maintenance import (
     prune_finished_jobs,
     purge_disconnected_shop,
 )
+from htco_application.messaging import (
+    OUTBOX_DELIVERY_JOB,
+    Deliverer,
+    OutboxStore,
+    deliver_outbox_message,
+)
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_domain.integrations import TokenHealth
 from htco_integrations.etsy import EtsyAdapter, EtsyConfig, EtsyCredentials
@@ -49,6 +55,7 @@ from htco_integrations.etsy_oauth import EtsyOAuthClient
 from htco_persistence.database import Database, tenant_scope
 from htco_persistence.jobs import PostgresJobQueue, PostgresWorkerHeartbeats
 from htco_persistence.maintenance import PostgresPurgeStore, PostgresShopDirectory
+from htco_persistence.messaging import PostgresOutbox
 from htco_persistence.shop_integrations import (
     PostgresCapabilityStore,
     PostgresRefreshLock,
@@ -146,6 +153,19 @@ def maintenance_handlers(  # noqa: PLR0913 - the handlers' collaborators
     return handlers
 
 
+def outbox_handlers(
+    store: OutboxStore, deliverers: Mapping[str, Deliverer]
+) -> dict[str, JobHandler]:
+    """The `outbox.deliver` job (slice 5.2). The pilot has no destination yet (HTCO writes
+    nothing to Etsy; email arrives in Phase 6), so a message would fail into the dead-letter
+    state; nothing writes one before a destination exists."""
+
+    async def deliver(job: ClaimedJob) -> None:
+        await deliver_outbox_message(store, deliverers, job, now=_now())
+
+    return {OUTBOX_DELIVERY_JOB: deliver}
+
+
 def _etsy_checks(
     settings: WorkerSettings, database: Database, http: httpx.AsyncClient
 ) -> tuple[PostgresTokenVault | None, CapabilityChecks | None]:
@@ -199,7 +219,7 @@ async def _serve(settings: WorkerSettings) -> None:
         vault=vault,
         checks=checks,
         purge=PostgresPurgeStore(database),
-    )
+    ) | outbox_handlers(PostgresOutbox(database), {})
     worker = Worker(
         queue,
         PostgresWorkerHeartbeats(database),

@@ -24,6 +24,10 @@ flowchart LR
 | Queue | Denial of service: a poison job kills workers in a loop | A crash counts as an attempt; the job ends `dead` | `test_crash_on_the_last_attempt__ends_dead` |
 | Etsy | Tampering with the live shop | The probes are GETs through the guarded adapter; any other method to the shop API is refused before a token is asked for and again in the HTTP client | `test_daily_probe_job__reaches_etsy_with_gets_only`, `tests/integrations/test_etsy_read_only.py` |
 | Purge | Deleting the wrong shop's data | Runs in the shop's organization, names organization and shop in every statement, re-checks `disconnected` and the purge date under a row lock, audits the counts | `test_purge__*`, `test_reconnect_before_the_purge__keeps_the_shops_data` |
+| Outbox | Information disclosure across tenants | The worker reaches outbox rows of its job's organization only (RLS) | `test_outbox__the_worker_delivers_inside_the_organization_only`, pgTAP 10 |
+| Outbox | Duplicate external effects | One message per idempotency key; the key goes to the destination on every attempt | `test_crash_after_the_business_commit__*` |
+| Idempotency-Key | Replaying another user's response | Keys are per signed-in user; the request hash must match | `test_same_key_from_another_user__is_a_new_request` |
+| Idempotency-Key | Storing personal data | Only routes whose responses hold no buyer contact data opt in; responses ≥ 500 are not stored; 24-hour lifetime enforced by a check | `test_server_error__is_not_stored_and_the_retry_runs_for_real` |
 | Schedules | Repudiation | Probe and expiry results are audited with actor `system:scheduler` and the job ID as correlation | `test_check_refresh_token__expired__marks_needs_reauth_with_an_audit_record` |
 
 ## Personal data
