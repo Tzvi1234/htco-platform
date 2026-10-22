@@ -278,3 +278,25 @@ async def test_forget__a_load_in_flight_finishes_for_its_caller_but_stores_nothi
     fresh = Loader("again")
     assert (await cache.get(KEY, fresh, POLICY)).value == "again"
     assert fresh.calls == 1
+
+
+async def test_get_dated__keeps_the_values_own_fetch_time_for_freshness_and_expiry() -> None:
+    """Codex review of #51: a value built from older data keeps that data's time."""
+    clock = Clock()
+    cache = ShopDataCache(clock=clock)
+    key = CacheKey(uuid.uuid4(), 1, "stats")
+    policy = CachePolicy(ttl=timedelta(minutes=10), max_stale=timedelta(minutes=30))
+    older = clock.now - timedelta(minutes=8)
+    loads: list[int] = []
+
+    async def load() -> tuple[str, datetime]:
+        loads.append(1)
+        return "basis", older
+
+    first = await cache.get_dated(key, load, policy)
+    assert (first.value, first.fetched_at) == ("basis", older)
+    clock.now += timedelta(minutes=1)
+    assert (await cache.get_dated(key, load, policy)).fetched_at == older
+    clock.now += timedelta(minutes=2)
+    await cache.get_dated(key, load, policy)
+    assert len(loads) == 2

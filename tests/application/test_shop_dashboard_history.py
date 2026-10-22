@@ -425,3 +425,57 @@ async def test_stats__etsy_down_after_6_hours__stale_with_the_fetch_time(world: 
 
 def test_periods__the_four_the_orders_screen_offers() -> None:
     assert [p.value for p in OrderPeriod] == ["30d", "90d", "12m", "all"]
+
+
+# --- Codex review of #51 ------------------------------------------------------------------------
+
+
+async def test_stats__built_from_cached_receipts__keep_the_receipts_fetch_time(
+    world: World,
+) -> None:
+    """Codex review of #51: a basis made from receipts cached 29 minutes earlier carries their
+    fetch time, so it is not shown as newer than it is and its 6 hours start then."""
+    await shop_orders(world.dashboard, auth(), SHOP, now=NOW, period=OrderPeriod.ALL)
+    world.clock.now = NOW + timedelta(minutes=29)
+
+    stats = await shop_stats(world.dashboard, auth(), SHOP, now=world.clock.now)
+
+    assert stats.freshness.fetched_at == NOW
+    assert world.source.windows == [None]
+    world.clock.now = NOW + timedelta(hours=6, minutes=5)
+    await shop_stats(world.dashboard, auth(), SHOP, now=world.clock.now)
+    assert world.source.windows == [None, None]
+
+
+@pytest.mark.parametrize(
+    ("now", "inside", "outside"),
+    [
+        # Twelve calendar months before 1 March 2024 is 1 March 2023 (365 days would be 2 March).
+        (
+            datetime(2024, 3, 1, 9, tzinfo=UTC),
+            datetime(2023, 3, 1, 10, tzinfo=UTC),
+            datetime(2023, 3, 1, 8, tzinfo=UTC),
+        ),
+        # From a leap day, 28 February of the year before.
+        (
+            datetime(2024, 2, 29, 9, tzinfo=UTC),
+            datetime(2023, 2, 28, 10, tzinfo=UTC),
+            datetime(2023, 2, 28, 8, tzinfo=UTC),
+        ),
+    ],
+)
+async def test_orders__12_months__twelve_calendar_months(
+    world: World, now: datetime, inside: datetime, outside: datetime
+) -> None:
+    """Codex review of #51: the 12-month period is calendar months, not 365 days."""
+    world.clock.now = now
+    world.source.receipts = [
+        receipt(1, created=inside, status="completed", shipped=True),
+        receipt(2, created=outside, status="completed", shipped=True),
+    ]
+
+    page = await shop_orders(world.dashboard, auth(), SHOP, now=now, period=OrderPeriod.MONTHS_12)
+
+    assert [o.order_id for o in page.items] == [1]
+    assert page.window_start == inside.replace(hour=9)
+    assert world.source.windows == [inside.replace(hour=9) - timedelta(days=1)]
