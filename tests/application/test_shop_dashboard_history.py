@@ -479,3 +479,16 @@ async def test_orders__12_months__twelve_calendar_months(
     assert [o.order_id for o in page.items] == [1]
     assert page.window_start == inside.replace(hour=9)
     assert world.source.windows == [inside.replace(hour=9) - timedelta(days=1)]
+
+
+async def test_orders__cap_hit_only_by_the_extra_day__not_partial(world: World) -> None:
+    """Codex review of #51: the read reaches one day before the period; orders there that push
+    the read over the cap do not make the period itself partial."""
+    in_period = [receipt(10_000 + n, created=NOW - timedelta(minutes=n)) for n in range(999)]
+    before = [receipt(20_000 + n, created=NOW - timedelta(days=90, hours=2 + n)) for n in range(2)]
+    world.source.receipts = [*in_period, *before]
+
+    page = await shop_orders(world.dashboard, auth(), SHOP, now=NOW, period=OrderPeriod.DAYS_90)
+
+    assert page.total == 999
+    assert page.partial is False
