@@ -4,7 +4,7 @@ shop: read only). All values are invented."""
 
 from collections.abc import Callable
 from dataclasses import replace
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
@@ -106,6 +106,7 @@ class _Routed(StrictEtsy):
         super().__init__()
         self._answer = answer
 
+    @override
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if request.method != "GET":
