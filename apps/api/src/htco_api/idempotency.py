@@ -1,0 +1,107 @@
+"""`Idempotency-Key` on unsafe routes (slice 5.2, AC-5.2.3): replay the stored response.
+
+A route that opts in wraps its work in `run_idempotently`. With the header, the first request runs
+and its response (below 500) is stored for 24 hours; a retry with the same key and body gets that
+response again, marked `Idempotent-Replayed: true`, and the work does not run a second time. The
+same key with a different body answers 422 `idempotency-key-reused`; a retry while the first is
+still running answers 409 `idempotency-in-progress`. Responses that carry buyer contact data are
+never stored, so only routes without such data opt in.
+"""
+
+import uuid
+from collections.abc import Awaitable, Callable
+from datetime import datetime
+from typing import Any
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+from htco_api.problems import ProblemError, ProblemType
+from htco_application.idempotency import (
+    IdempotencyStore,
+    IdempotentRequest,
+    InvalidIdempotencyKeyError,
+    KeyReused,
+    Replay,
+    StillRunning,
+    check_idempotency_key,
+    is_storable,
+    request_fingerprint,
+)
+
+IDEMPOTENCY_HEADER = "Idempotency-Key"
+REPLAYED_HEADER = "Idempotent-Replayed"
+
+IDEMPOTENCY_KEY_REQUIRED = ProblemType(
+    "idempotency-key-required",
+    "Idempotency-Key required",
+    400,
+    "Send an Idempotency-Key header (1 to 255 visible ASCII characters) with this request.",
+)
+IDEMPOTENCY_KEY_INVALID = ProblemType(
+    "idempotency-key-invalid",
+    "Invalid Idempotency-Key",
+    400,
+    "An Idempotency-Key is 1 to 255 visible ASCII characters.",
+)
+IDEMPOTENCY_KEY_REUSED = ProblemType(
+    "idempotency-key-reused",
+    "Idempotency-Key reused",
+    422,
+    "This Idempotency-Key was used with a different request. Use a new key.",
+)
+IDEMPOTENCY_IN_PROGRESS = ProblemType(
+    "idempotency-in-progress",
+    "Request still running",
+    409,
+    "The first request with this Idempotency-Key has not finished. Retry shortly.",
+)
+
+type Work = Callable[[], Awaitable[tuple[int, dict[str, Any]]]]
+
+
+async def run_idempotently(  # noqa: PLR0913 - the request, its caller, the store and the work
+    request: Request,
+    *,
+    user_id: uuid.UUID,
+    store: IdempotencyStore,
+    now: datetime,
+    work: Work,
+    required: bool = True,
+) -> JSONResponse:
+    raw = request.headers.get(IDEMPOTENCY_HEADER)
+    if raw is None:
+        if required:
+            raise ProblemError(IDEMPOTENCY_KEY_REQUIRED)
+        status, body = await work()
+        return JSONResponse(body, status_code=status)
+    try:
+        key = check_idempotency_key(raw)
+    except InvalidIdempotencyKeyError:
+        raise ProblemError(IDEMPOTENCY_KEY_INVALID) from None
+    idempotent = IdempotentRequest(
+        user_id=user_id,
+        key=key,
+        method=request.method,
+        path=request.url.path,
+        fingerprint=request_fingerprint(request.method, request.url.path, await request.body()),
+    )
+    begun = await store.begin(idempotent, now=now)
+    if isinstance(begun, Replay):
+        return JSONResponse(
+            dict(begun.body), status_code=begun.status, headers={REPLAYED_HEADER: "true"}
+        )
+    if isinstance(begun, KeyReused):
+        raise ProblemError(IDEMPOTENCY_KEY_REUSED)
+    if isinstance(begun, StillRunning):
+        raise ProblemError(IDEMPOTENCY_IN_PROGRESS)
+    try:
+        status, body = await work()
+    except BaseException:
+        await store.abandon(idempotent)
+        raise
+    if is_storable(status):
+        await store.complete(idempotent, status=status, body=body)
+    else:
+        await store.abandon(idempotent)
+    return JSONResponse(body, status_code=status)

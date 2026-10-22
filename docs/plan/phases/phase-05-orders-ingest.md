@@ -17,7 +17,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 
 - [ ] 5.0 Alignment of PRs #53, #55, #58 with the contracts (blocking their merge)
 - [x] 5.1 Job queue and worker (PR #53; aligned: migration `20261023120000_job_queue.sql` because a shop fix took `20261023090000`, pgTAP `10_job_queue`, `correlation_id` and `causation_id` on jobs; deployment in #54)
-- [ ] 5.2 Inbox and outbox (PR #55)
+- [x] 5.2 Inbox and outbox (PR #55; aligned: migration `20261023130000_inbox_outbox.sql`, pgTAP `11_inbox_outbox`, `action_execution_id` and `correlation_id` on outbox messages)
 - [ ] 5.3 Webhook ingress for all 11 Etsy events
 - [ ] 5.4 Receipt ingest on the order history store (#57)
 - [ ] 5.5 Reconciliation and backfill on the queue
@@ -112,7 +112,7 @@ Owner's instruction (2026-10-23): **do not merge #53, #55 or #58 before they are
 | Change | Why |
 |---|---|
 | **Renumber the migrations after merged #57's `20261022120000_etsy_order_history.sql`.** #53 `20261022090000_job_queue.sql`, #55 `20261022100000_inbox_outbox.sql` and #58 `20261022110000_automation_engine.sql` become, for example, `20261023090000`, `20261023100000` and `20261023110000`, keeping their order. | Supabase's `db push` refuses (or, with `--include-all`, applies out of order) a migration older than the last applied one; production already has `20261022120000` |
-| **Renumber the pgTAP files.** #53's `08_job_queue.test.sql` collides with merged `08_etsy_order_history.test.sql`. Use `10_job_queue`, `10_inbox_outbox` (from #55's `09`) and `11_automation_engine` (from #58's `10`). | Deterministic test order and no confusing duplicates |
+| **Renumber the pgTAP files.** #53's `08_job_queue.test.sql` collides with merged `08_etsy_order_history.test.sql`. Use `10_job_queue`, `11_inbox_outbox` (from #55's `09`) and `11_automation_engine` (from #58's `10`). | Deterministic test order and no confusing duplicates |
 | Rebase onto the plan PR. Conflicts in `docs/plan/PLAN.md`, this file, `DATA_MODEL.md`, `EVENT_CATALOG.md` and `ADR-0007` resolve by keeping this plan's text and adding each PR's progress tick and validation-log line | The plan PR rewrites these files |
 
 ### PR #53 — slice 5.1 (job queue, worker, maintenance)

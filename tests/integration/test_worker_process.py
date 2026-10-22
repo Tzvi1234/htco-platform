@@ -17,10 +17,12 @@ from typing import Any
 import pytest
 
 from htco_application.jobs import JobSpec
+from htco_application.messaging import OUTBOX_DELIVERY_JOB, OutboxMessage
 from htco_domain.automation import RetryPolicy
 from htco_persistence.database import Database
 from htco_persistence.jobs import PostgresJobQueue
-from tests.integration.test_etsy_connection import _url
+from htco_persistence.messaging import PostgresOutbox
+from tests.integration.test_etsy_connection import Tenant, _url, scalar
 from tests.integration.worker_harness import MARKS_TABLE
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -60,7 +62,9 @@ async def admin() -> AsyncIterator[Database]:
 def spawn(tmp_path: Path) -> Iterator[Callable[..., subprocess.Popen[bytes]]]:
     started: list[subprocess.Popen[bytes]] = []
 
-    def start(kind: str, *, lease: float, grace: float) -> subprocess.Popen[bytes]:
+    def start(
+        kind: str, *, lease: float, grace: float, mode: str = "job"
+    ) -> subprocess.Popen[bytes]:
         with (tmp_path / f"worker-{len(started)}.log").open("wb") as log:
             process = subprocess.Popen(
                 [
@@ -70,6 +74,7 @@ def spawn(tmp_path: Path) -> Iterator[Callable[..., subprocess.Popen[bytes]]]:
                     kind,
                     str(lease),
                     str(grace),
+                    mode,
                 ],
                 cwd=REPO_ROOT,
                 env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
@@ -180,3 +185,40 @@ async def test_sigterm__a_job_beyond_the_grace_period__is_left_to_its_lease(
     assert time.monotonic() - started < 15
     assert job_row(admin, job_id) == ("running", 1)  # another worker takes it after the lease
     assert marks(admin, job_id, "effect") == []
+
+
+@pytest.mark.ac("AC-5.2.2")
+async def test_crash_after_the_business_commit__the_effect_is_delivered_exactly_once(
+    admin: Database, spawn: Callable[..., subprocess.Popen[bytes]]
+) -> None:
+    tenant = Tenant(admin)
+    # The business transaction commits the effect's intent and its delivery job together.
+    message_id = PostgresOutbox(admin).add(
+        OutboxMessage(
+            organization_id=tenant.organization_id,
+            destination="test.sink",
+            idempotency_key=f"sink:{uuid.uuid4()}",
+            payload={"hold_first": True},
+        ),
+        now=datetime.now(UTC),
+    )
+    first = spawn(OUTBOX_DELIVERY_JOB, lease=3, grace=5, mode="outbox")
+    wait_for(lambda: bool(marks(admin, message_id, "started")), seconds=60, what="delivery")
+
+    first.kill()  # before the destination was reached
+    first.wait(timeout=10)
+    assert marks(admin, message_id, "effect") == []
+    second = spawn(OUTBOX_DELIVERY_JOB, lease=3, grace=5, mode="outbox")
+    wait_for(
+        lambda: (
+            scalar(admin, "select status from jobs.outbox where id = %s", [message_id])
+            == "delivered"
+        ),
+        seconds=60,
+        what="the delivery after restart",
+    )
+    second.send_signal(signal.SIGTERM)
+    second.wait(timeout=30)
+
+    assert len(marks(admin, message_id, "effect")) == 1
+    assert len(marks(admin, message_id, "started")) == 2
