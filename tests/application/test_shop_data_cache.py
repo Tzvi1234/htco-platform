@@ -220,3 +220,30 @@ async def test_get__entries_past_max_stale_are_swept_on_any_access() -> None:
     await cache.get(CacheKey(uuid.UUID(int=2), 1, "profile"), Loader("new"), POLICY)
 
     assert len(cache) == 1
+
+
+async def test_entry__dropped_by_its_timer_when_max_stale_ends_without_any_access() -> None:
+    """Buyer data must not outlive `max_stale` just because nobody asks again (Codex, #50)."""
+    cache = ShopDataCache(clock=Clock())
+    short = CachePolicy(ttl=timedelta(milliseconds=10), max_stale=timedelta(milliseconds=30))
+    await cache.get(KEY, Loader("v"), short)
+    assert len(cache) == 1
+
+    await asyncio.sleep(0.1)
+
+    assert len(cache) == 0
+
+
+async def test_entry__timer_of_a_replaced_value_keeps_the_newer_one() -> None:
+    clock = Clock()
+    cache = ShopDataCache(clock=clock)
+    short = CachePolicy(ttl=timedelta(milliseconds=10), max_stale=timedelta(milliseconds=60))
+    await cache.get(KEY, Loader("old"), short)
+    await asyncio.sleep(0.04)
+    clock.advance(seconds=1)
+    long = CachePolicy(ttl=timedelta(minutes=5), max_stale=timedelta(hours=1))
+    await cache.get(KEY, Loader("new"), long)
+
+    await asyncio.sleep(0.05)
+
+    assert (await cache.get(KEY, Loader("unused"), long)).value == "new"

@@ -401,7 +401,11 @@ async def shop_orders(  # noqa: PLR0913 - the shop, the caller, the filter and t
     opened = await _open(dashboard, auth, shop_id, Capability.VIEW_ORDERS, now)
     contact = _sees_buyer_contact(opened, auth, now)
     window = await opened.get("receipts", opened.receipts)
-    orders = [_order_view(r, now, contact=contact) for r in window.value.receipts]
+    # The load reads one day more (for the callers' time zones); the list keeps to 30 days.
+    since = now - timedelta(days=SALES_WINDOW_DAYS)
+    orders = [
+        _order_view(r, now, contact=contact) for r in window.value.receipts if r.created_at >= since
+    ]
     counts = Counter[OrderFilter]()
     for order in orders:
         counts[OrderFilter(order.state.value)] += 1
@@ -411,7 +415,7 @@ async def shop_orders(  # noqa: PLR0913 - the shop, the caller, the filter and t
     return OrdersPage(
         shop_id=shop_id,
         freshness=_freshness(window),
-        window_start=window.value.since,
+        window_start=since,
         items=tuple(matching[offset : offset + limit]),
         total=len(matching),
         counts={f: counts.get(f, 0) for f in OrderFilter},
@@ -740,11 +744,11 @@ def _summarise(
             if receipt.grand_total.currency_code == currency:
                 revenue[day] += receipt.grand_total.as_decimal()
             _count_listings(top, receipt, currency)
-        if order_state(receipt) is OrderState.PAID and _needs_shipping(receipt):
-            awaiting += 1
-            ship_by = _ship_by(receipt)
-            if ship_by is not None and ship_by < now:
-                overdue += 1
+            if order_state(receipt) is OrderState.PAID and _needs_shipping(receipt):
+                awaiting += 1
+                ship_by = _ship_by(receipt)
+                if ship_by is not None and ship_by < now:
+                    overdue += 1
 
     def period(length: int) -> SalesPeriod:
         span = days[-length:]

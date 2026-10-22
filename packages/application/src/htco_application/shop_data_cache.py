@@ -11,9 +11,10 @@ memory only, never to disk or the database:
   daily budget held back, an unreadable answer) and a value younger than `max_stale` exists, that
   value is served marked stale, with the time it was fetched. For `failure_cooldown` after a
   failure nobody calls Etsy again for that key.
-- **Gone after `max_stale`.** Older values are dropped on the next access, so buyer data in order
-  values never lives in memory longer than the receipts' `max_stale`. `forget` drops a shop at
-  once (it was disconnected or reconnected).
+- **Gone after `max_stale`.** Each value is dropped by a timer when its `max_stale` ends (and
+  by a sweep on any access), so buyer data in order values never lives in memory longer than the
+  receipts' `max_stale`, even when nobody asks again (Codex review of #50). `forget` drops a shop
+  at once (it was disconnected or reconnected).
 
 Keys carry the connection's generation: a reconnect never sees the previous connection's data.
 """
@@ -150,9 +151,18 @@ class ShopDataCache:
         finally:
             self._flights.pop(key, None)
         fetched_at = self._clock()
-        self._entries[key] = _Entry(value, fetched_at, policy)
+        entry = _Entry(value, fetched_at, policy)
+        self._entries[key] = entry
         self._failures.pop(key, None)
+        asyncio.get_running_loop().call_later(
+            policy.max_stale.total_seconds(), self._expire, key, entry
+        )
         return value, fetched_at
+
+    def _expire(self, key: CacheKey, entry: _Entry) -> None:
+        """The timer: drop this entry unless a newer load has replaced it."""
+        if self._entries.get(key) is entry:
+            del self._entries[key]
 
     def _stale_or_raise(
         self, key: CacheKey, entry: _Entry | None, error: MarketplaceError

@@ -80,6 +80,7 @@ class World:
     source: ShopData
     memberships: Memberships
     http: httpx.AsyncClient
+    dashboard: ShopDashboard
     shop_id: str = ""
 
     async def get(self, view: str, shop_id: str | None = None, **params: Any) -> httpx.Response:
@@ -128,7 +129,7 @@ async def _world(*, dashboard_on: bool = True) -> AsyncIterator[World]:
     )
     transport = httpx.ASGITransport(app=app, client=("203.0.113.9", 50000))
     async with httpx.AsyncClient(transport=transport, base_url="https://api.test") as http:
-        world = World(clock, vault, source, memberships, http)
+        world = World(clock, vault, source, memberships, http, dashboard)
         assert (await http.post("/v1/auth/sign-in", json=CREDENTIALS, headers=CSRF)).is_success
         await http.post("/v1/auth/mfa/enroll", json={"name": "Phone"}, headers=CSRF)
         verified = await http.post(
@@ -400,3 +401,16 @@ async def test_not_signed_in__401(world: World) -> None:
     response = await world.get("overview")
 
     assert response.status_code == 401
+
+
+async def test_disconnect__the_shops_cached_live_data_leaves_memory(world: World) -> None:
+    """Codex review of #50: buyer names do not wait for the next request to be forgotten."""
+    assert (await world.get("orders")).status_code == 200
+    assert len(world.dashboard.cache) == 1
+
+    response = await world.http.post(
+        f"/v1/shop-integrations/{world.shop_id}/disconnect", headers=CSRF
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(world.dashboard.cache) == 0

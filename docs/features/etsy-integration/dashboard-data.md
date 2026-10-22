@@ -47,7 +47,7 @@ Etsy's limits are per app (about 10 requests a second and 10,000 a day across ev
 - **Single flight:** concurrent requests for the same shop and resource share one Etsy load.
 - **Stale on error:** when Etsy is unreachable, rate limited, the daily budget is held back (`QuotaDeferredError`) or the answer is unreadable, the last copy is served with `stale: true` and its `fetched_at`; the web app says "Etsy is not answering; showing data from …". For 30 seconds after a failure nobody calls Etsy again for that key.
 - **Lasting failures** (401 after the refresh, 403 scope) drop the cached copy and answer the problem.
-- Keys carry the connection's generation: a reconnect never sees the previous connection's data. A shop found disconnected or needing re-authentication has its cached data dropped at once.
+- Each value is dropped by a timer when its `max_stale` ends, even if nobody asks again. Keys carry the connection's generation: a reconnect never sees the previous connection's data. A disconnect drops the shop's cached data at once, and a shop found needing re-authentication has it dropped on the next request.
 - Dashboard reads are routine (never `urgent`), so below the daily floor they wait and stale data shows; order intake keeps the budget.
 - Tokens: every read uses a token pinned to the connection (`VaultAccessTokenProvider.pinned`), refreshed on demand under the existing per-shop advisory lock (slice 4.4).
 - A successful load sets the connection's `last_successful_call_at`, so the shop card's "Last synced" moves.

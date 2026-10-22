@@ -267,7 +267,7 @@ async def test_orders__owner__newest_first_with_buyer_tracking_and_counts(world:
     assert late.ship_by == NOW - timedelta(hours=1)
     [sent] = shipped.shipments
     assert (sent.carrier, sent.tracking_code) == ("fake-post", TRACKING)
-    assert page.window_start == NOW - timedelta(days=31)
+    assert page.window_start == NOW - timedelta(days=30)
     assert page.freshness.source is DataSource.ETSY_LIVE
 
 
@@ -442,3 +442,21 @@ async def test_reconnect__new_generation_never_sees_the_old_data(world: World) -
 
 def test_now_is_timezone_aware() -> None:
     assert NOW.tzinfo is UTC
+
+
+# --- Codex review of #50 ------------------------------------------------------------------------
+
+
+async def test_orders_and_awaiting__keep_to_30_days_though_31_are_read(world: World) -> None:
+    world.source.receipts = [
+        receipt(1, created=NOW - timedelta(days=2)),
+        receipt(2, created=NOW - timedelta(days=30, hours=12)),
+    ]
+
+    page = await shop_orders(world.dashboard, auth(), SHOP, now=NOW)
+    overview = await shop_overview(world.dashboard, auth(), SHOP, now=NOW)
+
+    assert [o.order_id for o in page.items] == [1]
+    assert page.counts[OrderFilter.PAID] == 1
+    assert overview.sales is not None
+    assert overview.sales.awaiting_shipment == 1
