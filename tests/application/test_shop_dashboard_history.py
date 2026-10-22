@@ -551,7 +551,8 @@ async def test_orders__the_look_past_the_cap_follows_its_window(world: World) ->
     """Codex review of #52: the overview refreshes the shared 30-day window; the look past the
     cap belongs to the window it was made for, never to a newer one."""
     world.source.receipts = [
-        receipt(10_000 + n, created=NOW - timedelta(minutes=n + 10)) for n in range(500)
+        *(receipt(10_000 + n, created=NOW - timedelta(minutes=n + 10)) for n in range(500)),
+        receipt(20_000, created=NOW - timedelta(days=30, hours=2)),  # the extra day
     ]
     first = await shop_orders(world.dashboard, auth(), SHOP, now=NOW)
     assert first.partial is False
