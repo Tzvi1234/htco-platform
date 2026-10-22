@@ -142,7 +142,10 @@ async def test_orders__more_than_the_cap__reads_pages_in_turn_up_to_it_and_says_
 
     page = await shop_orders(world.dashboard, auth(), SHOP, now=NOW, period=period)
 
-    assert world.source.operations().count("list_order_receipts") == pages
+    # The pages in turn, and for a bounded period one look at the first receipt past the cap
+    # (is it still inside the period?) (Codex review of #52).
+    peek = 0 if period is OrderPeriod.ALL else 1
+    assert world.source.operations().count("list_order_receipts") == pages + peek
     assert page.partial is True
     assert page.cap == cap
     assert page.total == cap
@@ -479,3 +482,89 @@ async def test_orders__12_months__twelve_calendar_months(
     assert [o.order_id for o in page.items] == [1]
     assert page.window_start == inside.replace(hour=9)
     assert world.source.windows == [inside.replace(hour=9) - timedelta(days=1)]
+
+
+async def test_orders__cap_hit_only_by_the_extra_day__not_partial(world: World) -> None:
+    """Codex review of #51: the read reaches one day before the period; orders there that push
+    the read over the cap do not make the period itself partial."""
+    in_period = [receipt(10_000 + n, created=NOW - timedelta(minutes=n)) for n in range(999)]
+    before = [receipt(20_000 + n, created=NOW - timedelta(days=90, hours=2 + n)) for n in range(2)]
+    world.source.receipts = [*in_period, *before]
+
+    page = await shop_orders(world.dashboard, auth(), SHOP, now=NOW, period=OrderPeriod.DAYS_90)
+
+    assert page.total == 999
+    assert page.partial is False
+
+
+@pytest.mark.parametrize(("extra", "partial"), [(1, False), (0, False)])
+async def test_orders__exactly_the_cap_in_the_period__not_partial(
+    world: World, extra: int, partial: bool
+) -> None:
+    """Codex review of #52: exactly the cap inside the period plus receipts from the extra day
+    (or none at all) is the whole period."""
+    in_period = [receipt(10_000 + n, created=NOW - timedelta(minutes=n)) for n in range(1000)]
+    before = [
+        receipt(20_000 + n, created=NOW - timedelta(days=90, hours=2 + n)) for n in range(extra)
+    ]
+    world.source.receipts = [*in_period, *before]
+
+    page = await shop_orders(world.dashboard, auth(), SHOP, now=NOW, period=OrderPeriod.DAYS_90)
+
+    assert page.total == 1000
+    assert page.partial is partial
+
+
+async def test_orders__the_look_past_the_cap_is_cached_with_the_period(world: World) -> None:
+    world.source.receipts = [
+        receipt(10_000 + n, created=NOW - timedelta(minutes=n)) for n in range(501)
+    ]
+
+    await shop_orders(world.dashboard, auth(), SHOP, now=NOW)
+    await shop_orders(world.dashboard, auth(), SHOP, now=NOW, state=OrderFilter.PAID)
+
+    assert world.source.operations().count("list_order_receipts") == 6
+
+
+async def test_orders__the_look_past_the_cap_fails__partial_rather_than_whole(
+    world: World,
+) -> None:
+    world.source.receipts = [
+        receipt(10_000 + n, created=NOW - timedelta(minutes=n)) for n in range(501)
+    ]
+    original = world.source.list_order_receipts
+
+    async def failing_peek(shop_id: int, **kwargs: object) -> object:
+        if kwargs.get("limit") == 1:
+            raise MarketplaceUnavailableError("down", status=503)
+        return await original(shop_id, **kwargs)  # type: ignore[arg-type]
+
+    world.source.list_order_receipts = failing_peek  # type: ignore[method-assign,assignment]
+
+    page = await shop_orders(world.dashboard, auth(), SHOP, now=NOW)
+
+    assert page.partial is True
+    assert page.total == 500
+
+
+async def test_orders__the_look_past_the_cap_follows_its_window(world: World) -> None:
+    """Codex review of #52: the overview refreshes the shared 30-day window; the look past the
+    cap belongs to the window it was made for, never to a newer one."""
+    world.source.receipts = [
+        *(receipt(10_000 + n, created=NOW - timedelta(minutes=n + 10)) for n in range(500)),
+        receipt(20_000, created=NOW - timedelta(days=30, hours=2)),  # the extra day
+    ]
+    await shop_overview(world.dashboard, auth(), SHOP, now=NOW)  # loads the window
+    world.clock.now = NOW + timedelta(seconds=90)
+    first = await shop_orders(world.dashboard, auth(), SHOP, now=world.clock.now)  # the look
+    assert first.partial is False
+    # A new order arrives; the overview reloads the window (fresh for 2 minutes) while the look,
+    # a minute younger, would still be fresh.
+    world.source.receipts.insert(0, receipt(30_000, created=NOW + timedelta(seconds=100)))
+    world.clock.now = NOW + timedelta(seconds=150)
+    await shop_overview(world.dashboard, auth(), SHOP, now=world.clock.now)
+
+    later = await shop_orders(world.dashboard, auth(), SHOP, now=world.clock.now)
+
+    assert later.total == 500
+    assert later.partial is True
