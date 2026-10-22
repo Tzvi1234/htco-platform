@@ -94,6 +94,7 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "list_shop_reviews",
         "get_shop_shipping",
         "get_shop_stats",
+        "start_order_sync",
     }
 
 
