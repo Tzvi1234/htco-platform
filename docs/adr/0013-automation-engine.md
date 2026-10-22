@@ -1,6 +1,6 @@
 # ADR-0013: An automation registry and workflow engine independent of the agent runtime
 
-- **Status:** Accepted
+- **Status:** Accepted; amended 2026-10-23 by [ADR-0019](0019-unified-execution-engine-and-action-gateway.md) (handlers act through the Action Gateway and its channels)
 - **Date:** 2026-10-14
 - **Deciders:** Owner, engineering
 - **Related:** [ADR-0012](0012-living-office-organization.md), [ADR-0007](0007-job-queue.md) (job queue), [ADR-0003](0003-agent-runtime-langgraph.md)
@@ -46,3 +46,4 @@ Scenario G (a paid order replayed many times yields one order and correct counte
 ## Validation log
 
 - 2026-10-14 — In-memory engine: replays, retries, dead letters and employee authorization tested (`tests/application/test_automation_engine.py`).
+- 2026-10-23 — Amended by ADR-0019: an automation's handler performs its business actions through the Action Gateway (permissions, approvals, idempotency, limits, verification, audit) and the Execution Router (API, Browser, Internal, Human). `ai_steps` stays empty; an automation reaches the Browser channel only through deterministic Playwright recipes. The engine itself (PR #58) is kept.
