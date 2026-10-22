@@ -227,6 +227,7 @@ def stored_integration(connection: EtsyConnection, *, at: datetime = NOW) -> Sho
         scopes=connection.scopes,
         status=IntegrationStatus.CONNECTED,
         tokens=connection.tokens,
+        refresh_expires_at=connection.tokens.refresh_expires_at,
         key_id="fake-key",
         failure_count=0,
         last_successful_call_at=None,

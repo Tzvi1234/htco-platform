@@ -14,6 +14,7 @@ WORKSPACE_PACKAGES = {
     "htco_agent_runtime": "packages/agent-runtime/src",
     "htco_integrations": "packages/integrations/src",
     "htco_api": "apps/api/src",
+    "htco_worker": "workers/runner/src",
 }
 
 
