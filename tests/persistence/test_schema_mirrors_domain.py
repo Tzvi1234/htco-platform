@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from htco_domain.actors import ActorKind
+from htco_domain.automation import ExecutionState, TriggerKind
 from htco_domain.identity import Role
 from htco_domain.integrations import (
     CapabilityState,
@@ -11,6 +12,8 @@ from htco_domain.integrations import (
     IntegrationStatus,
     ShopCapability,
 )
+from htco_domain.jobs import JobState
+from htco_domain.workforce import Readiness
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
 
@@ -47,3 +50,19 @@ def test_shop_capabilities_capability_check__lists_exactly_the_domain_capabiliti
 
 def test_shop_capabilities_state_check__lists_exactly_the_domain_states() -> None:
     assert _check_values("shop_capabilities_state_check") == {s.value for s in CapabilityState}
+
+
+def test_automation_executions_state_check__lists_exactly_the_execution_states() -> None:
+    assert _check_values("automation_executions_state_check") == {s.value for s in ExecutionState}
+
+
+def test_automation_executions_trigger_check__lists_exactly_the_trigger_kinds() -> None:
+    assert _check_values("automation_executions_trigger_check") == {k.value for k in TriggerKind}
+
+
+def test_automation_definitions_readiness_check__lists_exactly_the_readiness_values() -> None:
+    assert _check_values("automation_definitions_readiness_check") == {r.value for r in Readiness}
+
+
+def test_jobs_state_check__lists_exactly_the_job_states() -> None:
+    assert _check_values("jobs_state_check") == {s.value for s in JobState}

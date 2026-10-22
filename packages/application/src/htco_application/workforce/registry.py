@@ -15,6 +15,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
+from htco_application.access.policy import Capability
 from htco_domain.automation import AutomationDefinition, RetryPolicy, TriggerKind
 from htco_domain.routing import (
     AdvisorUsage,
@@ -209,7 +210,14 @@ def parse_automation(document: Document) -> AutomationDefinition:
         readiness=_enum(Readiness, document, "readiness"),
         specification=_specification(document),
         activation_phase=_integer(document, "activation_phase"),
+        user_capability=_user_capability(document),
     )
+
+
+def _user_capability(document: Document) -> str | None:
+    if "user_capability" not in document:
+        return None
+    return _enum(Capability, document, "user_capability").value
 
 
 def parse_advisor(document: Document) -> AdvisorProfile:

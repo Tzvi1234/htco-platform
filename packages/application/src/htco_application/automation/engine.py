@@ -45,6 +45,45 @@ class TriggerRequest:
     idempotency_key: str
     payload: Mapping[str, object]
     correlation_id: str
+    # The tenant (durable engine, slice 5.10) and what caused the trigger.
+    organization_id: uuid.UUID | None = None
+    shop_id: uuid.UUID | None = None
+    causation_id: str | None = None
+
+
+def authorize(
+    registry: Registry, handlers: Mapping[str, object], request: TriggerRequest
+) -> AutomationDefinition:
+    """The single gate for every trigger (ADR-0013): known, production-ready, deployed, callable
+    from this trigger kind, and for employees granted. Raises `AutomationRefused` with the reason,
+    before anything is written (AC-5.10.2)."""
+    definition = registry.automations.get(request.automation_id)
+    if definition is None:
+        raise AutomationRefused(f"unknown automation {request.automation_id!r}")
+    if definition.readiness not in PRODUCTION_READINESS:
+        raise AutomationRefused(f"{definition.id} is not active ({definition.readiness.value})")
+    if definition.id not in handlers:
+        raise AutomationRefused(f"{definition.id} has no handler deployed")
+    if request.trigger not in definition.callable_from:
+        raise AutomationRefused(f"{definition.id} cannot be triggered by {request.trigger.value}")
+    if request.actor.kind is ActorKind.EMPLOYEE:
+        _authorize_employee(registry, definition, request)
+    return definition
+
+
+def _authorize_employee(
+    registry: Registry, definition: AutomationDefinition, request: TriggerRequest
+) -> None:
+    employee = request.actor.id
+    if request.trigger is not TriggerKind.AGENT_TOOL:
+        raise AutomationRefused("employees trigger automations only through agent_tool")
+    profile = registry.employees.get(employee)
+    if profile is None:
+        raise AutomationRefused(f"unknown employee {employee!r}")
+    if not profile.is_production_ready():
+        raise AutomationRefused(f"{employee} is not active ({profile.readiness.value})")
+    if definition.id not in profile.allowed_automations:
+        raise AutomationRefused(f"{definition.id} is not granted to {employee}")
 
 
 class AutomationEngine:
@@ -89,34 +128,7 @@ class AutomationEngine:
         return self._run(self._registry.automations[automation_id], execution)
 
     def _authorize(self, request: TriggerRequest) -> AutomationDefinition:
-        definition = self._registry.automations.get(request.automation_id)
-        if definition is None:
-            raise AutomationRefused(f"unknown automation {request.automation_id!r}")
-        if definition.readiness not in PRODUCTION_READINESS:
-            raise AutomationRefused(f"{definition.id} is not active ({definition.readiness.value})")
-        if definition.id not in self._handlers:
-            raise AutomationRefused(f"{definition.id} has no handler deployed")
-        if request.trigger not in definition.callable_from:
-            raise AutomationRefused(
-                f"{definition.id} cannot be triggered by {request.trigger.value}"
-            )
-        if request.actor.kind is ActorKind.EMPLOYEE:
-            self._authorize_employee(definition, request)
-        return definition
-
-    def _authorize_employee(
-        self, definition: AutomationDefinition, request: TriggerRequest
-    ) -> None:
-        employee = request.actor.id
-        if request.trigger is not TriggerKind.AGENT_TOOL:
-            raise AutomationRefused("employees trigger automations only through agent_tool")
-        profile = self._registry.employees.get(employee)
-        if profile is None:
-            raise AutomationRefused(f"unknown employee {employee!r}")
-        if not profile.is_production_ready():
-            raise AutomationRefused(f"{employee} is not active ({profile.readiness.value})")
-        if definition.id not in profile.allowed_automations:
-            raise AutomationRefused(f"{definition.id} is not granted to {employee}")
+        return authorize(self._registry, self._handlers, request)
 
     def _run(
         self, definition: AutomationDefinition, execution: AutomationExecution

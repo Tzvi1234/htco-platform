@@ -11,23 +11,38 @@ unique insert, like every real handler's idempotent write) and `finished`.
 With `outbox` it runs the production `outbox.deliver` job instead (slice 5.2), delivering to a
 test destination that holds its first delivery forever when the payload says `hold_first` and
 records each delivery once per idempotency key, as a deduplicating destination does.
+
+With `automation <automation id>` it runs the production `automation.execute` job (slice 5.10) with
+one test handler for that automation, which holds its first run forever when the payload says
+`hold_first` and records its business effect once per `mark_id`.
 """
 
 import os
 import random
 import sys
+import time
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 
 import anyio
 
+from htco_application.automation.durable import (
+    Completed,
+    DurableAutomationEngine,
+    HandlerContext,
+    HandlerOutcome,
+)
+from htco_application.automation.records import registry_from_rows
+from htco_application.execution.gateway import UnavailableGateway
 from htco_application.jobs import ClaimedJob
 from htco_application.messaging import PendingDelivery
+from htco_persistence.automation import PostgresAutomationCatalog, PostgresExecutionStore
 from htco_persistence.database import Database, tenant_scope
 from htco_persistence.jobs import PostgresJobQueue, PostgresWorkerHeartbeats
 from htco_persistence.messaging import PostgresOutbox
 from htco_platform.logs import configure_logging
-from htco_worker.main import WORKER_ROLE, outbox_handlers, stop_on_signal
+from htco_worker.main import WORKER_ROLE, automation_handlers, outbox_handlers, stop_on_signal
 from htco_worker.runner import JobHandler, Worker, WorkerConfig
 
 MARKS_TABLE = "public.job_test_marks"
@@ -67,6 +82,39 @@ class HoldingSink:
         await anyio.to_thread.run_sync(self._record, delivery, "effect")
 
 
+class HoldingAutomation:
+    """A handler: idempotent effect per `mark_id`; holds its first run when asked."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def __call__(self, context: HandlerContext) -> HandlerOutcome:
+        return await anyio.to_thread.run_sync(self._run, context.payload)
+
+    def _run(self, payload: Mapping[str, object]) -> HandlerOutcome:
+        mark = uuid.UUID(str(payload["mark_id"]))
+        with self._database.connection() as connection, connection.transaction():
+            row = connection.execute(
+                f"select count(*) from {MARKS_TABLE} where job_id = %s and phase = 'started'",  # noqa: S608 - constant table
+                [mark],
+            ).fetchone()
+            seen = 0 if row is None else int(row[0])
+            connection.execute(
+                f"insert into {MARKS_TABLE} (job_id, attempt, phase, pid) "  # noqa: S608 - constant table
+                "values (%s, %s, 'started', %s)",
+                [mark, seen + 1, os.getpid()],
+            )
+        if payload.get("hold_first") and seen == 0:
+            time.sleep(3600)  # killed here
+        with self._database.connection() as connection, connection.transaction():
+            connection.execute(
+                f"insert into {MARKS_TABLE} (job_id, attempt, phase, pid) "  # noqa: S608 - constant table
+                "values (%s, %s, 'effect', %s) on conflict do nothing",
+                [mark, seen + 1, os.getpid()],
+            )
+        return Completed({"done": True})
+
+
 async def _serve(kind: str, lease: float, grace: float, mode: str) -> None:
     database = Database(os.environ["HTCO_TEST_DATABASE_URL"], max_size=3, role=WORKER_ROLE)
 
@@ -79,11 +127,21 @@ async def _serve(kind: str, lease: float, grace: float, mode: str) -> None:
         await anyio.to_thread.run_sync(_mark, database, job, "effect")
         await anyio.to_thread.run_sync(_mark, database, job, "finished")
 
-    handlers: dict[str, JobHandler] = (
-        outbox_handlers(PostgresOutbox(database), {"test.sink": HoldingSink(database)})
-        if mode == "outbox"
-        else {kind: handle}
-    )
+    handlers: dict[str, JobHandler] = {kind: handle}
+    if mode == "outbox":
+        handlers = outbox_handlers(PostgresOutbox(database), {"test.sink": HoldingSink(database)})
+    elif mode.startswith("automation:"):
+        catalog = PostgresAutomationCatalog(database)
+        engine = DurableAutomationEngine(
+            lambda: registry_from_rows(catalog.current()),
+            PostgresExecutionStore(database),
+            {mode.removeprefix("automation:"): HoldingAutomation(database)},
+            clock=lambda: datetime.now(UTC),
+            jitter=random.random,
+            gateway=UnavailableGateway(),
+            offload=anyio.to_thread.run_sync,
+        )
+        handlers = automation_handlers(engine, f"harness-{os.getpid()}")
     worker = Worker(
         PostgresJobQueue(database),
         PostgresWorkerHeartbeats(database),

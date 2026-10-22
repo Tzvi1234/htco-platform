@@ -12,6 +12,7 @@ from fastapi.routing import APIRoute
 from opentelemetry.sdk.trace import TracerProvider
 
 from htco_api.access import access_router
+from htco_api.automations import AutomationServices, automations_router
 from htco_api.diagnostics import diagnostics_router
 from htco_api.etsy import etsy_router
 from htco_api.health import health_router
@@ -120,6 +121,9 @@ class AppOptions:
     # The connected shop's live data (overview, orders, listings, reviews, shipping); without
     # it, those routes answer 503.
     dashboard: ShopDashboard | None = None
+    # Automations (slice 5.10): reading needs the database; triggering also
+    # HTCO_AUTOMATIONS_ENABLED. Without it, those routes answer 503.
+    automations: AutomationServices | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -164,6 +168,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.token_vault = options.token_vault
     app.state.shop_remover = options.shop_remover
     app.state.dashboard = options.dashboard
+    app.state.automations = options.automations
     app.state.clock = options.clock
     app.include_router(
         health_router(
@@ -177,6 +182,9 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.include_router(web_auth_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(etsy_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(shop_data_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
+    app.include_router(
+        automations_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES
+    )
     if options.diagnostics:
         app.include_router(diagnostics_router(), responses=UNEXPECTED_ERROR_RESPONSES)
     add_problem_handlers(app)

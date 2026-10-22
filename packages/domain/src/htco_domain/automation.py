@@ -95,6 +95,9 @@ class AutomationDefinition:
     readiness: Readiness
     specification: Mapping[str, SpecSection]
     activation_phase: int  # the plan phase that builds and activates it
+    # The policy capability a user needs to trigger it by hand (`user_action`); without one, no
+    # user may (deny by default, AC-5.10.3).
+    user_capability: str | None = None
 
     def __post_init__(self) -> None:
         if self.activation_phase < 0:
@@ -115,6 +118,8 @@ class AutomationDefinition:
 class ExecutionState(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
+    # An action of the run waits for an approval or a person (ADR-0019); no job holds a lease.
+    WAITING = "waiting"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     RETRY_SCHEDULED = "retry_scheduled"
@@ -125,11 +130,17 @@ class ExecutionState(StrEnum):
 
 _EXECUTION_TRANSITIONS: Mapping[ExecutionState, frozenset[ExecutionState]] = {
     ExecutionState.PENDING: frozenset({ExecutionState.RUNNING, ExecutionState.CANCELLED}),
-    ExecutionState.RUNNING: frozenset({ExecutionState.SUCCEEDED, ExecutionState.FAILED}),
+    ExecutionState.RUNNING: frozenset(
+        {ExecutionState.SUCCEEDED, ExecutionState.FAILED, ExecutionState.WAITING}
+    ),
+    # Resumed by `approvals.decided.v1` or the task's completion; ended when rejected or expired.
+    ExecutionState.WAITING: frozenset({ExecutionState.RETRY_SCHEDULED, ExecutionState.CANCELLED}),
     ExecutionState.FAILED: frozenset(
         {ExecutionState.RETRY_SCHEDULED, ExecutionState.DEAD_LETTERED, ExecutionState.COMPENSATED}
     ),
     ExecutionState.RETRY_SCHEDULED: frozenset({ExecutionState.RUNNING, ExecutionState.CANCELLED}),
+    # An admin's retry reuses the dead-lettered execution (audited, AC-5.10.4).
+    ExecutionState.DEAD_LETTERED: frozenset({ExecutionState.RETRY_SCHEDULED}),
 }
 _TERMINAL = frozenset(
     {
@@ -152,15 +163,26 @@ class AutomationExecution:
     state: ExecutionState
     attempts: int
     correlation_id: str
+    # The tenant it runs for (durable executions, slice 5.10); None in the in-memory engine.
+    organization_id: uuid.UUID | None = None
+    shop_id: uuid.UUID | None = None
+    causation_id: str | None = None
+    # The last failure: an exception type, or a message marked safe to show.
+    last_error: str | None = None
 
     def __post_init__(self) -> None:
         if not self.idempotency_key.strip():
             raise ValueError("an execution needs an idempotency key")
 
-    def transition(self, target: ExecutionState) -> AutomationExecution:
+    def transition(
+        self, target: ExecutionState, *, error: str | None = None
+    ) -> AutomationExecution:
         check_transition("automation execution", _EXECUTION_TRANSITIONS, self.state, target)
         attempts = self.attempts + 1 if target is ExecutionState.RUNNING else self.attempts
-        return replace(self, state=target, attempts=attempts)
+        last_error = error if target is ExecutionState.FAILED else self.last_error
+        if target is ExecutionState.SUCCEEDED:
+            last_error = None
+        return replace(self, state=target, attempts=attempts, last_error=last_error)
 
     @property
     def is_terminal(self) -> bool:

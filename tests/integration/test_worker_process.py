@@ -10,18 +10,22 @@ import sys
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from htco_application.automation.durable import EXECUTION_JOB
 from htco_application.jobs import JobSpec
 from htco_application.messaging import OUTBOX_DELIVERY_JOB, OutboxMessage
 from htco_domain.automation import RetryPolicy
 from htco_persistence.database import Database
 from htco_persistence.jobs import PostgresJobQueue
 from htco_persistence.messaging import PostgresOutbox
+from tests.automation_fakes import EffectBook
+from tests.integration.test_durable_engine import engine_on, register, trigger
 from tests.integration.test_etsy_connection import Tenant, _url, scalar
 from tests.integration.worker_harness import MARKS_TABLE
 
@@ -222,3 +226,56 @@ async def test_crash_after_the_business_commit__the_effect_is_delivered_exactly_
 
     assert len(marks(admin, message_id, "effect")) == 1
     assert len(marks(admin, message_id, "started")) == 2
+
+
+@pytest.mark.ac("AC-5.10.5")
+async def test_worker_killed_during_a_running_execution__one_success_and_one_effect(
+    admin: Database, spawn: Callable[..., subprocess.Popen[bytes]]
+) -> None:
+    tenant = Tenant(admin)
+    automation = register(admin)
+    mark = uuid.uuid4()
+    request = trigger(automation, tenant)
+    # The trigger side only checks that a handler is deployed; the worker process runs its own.
+    execution = engine_on(admin, automation, EffectBook().handle).trigger(
+        replace(request, payload={"hold_first": True, "mark_id": str(mark)})
+    )
+    first = spawn(EXECUTION_JOB, lease=3, grace=5, mode=f"automation:{automation}")
+    wait_for(lambda: bool(marks(admin, mark, "started")), seconds=60, what="the first run")
+
+    first.kill()
+    first.wait(timeout=10)
+    assert (
+        scalar(admin, "select state from app.automation_executions where id = %s", [execution.id])
+        == "running"
+    )
+    second = spawn(EXECUTION_JOB, lease=3, grace=5, mode=f"automation:{automation}")
+    wait_for(
+        lambda: (
+            scalar(
+                admin, "select state from app.automation_executions where id = %s", [execution.id]
+            )
+            == "succeeded"
+        ),
+        seconds=90,
+        what="the execution to succeed after the restart",
+    )
+    second.send_signal(signal.SIGTERM)
+    second.wait(timeout=30)
+
+    assert len(marks(admin, mark, "effect")) == 1
+    assert (
+        scalar(
+            admin, "select attempts from app.automation_executions where id = %s", [execution.id]
+        )
+        == 2
+    )
+    assert (
+        scalar(
+            admin,
+            "select count(*) from app.automation_execution_events "
+            "where execution_id = %s and to_state = 'succeeded'",
+            [execution.id],
+        )
+        == 1
+    )
