@@ -538,7 +538,7 @@ async def shop_orders(  # noqa: PLR0913 - the shop, the caller, the period, filt
         total=len(matching),
         counts={f: counts.get(f, 0) for f in OrderFilter},
         buyer_details=contact,
-        partial=await _cut_into(opened, period, window.value, since, listed),
+        partial=await _cut_into(opened, period, window, since, listed),
         cap=RECEIPT_CAPS[period],
     )
 
@@ -689,12 +689,18 @@ class _Opened:
         return await self.get_dated(resource, undated)
 
     async def get_dated[ValueT](
-        self, resource: str, load: Callable[[], Awaitable[tuple[ValueT, datetime | None]]]
+        self,
+        resource: str,
+        load: Callable[[], Awaitable[tuple[ValueT, datetime | None]]],
+        *,
+        policy: str | None = None,
     ) -> Fetched[ValueT]:
+        """`policy`: the name of the cache policy when the resource's name carries more (a
+        version)."""
         integration = self.integration
         key = CacheKey(integration.shop_id, integration.generation, resource)
         try:
-            fetched = await self.dashboard.cache.get_dated(key, load, POLICIES[resource])
+            fetched = await self.dashboard.cache.get_dated(key, load, POLICIES[policy or resource])
         except MarketplaceAuthError:
             raise ShopNotConnectedError(f"shop {integration.shop_id} is not connected") from None
         except MarketplacePermissionError:
@@ -1116,23 +1122,31 @@ def _period_start(period: OrderPeriod, now: datetime) -> datetime | None:
 async def _cut_into(
     opened: _Opened,
     period: OrderPeriod,
-    window: _ReceiptWindow,
+    fetched: Fetched[_ReceiptWindow],
     since: datetime,
     listed: tuple[OrderReceipt, ...],
 ) -> bool:
     """Did the cap cut into the period itself (Codex reviews of #51 and #52)? Bounded periods are
     read from one day before them (for time zones): when a receipt read is from that day, the
     period was read whole; when every receipt read is inside the period, the first receipt past
-    the cap decides."""
+    the cap decides. The look belongs to the window it was made for: its key carries the window's
+    fetch time, so a reloaded window never reuses an older look (Codex review of #52)."""
+    window = fetched.value
     if not window.partial:
         return False
     if window.since is None:
         return True
     if len(listed) < len(window.receipts):
         return False
+    name = f"{_RECEIPTS[period]}:next"
+    load = opened.next_receipt(window.since, len(window.receipts))
+
+    async def undated() -> tuple[datetime | None, datetime | None]:
+        return await load(), None
+
     try:
-        following = await opened.get(
-            f"{_RECEIPTS[period]}:next", opened.next_receipt(window.since, len(window.receipts))
+        following = await opened.get_dated(
+            f"{name}@{fetched.fetched_at.isoformat()}", undated, policy=name
         )
     except ShopDataUnavailableError:
         return True  # unknown: say the list may be cut rather than claim it is whole
