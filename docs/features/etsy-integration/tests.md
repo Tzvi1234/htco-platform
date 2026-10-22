@@ -8,6 +8,10 @@
 | Adapter contract | Requests (URL, query, `x-api-key`, Bearer, timeout), payload mapping, every error status, retries and backoff, `retry-after` forms, throttle, daily floor, logs and metrics, configuration | `tests/integrations/test_etsy_adapter.py` |
 | Fixture hygiene | Every file in `tests/fixtures/` scanned; the detectors tested on real-looking and fake values | `tests/integrations/test_fixture_hygiene.py` |
 | Settings | Etsy secrets optional, paired, hidden in `repr`, blank means unset, floor not negative | `tests/api/test_settings.py` |
+| Dashboard reads (adapter) | Every new read is a GET with the connection's token (strict mock), payload mapping, buyer name shortened, no name, tracking number, email, address or review text in `repr` or logs | `tests/integrations/test_etsy_dashboard_reads.py` |
+| Dashboard cache | Fresh for the TTL, one load for concurrent callers, stale on passing failures, cooldown, `max_stale` sweep, lasting failures drop the copy, `forget` | `tests/application/test_shop_data_cache.py` |
+| Dashboard use cases | Authorization before any call, not connected without a call, pinned tokens, sales by the caller's day, order states and overdue, buyer details by role, filters and pages, stale and unavailable, reconnect and disconnect | `tests/application/test_shop_dashboard.py` |
+| Dashboard API | Shapes, `no-store` on orders, buyer details by role, 404/409/422/503 problems with `Retry-After`, stale answers, nothing in the logs | `tests/api/test_shop_data_routes.py` |
 | Architecture | `htco_integrations` is an adapter beside persistence and the agent runtime | `pyproject.toml` import-linter contracts, `tests/architecture/test_workspace_packages.py` |
 
 Fixtures (`tests/fixtures/etsy/`): `shop.json`, `receipts_page.json`, `listings_page.json` and `errors.json`, written by hand from Etsy's OpenAPI spec with obviously fake IDs, names and amounts. They are served by `httpx.MockTransport`; a fake clock replaces every sleep, so no test waits or reaches the network. `respx` is not a dependency; MockTransport covers the same ground.
@@ -44,6 +48,11 @@ Slices 4.2 to 4.4 have their own test maps in [token vault](token-vault.md#tests
 
 
 ## Verification evidence
+
+### Slice 4.6, live dashboard data — 2026-10-22
+
+- **Automated:** `ruff format --check`, `ruff check`, `mypy` (strict), `lint-imports`, the architecture tests and the new adapter, cache, use-case and API tests pass locally; the committed OpenAPI was regenerated; CI runs the whole suite and the contract fuzzing.
+- **Real run:** none against Etsy, deliberately: the agent never calls the live API. All data in tests is invented (`tests/shop_data_fakes.py`, new fixtures under `tests/fixtures/etsy/`, scanned by the hygiene test). The first real reads happen when the owner opens the dashboard after deployment; they are GETs only.
 
 ### Slices 4.5 and 4.7 — 2026-10-16
 

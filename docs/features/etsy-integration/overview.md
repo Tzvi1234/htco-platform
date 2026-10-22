@@ -3,11 +3,11 @@
 | | |
 |---|---|
 | **Slug** | `etsy-integration` |
-| **Phase / slices** | Phase 4 — slices 4.1 to 4.5 (done at the platform); 4.6 in `htco-clients`; 4.7 disconnect done, restore rehearsal pending |
+| **Phase / slices** | Phase 4 — slices 4.1 to 4.5 (done at the platform); 4.6 the shop card and the live dashboard data (platform endpoints, screens in `htco-clients`); 4.7 disconnect done, restore rehearsal pending |
 | **Requirements** | [FR-SHOP-01 to FR-SHOP-05](../../product/PRD.md) |
 | **Decision** | [ADR-0008](../../adr/0008-etsy-integration.md); research in [Etsy API capabilities](../../architecture/etsy-api-capabilities.md) |
-| **Status** | In progress (4.1 adapter, 4.2 [token vault](token-vault.md), 4.3 and 4.4 [connect flow and refresh](connect-flow.md), 4.5 and 4.7 [operations](operations.md)) |
-| **Last updated** | 2026-10-16 |
+| **Status** | Complete except the restore rehearsal (4.1 adapter, 4.2 [token vault](token-vault.md), 4.3 and 4.4 [connect flow and refresh](connect-flow.md), 4.5 and 4.7 [operations](operations.md), 4.6 the shop's [live data on the dashboard](dashboard-data.md)) |
+| **Last updated** | 2026-10-22 |
 
 ## What and why
 
