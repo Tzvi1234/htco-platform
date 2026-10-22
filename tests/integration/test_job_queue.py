@@ -401,7 +401,10 @@ async def test_schedule__two_workers_in_one_period__one_job_runs_once(
         runs.append(claimed.idempotency_key)
 
     handlers: dict[str, JobHandler] = {kind: fan_out}
-    clock = [NOW]
+    # Early in a period, so the hour below never crosses into the next day (a run just before
+    # midnight UTC did, 2026-10-23).
+    start = schedule.period_start(NOW) + timedelta(minutes=1)
+    clock = [start]
     workers = [
         Worker(
             PostgresJobQueue(worker_db),
@@ -422,7 +425,7 @@ async def test_schedule__two_workers_in_one_period__one_job_runs_once(
     for each in workers:
         await each.run_once()
 
-    assert runs == [schedule.key_for(NOW)]
+    assert runs == [schedule.key_for(start)]
     assert scalar(worker_db, "select count(*) from jobs.jobs where kind = %s", [kind]) == 1
 
 
