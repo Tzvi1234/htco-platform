@@ -18,6 +18,7 @@ members = [
     "htco-integrations",
     "htco-persistence",
     "htco-platform",
+    "htco-worker",
 ]
 
 [manifest.dependency-groups]
@@ -584,6 +585,35 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.15,<3" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
     { name = "sentry-sdk", specifier = ">=2.70,<3" },
+    { name = "structlog", specifier = ">=26.1,<27" },
+]
+
+[[package]]
+name = "htco-worker"
+version = "0.0.0"
+source = { editable = "workers/runner" }
+dependencies = [
+    { name = "anyio" },
+    { name = "htco-application" },
+    { name = "htco-domain" },
+    { name = "htco-integrations" },
+    { name = "htco-persistence" },
+    { name = "htco-platform" },
+    { name = "httpx" },
+    { name = "pydantic-settings" },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anyio", specifier = ">=4.12,<5" },
+    { name = "htco-application", editable = "packages/application" },
+    { name = "htco-domain", editable = "packages/domain" },
+    { name = "htco-integrations", editable = "packages/integrations" },
+    { name = "htco-persistence", editable = "packages/persistence" },
+    { name = "htco-platform", editable = "packages/platform" },
+    { name = "httpx", specifier = ">=0.28,<0.29" },
+    { name = "pydantic-settings", specifier = ">=2.15,<3" },
     { name = "structlog", specifier = ">=26.1,<27" },
 ]
 

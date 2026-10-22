@@ -81,6 +81,8 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 | `just test-db` | Integration tests (`-m db`, `tests/integration`) against the local database; CI runs them in the `database` job | Slice 2.1 |
 | `just seed` | Two organizations, their shops, one user per role | Slice 2.2 |
 | `uv run htco admin bootstrap --email … --organization … --display-name …` | Create the owner's organization and owner membership after the owner signs up (idempotent; needs `HTCO_DATABASE_URL`) | Slice 2.5 |
+| `uv run python -m htco_worker` | The `agent-worker`: job queue consumer, schedules and maintenance jobs (needs `HTCO_DATABASE_URL`; schedules only when named in `HTCO_WORKER_SCHEDULES`) | Slice 5.1 |
+| `uv run htco admin dead-letters [--organization ID] [--limit N]` | Jobs whose retries are exhausted, one JSON line each (needs `HTCO_DATABASE_URL`) | Slice 5.1 |
 | `uv run htco admin rotate-token-keys [--batch-size N]` | Re-wrap stored Etsy tokens with the current vault key while the API runs; prints rows per key ID (needs `HTCO_DATABASE_URL`, `HTCO_TOKEN_VAULT_KEY`, `HTCO_TOKEN_VAULT_PREVIOUS_KEYS`) | Slice 4.2 |
 
 ## Golden rules

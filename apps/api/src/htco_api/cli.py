@@ -1,5 +1,5 @@
 """The operator command line: `htco admin bootstrap` (slice 2.5), `htco admin rotate-token-keys`
-(slice 4.2).
+(slice 4.2), `htco admin dead-letters` (slice 5.1).
 
 Usage, once the owner has signed up through Supabase Auth:
 
@@ -19,6 +19,14 @@ It reads `HTCO_DATABASE_URL`, `HTCO_TOKEN_VAULT_KEY` and `HTCO_TOKEN_VAULT_PREVI
 re-wraps every row still on a previous key with the current key while the API keeps serving, and
 prints the count and the rows per key ID; when only the current ID is left, the previous keys can
 be removed.
+
+To see the jobs whose retries are exhausted (the dead-letter state, AC-5.1.3):
+
+    htco admin dead-letters [--organization <ID>] [--limit 50]
+
+It reads `HTCO_DATABASE_URL` and prints one JSON line per dead job, newest first: ID, kind,
+organization, shop, attempts, the last error (an exception type or a message marked safe) and
+when it failed. Never a payload.
 """
 
 import argparse
@@ -39,8 +47,10 @@ from htco_application.bootstrap import (
     UserNotFoundError,
     bootstrap_owner,
 )
+from htco_application.jobs import DeadLetter
 from htco_persistence.bootstrap import PostgresBootstrapStore
 from htco_persistence.database import Database
+from htco_persistence.jobs import PostgresJobQueue
 from htco_persistence.shop_integrations import PostgresTokenVault
 from htco_platform.crypto import EnvelopeSealer, KeyRing
 from htco_platform.settings import ConfigurationError, load_settings
@@ -132,7 +142,41 @@ def _postgres_rotator(url: str, ring: KeyRing) -> ManagedRotator:
     return _DatabaseTokenVault(Database(url, min_size=1, max_size=1), ring)
 
 
+class DeadLetterReader(Protocol):
+    async def start(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+    async def dead_letters(
+        self, *, organization_id: uuid.UUID | None, limit: int
+    ) -> list[DeadLetter]: ...
+
+
+class _DatabaseDeadLetters:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+        self._queue = PostgresJobQueue(database)
+
+    async def start(self) -> None:
+        await self._database.start()
+
+    async def stop(self) -> None:
+        await self._database.stop()
+
+    async def dead_letters(
+        self, *, organization_id: uuid.UUID | None, limit: int
+    ) -> list[DeadLetter]:
+        return await anyio.to_thread.run_sync(
+            lambda: self._queue.dead_letters(organization_id=organization_id, limit=limit)
+        )
+
+
+def _postgres_dead_letters(url: str) -> DeadLetterReader:
+    return _DatabaseDeadLetters(Database(url, min_size=1, max_size=1))
+
+
 MAX_BATCH_SIZE = 10_000
+MAX_DEAD_LETTERS = 500
 
 
 def _batch_size(value: str) -> int:
@@ -163,7 +207,22 @@ def _parser() -> argparse.ArgumentParser:
     rotate.add_argument(
         "--batch-size", type=_batch_size, default=100, help="Rows per transaction (default 100)."
     )
+    dead = commands.add_parser(
+        "dead-letters", help="List jobs whose retries are exhausted, newest first."
+    )
+    dead.add_argument("--organization", type=uuid.UUID, help="Only this organization's jobs.")
+    dead.add_argument("--limit", type=_limit, default=50, help="At most this many (default 50).")
     return parser
+
+
+def _limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a whole number") from None
+    if not 1 <= limit <= MAX_DEAD_LETTERS:
+        raise argparse.ArgumentTypeError(f"must be between 1 and {MAX_DEAD_LETTERS}")
+    return limit
 
 
 def main(
@@ -171,12 +230,15 @@ def main(
     *,
     new_store: Callable[[str], ManagedStore] = _postgres_store,
     new_rotator: Callable[[str, KeyRing], ManagedRotator] = _postgres_rotator,
+    new_dead_letters: Callable[[str], DeadLetterReader] = _postgres_dead_letters,
     stdout: TextIO | None = None,
 ) -> int:
     args = _parser().parse_args(argv)
     out = stdout or sys.stdout
     if args.command == "rotate-token-keys":
         return _rotate(args.batch_size, new_rotator, out)
+    if args.command == "dead-letters":
+        return _dead_letters(args.organization, args.limit, new_dead_letters, out)
     try:
         settings = load_settings(AdminSettings)
     except ConfigurationError as error:
@@ -249,6 +311,43 @@ def _rotate(
         return 0
 
     return anyio.run(run)
+
+
+def _dead_letters(
+    organization_id: uuid.UUID | None,
+    limit: int,
+    new_reader: Callable[[str], DeadLetterReader],
+    out: TextIO,
+) -> int:
+    try:
+        settings = load_settings(AdminSettings)
+    except ConfigurationError as error:
+        sys.stderr.write(f"htco: invalid configuration\n{error}\n")
+        return EXIT_CONFIGURATION_ERROR
+    reader = new_reader(settings.database_url.get_secret_value())
+
+    async def run() -> int:
+        await reader.start()
+        try:
+            found = await reader.dead_letters(organization_id=organization_id, limit=limit)
+        finally:
+            await reader.stop()
+        out.writelines(json.dumps(_dead_letter_line(dead)) + "\n" for dead in found)
+        return 0
+
+    return anyio.run(run)
+
+
+def _dead_letter_line(dead: DeadLetter) -> dict[str, object]:
+    return {
+        "id": str(dead.id),
+        "kind": dead.kind,
+        "organization_id": None if dead.organization_id is None else str(dead.organization_id),
+        "shop_id": None if dead.shop_id is None else str(dead.shop_id),
+        "attempts": dead.attempts,
+        "last_error": dead.last_error,
+        "failed_at": dead.failed_at.isoformat(),
+    }
 
 
 def entry_point() -> None:  # pragma: no cover - the console script

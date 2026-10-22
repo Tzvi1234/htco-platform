@@ -21,7 +21,7 @@ Accepted ADRs are not rewritten. Two things may be added later: a status change,
 | [0004](0004-model-gateway.md) | Own model gateway on official SDKs | Accepted; amended by 0015 |
 | [0005](0005-hosting-digitalocean-supabase.md) | DigitalOcean App Platform and Supabase Pro | Accepted (Frankfurt, GHCR) |
 | [0006](0006-web-auth-bff.md) | Web authentication through a backend-for-frontend | Accepted |
-| [0007](0007-job-queue.md) | Postgres-native job queue behind a port | Proposed (Phase 5 spike); amended by 0019 |
+| [0007](0007-job-queue.md) | Postgres-native job queue behind a port | Accepted (2026-10-22: in-house queue); amended by 0019 |
 | [0008](0008-etsy-integration.md) | Etsy integration: Seller App, webhooks plus reconciliation, read-first tracking | Accepted (validated in Phases 0 and 4); amended by 0022 |
 | [0009](0009-autova-integration.md) | AutoVA behind a port, tracking read from Etsy | Accepted |
 | [0010](0010-test-first-development.md) | Test-first development with mechanical enforcement | Accepted |
@@ -32,7 +32,7 @@ Accepted ADRs are not rewritten. Two things may be added later: a status change,
 | [0015](0015-decision-advisor-and-routing.md) | Shared Decision Advisor; one router with a policy per employee | Accepted; amends 0004 |
 | [0016](0016-web-first.md) | Web first: every feature works on the web before any native app | Accepted |
 | [0017](0017-engineering-on-claude-code-subscription.md) | The Engineering department runs on Claude Code with the owner's subscription | Accepted |
-| 0018 | Order history is stored with the buyer's name and shipping address, never contact data | Accepted (added by PR #53) |
+| [0018](0018-order-history-and-buyer-data.md) | Order history is stored with the buyer's name and shipping address, never contact data | Accepted |
 | [0019](0019-unified-execution-engine-and-action-gateway.md) | One execution engine and one Action Gateway for automations and AI employees | Proposed; amends 0003, 0007, 0012, 0013, 0014 |
 | [0020](0020-per-shop-browser-environment.md) | An optional, honest per-shop Browser Environment (no anti-detect browser, no proxy per shop) | Accepted (owner, 2026-10-23) |
 | [0021](0021-authenticator-service.md) | An internal Authenticator service: PyOTP on the existing vault | Proposed (Phase 8B) |

@@ -469,6 +469,7 @@ class PostgresTokenVault:
             purge_after=row[20],
             generation=int(row[21]),
             app_key_fingerprint=fingerprint,
+            refresh_expires_at=row[12],
         )
 
     async def _execute(self, sql: str, params: list[object]) -> None:

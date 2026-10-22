@@ -113,6 +113,8 @@ class ShopIntegration:
     # Which Etsy app the tokens were issued for: the first 16 hex characters of the keystring's
     # SHA-256 (never the key). None for connections made before it was recorded.
     app_key_fingerprint: str | None = None
+    # When the refresh token ends, also when the tokens are not opened (the expiry check).
+    refresh_expires_at: datetime | None = None
 
     @property
     def is_usable(self) -> bool:

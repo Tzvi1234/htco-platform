@@ -69,6 +69,15 @@ class RetryPolicy:
         delay: timedelta = self.initial_backoff * 2 ** (attempt - 1)
         return min(delay, self.max_backoff)
 
+    def jittered_backoff(self, attempt: int, jitter: float) -> timedelta:
+        """The backoff with "equal jitter": between half and all of `backoff(attempt)`, so retries
+        of many failed jobs spread out instead of arriving together (ER-REL-03). `jitter` is a
+        random number in [0, 1], injected so tests are deterministic."""
+        if not 0.0 <= jitter <= 1.0:
+            raise ValueError("jitter must be between 0 and 1")
+        half = self.backoff(attempt) / 2
+        return half + half * jitter
+
 
 @dataclass(frozen=True)
 class AutomationDefinition:
