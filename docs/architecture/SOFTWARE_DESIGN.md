@@ -235,7 +235,7 @@ All external systems sit behind ports owned by the application layer.
 
 ### 8.2 Job queue
 
-A Postgres-native queue with atomic claims (`FOR UPDATE SKIP LOCKED`), visibility timeouts or leases, retries with exponential backoff and jitter, a dead-letter state, per-resource locks (for example one sync per shop at a time), and scheduled jobs. Candidates are a small in-house queue, the `procrastinate` library, or Supabase Queues (pgmq, still public alpha in October 2026, with no built-in dead-letter queue). The choice is made by a spike at the start of Phase 5 ([ADR-0007](../adr/0007-job-queue.md)); the application layer only sees a `JobQueue` port either way.
+A Postgres-native queue with atomic claims (`FOR UPDATE SKIP LOCKED`), visibility timeouts or leases, retries with exponential backoff and jitter, a dead-letter state, per-resource locks (for example one sync per shop at a time), and scheduled jobs. The Phase 5 spike chose a small in-house queue on `jobs.jobs` ([ADR-0007](../adr/0007-job-queue.md), accepted 2026-10-22; design in [`docs/features/job-queue/`](../features/job-queue/design.md)): one running job per lock key enforced by a partial unique index, leases extended by a heartbeat, and the worker's own role reaching one organization per job through RLS. The application layer only sees the `JobQueue` port.
 
 ### 8.3 Inbox and outbox
 
@@ -457,7 +457,7 @@ Details: `htco-clients/docs/architecture/CLIENT_ARCHITECTURE.md`.
 | [0004](../adr/0004-model-gateway.md) | Own model gateway on official SDKs; catalog as data; budget ledger | Accepted |
 | [0005](../adr/0005-hosting-digitalocean-supabase.md) | DigitalOcean App Platform and Supabase Pro, IPv4 add-on, same region | Proposed until the owner chooses the region |
 | [0006](../adr/0006-web-auth-bff.md) | Web authentication through a backend-for-frontend with session cookies | Accepted |
-| [0007](../adr/0007-job-queue.md) | Postgres-native job queue behind a port; implementation chosen by spike | Proposed, decided in Phase 5 |
+| [0007](../adr/0007-job-queue.md) | Postgres-native job queue behind a port; an in-house table queue | Accepted (Phase 5 spike) |
 | [0008](../adr/0008-etsy-integration.md) | Etsy Seller App, webhooks plus reconciliation polling, read-first tracking | Accepted; validated in Phases 0 and 4 |
 | [0009](../adr/0009-autova-integration.md) | AutoVA behind a port; read tracking from Etsy; manual adapter first | Accepted |
 | [0010](../adr/0010-test-first-development.md) | Test-first development with enforced quality gates | Accepted |
@@ -474,7 +474,7 @@ Details: `htco-clients/docs/architecture/CLIENT_ARCHITECTURE.md`.
 | Whether Etsy webhooks and shipment writes are available to a Seller App in the shop's region | Owner + platform | Phase 0 spike, Phase 4 probe |
 | AutoVA integration options (API, export, partner program) | Owner | Phase 0 inquiry |
 | Region choice (Frankfurt vs US East) | Owner | Phase 0 |
-| Job queue implementation | Platform | Phase 5 spike |
+| Job queue implementation | Platform | Resolved 2026-10-22: ADR-0007 accepted (in-house queue) |
 | Server-sent events through DigitalOcean's request timeout vs Supabase Realtime for live updates | Platform | Phase 15 spike |
 | Point-in-time recovery cost vs recovery objectives | Owner | Before Phase 20 |
 | Catalog model vs Etsy reselling policy | Owner | Before Phase 12 |

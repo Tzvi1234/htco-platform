@@ -110,6 +110,8 @@ class ShopIntegration:
     # Grows with every connect, reconnect and disconnect: results of a probe that started under
     # an earlier generation are dropped (slice 4.5).
     generation: int = 0
+    # When the refresh token ends, also when the tokens are not opened (the expiry check).
+    refresh_expires_at: datetime | None = None
 
     @property
     def is_usable(self) -> bool:

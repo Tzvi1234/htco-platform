@@ -55,7 +55,7 @@ Runbook:
 
 **Revocation at Etsy:** Etsy documents no token revocation endpoint (authentication guide and OpenAPI spec, checked 2026-10-16; assumption A-15 resolved). HTCO deletes its copy; the owner can also remove HTCO's access in Etsy's account settings (the exact menu name is UNCONFIRMED). The audit record states `etsy_revocation: not_offered_by_etsy`.
 
-**Purge:** only the date is stored now. The purge job (Phase 5) deletes the shop's synced data after `purge_after`, keeping records under legal retention.
+**Purge:** the daily job `maintenance.purge_disconnected_shops` (slice 5.1, [job queue](../job-queue/operations.md)) deletes the shop's synced data once `purge_after` has passed, in one audited transaction (`shop.purged` with the deleted rows per table), and clears `purge_after`; a reconnect before the date keeps the data. Orders and their items join the purge list with slices 5.4 and 5.5 ([ADR-0018](../../adr/0018-order-history-and-buyer-data.md)), keeping records under legal retention.
 
 ## Backups and the restore rehearsal (AC-4.7.2)
 

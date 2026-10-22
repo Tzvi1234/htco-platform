@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Logical model 2.0 (the living office, [ADR-0012](../adr/0012-living-office-organization.md)). Physical tables are created phase by phase, and this page is updated in the same pull request as each migration. Created so far: the base schemas (slice 2.1); `organizations`, `user_profiles`, `memberships`, `shops` (shell), `shop_access` and `audit.audit_log` (slice 2.2, `supabase/migrations/20261014160000_identity_access.sql`). |
+| **Status** | Logical model 2.0 (the living office, [ADR-0012](../adr/0012-living-office-organization.md)). Physical tables are created phase by phase, and this page is updated in the same pull request as each migration. Created so far: the base schemas (slice 2.1); `organizations`, `user_profiles`, `memberships`, `shops` (shell), `shop_access` and `audit.audit_log` (slice 2.2, `supabase/migrations/20261014160000_identity_access.sql`); the `jobs` schema with `jobs.jobs` and `jobs.worker_heartbeats`, and the `htco_worker` role (slice 5.1, `20261023120000_job_queue.sql`). |
 | **Last updated** | 2026-10-23 (unified execution architecture: [execution-engine.md](execution-engine.md)) |
 | **Rules** | [ER-DATA](../engineering/ENGINEERING_RULES.md#5-data-er-data), [ADR-0011](../adr/0011-data-access-and-migrations.md) |
 
@@ -124,7 +124,7 @@ The phase column says when a table first appears.
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `customers`, `customer_consents` | Minimal buyer records per shop; consent ledger | 14 |
+| `customers`, `customer_consents` | Not for Etsy buyers: no stored customer list, segments or marketing profiles ([ADR-0018](../adr/0018-order-history-and-buyer-data.md)); a per-buyer view is computed from the order history on demand. Only email support contacts (Phase 14), if the owner approves | 14 |
 | `support_tickets`, `customer_messages` | Tickets and messages | 14 |
 | `email_domains`, `email_identities`, `mailboxes` | Sending and receiving identities | 6, 14 |
 | `email_threads`, `email_messages`, `email_attachments` | Mail content (untrusted) | 14 |
@@ -216,7 +216,7 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 | `debug_reports` | Amir's diagnoses | 19 |
 | `audit.audit_log` | Append-only audit of sensitive actions | 2 |
 | `system_alerts`, `notifications`, `notification_preferences` | Alerts and user notifications | 6–7 |
-| `worker_heartbeats` | Liveness of workers | 5 |
+| `jobs.worker_heartbeats` | Liveness of workers: last beat, current job, stopping. **Created** (slice 5.1, `20261023120000_job_queue.sql`) | 5 |
 
 ### Infrastructure tables
 
@@ -225,7 +225,7 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 | `inbox` | External events, unique by `(source, event_id)` | 5 |
 | `idempotency_keys` | Stored request hash and response for unsafe API requests with an `Idempotency-Key` (24 h) | 5 |
 | `outbox` | Pending external side effects, unique by idempotency key | 5 |
-| `jobs.*` | Technical job queue (implementation per ADR-0007) | 5 |
+| `jobs.jobs` | Technical job queue ([ADR-0007](../adr/0007-job-queue.md)): unique `(kind, idempotency_key)`, optional `organization_id`/`shop_id`, `lock_key` (one running job per key), state, attempts and backoff, lease, last error, `correlation_id`, `causation_id`. RLS on; only the `htco_worker` role and the login role. **Created** (slice 5.1) | 5 |
 | `agent_runtime.*` | LangGraph checkpoints, writes, blobs, store | 8 |
 
 ## 4. Row-level security pattern
@@ -276,7 +276,7 @@ Proposed defaults, confirmed with the owner before Phase 5 and checked against E
 | Data | Retention |
 |---|---|
 | Orders, items, financial entries | 7 years (bookkeeping) with buyer PII minimized after the support window |
-| Buyer contact details (DC1) | Until the order is closed plus 180 days, then masked |
+| Buyer name and shipping address (DC1) | With the order while the shop is connected, masked after the support window per this table's review; purged 30 days after a disconnect ([ADR-0018](../adr/0018-order-history-and-buyer-data.md)). Email, phone and messages are never stored |
 | Buyer messages and inbound email (DC2) | 365 days, then deleted |
 | Audit log | 7 years |
 | Agent checkpoints | 30 days after a thread completes |

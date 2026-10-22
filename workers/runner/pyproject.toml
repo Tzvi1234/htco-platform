@@ -1,0 +1,27 @@
+[project]
+name = "htco-worker"
+version = "0.0.0"
+description = "HTCO agent-worker: the job queue's consumer, schedules and maintenance jobs (slice 5.1)."
+requires-python = "==3.14.*"
+dependencies = [
+  "anyio>=4.12,<5",
+  "htco-application",
+  "htco-domain",
+  "htco-integrations",
+  "htco-persistence",
+  "htco-platform",
+  "httpx>=0.28,<0.29",
+  "pydantic-settings>=2.15,<3",
+  "structlog>=26.1,<27",
+]
+
+[tool.uv.sources]
+htco-application = { workspace = true }
+htco-domain = { workspace = true }
+htco-integrations = { workspace = true }
+htco-persistence = { workspace = true }
+htco-platform = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"

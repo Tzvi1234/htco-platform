@@ -408,6 +408,7 @@ class PostgresTokenVault:
             disconnected_at=row[19],
             purge_after=row[20],
             generation=int(row[21]),
+            refresh_expires_at=row[12],
         )
 
     async def _execute(self, sql: str, params: list[object]) -> None:
