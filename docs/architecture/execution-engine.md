@@ -65,67 +65,85 @@ class Channel(StrEnum):
     INTERNAL = "internal"
     HUMAN = "human"
 
-class ActorKind(StrEnum):            # existing htco_domain.actors
-    USER = "user"; EMPLOYEE = "employee"; AUTOMATION = "automation"
-    ADVISOR = "advisor"; SYSTEM = "system"
+
+class ActorKind(StrEnum):  # existing htco_domain.actors
+    USER = "user"
+    EMPLOYEE = "employee"
+    AUTOMATION = "automation"
+    ADVISOR = "advisor"
+    SYSTEM = "system"
+
 
 class ActionRef(BaseModel):
-    name: str                        # tool name, e.g. "etsy.inventory.update"
+    name: str  # tool name, e.g. "etsy.inventory.update"
     version: int
+
 
 class ActionRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     action: ActionRef
-    actor: ActorRef                  # kind + id; from the authenticated context, never from model output
-    on_behalf_of_user: UUID | None   # the originating user for employee sessions (narrowest access wins)
+    actor: ActorRef  # kind + id; from the authenticated context, never from model output
+    on_behalf_of_user: (
+        UUID | None
+    )  # the originating user for employee sessions (narrowest access wins)
     organization_id: UUID
     shop_id: UUID | None
-    idempotency_key: str             # 1..200 chars, deterministic per business effect
+    idempotency_key: str  # 1..200 chars, deterministic per business effect
     correlation_id: str
     causation_id: str | None
-    input: dict[str, JsonValue]      # validated against the action's input model before routing
-    channel_hint: Channel | None = None   # a preference only; the router decides
+    input: dict[str, JsonValue]  # validated against the action's input model before routing
+    channel_hint: Channel | None = None  # a preference only; the router decides
     deadline: AwareDatetime | None = None
     approval_id: UUID | None = None  # set when resuming after a decided approval
-    owner_trigger: bool = False      # the Owner ran it by hand (first-run rule, ADR-0022)
+    owner_trigger: bool = False  # the Owner ran it by hand (first-run rule, ADR-0022)
+
 
 class Evidence(BaseModel):
     kind: Literal["api_response", "reread", "dom_snapshot_hash", "export_file", "human_note"]
-    ref: str                         # storage key or row ID; never secrets or raw buyer content
+    ref: str  # storage key or row ID; never secrets or raw buyer content
     sha256: str | None = None
 
+
 class ActionOutcome(StrEnum):
-    SUCCEEDED = "succeeded"; FAILED = "failed"; DENIED = "denied"
-    PENDING_APPROVAL = "pending_approval"; HANDED_TO_HUMAN = "handed_to_human"
-    DEFERRED = "deferred"            # breaker open or rate-limited; re-queued
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    DENIED = "denied"
+    PENDING_APPROVAL = "pending_approval"
+    HANDED_TO_HUMAN = "handed_to_human"
+    DEFERRED = "deferred"  # breaker open or rate-limited; re-queued
+
 
 class ActionResult(BaseModel):
     model_config = ConfigDict(frozen=True)
     execution_id: UUID
     outcome: ActionOutcome
     channel: Channel | None
-    output: dict[str, JsonValue] | None    # validated against the action's output model
-    verified: bool                   # the effect was re-read or validated
+    output: dict[str, JsonValue] | None  # validated against the action's output model
+    verified: bool  # the effect was re-read or validated
     evidence: tuple[Evidence, ...] = ()
     attempts: int
-    error_code: str | None = None    # stable codes: "scope_missing", "capability_blocked", "challenge", ...
-    cost: Decimal | None = None      # model or paid-API cost, if any
+    error_code: str | None = (
+        None  # stable codes: "scope_missing", "capability_blocked", "challenge", ...
+    )
+    cost: Decimal | None = None  # model or paid-API cost, if any
+
 
 class ChannelBinding(BaseModel):
     channel: Channel
-    recipe: str | None = None        # browser: recipe ID from the catalog; api: adapter method
-    requires_capability: str | None = None   # e.g. "etsy.shipments.create" from shop_capabilities
-    browser_scope_id: str | None = None      # e.g. "B-02" from etsy-automation-approval.md
-    deterministic: bool = True       # False only for Browser Use recipes (employees only)
+    recipe: str | None = None  # browser: recipe ID from the catalog; api: adapter method
+    requires_capability: str | None = None  # e.g. "etsy.shipments.create" from shop_capabilities
+    browser_scope_id: str | None = None  # e.g. "B-02" from etsy-automation-approval.md
+    deterministic: bool = True  # False only for Browser Use recipes (employees only)
+
 
 class ActionDefinition(BaseModel):
-    tool: ToolDefinitionModel        # the registry's ToolDefinition (side effect, risk, data scope)
-    input_schema: str                # JSON Schema ID
+    tool: ToolDefinitionModel  # the registry's ToolDefinition (side effect, risk, data scope)
+    input_schema: str  # JSON Schema ID
     output_schema: str
-    bindings: tuple[ChannelBinding, ...]     # ordered by preference
+    bindings: tuple[ChannelBinding, ...]  # ordered by preference
     approval_policy: Literal["R0", "R1", "W1", "W2", "W3"]
-    rate_limit_key: str | None       # e.g. "etsy:app" (shared app budget), "browser:{shop}"
-    concurrency_key: str | None      # e.g. "shop:{shop_id}:writes"
+    rate_limit_key: str | None  # e.g. "etsy:app" (shared app budget), "browser:{shop}"
+    concurrency_key: str | None  # e.g. "shop:{shop_id}:writes"
     verify: Literal["none", "reread", "schema", "human"]
     timeout: timedelta
 ```
@@ -138,75 +156,124 @@ class ActionGateway(Protocol):
         """The only entry point for business actions. Idempotent per
         (action.name, idempotency_key): a replay returns the first result."""
 
+
 class ExecutionRouter(Protocol):
     def choose(self, definition: ActionDefinition, ctx: RoutingContext) -> ChannelBinding:
         """Deterministic: bindings in order, filtered by shop capabilities, environment
         status, browser scope flags and actor kind (automations: deterministic only)."""
 
+
 class ChannelAdapter(Protocol):
     channel: ClassVar[Channel]
-    async def execute(self, request: ActionRequest, binding: ChannelBinding,
-                      lease: ExecutionLease) -> ChannelOutcome: ...
+
+    async def execute(
+        self, request: ActionRequest, binding: ChannelBinding, lease: ExecutionLease
+    ) -> ChannelOutcome: ...
     async def verify(self, request: ActionRequest, outcome: ChannelOutcome) -> Verification: ...
 
-class ApiChannel(ChannelAdapter, Protocol): ...          # Etsy httpx adapter; writes via outbox
-class InternalChannel(ChannelAdapter, Protocol): ...     # use cases
-class HumanChannel(ChannelAdapter, Protocol):            # tasks and approvals (Phase 7)
+
+class ApiChannel(ChannelAdapter, Protocol): ...  # Etsy httpx adapter; writes via outbox
+
+
+class InternalChannel(ChannelAdapter, Protocol): ...  # use cases
+
+
+class HumanChannel(ChannelAdapter, Protocol):  # tasks and approvals (Phase 7)
     async def hand_off(self, request: ActionRequest, reason: HandoffReason) -> UUID: ...
 
-class BrowserChannel(ChannelAdapter, Protocol):          # Phase 5: interface + FakeBrowserChannel
+
+class BrowserChannel(ChannelAdapter, Protocol):  # Phase 5: interface + FakeBrowserChannel
     async def preflight(self, environment_id: UUID) -> PreflightReport: ...
 
-class BrowserController(Protocol):                       # Phase 8A
+
+class BrowserController(Protocol):  # Phase 8A
     @asynccontextmanager
-    def session(self, environment_id: UUID, *, purpose: str,
-                deadline: AwareDatetime) -> AsyncIterator[BrowserSession]:
+    def session(
+        self, environment_id: UUID, *, purpose: str, deadline: AwareDatetime
+    ) -> AsyncIterator[BrowserSession]:
         """Holds pg advisory lock (profile), unpacks the sealed profile, starts one engine
         (Playwright persistent context or CDP Chromium), runs preflight; on exit closes,
         re-seals the profile, drops secrets and releases the lock."""
+
 
 class BrowserSession(Protocol):
     async def run_recipe(self, recipe: str, params: Mapping[str, JsonValue]) -> RecipeOutcome: ...
     async def extract(self, recipe: str, model: type[BaseModel]) -> BaseModel: ...
     async def inject_secret(self, grant: InjectionGrant, selector: str) -> None: ...
 
+
 class ShopEnvironmentRegistry(Protocol):
     def get(self, shop_id: UUID) -> BrowserEnvironment | None: ...
-    def create(self, shop_id: UUID, *, by: ActorRef, consent: ConsentRecord) -> BrowserEnvironment: ...
-    def transition(self, environment_id: UUID, target: EnvironmentStatus, *,
-                   reason: str, by: ActorRef, expected: EnvironmentStatus) -> BrowserEnvironment: ...
+    def create(
+        self, shop_id: UUID, *, by: ActorRef, consent: ConsentRecord
+    ) -> BrowserEnvironment: ...
+    def transition(
+        self,
+        environment_id: UUID,
+        target: EnvironmentStatus,
+        *,
+        reason: str,
+        by: ActorRef,
+        expected: EnvironmentStatus,
+    ) -> BrowserEnvironment: ...
     def record_health(self, environment_id: UUID, report: HealthReport) -> None: ...
 
-class EnvironmentProvisioner(Protocol):                  # contract in Phase 5, real in 8A
+
+class EnvironmentProvisioner(Protocol):  # contract in Phase 5, real in 8A
     async def provision(self, environment_id: UUID) -> ProvisioningResult: ...
     async def deprovision(self, environment_id: UUID) -> None: ...
 
-class SecretBroker(Protocol):                            # contract in Phase 5, real in 8B
-    def issue_injection_grant(self, *, execution_id: UUID, environment_id: UUID,
-                              secret_ref: SecretRef, field: str, ttl: timedelta) -> InjectionGrant: ...
+
+class SecretBroker(Protocol):  # contract in Phase 5, real in 8B
+    def issue_injection_grant(
+        self,
+        *,
+        execution_id: UUID,
+        environment_id: UUID,
+        secret_ref: SecretRef,
+        field: str,
+        ttl: timedelta,
+    ) -> InjectionGrant: ...
     def redeem(self, grant: InjectionGrant, *, worker: ActorRef) -> SecretValue:
         """Browser workers only; one use; audited; SecretValue has no __repr__/__str__."""
 
-class Authenticator(Protocol):                           # Phase 8B
-    def enrol(self, *, shop_id: UUID, label: str, secret_or_uri: SecretValue,
-              confirm_code: str, by: ActorRef, consent: ConsentRecord) -> TotpAccount: ...
-    def rotate(self, account_id: UUID, *, new_secret: SecretValue, confirm_code: str,
-               by: ActorRef) -> TotpAccount: ...
+
+class Authenticator(Protocol):  # Phase 8B
+    def enrol(
+        self,
+        *,
+        shop_id: UUID,
+        label: str,
+        secret_or_uri: SecretValue,
+        confirm_code: str,
+        by: ActorRef,
+        consent: ConsentRecord,
+    ) -> TotpAccount: ...
+    def rotate(
+        self, account_id: UUID, *, new_secret: SecretValue, confirm_code: str, by: ActorRef
+    ) -> TotpAccount: ...
     def remove(self, account_id: UUID, *, by: ActorRef) -> None: ...
-    def current_code_for_display(self, account_id: UUID, *, viewer: AuthContext) -> DisplayedCode: ...
+    def current_code_for_display(
+        self, account_id: UUID, *, viewer: AuthContext
+    ) -> DisplayedCode: ...
     def code_for_injection(self, grant: InjectionGrant) -> SecretValue: ...
 
-class ApprovalService(Protocol):                         # contract in Phase 5, real in Phase 7
+
+class ApprovalService(Protocol):  # contract in Phase 5, real in Phase 7
     def request(self, request: ApprovalRequest) -> Approval: ...
-    def decide(self, approval_id: UUID, decision: Decision, *, by: AuthContext,
-               shown_hash: str) -> Approval: ...
+    def decide(
+        self, approval_id: UUID, decision: Decision, *, by: AuthContext, shown_hash: str
+    ) -> Approval: ...
     def status(self, approval_id: UUID) -> Approval: ...
 
-class CircuitBreakers(Protocol):                         # PyBreaker, state shared in Postgres
+
+class CircuitBreakers(Protocol):  # PyBreaker, state shared in Postgres
     def guard(self, key: str) -> AbstractAsyncContextManager[None]: ...
 
-class RateLimiter(Protocol):                             # aiolimiter + Postgres token bucket
+
+class RateLimiter(Protocol):  # aiolimiter + Postgres token bucket
     async def acquire(self, key: str, *, cost: int = 1, wait: timedelta) -> bool: ...
+
 
 class ConcurrencyLimiter(Protocol):
     def slot(self, key: str, *, limit: int) -> AbstractAsyncContextManager[bool]: ...
@@ -247,21 +314,30 @@ One approval contract for every actor and channel. Phase 5 defines it with an in
 ```python
 class ApprovalRequest(BaseModel):
     action: ActionRef
-    request_hash: str                # SHA-256 of the canonical ActionRequest (minus approval_id)
+    request_hash: str  # SHA-256 of the canonical ActionRequest (minus approval_id)
     requester: ActorRef
-    organization_id: UUID; shop_id: UUID | None
-    summary: str                     # code template, never model text
-    parameters: dict[str, JsonValue] # what will be sent (diff for updates)
-    impact: str; risk: RiskLevel; rollback: str
+    organization_id: UUID
+    shop_id: UUID | None
+    summary: str  # code template, never model text
+    parameters: dict[str, JsonValue]  # what will be sent (diff for updates)
+    impact: str
+    risk: RiskLevel
+    rollback: str
     evidence: tuple[Evidence, ...]
     expires_at: AwareDatetime
     policy: Literal["W1", "W2", "W3"]
-    decided_by_roles: frozenset[Role]          # W3: {OWNER}
-    requires_step_up: bool                     # W2, W3
+    decided_by_roles: frozenset[Role]  # W3: {OWNER}
+    requires_step_up: bool  # W2, W3
+
 
 class ApprovalState(StrEnum):
-    REQUESTED = "requested"; APPROVED = "approved"; REJECTED = "rejected"
-    EXPIRED = "expired"; EXECUTED = "executed"; FAILED = "failed"; CANCELLED = "cancelled"
+    REQUESTED = "requested"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    EXECUTED = "executed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 ```
 
 Rules, from Phase 7 (AC-7.3.x):
@@ -279,15 +355,27 @@ class SecretRef(BaseModel):
     environment_id: UUID
     account_id: UUID | None
 
-class InjectionGrant(BaseModel):     # opaque to callers; signed server-side
-    grant_id: UUID; execution_id: UUID; environment_id: UUID
-    secret_ref: SecretRef; field: str; expires_at: AwareDatetime   # ttl ≤ 60 s
 
-class DisplayedCode(BaseModel):      # dashboard only; never logged, never cached
-    code: SecretStr; period_ends_at: AwareDatetime; period_seconds: int
+class InjectionGrant(BaseModel):  # opaque to callers; signed server-side
+    grant_id: UUID
+    execution_id: UUID
+    environment_id: UUID
+    secret_ref: SecretRef
+    field: str
+    expires_at: AwareDatetime  # ttl ≤ 60 s
+
+
+class DisplayedCode(BaseModel):  # dashboard only; never logged, never cached
+    code: SecretStr
+    period_ends_at: AwareDatetime
+    period_seconds: int
+
 
 class ConsentRecord(BaseModel):
-    text_version: str; user_id: UUID; at: AwareDatetime; ip_hash: str
+    text_version: str
+    user_id: UUID
+    at: AwareDatetime
+    ip_hash: str
 ```
 
 Invariants (all tested):
