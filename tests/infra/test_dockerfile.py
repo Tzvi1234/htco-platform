@@ -58,4 +58,11 @@ def test_dockerignore__allows_only_the_build_inputs() -> None:
 
     assert rules[0] == "*", "the build context must be an allow-list"
     allowed = {rule[1:].rstrip("/") for rule in rules if rule.startswith("!")}
-    assert allowed == {"pyproject.toml", "uv.lock", ".python-version", "apps", "packages"}
+    assert allowed == {
+        "pyproject.toml",
+        "uv.lock",
+        ".python-version",
+        "apps",
+        "packages",
+        "workers",
+    }
