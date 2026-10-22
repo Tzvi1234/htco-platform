@@ -460,3 +460,23 @@ async def test_orders_and_awaiting__keep_to_30_days_though_31_are_read(world: Wo
     assert page.counts[OrderFilter.PAID] == 1
     assert overview.sales is not None
     assert overview.sales.awaiting_shipment == 1
+
+
+async def test_last_sync__a_load_from_an_earlier_connection_does_not_stamp_the_new_one(
+    world: World,
+) -> None:
+    """Codex review of #50: the success time is pinned to the connection the load ran for."""
+    recorded: list[int | None] = []
+
+    class Recorder:
+        async def record_successful_call(
+            self, shop_id: uuid.UUID, *, at: datetime, generation: int | None = None
+        ) -> None:
+            assert (shop_id, at) == (SHOP, NOW)
+            recorded.append(generation)
+
+    dashboard = replace(world.dashboard, successes=Recorder())
+
+    await shop_listings(dashboard, auth(), SHOP, now=NOW)
+
+    assert recorded == [world.vault.rows[SHOP].generation]

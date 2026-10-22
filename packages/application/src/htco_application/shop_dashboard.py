@@ -127,7 +127,11 @@ class DashboardConnections(Protocol):
 
 
 class SuccessRecorder(Protocol):
-    async def record_successful_call(self, shop_id: uuid.UUID, *, at: datetime) -> None: ...
+    async def record_successful_call(
+        self, shop_id: uuid.UUID, *, at: datetime, generation: int | None = None
+    ) -> None:
+        """With `generation`: only while that connection is the connected one."""
+        ...
 
 
 class ShopDataSource(Protocol):
@@ -538,7 +542,11 @@ class _Opened:
         if recorder is None:
             return
         try:
-            await recorder.record_successful_call(self.integration.shop_id, at=self.now)
+            # Pinned to the connection the load ran for: a reconnect meanwhile keeps its own
+            # time (Codex review of #50).
+            await recorder.record_successful_call(
+                self.integration.shop_id, at=self.now, generation=self.integration.generation
+            )
         except Exception as error:
             _log.warning("shop_data.success_not_recorded: %s", type(error).__name__)
 

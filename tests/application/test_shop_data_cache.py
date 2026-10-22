@@ -247,3 +247,34 @@ async def test_entry__timer_of_a_replaced_value_keeps_the_newer_one() -> None:
     await asyncio.sleep(0.05)
 
     assert (await cache.get(KEY, Loader("unused"), long)).value == "new"
+
+
+async def test_forget__cancels_the_timers_so_nothing_keeps_the_values() -> None:
+    """Codex review of #50: a timer must not keep buyer data reachable after a forget."""
+    cache = ShopDataCache(clock=Clock())
+    await cache.get(KEY, Loader("v"), POLICY)
+    assert len(cache._timers) == 1
+
+    cache.forget(SHOP)
+
+    assert len(cache) == 0
+    assert cache._timers == {}
+
+
+async def test_forget__a_load_in_flight_finishes_for_its_caller_but_stores_nothing() -> None:
+    """Codex review of #50: a late Etsy answer after a disconnect must not refill the cache."""
+    cache = ShopDataCache(clock=Clock())
+    load = Loader("late")
+    load.gate = asyncio.Event()
+    pending = asyncio.ensure_future(cache.get(KEY, load, POLICY))
+    await asyncio.sleep(0)
+
+    cache.forget(SHOP)
+    load.gate.set()
+    answered = await pending
+
+    assert answered.value == "late"
+    assert len(cache) == 0
+    fresh = Loader("again")
+    assert (await cache.get(KEY, fresh, POLICY)).value == "again"
+    assert fresh.calls == 1

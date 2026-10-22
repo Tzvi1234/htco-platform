@@ -146,7 +146,11 @@ class TokenVault(Protocol):
         since the last success."""
         ...
 
-    async def record_successful_call(self, shop_id: uuid.UUID, *, at: datetime) -> None: ...
+    async def record_successful_call(
+        self, shop_id: uuid.UUID, *, at: datetime, generation: int | None = None
+    ) -> None:
+        """With `generation`: only while that connection is the connected one."""
+        ...
 
     async def mark_needs_reauth(
         self,

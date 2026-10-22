@@ -304,9 +304,11 @@ class Vault:
             self.audit.append(audit)
         return True
 
-    async def record_successful_call(self, shop_id: uuid.UUID, *, at: datetime) -> None:
+    async def record_successful_call(
+        self, shop_id: uuid.UUID, *, at: datetime, generation: int | None = None
+    ) -> None:
         row = self.rows[shop_id]
-        if row.status is IntegrationStatus.CONNECTED:
+        if row.status is IntegrationStatus.CONNECTED and _current(row, generation):
             self.rows[shop_id] = replace(row, last_successful_call_at=at)
 
     async def disconnect(

@@ -101,6 +101,10 @@ class ShopDataCache:
         self._entries: dict[CacheKey, _Entry] = {}
         self._failures: dict[CacheKey, _Failure] = {}
         self._flights: dict[CacheKey, asyncio.Task[Any]] = {}
+        # The expiry timer of each entry; it holds only the key, never the value.
+        self._timers: dict[CacheKey, asyncio.TimerHandle] = {}
+        # Grows with every `forget` of a shop: a load that started before must not store.
+        self._epochs: dict[uuid.UUID, int] = {}
 
     async def get[ValueT](
         self, key: CacheKey, load: Callable[[], Awaitable[ValueT]], policy: CachePolicy
@@ -121,7 +125,8 @@ class ShopDataCache:
         flight = self._flights.get(key)
         leader = flight is None
         if flight is None:
-            flight = asyncio.ensure_future(self._load(key, load, policy))
+            epoch = self._epochs.get(key.shop_id, 0)
+            flight = asyncio.ensure_future(self._load(key, load, policy, epoch))
             self._flights[key] = flight
         try:
             value, fetched_at = await asyncio.shield(flight)
@@ -130,39 +135,60 @@ class ShopDataCache:
         return Fetched(value, fetched_at, stale=False, loaded=leader)
 
     def forget(self, shop_id: uuid.UUID) -> None:
-        """Drop everything cached for the shop (every generation)."""
-        for store in (self._entries, self._failures):
-            for key in [k for k in store if k.shop_id == shop_id]:
-                del store[key]
+        """Drop everything cached for the shop (every generation) at once: entries, failures and
+        their timers; loads still waiting for Etsy finish for their callers but store nothing, and
+        new callers start their own (Codex review of #50)."""
+        self._epochs[shop_id] = self._epochs.get(shop_id, 0) + 1
+        for key in [k for k in self._entries if k.shop_id == shop_id]:
+            self._drop(key)
+        for key in [k for k in self._failures if k.shop_id == shop_id]:
+            del self._failures[key]
+        for key in [k for k in self._flights if k.shop_id == shop_id]:
+            del self._flights[key]
 
     def __len__(self) -> int:
         return len(self._entries)
 
     async def _load[ValueT](
-        self, key: CacheKey, load: Callable[[], Awaitable[ValueT]], policy: CachePolicy
+        self,
+        key: CacheKey,
+        load: Callable[[], Awaitable[ValueT]],
+        policy: CachePolicy,
+        epoch: int,
     ) -> tuple[ValueT, datetime]:
+        flight = asyncio.current_task()
         try:
             value = await load()
         except MarketplaceError as error:
-            self._failures[key] = _Failure(self._clock(), error)
-            if not isinstance(error, _PASSING):
-                self._entries.pop(key, None)
+            if self._epochs.get(key.shop_id, 0) == epoch:
+                self._failures[key] = _Failure(self._clock(), error)
+                if not isinstance(error, _PASSING):
+                    self._drop(key)
             raise
         finally:
-            self._flights.pop(key, None)
+            if self._flights.get(key) is flight:
+                del self._flights[key]
         fetched_at = self._clock()
-        entry = _Entry(value, fetched_at, policy)
-        self._entries[key] = entry
+        if self._epochs.get(key.shop_id, 0) != epoch:
+            return value, fetched_at  # forgotten meanwhile: answer the waiters, keep nothing
+        self._drop(key)
+        self._entries[key] = _Entry(value, fetched_at, policy)
         self._failures.pop(key, None)
-        asyncio.get_running_loop().call_later(
-            policy.max_stale.total_seconds(), self._expire, key, entry
+        self._timers[key] = asyncio.get_running_loop().call_later(
+            policy.max_stale.total_seconds(), self._expire, key
         )
         return value, fetched_at
 
-    def _expire(self, key: CacheKey, entry: _Entry) -> None:
-        """The timer: drop this entry unless a newer load has replaced it."""
-        if self._entries.get(key) is entry:
-            del self._entries[key]
+    def _expire(self, key: CacheKey) -> None:
+        """The timer: drop the entry (a newer load cancels and replaces the timer)."""
+        self._timers.pop(key, None)
+        self._entries.pop(key, None)
+
+    def _drop(self, key: CacheKey) -> None:
+        self._entries.pop(key, None)
+        timer = self._timers.pop(key, None)
+        if timer is not None:
+            timer.cancel()
 
     def _stale_or_raise(
         self, key: CacheKey, entry: _Entry | None, error: MarketplaceError
@@ -178,6 +204,6 @@ class ShopDataCache:
     def _sweep(self, now: datetime) -> None:
         expired = [k for k, e in self._entries.items() if now - e.fetched_at >= e.policy.max_stale]
         for key in expired:
-            del self._entries[key]
+            self._drop(key)
         for key in [k for k, f in self._failures.items() if now - f.at >= self._cooldown]:
             del self._failures[key]
