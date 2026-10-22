@@ -22,14 +22,21 @@ from htco_application.maintenance import (
     SCHEDULES,
     TenantShop,
 )
+from htco_application.messaging import OUTBOX_DELIVERY_JOB
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_integrations import EtsyConnection, OAuthTokens
 from htco_domain.jobs import JobState
 from htco_integrations.etsy import EtsyConfig
 from htco_platform.settings import ConfigurationError, load_settings
 from htco_worker.health import health_answer
-from htco_worker.main import EXIT_CONFIGURATION_ERROR, main, maintenance_handlers
+from htco_worker.main import (
+    EXIT_CONFIGURATION_ERROR,
+    main,
+    maintenance_handlers,
+    outbox_handlers,
+)
 from htco_worker.settings import WorkerSettings
+from tests.application.test_messaging import Store
 from tests.etsy_fakes import ETSY_SHOP, NOW, Capabilities, Pinning, Vault
 from tests.integrations.test_etsy_adapter import Harness, ok
 from tests.job_fakes import MemoryJobQueue
@@ -326,3 +333,7 @@ def test_settings__a_worker_id_longer_than_the_queue_columns__is_refused(
 
     with pytest.raises(ConfigurationError, match="HTCO_WORKER_ID"):
         load_settings(WorkerSettings)
+
+
+def test_outbox_handlers__deliver_the_outbox_job() -> None:
+    assert set(outbox_handlers(Store(), {})) == {OUTBOX_DELIVERY_JOB}
