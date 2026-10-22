@@ -33,7 +33,9 @@ Etsy's answers cross a trust boundary: they are parsed field by field into typed
 
 | Data | Class | Who can see it | Retention | Masking |
 |---|---|---|---|---|
-| Receipt buyer name, email, address | DC3 | Not read: the port's `Receipt` does not carry them; the probe's address check keeps only whether the fields hold text | — | Not mapped |
+| Receipt buyer email, address, messages | DC3 | Not read: neither `Receipt` nor `OrderReceipt` carries them; the probe's address check keeps only whether the fields hold text | — | Not mapped |
+| Buyer display name (first name, last initial), tracking number | DC3 | Owner, Admin, Operations, Support, live on the Orders screen ([dashboard data](dashboard-data.md#personal-data)) | In API memory at most 1 hour; never stored, logged or audited; answers `no-store` | Name shortened at the adapter; left out for Finance, Developer and Viewer |
+| Review text | DC2 (public on Etsy) | Members who see the shop | In API memory at most 6 hours | Kept out of `repr` and logs |
 | Shop name, listing titles, prices | DC1 (business data) | Shop members (from Phase 5 storage) | Per Etsy API Terms (no data older than 6 h / 24 h shown) | — |
 
 ## ASVS 5.0 requirements covered

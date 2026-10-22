@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Status** | Version 2.0 — the living-office plan ([ADR-0012](../adr/0012-living-office-organization.md)); awaiting owner approval |
-| **Last updated** | 2026-10-14 |
-| **Current phase** | Phase 0 — Groundwork (owner tasks open); Phase 1 — Walking skeleton (code complete, account-dependent parts open) |
+| **Last updated** | 2026-10-22 |
+| **Current phase** | Phase 5 — Orders ingest is next; Phases 1–4 complete apart from the notes in §6 |
 | **Related** | [PRD](../product/PRD.md) · [MVP](../product/MVP.md) · [Software design](../architecture/SOFTWARE_DESIGN.md) · [Engineering rules](../engineering/ENGINEERING_RULES.md) |
 
 This plan supersedes the build order in the original HTCO planning brief (v5), which is kept outside the repository, and version 1.0 of this plan (18 phases built around 18 agent roles). Version 2.0 reorganizes phases 5 to 21 around the four concepts of [ADR-0012](../adr/0012-living-office-organization.md): AI employees, deterministic automations, the tool library, and engineering. Phases 0 to 4 keep their numbers and scope; phase files 8 to 17 of version 1.0 were renamed and rewritten (their history is in Git).
@@ -132,10 +132,11 @@ Status words: **COMPLETE** (merged, verified), **PARTIAL** (some slices or parts
 | Phase | Status | Started | Finished | Evidence and notes |
 |---|---|---|---|---|
 | 0 | PARTIAL | 2026-10-14 | | Docs, repositories and design system created; owner prerequisites open ([issue #8](https://github.com/Tzvi1234/htco-platform/issues/8)) |
-| 1 | PARTIAL | 2026-10-14 | | 1.1–1.4 and 1.6 complete (rulesets active 2026-10-14); 1.5 complete (deployed 2026-10-14, rollback drill passed); 1.7 complete except verifying a real Sentry event and an alert. PRs #1–#7, #11 |
-| 2 | PARTIAL | 2026-10-14 | | Policy engine v0 for human roles (2.4 part 1, PR #10); living-office domain foundation (PR for ADR-0012); 2.1 database workflow (PR #16); 2.2 identity schema with RLS (PR #21); 2.3 authentication in the API (PR #22); 2.4 part 2 `/v1/me` and `/v1/shops` (PR #23); 2.5 audit writer and owner bootstrap (PR #24); 2.6 member and shop-access management; production database migrated (2026-10-14); API deployed and connected to Supabase (2026-10-14); exit gate open: the owner's account (needs the Phase 3 sign-in screens); Supabase project `htco` created (Frankfurt, Free plan) |
-| 3 | PARTIAL | 2026-10-14 | | 3.1, 3.2 and 3.3 part 1 in clients PRs #1–#4 |
-| 4–21 | PLANNED | | | Foundations for 5, 7, 8, 9, 10 and 18 exist as tested domain code (ADR-0012 validation log) |
+| 1 | COMPLETE | 2026-10-14 | 2026-10-22 | 1.1–1.6 complete (rulesets active 2026-10-14; deployed 2026-10-14, rollback drill passed); 1.7 complete. Open note: verifying a real Sentry event and an alert. PRs #1–#7, #11 |
+| 2 | COMPLETE | 2026-10-14 | 2026-10-22 | Policy engine v0 for human roles (2.4 part 1, PR #10); living-office domain foundation (PR for ADR-0012); 2.1 database workflow (PR #16); 2.2 identity schema with RLS (PR #21); 2.3 authentication in the API (PR #22); 2.4 part 2 `/v1/me` and `/v1/shops` (PR #23); 2.5 audit writer and owner bootstrap (PR #24); 2.6 member and shop-access management; production database migrated (2026-10-14); API deployed and connected to Supabase (2026-10-14); exit gate open: the owner's account (needs the Phase 3 sign-in screens); Supabase project `htco` created (Frankfurt, Free plan) |
+| 3 | COMPLETE | 2026-10-14 | 2026-10-22 | Design system, web shell, sign-in with MFA and password reset, Design 1C on every screen (clients PRs #1–#34). Open note: email verification through Resend |
+| 4 | COMPLETE | 2026-10-15 | 2026-10-22 | Adapter, token vault, OAuth connect, refresh, capability probes, disconnect, the shop card and the shop's live data on the dashboard ([dashboard data](../features/etsy-integration/dashboard-data.md)). Open note: the restore rehearsal (AC-4.7.2, with the owner) |
+| 5–21 | PLANNED | | | Foundations for 5, 7, 8, 9, 10 and 18 exist as tested domain code (ADR-0012 validation log) |
 
 Update this table in the pull request that completes each phase.
 

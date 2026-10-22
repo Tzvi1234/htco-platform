@@ -98,13 +98,16 @@ class PostgresTokenVault:
 
         return await anyio.to_thread.run_sync(run)
 
-    async def record_successful_call(self, shop_id: uuid.UUID, *, at: datetime) -> None:
+    async def record_successful_call(
+        self, shop_id: uuid.UUID, *, at: datetime, generation: int | None = None
+    ) -> None:
         await self._execute(
             """
             update app.shop_integrations set last_successful_call_at = %s
             where shop_id = %s and provider = %s and status = 'connected'
+              and (%s::integer is null or connection_generation = %s::integer)
             """,
-            [at, shop_id, _PROVIDER.value],
+            [at, shop_id, _PROVIDER.value, generation, generation],
         )
 
     async def mark_needs_reauth(

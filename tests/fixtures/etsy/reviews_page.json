@@ -1,0 +1,41 @@
+{
+  "count": 3,
+  "results": [
+    {
+      "shop_id": 10000001,
+      "listing_id": 7000000001,
+      "rating": 5,
+      "review": "Fake review text: lovely test mug.",
+      "language": "en",
+      "image_url_fullxfull": null,
+      "create_timestamp": 1760400000,
+      "created_timestamp": 1760400000,
+      "update_timestamp": 1760400000,
+      "updated_timestamp": 1760400000
+    },
+    {
+      "shop_id": 10000001,
+      "listing_id": 7000000002,
+      "rating": 4,
+      "review": null,
+      "language": "en",
+      "image_url_fullxfull": null,
+      "create_timestamp": 1760300000,
+      "created_timestamp": 1760300000,
+      "update_timestamp": 1760300000,
+      "updated_timestamp": 1760300000
+    },
+    {
+      "shop_id": 10000001,
+      "listing_id": 7000000001,
+      "rating": 2,
+      "review": "Fake review text: arrived late.",
+      "language": "en",
+      "image_url_fullxfull": null,
+      "create_timestamp": 1760200000,
+      "created_timestamp": 1760200000,
+      "update_timestamp": 1760200000,
+      "updated_timestamp": 1760200000
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "count": 1,
+  "results": [
+    {
+      "shipping_profile_id": 9000000001,
+      "title": "Fake standard shipping",
+      "user_id": 20000001,
+      "origin_country_iso": "IL",
+      "is_deleted": false,
+      "origin_postal_code": null,
+      "profile_type": "manual",
+      "domestic_handling_fee": 0,
+      "international_handling_fee": 0,
+      "shipping_profile_destinations": [
+        {
+          "shipping_profile_destination_id": 9100000001,
+          "shipping_profile_id": 9000000001,
+          "origin_country_iso": "IL",
+          "destination_country_iso": "US",
+          "destination_region": "none",
+          "primary_cost": {
+            "amount": 599,
+            "divisor": 100,
+            "currency_code": "USD"
+          },
+          "secondary_cost": {
+            "amount": 200,
+            "divisor": 100,
+            "currency_code": "USD"
+          },
+          "shipping_carrier_id": null,
+          "mail_class": null,
+          "min_delivery_days": 7,
+          "max_delivery_days": 14
+        },
+        {
+          "shipping_profile_destination_id": 9100000002,
+          "shipping_profile_id": 9000000001,
+          "origin_country_iso": "IL",
+          "destination_country_iso": "",
+          "destination_region": "eu",
+          "primary_cost": {
+            "amount": 799,
+            "divisor": 100,
+            "currency_code": "USD"
+          },
+          "secondary_cost": {
+            "amount": 300,
+            "divisor": 100,
+            "currency_code": "USD"
+          },
+          "shipping_carrier_id": null,
+          "mail_class": null,
+          "min_delivery_days": null,
+          "max_delivery_days": null
+        }
+      ],
+      "shipping_profile_upgrades": [
+        {
+          "shipping_profile_id": 9000000001,
+          "upgrade_id": 9200000001,
+          "upgrade_name": "Fake express",
+          "type": 0,
+          "rank": 1,
+          "language": "en",
+          "price": {
+            "amount": 1500,
+            "divisor": 100,
+            "currency_code": "USD"
+          },
+          "secondary_price": {
+            "amount": 500,
+            "divisor": 100,
+            "currency_code": "USD"
+          },
+          "shipping_carrier_id": null,
+          "mail_class": null,
+          "min_delivery_days": 2,
+          "max_delivery_days": 4
+        }
+      ]
+    }
+  ]
+}

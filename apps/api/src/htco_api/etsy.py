@@ -68,6 +68,7 @@ from htco_application.shop_capabilities import (
     probe_capabilities,
     recheck_capabilities,
 )
+from htco_application.shop_dashboard import ShopDashboard
 from htco_application.shop_integrations import (
     DisconnectingVault,
     DisconnectNotAllowedError,
@@ -512,4 +513,8 @@ def _add_connection_routes(router: APIRouter, *, clock: Callable[[], datetime]) 
             raise ProblemError(NOT_FOUND) from None
         except DisconnectNotAllowedError as error:
             raise ProblemError(_PROBLEM_FOR_OUTCOME.get(error.outcome, FORBIDDEN)) from None
+        # The shop's live data (buyer names among it) leaves memory with the tokens.
+        dashboard = getattr(request.app.state, "dashboard", None)
+        if isinstance(dashboard, ShopDashboard):
+            dashboard.cache.forget(shop_id)
         return _view(IntegrationSummary.of(after), now)

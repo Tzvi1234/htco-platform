@@ -57,6 +57,30 @@ Notes:
 10. **Messages** have no API. Etsy's notification emails can be read from the owner's mailbox (Phase 14).
 11. **Token hygiene.** Access tokens are refreshed hourly; the owner re-consents before the 90-day refresh token expires. The shared secret is rotated.
 
+## In the dashboard
+
+Phase 4 (slice 4.6) shows every read our granted scopes (`shops_r`, `transactions_r`, `listings_r`) or the API key allow where a dashboard screen has a place for it, live through the read-only adapter and a short cache ([dashboard data](../features/etsy-integration/dashboard-data.md)). Nothing is written and no scope was added.
+
+| Etsy endpoint | Scope | Screen / panel | Now or deferred |
+|---|---|---|---|
+| `getShop` | API key | Shops: shop card tiles (favourites, rating) and freshness; Home: shop card; Customers: review average and count | Now |
+| `getShopReceipts` (30 days, newest first) | `transactions_r` | Orders (live view); Home: Revenue and Orders today, 7-day orders; Shops: orders and revenue today; Shipping: awaiting and shipped orders | Now (read-through); exactly-once ingest, history and webhooks in Phase 5 |
+| Receipt `transactions` (embedded) | `transactions_r` | Orders: items, ship-by dates; Home: top listings by units | Now |
+| Receipt `shipments` (embedded) | `transactions_r` | Orders and Shipping: carrier, shipped date; tracking number for buyer-contact roles | Now |
+| `getListingsByShop` (`active`, `includes=Images`) | `listings_r` | Products: catalog and details; Shops: top listings strip | Now |
+| `getShopSections` | API key | Products: section names and filter | Now |
+| `getReviewsByShop` | API key | Customers: "Reviews" strip (replaces the demo segments) | Now |
+| `getShopShippingProfiles` | `shops_r` | Shipping: profiles, destinations, costs, delivery days (replace the demo carrier panels) | Now |
+| `getShopReturnPolicies` | API key | Shipping: return policy | Now |
+| `getShopProductionPartners` | `shops_r` | Shipping: production partners | Now |
+| `getShopReceiptTransactionsByShop` | `transactions_r` | — (the receipts already embed their transactions) | Not needed |
+| `getShopReadinessStateDefinitions` (processing profiles) | `shops_r` | Shipping: processing times | Deferred to Phase 11 (listing health), with per-listing readiness |
+| `getListingInventory`, variations, SKUs per product | `listings_r` | Products: stock per variation | Deferred to Phase 11 (one call per listing) |
+| `getPayments`, `getShopPaymentAccountLedgerEntries` | `transactions_r` | Finance overview and ledger | Deferred to Phase 13: allowed by our scope, but meaningful only with fee classification, payout matching and supplier costs |
+| Webhooks (`order.*`, `listing.*`, `inventory.*`) | app setting | Live updates instead of the 2-minute cache | Phase 5 |
+| `updateShopReceipt`, `createReceiptShipment`, any listing or shop write | `*_w` | — | Never without the owner's approval; Phases 6 and 12 |
+| Buyer email and address (`buyer_email`, `first_line` …) | `transactions_r` (address hidden for Israeli keys) | — | Not read: only a display name (first name, last initial) for Owner, Admin, Operations and Support |
+
 ## Rules we keep (API Terms, 2026-08-18)
 
 - One app (one keystring) for all shops. Never extra keys or apps to get around limits or review.
