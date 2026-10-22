@@ -130,6 +130,8 @@ jobs:
           cache-python: true
       # AC-5.10.7: the definitions load from registry/automations/, and the database then matches.
       - name: Automation definitions match the registry
+        env:
+          HTCO_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: |
           uv run htco registry sync --automations --apply
           uv run htco registry sync --automations --check
