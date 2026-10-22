@@ -8,7 +8,7 @@ After a disconnect no marketplace call is made for the shop (AC-4.7.1).
 
 import uuid
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any, override
 
@@ -23,6 +23,7 @@ from htco_application.etsy_connect import EtsyConnect
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_integrations import IntegrationSummary
 from htco_domain.identity import Role
+from htco_domain.integrations import IntegrationStatus
 from htco_platform.jwt import JwtVerifier
 from tests.api.test_etsy_connect_routes import (
     CREDENTIALS,
@@ -144,13 +145,14 @@ class TwoOrganizations(Memberships):
         return [*first, Membership(uuid.UUID(int=7), Role.OWNER, frozenset())]
 
 
-async def _world(
+async def _world(  # noqa: PLR0913 - one keyword per variation
     *,
     role: Role = Role.OWNER,
     several_organizations: bool = False,
     mfa: bool = True,
     probe: Probe | None = None,
     probes_on: bool = True,
+    shop_remover: Any = None,
 ) -> AsyncIterator[World]:
     clock = Clock()
     vault, audit = Vault(), AuditLog()
@@ -183,6 +185,7 @@ async def _world(
             integrations=Integrations(vault, store),
             capability_checks=checks if probes_on else None,
             token_vault=vault,
+            shop_remover=shop_remover(vault, audit) if shop_remover is not None else None,
         )
     )
     transport = httpx.ASGITransport(app=app, client=("203.0.113.9", 50000))
@@ -330,6 +333,18 @@ async def test_disconnect__afterwards_no_marketplace_call_for_the_shop(world: Wo
 
     assert response.status_code == 409
     assert response.json()["type"] == PROBLEMS + "shop-not-connected"
+    assert response.json()["reason"] == "disconnected"
+    assert world.probe.calls == []
+
+
+async def test_recheck__needs_reauth__409_with_the_reason_and_no_probe(world: World) -> None:
+    shop = uuid.UUID(shop_of(world))
+    world.vault.rows[shop] = replace(world.vault.rows[shop], status=IntegrationStatus.NEEDS_REAUTH)
+
+    response = await world.recheck(shop_of(world))
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "needs_reauth"
     assert world.probe.calls == []
 
 

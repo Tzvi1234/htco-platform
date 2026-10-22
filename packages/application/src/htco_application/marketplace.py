@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Protocol, override
+from typing import Protocol, override, runtime_checkable
 
 _CURRENCY = re.compile(r"^[A-Z]{3}$")
 
@@ -377,6 +377,17 @@ class MarketplaceAuthError(MarketplaceError):
     """401: the access token is missing, expired or revoked; refresh or reconnect."""
 
 
+class MarketplaceCredentialsRejectedError(MarketplaceAuthError):
+    """The marketplace refused the connection's credentials themselves: the token is not valid
+    for this app (401 `invalid_token`), or the app's key is not accepted (a 403 about the API
+    key). Retrying or refreshing cannot help; the owner must reconnect. `reason` is a short
+    lower-case code (`invalid_token`, `api_key_rejected`), never payload text."""
+
+    def __init__(self, message: str, *, status: int | None = None, reason: str) -> None:
+        super().__init__(message, status=status)
+        self.reason = reason
+
+
 class MarketplacePermissionError(MarketplaceError):
     """403: the app or the granted scopes do not allow this call (a capability is missing)."""
 
@@ -434,6 +445,15 @@ class AccessTokenProvider(Protocol):
     """Supplies a valid OAuth access token for a marketplace shop (the token vault, slice 4.2)."""
 
     async def access_token(self, shop_id: int) -> str: ...
+
+
+@runtime_checkable
+class CredentialsRejectionSink(Protocol):
+    """An `AccessTokenProvider` that is told when the marketplace refused its credentials
+    (`MarketplaceCredentialsRejectedError`), so the connection is marked `needs_reauth` at once
+    instead of failing call after call while it still looks connected."""
+
+    async def credentials_rejected(self, shop_id: int, *, reason: str) -> None: ...
 
 
 class MarketplacePort(Protocol):

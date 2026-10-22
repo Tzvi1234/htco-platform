@@ -29,7 +29,9 @@ this retry loop.
 Nothing here logs or raises with the API key, the shared secret, an access token or a payload.
 """
 
+import hashlib
 import math
+import re
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
@@ -46,12 +48,13 @@ from opentelemetry import metrics
 
 from htco_application.marketplace import (
     AccessTokenProvider,
+    CredentialsRejectionSink,
     Listing,
     ListingDetails,
     ListingImage,
     ListingState,
-    MarketplaceAuthError,
     MarketplaceConflictError,
+    MarketplaceCredentialsRejectedError,
     MarketplaceError,
     MarketplaceMoney,
     MarketplaceNotFoundError,
@@ -117,6 +120,19 @@ class EtsyCredentials:
 
     def api_key_header(self) -> str:
         return f"{self.keystring}:{self.shared_secret}"
+
+    @property
+    def fingerprint(self) -> str:
+        """`app_key_fingerprint` of the keystring: which app the stored tokens were issued for."""
+        return app_key_fingerprint(self.keystring)
+
+
+def app_key_fingerprint(keystring: str) -> str:
+    """The first 16 hex characters of the keystring's SHA-256: enough to tell two apps apart,
+    never the key itself. Tokens are issued per app, so a connection whose fingerprint differs
+    from the configured key's cannot work and is treated as `needs_reauth` without calling Etsy.
+    """
+    return hashlib.sha256(keystring.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass(frozen=True)
@@ -576,7 +592,10 @@ class EtsyAdapter:
                     )
                 await self._retry_after_wait(operation, attempt, status, self._backoff(attempt))
                 continue
-            raise _client_error(operation, status)
+            refused = _client_error(operation, status, _json_or_none(response))
+            if isinstance(refused, MarketplaceCredentialsRejectedError) and access_token is None:
+                await _tell_rejected(tokens, shop_id, refused.reason)
+            raise refused
 
     def _backoff(self, attempt: int) -> float:
         base = self._config.backoff_base_seconds * 2 ** (attempt - 1)
@@ -711,11 +730,40 @@ class _WriteGuard:
 # --- HTTP helpers -----------------------------------------------------------------------------
 
 
-def _client_error(operation: str, status: int) -> MarketplaceError:
+async def _tell_rejected(tokens: AccessTokenProvider, shop_id: int, reason: str) -> None:
+    """Let the token source mark the connection `needs_reauth`; a failure there never hides
+    Etsy's answer."""
+    if not isinstance(tokens, CredentialsRejectionSink):
+        return
+    try:
+        await tokens.credentials_rejected(shop_id, reason=reason)
+    except Exception as failure:
+        _log.warning("etsy.rejection_not_recorded", error=type(failure).__name__)
+
+
+# Etsy's answer for a key it does not accept ("Invalid API key", an `invalid_client`), as
+# opposed to a scope or permission the shop did not grant.
+_API_KEY_REFUSAL = re.compile(
+    r"api[ _-]?key|keystring|invalid_client|shared[ _-]?secret", re.IGNORECASE
+)
+
+
+def _client_error(  # noqa: PLR0911 - one answer per status class
+    operation: str, status: int, body: Mapping[str, Any] | None = None
+) -> MarketplaceError:
+    """Only the body's `error` code and description are looked at, never logged or kept."""
     message = f"Etsy answered {status} to {operation}"
+    said = "" if body is None else f"{body.get('error', '')} {body.get('error_description', '')}"
     match status:
         case httpx.codes.UNAUTHORIZED:
-            return MarketplaceAuthError(message, status=status)
+            # The provider refreshes before expiry, so a 401 means the token is not valid for
+            # this app at all (revoked, or issued to another app's key).
+            reason = "api_key_rejected" if _API_KEY_REFUSAL.search(said) else "invalid_token"
+            return MarketplaceCredentialsRejectedError(message, status=status, reason=reason)
+        case httpx.codes.FORBIDDEN if _API_KEY_REFUSAL.search(said):
+            return MarketplaceCredentialsRejectedError(
+                message, status=status, reason="api_key_rejected"
+            )
         case httpx.codes.FORBIDDEN:
             return MarketplacePermissionError(message, status=status)
         case httpx.codes.NOT_FOUND:
@@ -754,6 +802,14 @@ def _count(value: str | None) -> int | None:
     except ValueError:
         return None
     return number if number >= 0 else None
+
+
+def _json_or_none(response: httpx.Response) -> Mapping[str, Any] | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
 
 
 def _json(operation: str, response: httpx.Response) -> Any:

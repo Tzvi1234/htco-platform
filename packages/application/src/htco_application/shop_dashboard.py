@@ -785,7 +785,11 @@ class _Opened:
         try:
             fetched = await self.dashboard.cache.get_dated(key, load, POLICIES[policy or resource])
         except MarketplaceAuthError:
-            raise ShopNotConnectedError(f"shop {integration.shop_id} is not connected") from None
+            # Refused credentials were reported to the token provider, which marked the
+            # connection `needs_reauth`; a refused refresh did the same.
+            raise ShopNotConnectedError(
+                f"shop {integration.shop_id} is not connected", reason="needs_reauth"
+            ) from None
         except MarketplacePermissionError:
             raise ShopDataScopeMissingError(resource) from None
         except MarketplaceRateLimitedError as error:
@@ -927,7 +931,7 @@ async def _open(
         raise ShopNotFoundError("no such shop")
     if integration.status is not IntegrationStatus.CONNECTED:
         dashboard.cache.forget(shop_id)
-        raise ShopNotConnectedError(f"shop {shop_id} is not connected")
+        raise ShopNotConnectedError.of(integration)
     tokens = dashboard.tokens.pinned(shop_id, generation=integration.generation)
     return _Opened(dashboard, integration, tokens, now)
 

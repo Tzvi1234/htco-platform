@@ -21,6 +21,7 @@ from htco_api.web_auth import WebAuth
 from htco_application.access.authentication import Membership
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.marketplace import (
+    MarketplaceCredentialsRejectedError,
     MarketplacePermissionError,
     MarketplaceRateLimitedError,
     MarketplaceUnavailableError,
@@ -345,6 +346,44 @@ async def test_every_view__shop_disconnected__409_and_no_etsy_call(world: World,
 
     problem(await world.get(view), "shop-not-connected", 409)
     assert world.source.calls == []
+
+
+@pytest.mark.parametrize("view", ["overview", "orders", "listings", "reviews", "shipping", "stats"])
+async def test_every_view__needs_reauth__409_with_the_reason_and_no_etsy_call(
+    world: World, view: str
+) -> None:
+    world.set_status(IntegrationStatus.NEEDS_REAUTH)
+
+    response = await world.get(view)
+
+    problem(response, "shop-not-connected", 409)
+    assert response.json()["reason"] == "needs_reauth"
+    assert world.source.calls == []
+
+
+async def test_disconnected__409_says_disconnected(world: World) -> None:
+    world.set_status(IntegrationStatus.DISCONNECTED)
+
+    assert (await world.get("overview")).json()["reason"] == "disconnected"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        MarketplaceCredentialsRejectedError("refused", status=401, reason="invalid_token"),
+        MarketplaceCredentialsRejectedError("refused", status=403, reason="api_key_rejected"),
+    ],
+)
+async def test_etsy_refuses_the_credentials__409_needs_reauth_never_an_empty_answer(
+    world: World, error: MarketplaceCredentialsRejectedError
+) -> None:
+    """The app key was replaced: Etsy refuses the stored tokens. The screens must say so."""
+    world.source.fail["list_listing_details"] = error
+
+    response = await world.get("listings")
+
+    problem(response, "shop-not-connected", 409)
+    assert response.json()["reason"] == "needs_reauth"
 
 
 async def test_operations_without_a_grant__404(world: World) -> None:

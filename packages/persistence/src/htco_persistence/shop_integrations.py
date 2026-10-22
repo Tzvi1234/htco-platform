@@ -11,6 +11,13 @@ the previous keys, so every row stays readable while rotation runs. Rows sealed 
 ring does not know are left alone (they cannot be opened anyway); `key_usage` shows them.
 
 Nothing here logs a token or a key; errors name the shop only (AC-4.2.3).
+
+The app key (replacing the Etsy app): each row keeps `app_key_fingerprint`, the fingerprint of
+the keystring its tokens were issued for. With a configured fingerprint the vault treats a
+connected row with another fingerprint as `needs_reauth` when it reads it (no Etsy call is made
+with tokens of another app), and `retire_other_app_keys` (run at startup) stores that status with
+an audit record. A row without a fingerprint (connected before it was recorded) takes the current
+one at its first successful call or refresh: that proves its tokens work with this key.
 """
 
 import uuid
@@ -32,6 +39,7 @@ from htco_application.shop_integrations import (
     ShopIntegration,
     TokenVaultError,
 )
+from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.integrations import (
     CapabilityResult,
     CapabilityState,
@@ -48,7 +56,7 @@ _COLUMNS = """
 id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id, wrapped_data_key,
 access_token_ciphertext, refresh_token_ciphertext, scopes, access_expires_at, refresh_expires_at,
 status, failure_count, last_successful_call_at, created_at, updated_at, last_refresh_failed_at,
-disconnected_at, purge_after, connection_generation
+disconnected_at, purge_after, connection_generation, app_key_fingerprint
 """
 
 _log = structlog.get_logger(__name__)
@@ -59,9 +67,53 @@ def _context(shop_id: uuid.UUID, provider: IntegrationProvider = _PROVIDER) -> b
 
 
 class PostgresTokenVault:
-    def __init__(self, database: Database, sealer: EnvelopeSealer) -> None:
+    def __init__(
+        self,
+        database: Database,
+        sealer: EnvelopeSealer,
+        *,
+        app_key_fingerprint: str | None = None,
+    ) -> None:
         self._database = database
         self._sealer = sealer
+        self._app_key = app_key_fingerprint
+
+    async def retire_other_app_keys(self) -> int:
+        """Mark every connected row whose tokens were issued for another app key `needs_reauth`,
+        with one audit record each, in one transaction. Returns how many rows changed."""
+        current = self._app_key
+        if current is None:
+            return 0
+
+        def run() -> int:
+            with self._database.connection() as connection, connection.transaction():
+                rows = connection.execute(
+                    """
+                    update app.shop_integrations set status = 'needs_reauth'
+                    where provider = %s and status = 'connected'
+                      and app_key_fingerprint is not null and app_key_fingerprint <> %s
+                    returning organization_id, shop_id
+                    """,
+                    [_PROVIDER.value, current],
+                ).fetchall()
+                for organization_id, shop_id in rows:
+                    append_audit(
+                        connection,
+                        AuditRecord.new(
+                            organization_id=organization_id,
+                            actor=ActorRef(ActorKind.SYSTEM, "etsy-app-key-check"),
+                            action="shop.integration_needs_reauth",
+                            entity_type="shop",
+                            entity_id=str(shop_id),
+                            after={"reason": "app_key_changed", "provider": _PROVIDER.value},
+                        ),
+                    )
+            return len(rows)
+
+        retired = await anyio.to_thread.run_sync(run)
+        if retired:
+            _log.info("token_vault.app_key_changed", retired=retired)
+        return retired
 
     async def store(self, connection: EtsyConnection) -> ShopIntegration:
         return await anyio.to_thread.run_sync(self._store, connection)
@@ -103,11 +155,13 @@ class PostgresTokenVault:
     ) -> None:
         await self._execute(
             """
-            update app.shop_integrations set last_successful_call_at = %s
+            update app.shop_integrations
+            set last_successful_call_at = %s,
+                app_key_fingerprint = coalesce(app_key_fingerprint, %s)
             where shop_id = %s and provider = %s and status = 'connected'
               and (%s::integer is null or connection_generation = %s::integer)
             """,
-            [at, shop_id, _PROVIDER.value, generation, generation],
+            [at, self._app_key, shop_id, _PROVIDER.value, generation, generation],
         )
 
     async def mark_needs_reauth(
@@ -249,8 +303,9 @@ class PostgresTokenVault:
             insert into app.shop_integrations
               (id, organization_id, shop_id, provider, etsy_shop_id, etsy_user_id, key_id,
                wrapped_data_key, access_token_ciphertext, refresh_token_ciphertext, scopes,
-               access_expires_at, refresh_expires_at, status, failure_count, connection_generation)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'connected', 0, 1)
+               access_expires_at, refresh_expires_at, status, failure_count, connection_generation,
+               app_key_fingerprint)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'connected', 0, 1, %s)
             on conflict (shop_id, provider) do update set
               etsy_shop_id = excluded.etsy_shop_id,
               etsy_user_id = excluded.etsy_user_id,
@@ -266,7 +321,8 @@ class PostgresTokenVault:
               last_refresh_failed_at = null,
               disconnected_at = null,
               purge_after = null,
-              connection_generation = app.shop_integrations.connection_generation + 1
+              connection_generation = app.shop_integrations.connection_generation + 1,
+              app_key_fingerprint = excluded.app_key_fingerprint
             -- Never across tenants: a shop's row stays with its organization.
             where app.shop_integrations.organization_id = excluded.organization_id
             returning {_COLUMNS}
@@ -285,6 +341,7 @@ class PostgresTokenVault:
                 sorted(connection.scopes),
                 connection.tokens.access_expires_at,
                 connection.tokens.refresh_expires_at,
+                self._app_key,
             ],
         ).fetchone()
         if row is None:  # the conflict update was skipped: another organization's shop
@@ -316,7 +373,8 @@ class PostgresTokenVault:
                 update app.shop_integrations
                 set key_id = %s, wrapped_data_key = %s, access_token_ciphertext = %s,
                     refresh_token_ciphertext = %s, access_expires_at = %s,
-                    refresh_expires_at = %s, failure_count = 0, last_refresh_failed_at = null
+                    refresh_expires_at = %s, failure_count = 0, last_refresh_failed_at = null,
+                    app_key_fingerprint = coalesce(app_key_fingerprint, %s)
                 where shop_id = %s and provider = %s and status = 'connected'
                   and (%s::integer is null or connection_generation = %s::integer)
                 """,
@@ -327,6 +385,7 @@ class PostgresTokenVault:
                     refresh,
                     tokens.access_expires_at,
                     tokens.refresh_expires_at,
+                    self._app_key,
                     shop_id,
                     _PROVIDER.value,
                     generation,
@@ -389,6 +448,7 @@ class PostgresTokenVault:
                 access_expires_at=row[11],
                 refresh_expires_at=row[12],
             )
+        fingerprint: str | None = row[22]
         return ShopIntegration(
             id=row[0],
             organization_id=row[1],
@@ -397,7 +457,7 @@ class PostgresTokenVault:
             etsy_shop_id=int(row[4]),
             etsy_user_id=int(row[5]),
             scopes=frozenset(row[10]),
-            status=IntegrationStatus(row[13]),
+            status=effective_status(IntegrationStatus(row[13]), fingerprint, self._app_key),
             tokens=tokens,
             key_id=key_id,
             failure_count=int(row[14]),
@@ -408,6 +468,7 @@ class PostgresTokenVault:
             disconnected_at=row[19],
             purge_after=row[20],
             generation=int(row[21]),
+            app_key_fingerprint=fingerprint,
         )
 
     async def _execute(self, sql: str, params: list[object]) -> None:
@@ -450,6 +511,20 @@ class PostgresRefreshLock:
             await anyio.to_thread.run_sync(pooled.__exit__, None, None, None)
 
 
+def effective_status(
+    status: IntegrationStatus, fingerprint: str | None, configured: str | None
+) -> IntegrationStatus:
+    """`needs_reauth` for a connected row whose tokens were issued for another app key."""
+    if (
+        status is IntegrationStatus.CONNECTED
+        and configured is not None
+        and fingerprint is not None
+        and fingerprint != configured
+    ):
+        return IntegrationStatus.NEEDS_REAUTH
+    return status
+
+
 def _advisory(connection: psycopg.Connection[Any], function: str, key: str) -> None:
     connection.execute(
         f"select {function}(hashtextextended(%s, 0))",
@@ -467,7 +542,7 @@ def _advisory(connection: psycopg.Connection[Any], function: str, key: str) -> N
 _LIST_INTEGRATIONS = """
 select i.shop_id, i.organization_id, i.provider, i.status, i.etsy_shop_id, i.scopes,
        i.access_expires_at, i.refresh_expires_at, i.failure_count, i.last_successful_call_at,
-       i.created_at, i.updated_at, i.disconnected_at, i.purge_after,
+       i.created_at, i.updated_at, i.disconnected_at, i.purge_after, i.app_key_fingerprint,
        (select coalesce(json_agg(json_build_array(c.capability, c.state, c.detail, c.checked_at)),
                         '[]'::json)
         from app.shop_capabilities c where c.shop_id = i.shop_id) as capabilities
@@ -478,8 +553,9 @@ order by i.shop_id
 
 
 class PostgresIntegrationReader:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, *, app_key_fingerprint: str | None = None) -> None:
         self._database = database
+        self._app_key = app_key_fingerprint
 
     async def list_integrations(
         self, claims: Mapping[str, Any], organization_id: uuid.UUID
@@ -492,7 +568,7 @@ class PostgresIntegrationReader:
                     shop_id=row[0],
                     organization_id=row[1],
                     provider=IntegrationProvider(row[2]),
-                    status=IntegrationStatus(row[3]),
+                    status=effective_status(IntegrationStatus(row[3]), row[14], self._app_key),
                     etsy_shop_id=int(row[4]),
                     scopes=frozenset(row[5]),
                     access_expires_at=row[6],
@@ -503,7 +579,7 @@ class PostgresIntegrationReader:
                     updated_at=row[11],
                     disconnected_at=row[12],
                     purge_after=row[13],
-                    capabilities=_capabilities(row[14]),
+                    capabilities=_capabilities(row[15]),
                 )
                 for row in rows
             ]

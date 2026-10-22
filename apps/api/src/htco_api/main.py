@@ -31,7 +31,7 @@ from htco_application.order_history import OrderSync
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
 from htco_application.shop_data_cache import ShopDataCache
-from htco_application.shop_integrations import IntegrationReader, TokenVault
+from htco_application.shop_integrations import IntegrationReader, ShopRemover, TokenVault
 from htco_application.shops import ShopReader
 from htco_application.web_sessions import (
     CredentialsRefusedError,
@@ -42,7 +42,7 @@ from htco_application.web_sessions import (
     TooManyAttemptsError,
     WeakPasswordError,
 )
-from htco_integrations.etsy import EtsyAdapter, EtsyConfig, EtsyCredentials
+from htco_integrations.etsy import EtsyAdapter, EtsyConfig, EtsyCredentials, app_key_fingerprint
 from htco_integrations.etsy_oauth import EtsyOAuthClient
 from htco_persistence.access import PostgresAccessStore
 from htco_persistence.audit import PostgresAuditLog
@@ -57,7 +57,7 @@ from htco_persistence.shop_integrations import (
     PostgresRefreshLock,
     PostgresTokenVault,
 )
-from htco_persistence.shops import PostgresShopReader
+from htco_persistence.shops import PostgresShopReader, PostgresShopRemover
 from htco_persistence.web_sessions import PostgresSessionStore
 from htco_platform.crypto import EnvelopeSealer, Sealer
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter, SentryErrorReporter
@@ -156,6 +156,7 @@ def main(
         integrations=wiring.integrations,
         capability_checks=wiring.capability_checks,
         token_vault=wiring.token_vault,
+        shop_remover=wiring.shop_remover,
         dashboard=wiring.dashboard,
         resources=wiring.resources,
     )
@@ -164,6 +165,26 @@ def main(
     finally:
         reporter.close()
     return 0
+
+
+class _AppKeyCheck:
+    """At startup, marks connections whose tokens belong to another Etsy app key `needs_reauth`
+    (after the key was replaced). A failure is logged, never stops the app: the vault treats such
+    rows as `needs_reauth` whenever it reads them anyway."""
+
+    def __init__(self, vault: PostgresTokenVault) -> None:
+        self._vault = vault
+
+    async def start(self) -> None:
+        try:
+            await self._vault.retire_other_app_keys()
+        except Exception as error:
+            structlog.get_logger(__name__).warning(
+                "api.app_key_check_failed", error=type(error).__name__
+            )
+
+    async def stop(self) -> None:
+        return None
 
 
 class _HttpClient:
@@ -281,6 +302,7 @@ class _Wiring:
     inviter: _Inviter | None = None
     web_auth: WebAuth | None = None
     token_vault: TokenVault | None = None
+    shop_remover: ShopRemover | None = None
     # The connect flow (slice 4.3) and the shop card's connection health (slice 4.4).
     etsy: EtsyConnect | None = None
     integrations: IntegrationReader | None = None
@@ -344,13 +366,22 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
             else str(settings.password_reset_redirect_url),
         )
     key_ring = settings.token_key_ring
+    app_key = (
+        None
+        if settings.etsy_keystring is None
+        else app_key_fingerprint(settings.etsy_keystring.get_secret_value())
+    )
     token_vault = (
-        None if key_ring is None else PostgresTokenVault(database, EnvelopeSealer(key_ring))
+        None
+        if key_ring is None
+        else PostgresTokenVault(database, EnvelopeSealer(key_ring), app_key_fingerprint=app_key)
     )
     etsy, marketplace, checks, dashboard = _etsy_wiring(
         settings, database, http, token_vault, web_auth
     )
     resources: list[Resource] = [database, _HttpClient(http)]
+    if token_vault is not None and app_key is not None:
+        resources.append(_AppKeyCheck(token_vault))
     if dashboard is not None and dashboard.history is not None:
         resources.append(dashboard.history)  # running syncs stop with the app
     return _Wiring(
@@ -360,7 +391,8 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         marketplace=marketplace,
         capability_checks=checks,
         dashboard=dashboard,
-        integrations=PostgresIntegrationReader(database),
+        integrations=PostgresIntegrationReader(database, app_key_fingerprint=app_key),
+        shop_remover=PostgresShopRemover(database),
         authenticator=Authenticator(verifier, PostgresMembershipReader(database)),
         shops=PostgresShopReader(database),
         access=PostgresAccessStore(database),

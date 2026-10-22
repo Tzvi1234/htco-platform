@@ -10,8 +10,10 @@ granted `scope`. Requests also carry `x-api-key` like every v3 call.
 
 One attempt per request, no retry: a token request is not something to repeat blindly (a code is
 single-use), and the refresh provider counts failures itself. `invalid_grant` raises
-`OAuthInvalidGrantError`; anything else (no answer, another error, an unreadable payload) raises
-`OAuthUnavailableError`. Nothing logs or raises with a token, a code, a verifier or a secret.
+`OAuthInvalidGrantError`; `invalid_client` (the app's key is not accepted, or the token belongs
+to another app after the key was replaced) raises `OAuthClientRejectedError`, its subclass;
+anything else (no answer, another error, an unreadable payload) raises `OAuthUnavailableError`.
+Nothing logs or raises with a token, a code, a verifier or a secret.
 """
 
 from datetime import timedelta
@@ -22,6 +24,7 @@ import httpx
 import structlog
 
 from htco_application.etsy_connect import (
+    OAuthClientRejectedError,
     OAuthInvalidGrantError,
     OAuthUnavailableError,
     TokenGrant,
@@ -30,7 +33,7 @@ from htco_integrations.etsy import EtsyCredentials
 
 ETSY_AUTHORIZATION_URL = "https://www.etsy.com/oauth/connect"
 ETSY_TOKEN_URL = "https://api.etsy.com/v3/public/oauth/token"  # noqa: S105 - a URL
-_REFUSED = frozenset({httpx.codes.BAD_REQUEST, httpx.codes.UNAUTHORIZED})
+_REFUSED = frozenset({httpx.codes.BAD_REQUEST, httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN})
 
 _log = structlog.get_logger(__name__)
 
@@ -113,6 +116,11 @@ class EtsyOAuthClient:
         if status in _REFUSED and body is not None and body.get("error") == "invalid_grant":
             _log.info("etsy.token_refused", grant_type=grant_type, status=status)
             raise OAuthInvalidGrantError(f"Etsy refused the {grant_type} grant (invalid_grant)")
+        if status in _REFUSED and body is not None and body.get("error") == "invalid_client":
+            _log.info("etsy.token_client_refused", grant_type=grant_type, status=status)
+            raise OAuthClientRejectedError(
+                f"Etsy refused the app's credentials for the {grant_type} grant (invalid_client)"
+            )
         if not response.is_success or body is None:
             _log.warning("etsy.token_request_failed", grant_type=grant_type, status=status)
             raise OAuthUnavailableError(f"Etsy answered {status} to the {grant_type} request")

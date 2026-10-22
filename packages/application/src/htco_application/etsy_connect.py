@@ -154,6 +154,11 @@ class OAuthInvalidGrantError(Exception):
     """Etsy answered `invalid_grant`: the code or refresh token is expired, used or revoked."""
 
 
+class OAuthClientRejectedError(OAuthInvalidGrantError):
+    """Etsy answered `invalid_client`: the app's key or secret is not accepted, or the refresh
+    token was issued to another app (the key was replaced). Reconnecting is the only way out."""
+
+
 class OAuthUnavailableError(Exception):
     """Etsy's token endpoint failed otherwise (no answer, 5xx, an unexpected payload)."""
 
