@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, override
 
 _CURRENCY = re.compile(r"^[A-Z]{3}$")
 
@@ -200,14 +200,59 @@ class OrderShipment:
     notified_at: datetime
 
 
+def display_name(full_name: str | None) -> str | None:
+    """First name and last initial ("Dana L."): all the Orders screen needs to tell buyers
+    apart."""
+    if not isinstance(full_name, str):
+        return None
+    words = full_name.split()
+    if not words:
+        return None
+    if len(words) == 1:
+        return words[0]
+    return f"{words[0]} {words[-1][0]}."
+
+
+@dataclass(frozen=True, repr=False)
+class ShippingAddress:
+    """Where the order ships, as the marketplace shares it with the seller (the owner's decision
+    of 2026-10-22: stored for order statistics and later insights). Personal data: never in a
+    repr, a log line, an error, an error report or an audit record."""
+
+    first_line: str | None
+    second_line: str | None
+    city: str | None
+    state: str | None
+    postal_code: str | None
+    country_code: str | None
+
+    @override
+    def __repr__(self) -> str:
+        return "ShippingAddress(<hidden>)"
+
+
+@dataclass(frozen=True)
+class OrderRefund:
+    """One refund of an order, as Etsy lists it on the receipt. `note_from_issuer` is the
+    seller's own words: stored and shown to buyer-data roles, never in a repr or a log."""
+
+    amount: MarketplaceMoney
+    created_at: datetime
+    reason: str | None
+    status: str | None
+    note_from_issuer: str | None = field(default=None, repr=False)
+
+
 @dataclass(frozen=True)
 class OrderReceipt:
-    """An order as the Orders screen shows it.
+    """An order as the Orders screen shows it and the order history stores it.
 
-    Buyer data is minimised by the adapter before it reaches HTCO: only a display name made of
-    the first name and the last initial (`buyer_display_name`) is kept, and never in a repr or a
-    log. Of the address only the country is kept (`country_code`), for aggregate statistics.
-    Email addresses, street addresses and messages are not read at all.
+    Contact data is never read: no email address, phone number, message, gift message or note.
+    The buyer's name (`buyer_name`) and shipping address (`shipping_address`) are kept for the
+    stored order history (the owner's decision of 2026-10-22); the Orders screen shows only a
+    display name made of the first name and the last initial (`buyer_display_name`). None of
+    them is ever in a repr or a log. `country_code` is the destination country, used for
+    aggregate statistics.
     """
 
     receipt_id: int
@@ -225,8 +270,14 @@ class OrderReceipt:
     lines: tuple[OrderLine, ...]
     shipments: tuple[OrderShipment, ...]
     buyer_display_name: str | None = field(default=None, repr=False)
-    # The destination country (ISO 3166-1 alpha-2); no other part of the address is read.
+    # The destination country (ISO 3166-1 alpha-2), for aggregate statistics.
     country_code: str | None = field(default=None, repr=False)
+    # The full name the order ships to, and the shipping address: personal data, stored only in
+    # the order history's buyer table.
+    buyer_name: str | None = field(default=None, repr=False)
+    shipping_address: ShippingAddress | None = field(default=None, repr=False)
+    # Refunds with their reason, oldest first (empty when none).
+    refunds: tuple[OrderRefund, ...] = ()
 
 
 @dataclass(frozen=True)

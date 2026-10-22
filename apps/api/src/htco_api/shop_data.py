@@ -9,10 +9,13 @@ days by default, 90 days, 12 months or all time).
 `GET /v1/shops/{shop_id}/shipping`: shipping profiles, return policies, production partners.
 `GET /v1/shops/{shop_id}/stats`: the Shops screen's Statistics: Etsy's counts since the shop
 opened and the aggregates of the whole order history (no buyer data).
+`POST /v1/shops/{shop_id}/order-sync`: the Owner or an Admin starts a sync of the stored order
+history now (audited; the run goes on in the background).
 
-Every answer says where it comes from (`source`: `etsy_live` today; Phase 5 serves orders from
-HTCO's own store with the same contract), when it was fetched and whether it is `stale` (Etsy did
-not answer and older cached data stands in). Reads only: nothing here writes to Etsy. Buyer
+Every answer says where it comes from (`source`: `etsy_live`, or `htco_store` for orders and
+statistics once the stored order history is complete; `sync` says whether it is still syncing),
+when it was fetched and whether it is `stale` (Etsy did not answer and older cached data stands
+in). Reads only: nothing here writes to Etsy. Buyer
 details (a display name, tracking numbers) appear only for roles allowed to see buyer contacts;
 order answers are `no-store`. Nothing about an order, a buyer or a review is logged.
 """
@@ -29,7 +32,14 @@ from pydantic import BaseModel
 from htco_api.auth import CurrentAuth
 from htco_api.etsy import SHOP_NOT_CONNECTED
 from htco_api.identity import problem_responses
-from htco_api.problems import NOT_FOUND, ProblemError, ProblemType, ValidationProblem
+from htco_api.policy_guard import FORBIDDEN
+from htco_api.problems import (
+    NOT_FOUND,
+    ProblemError,
+    ProblemType,
+    ValidationProblem,
+    request_id_of,
+)
 from htco_application import shop_dashboard as dashboards
 from htco_application.marketplace import (
     ListingState,
@@ -37,6 +47,7 @@ from htco_application.marketplace import (
     ShopProfile,
     ShopReview,
 )
+from htco_application.order_history import HistoryState, HistorySync, request_order_sync
 from htco_application.shop_capabilities import ShopNotConnectedError
 from htco_application.shop_dashboard import (
     DataSource,
@@ -49,7 +60,7 @@ from htco_application.shop_dashboard import (
     ShopDataScopeMissingError,
     ShopDataUnavailableError,
 )
-from htco_application.shops import ShopNotFoundError
+from htco_application.shops import ShopAccessDeniedError, ShopNotFoundError
 
 SHOP_DATA_OFF = ProblemType(
     "shop-data-unavailable",
@@ -92,6 +103,14 @@ class FreshnessView(BaseModel):
     source: DataSource
     fetched_at: datetime
     stale: bool
+
+
+class SyncView(BaseModel):
+    # `syncing_history`: the backfill is running and the answer is read live from Etsy;
+    # `complete`: the answer comes from the stored history (`source: htco_store`).
+    state: HistoryState
+    orders_stored: int
+    last_synced_at: datetime | None
 
 
 class ShopProfileView(BaseModel):
@@ -170,6 +189,16 @@ class ShipmentView(BaseModel):
     tracking_code: str | None
 
 
+class RefundView(BaseModel):
+    amount: MoneyView
+    refunded_at: datetime
+    # Etsy's reason for the refund, when it gives one.
+    reason: str | None
+    status: str | None
+    # The seller's note on the refund, only for roles that see buyer contacts.
+    note: str | None
+
+
 class OrderView(BaseModel):
     order_id: int
     state: OrderState
@@ -186,6 +215,10 @@ class OrderView(BaseModel):
     shipments: list[ShipmentView]
     # First name and last initial, only for roles that see buyer contacts.
     buyer: str | None
+    # Oldest first; empty without refunds.
+    refunds: list[RefundView] = []
+    # The refunds' sum in the order's currency; null without refunds.
+    refunded_total: MoneyView | None = None
 
 
 class OrderCountsView(BaseModel):
@@ -210,6 +243,8 @@ class OrdersView(FreshnessView):
     # True when the period had more orders than `cap`: the newest `cap` are listed.
     partial: bool
     cap: int
+    # The stored order history; null when it is not set up on this server.
+    sync: SyncView | None = None
 
 
 class ListingView(BaseModel):
@@ -323,6 +358,16 @@ class CountryOrdersView(BaseModel):
     orders: int
 
 
+class ReasonCountView(BaseModel):
+    # `refund` or `cancellation`.
+    kind: str
+    # Etsy's reason; null when it gives none.
+    reason: str | None
+    orders: int
+    # Refunded, in the shop's currency.
+    amount: MoneyView
+
+
 class AllTimeSalesView(BaseModel):
     currency: str
     # Paid orders that were not cancelled or fully refunded.
@@ -342,6 +387,12 @@ class AllTimeSalesView(BaseModel):
     # True when the shop had more orders than one load reads: the figures cover the newest
     # `receipts_read`.
     partial: bool
+    # From the stored history only (null when read live): unique buyers among the sales and the
+    # share of them who bought more than once, in percent.
+    customers: int | None = None
+    repeat_customers_percent: Decimal | None = None
+    # Refunds and cancellations by Etsy's reason.
+    refunds_and_cancellations: list[ReasonCountView] = []
 
 
 class ShopStatsView(FreshnessView):
@@ -349,6 +400,8 @@ class ShopStatsView(FreshnessView):
     profile: ShopProfileView
     # Null when the orders could not be read (the profile still shows).
     sales: AllTimeSalesView | None
+    # The stored order history; null when it is not set up on this server.
+    sync: SyncView | None = None
 
 
 # --- Mapping -----------------------------------------------------------------------------------
@@ -364,6 +417,14 @@ def _fresh(freshness: Freshness) -> dict[str, Any]:
 
 def _money(money: Money) -> MoneyView:
     return MoneyView(amount=money.amount, currency=money.currency)
+
+
+def _sync(sync: HistorySync | None) -> SyncView | None:
+    if sync is None:
+        return None
+    return SyncView(
+        state=sync.state, orders_stored=sync.orders_stored, last_synced_at=sync.last_synced_at
+    )
 
 
 def _marketplace_money(money: MarketplaceMoney) -> MoneyView:
@@ -436,6 +497,17 @@ def _all_time(sales: dashboards.AllTimeSales) -> AllTimeSalesView:
         first_order_at=sales.first_order_at,
         receipts_read=sales.receipts_read,
         partial=sales.partial,
+        customers=sales.customers,
+        repeat_customers_percent=sales.repeat_customers_percent,
+        refunds_and_cancellations=[
+            ReasonCountView(
+                kind=r.kind,
+                reason=r.reason,
+                orders=r.orders,
+                amount=MoneyView(amount=r.amount, currency=currency),
+            )
+            for r in sales.refunds_and_cancellations
+        ],
     )
 
 
@@ -445,6 +517,7 @@ def _stats(found: dashboards.ShopStats) -> ShopStatsView:
         shop_id=found.shop_id,
         profile=_profile(found.profile),
         sales=None if found.sales is None else _all_time(found.sales),
+        sync=_sync(found.sync),
     )
 
 
@@ -508,6 +581,17 @@ def _order(order: dashboards.OrderView) -> OrderView:
             for s in order.shipments
         ],
         buyer=order.buyer,
+        refunds=[
+            RefundView(
+                amount=_money(r.amount),
+                refunded_at=r.refunded_at,
+                reason=r.reason,
+                status=r.status,
+                note=r.note,
+            )
+            for r in order.refunds
+        ],
+        refunded_total=None if order.refunded is None else _money(order.refunded),
     )
 
 
@@ -524,6 +608,7 @@ def _orders(page: dashboards.OrdersPage) -> OrdersView:
         buyer_details=page.buyer_details,
         partial=page.partial,
         cap=page.cap,
+        sync=_sync(page.sync),
     )
 
 
@@ -799,4 +884,53 @@ def shop_data_router(*, clock: Callable[[], datetime]) -> APIRouter:
         response.headers["Cache-Control"] = _PRIVATE
         return _stats(found)
 
+    _add_sync_route(router, clock=clock)
     return router
+
+
+def _add_sync_route(router: APIRouter, *, clock: Callable[[], datetime]) -> None:
+    """The manual sync of the stored order history."""
+
+    @router.post(
+        "/order-sync",
+        status_code=202,
+        summary="Start a sync of the shop's stored order history now",
+        responses=problem_responses(
+            {
+                403: "Only the Owner and Admins start a sync (forbidden), or the request did not "
+                "come from the web app (csrf-failed)",
+                404: "No such shop for the caller",
+                409: "The shop is not connected (shop-not-connected)",
+                422: ("Invalid shop ID", ValidationProblem),
+                503: "The stored order history is not set up on this server "
+                "(shop-data-unavailable)",
+            }
+        ),
+    )
+    async def start_order_sync(
+        shop_id: uuid.UUID, request: Request, auth: CurrentAuth, dashboard: _Dashboard
+    ) -> SyncView:
+        """The backfill from its checkpoint (or from the start), then the last 30 days; Etsy is
+        only read. Audited with the trigger only. Answers at once; the run goes on in the
+        background and one runs per shop at a time."""
+        history = dashboard.history
+        if history is None:
+            raise ProblemError(SHOP_DATA_OFF)
+        try:
+            sync = await request_order_sync(
+                history,
+                dashboard.connections,
+                auth,
+                shop_id,
+                now=clock(),
+                correlation_id=request_id_of(request),
+            )
+        except ShopNotFoundError:
+            raise ProblemError(NOT_FOUND) from None
+        except ShopAccessDeniedError:
+            raise ProblemError(FORBIDDEN) from None
+        except ShopNotConnectedError:
+            raise ProblemError(SHOP_NOT_CONNECTED) from None
+        return SyncView(
+            state=sync.state, orders_stored=sync.orders_stored, last_synced_at=sync.last_synced_at
+        )

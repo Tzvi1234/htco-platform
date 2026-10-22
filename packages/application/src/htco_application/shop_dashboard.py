@@ -1,10 +1,11 @@
 """The connected shop's live data on the dashboard: overview, orders, listings, reviews, shipping.
 
-Read through, never stored (Phase 4, "dashboard data"): every value comes from the marketplace
-through the read-only adapter and the short per-shop cache (`shop_data_cache`), with the time it
-was fetched and whether it is stale. Phase 5 ingests orders exactly once into HTCO's own store;
-then the orders source changes (`DataSource.ETSY_LIVE` becomes the store) while these results and
-the API contract stay the same.
+Read through (Phase 4, "dashboard data"): values come from the marketplace through the read-only
+adapter and the short per-shop cache (`shop_data_cache`), with the time they were fetched and
+whether they are stale. Orders and statistics come from the stored order history
+(`order_history`, `DataSource.HTCO_STORE`) once its backfill is complete; until then they are
+read live and the answer says the history is syncing. The results and the API contract are the
+same either way.
 
 Who sees what (PERMISSION_MATRIX): overview, listings, reviews and shipping need `view_overview`;
 orders need `view_orders`. A buyer's display name and tracking numbers are shown only to roles
@@ -19,7 +20,7 @@ import logging
 import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
@@ -45,6 +46,13 @@ from htco_application.marketplace import (
     ShopProfile,
     ShopReview,
     ShopSection,
+)
+from htco_application.order_history import (
+    STALE_AFTER,
+    HistorySync,
+    OrderSync,
+    SyncState,
+    history_sync,
 )
 from htco_application.shop_capabilities import ShopNotConnectedError, TokenPinning
 from htco_application.shop_data_cache import CacheKey, CachePolicy, Fetched, ShopDataCache
@@ -127,9 +135,10 @@ _NOT_A_SALE = frozenset({"canceled", "fully refunded"})
 
 
 class DataSource(StrEnum):
-    """Where a result comes from. Phase 5 adds the ingested store for orders."""
+    """Where a result comes from: Etsy live, or HTCO's stored order history."""
 
     ETSY_LIVE = "etsy_live"
+    HTCO_STORE = "htco_store"
 
 
 class OrderState(StrEnum):
@@ -249,6 +258,8 @@ class ShopDashboard:
     cache: ShopDataCache
     # Moves the shop card's "last synced" when a load succeeds; optional.
     successes: SuccessRecorder | None = None
+    # The stored order history; without it orders and statistics are always read live.
+    history: OrderSync | None = None
 
 
 # --- Results -----------------------------------------------------------------------------------
@@ -355,6 +366,20 @@ class OrderView:
     shipments: tuple[OrderShipmentView, ...]
     # First name and last initial; only for roles that may see buyer contact details.
     buyer: str | None
+    # Refunds with Etsy's reason, oldest first, and their sum (None without refunds).
+    refunds: tuple[RefundView, ...] = ()
+    refunded: Money | None = None
+
+
+@dataclass(frozen=True)
+class RefundView:
+    amount: Money
+    refunded_at: datetime
+    # Etsy's reason code for the refund, when it gives one.
+    reason: str | None
+    status: str | None
+    # The seller's own note on the refund; only for roles that may see buyer contact details.
+    note: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -372,6 +397,8 @@ class OrdersPage:
     # True: the period had more orders than `cap`; the newest `cap` are listed.
     partial: bool
     cap: int
+    # The stored history's state; None when the store is not set up.
+    sync: HistorySync | None = None
 
 
 @dataclass(frozen=True)
@@ -441,6 +468,24 @@ class AllTimeSales:
     receipts_read: int
     # True: the shop had more orders than the cap; the figures cover the newest `receipts_read`.
     partial: bool
+    # From the stored history only (None when read live): unique buyers among the sales (by the
+    # stored name and destination country) and the share who bought more than once, in percent.
+    customers: int | None = None
+    repeat_customers_percent: Decimal | None = None
+    # Refunds and cancellations by Etsy's reason, over every order read.
+    refunds_and_cancellations: tuple[ReasonCount, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReasonCount:
+    # "refund" or "cancellation".
+    kind: str
+    # Etsy's reason code; None when it gives none (Etsy's receipt has no cancellation reason of
+    # its own: a cancellation takes the reason of its refund).
+    reason: str | None
+    orders: int
+    # Refunded, in the shop's currency.
+    amount: Decimal
 
 
 @dataclass(frozen=True)
@@ -451,6 +496,8 @@ class ShopStats:
     profile: ShopProfile
     # None when the orders could not be read.
     sales: AllTimeSales | None
+    # The stored history's state; None when the store is not set up.
+    sync: HistorySync | None = None
 
 
 @dataclass(frozen=True)
@@ -476,6 +523,7 @@ async def shop_overview(
     """The shop card and the Home screen: the shop's profile and its sales of the last 30 days."""
     _check_offset(utc_offset_minutes)
     opened = await _open(dashboard, auth, shop_id, Capability.VIEW_OVERVIEW, now)
+    await _sync_state(opened)  # starts the history's sync when due; never waits for it
     profile = await opened.get("profile", opened.profile)
     sales: Fetched[_ReceiptWindow] | None
     try:
@@ -504,24 +552,37 @@ async def shop_orders(  # noqa: PLR0913 - the shop, the caller, the period, filt
     limit: int = 50,
     offset: int = 0,
 ) -> OrdersPage:
-    """The Orders screen: the period's orders (30 days by default), newest first, live from the
-    marketplace. Completed and shipped orders are included like any other state."""
+    """The Orders screen: the period's orders (30 days by default), newest first, from the stored
+    order history once its backfill is complete, live from the marketplace until then.
+    Completed and shipped orders are included like any other state."""
     if not 1 <= limit <= PAGE or offset < 0:
         raise ValueError("limit must be between 1 and 100 and offset not negative")
     opened = await _open(dashboard, auth, shop_id, Capability.VIEW_ORDERS, now)
     contact = _sees_buyer_contact(opened, auth, now)
-    window = await opened.get(_RECEIPTS[period], opened.history(period))
-    parts: list[Fetched[object]] = [window]
+    sync_state = await _sync_state(opened)
+    sync = None if dashboard.history is None else history_sync(sync_state, opened.etsy)
     start = _period_start(period, now)
-    if start is None:
-        profile = await opened.get("profile", opened.profile)
-        parts.append(profile)
-        since = profile.value.created_at
-        listed = window.value.receipts
+    stored = await _stored(opened, sync_state, since=start, buyer_data=contact)
+    if stored is not None and sync_state is not None:
+        since = start if start is not None else await _opened_at(opened, stored)
+        listed = stored
+        freshness = _store_freshness(sync_state, now)
+        partial = False
     else:
-        # The load reads one day more (for the callers' time zones); the list keeps to the period.
-        since = start
-        listed = tuple(r for r in window.value.receipts if r.created_at >= since)
+        window = await opened.get(_RECEIPTS[period], opened.history(period))
+        parts: list[Fetched[object]] = [window]
+        if start is None:
+            profile = await opened.get("profile", opened.profile)
+            parts.append(profile)
+            since = profile.value.created_at
+            listed = window.value.receipts
+        else:
+            # The load reads one day more (for the callers' time zones); the list keeps to the
+            # period.
+            since = start
+            listed = tuple(r for r in window.value.receipts if r.created_at >= since)
+        freshness = _freshness(*parts)
+        partial = await _cut_into(opened, period, window, since, listed)
     orders = [_order_view(r, now, contact=contact) for r in listed]
     counts = Counter[OrderFilter]()
     for order in orders:
@@ -531,15 +592,16 @@ async def shop_orders(  # noqa: PLR0913 - the shop, the caller, the period, filt
     matching = [o for o in orders if _matches(o, state)]
     return OrdersPage(
         shop_id=shop_id,
-        freshness=_freshness(*parts),
+        freshness=freshness,
         period=period,
         window_start=since,
         items=tuple(matching[offset : offset + limit]),
         total=len(matching),
         counts={f: counts.get(f, 0) for f in OrderFilter},
         buyer_details=contact,
-        partial=await _cut_into(opened, period, window, since, listed),
+        partial=partial,
         cap=RECEIPT_CAPS[period],
+        sync=sync,
     )
 
 
@@ -556,7 +618,21 @@ async def shop_stats(
     every role that sees the shop may see them."""
     _check_offset(utc_offset_minutes)
     opened = await _open(dashboard, auth, shop_id, Capability.VIEW_OVERVIEW, now)
+    sync_state = await _sync_state(opened)
+    sync = None if dashboard.history is None else history_sync(sync_state, opened.etsy)
     profile = await opened.get("profile", opened.profile)
+    currency = profile.value.currency_code
+    # Aggregates only: the stored names are read to count unique buyers and never answered.
+    stored = await _stored(opened, sync_state, since=None, buyer_data=True)
+    if stored is not None and sync_state is not None:
+        basis = _History(facts=tuple(_fact(r, with_buyer=True) for r in stored), partial=False)
+        return ShopStats(
+            shop_id=shop_id,
+            freshness=_store_freshness(sync_state, now),
+            profile=profile.value,
+            sales=_with_customers(_all_time(basis, currency, now, utc_offset_minutes), basis),
+            sync=sync,
+        )
     history: Fetched[_History] | None
     try:
         history = await opened.get_dated(_STATS, opened.history_facts)
@@ -564,12 +640,13 @@ async def shop_stats(
         history = None
     sales = None
     if history is not None:
-        sales = _all_time(history.value, profile.value.currency_code, now, utc_offset_minutes)
+        sales = _all_time(history.value, currency, now, utc_offset_minutes)
     return ShopStats(
         shop_id=shop_id,
         freshness=_freshness(profile, *([] if history is None else [history])),
         profile=profile.value,
         sales=sales,
+        sync=sync,
     )
 
 
@@ -649,6 +726,12 @@ class _SaleFact:
     total: MarketplaceMoney
     lines: tuple[OrderLine, ...]
     country_code: str | None
+    # Stored history only: who bought (name and country, normalised), to count unique buyers.
+    # Never cached, answered or logged.
+    buyer_key: str | None = field(default=None, repr=False)
+    status: str = ""
+    # Each refund's amount and reason (no note).
+    refunds: tuple[tuple[MarketplaceMoney, str | None], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -849,6 +932,52 @@ async def _open(
     return _Opened(dashboard, integration, tokens, now)
 
 
+async def _sync_state(opened: _Opened) -> SyncState | None:
+    """The stored history's state, starting its sync when due (best effort: a database problem
+    never fails a dashboard read; the live read stands in)."""
+    history = opened.dashboard.history
+    if history is None:
+        return None
+    try:
+        return await history.ensure(opened.integration, now=opened.now)
+    except Exception as error:
+        _log.warning("order_history.state_unavailable: %s", type(error).__name__)
+        return None
+
+
+async def _stored(
+    opened: _Opened, state: SyncState | None, *, since: datetime | None, buyer_data: bool
+) -> tuple[OrderReceipt, ...] | None:
+    """The stored orders when the backfill is complete; None means read live."""
+    history = opened.dashboard.history
+    if history is None or state is None or not state.complete_for(opened.etsy):
+        return None
+    try:
+        return await history.store.load(
+            opened.integration.shop_id, opened.etsy, since=since, buyer_data=buyer_data
+        )
+    except Exception as error:
+        _log.warning("order_history.read_failed: %s", type(error).__name__)
+        return None
+
+
+async def _opened_at(opened: _Opened, stored: tuple[OrderReceipt, ...]) -> datetime:
+    """All time starts when the shop opened (Etsy's profile, cached); without it, at the oldest
+    stored order."""
+    try:
+        profile = await opened.get("profile", opened.profile)
+    except ShopDataUnavailableError, ShopDataScopeMissingError:
+        return min((r.created_at for r in stored), default=opened.now)
+    return profile.value.created_at
+
+
+def _store_freshness(state: SyncState, now: datetime) -> Freshness:
+    synced = state.last_synced_at or now
+    return Freshness(
+        source=DataSource.HTCO_STORE, fetched_at=synced, stale=now - synced > STALE_AFTER
+    )
+
+
 def _sees_buyer_contact(opened: _Opened, auth: AuthContext, now: datetime) -> bool:
     integration = opened.integration
     principal = auth.principal_for(integration.organization_id)
@@ -939,7 +1068,30 @@ def _order_view(receipt: OrderReceipt, now: datetime, *, contact: bool) -> Order
             for shipment in receipt.shipments
         ),
         buyer=receipt.buyer_display_name if contact else None,
+        refunds=tuple(
+            RefundView(
+                amount=_money(r.amount.as_decimal(), r.amount.currency_code),
+                refunded_at=r.created_at,
+                reason=r.reason,
+                status=r.status,
+                note=r.note_from_issuer if contact else None,
+            )
+            for r in receipt.refunds
+        ),
+        refunded=_refunded(receipt),
     )
+
+
+def _refunded(receipt: OrderReceipt) -> Money | None:
+    """The refunds' sum in the order's currency (refunds in another currency are left out)."""
+    if not receipt.refunds:
+        return None
+    currency = receipt.grand_total.currency_code
+    total = sum(
+        (r.amount.as_decimal() for r in receipt.refunds if r.amount.currency_code == currency),
+        Decimal(0),
+    )
+    return _money(total, currency)
 
 
 def _matches(order: OrderView, wanted: OrderFilter | None) -> bool:
@@ -1031,14 +1183,60 @@ def _top(top: dict[int, _Tally]) -> tuple[TopListing, ...]:
 # --- Statistics ----------------------------------------------------------------------------------
 
 
-def _fact(receipt: OrderReceipt) -> _SaleFact:
+def _fact(receipt: OrderReceipt, *, with_buyer: bool = False) -> _SaleFact:
+    key = None
+    if with_buyer and receipt.buyer_name:
+        name = " ".join(receipt.buyer_name.casefold().split())
+        key = f"{name}|{receipt.country_code or ''}"
     return _SaleFact(
         created_at=receipt.created_at,
         is_sale=_is_sale(receipt),
         total=receipt.grand_total,
         lines=receipt.lines,
         country_code=receipt.country_code,
+        buyer_key=key,
+        status=receipt.status,
+        refunds=tuple((r.amount, r.reason) for r in receipt.refunds),
     )
+
+
+def _reasons(facts: tuple[_SaleFact, ...], currency: str) -> tuple[ReasonCount, ...]:
+    """Refunds and cancellations by Etsy's reason: orders and refunded amount (shop currency).
+    A cancellation's reason is the reason of its latest refund; None when Etsy gives none."""
+    orders: Counter[tuple[str, str | None]] = Counter()
+    amounts: dict[tuple[str, str | None], Decimal] = {}
+    for fact in facts:
+        priced = [(m.as_decimal(), r) for m, r in fact.refunds if m.currency_code == currency]
+        per_order: dict[tuple[str, str | None], Decimal] = {}
+        if fact.status == "canceled":
+            key = ("cancellation", fact.refunds[-1][1] if fact.refunds else None)
+            per_order[key] = sum((a for a, _ in priced), Decimal(0))
+        else:
+            for amount, reason in priced:
+                key = ("refund", reason)
+                per_order[key] = per_order.get(key, Decimal(0)) + amount
+        for key, amount in per_order.items():
+            orders[key] += 1
+            amounts[key] = amounts.get(key, Decimal(0)) + amount
+    ranked = sorted(orders, key=lambda k: (k[0], -orders[k], k[1] or ""))
+    return tuple(
+        ReasonCount(
+            kind=kind, reason=reason, orders=orders[kind, reason], amount=amounts[kind, reason]
+        )
+        for kind, reason in ranked
+    )
+
+
+def _with_customers(sales: AllTimeSales, history: _History) -> AllTimeSales:
+    """Unique buyers among the sales and the share who bought more than once (percent, one
+    decimal). Sales without a stored name are not counted."""
+    bought = Counter(f.buyer_key for f in history.facts if f.is_sale and f.buyer_key)
+    customers = len(bought)
+    repeat = sum(1 for n in bought.values() if n > 1)
+    percent = None
+    if customers:
+        percent = (Decimal(repeat) * 100 / customers).quantize(Decimal("0.1"))
+    return replace(sales, customers=customers, repeat_customers_percent=percent)
 
 
 def _months(first: date, last: date) -> list[date]:
@@ -1103,6 +1301,7 @@ def _all_time(
         first_order_at=min((fact.created_at for fact in history.facts), default=None),
         receipts_read=len(history.facts),
         partial=history.partial,
+        refunds_and_cancellations=_reasons(history.facts, currency),
     )
 
 

@@ -3,10 +3,10 @@
 | | |
 |---|---|
 | **Phase / slice** | Phase 4, slice 4.6 (Shops UI and the dashboard screens that show shop data) |
-| **Decision** | Read through, not ingested: the dashboard reads Etsy live through the read-only adapter and a short in-memory cache. Phase 5 ingests orders exactly once into HTCO's own store and then swaps the orders source; the API contract stays. |
+| **Decision** | Read through, plus a stored order history: the dashboard reads Etsy live through the read-only adapter and a short in-memory cache; Orders and Statistics read the shop's whole order history from HTCO's database once its one-time backfill is complete (owner's decision of 2026-10-22). The API contract stays and only grows. |
 | **Research** | [Etsy API capabilities](../../architecture/etsy-api-capabilities.md#in-the-dashboard) |
 | **Clients** | `htco-clients`: Shops, Home, Orders, Products, Shipping and Customers screens |
-| **Last updated** | 2026-10-22 (order periods and shop statistics) |
+| **Last updated** | 2026-10-22 (stored order history, refunds with reasons) |
 
 ## What and why
 
@@ -14,7 +14,7 @@ The owner connected the live shop, but apart from its name the dashboard showed 
 
 ## Endpoints
 
-All are `GET`, signed in, for one shop the caller may see (`404` otherwise, as for any shop). Every answer carries `source` (`etsy_live`), `fetched_at` (when Etsy answered) and `stale` (Etsy did not answer and an older cached copy stands in).
+All are `GET` (except the manual sync), signed in, for one shop the caller may see (`404` otherwise, as for any shop). Every answer carries `source` (`etsy_live`, or `htco_store` when Orders or Statistics come from the [stored order history](#stored-order-history)), `fetched_at` (when Etsy answered, or the last successful sync) and `stale` (Etsy did not answer and an older cached copy stands in, or no sync succeeded for 30 minutes). Orders and Statistics also carry `sync` (`state`: `syncing_history` or `complete`, `orders_stored`, `last_synced_at`; null when the store is not set up).
 
 | Endpoint | Etsy calls (all GET) | Permission | Screen / panel |
 |---|---|---|---|
@@ -23,7 +23,8 @@ All are `GET`, signed in, for one shop the caller may see (`404` otherwise, as f
 | `GET /v1/shops/{shop_id}/listings` | `getListingsByShop` (`state=active`, `includes=Images`, up to 3 pages of 100); `getShopSections` | `view_overview` | Products: catalog and listing details. Shops: the "Top listings" strip |
 | `GET /v1/shops/{shop_id}/reviews` | `getShop` (average, count); `getReviewsByShop` (newest 100) | `view_overview` | Customers: the "Reviews" strip (replaces the demo "Segments") |
 | `GET /v1/shops/{shop_id}/shipping` | `getShopShippingProfiles`, `getShopReturnPolicies`, `getShopProductionPartners` | `view_overview` | Shipping: shipping profiles, return policy and production partners (replace the demo carrier panels) |
-| `GET /v1/shops/{shop_id}/stats?utc_offset_minutes=` | `getShop`; the all-time `getShopReceipts` (shared with Orders' All time) | `view_overview` (aggregates only, no buyer data) | Shops: the "Statistics" tab per shop; may feed the Home shop card |
+| `GET /v1/shops/{shop_id}/stats?utc_offset_minutes=` | `getShop`; the all-time `getShopReceipts` (shared with Orders' All time) until the stored history is complete | `view_overview` (aggregates only, no buyer data) | Shops: the "Statistics" tab per shop; may feed the Home shop card |
+| `POST /v1/shops/{shop_id}/order-sync` | None in the request; starts the backfill (from its checkpoint) and the 30-day sync in the background | `request_bulk_resync` with organization scope (Owner, Admin); web app CSRF; audited (`shop.order_sync_requested`, trigger only) | `202` with `sync` |
 
 Problems: `404 not-found`, `409 shop-not-connected` (needs re-authentication or disconnected; no Etsy call is made), `409 etsy-scope-missing` (Etsy answered 403), `503 etsy-data-unavailable` with `Retry-After` (Etsy unreachable or rate limited and nothing recent cached), `503 shop-data-unavailable` (not configured on this server), `422` for an invalid shop ID or query.
 
@@ -32,11 +33,13 @@ How the numbers are made:
 - **Order state:** `unpaid` (open or payment processing), `paid`, `shipped` (Etsy says shipped or completed), `canceled`, `refunded` (fully). `overdue`: paid, not shipped, with a physical item, and past the earliest `expected_ship_date` of its items. Partially refunded orders keep their shipping state.
 - **Top listings** rank the 30-day window's units per listing. Etsy has no per-listing sales count, and views are listing views, not shop visits.
 - **Periods and caps:** the Orders screen reads 30 days (up to 500 orders), 90 days (1,000), 12 months (2,000) or all time (the newest 2,000). The answer carries `period`, `cap` and `window_start` (for all time, when the shop opened). Completed and shipped orders are listed like any other state; Etsy is asked with no `was_paid`, `was_shipped` or `was_canceled` filter.
+- **Refunds:** every order lists `refunds` (amount, `refunded_at`, Etsy's `reason` and `status`, and the seller's `note`, the note only for buyer-data roles) and `refunded_total`. Etsy's receipt has no cancellation reason of its own; a cancellation is counted under the reason of its latest refund (null without one).
 - `partial` / `truncated` say a window or catalog was larger than one load reads (the period's cap, 300 listings). For orders, `partial` means the cap cut into the period itself: orders from the extra day read for time zones never set it, and when every order read is inside the period, one GET of the first receipt past the cap (cached with the period) decides; if that look fails, `partial` stays true.
 
 Statistics (`/stats`), all labelled in the web app as what they are:
 - **From Etsy's shop record:** opened (`created_timestamp`, "open for N years"), total sales (`transaction_sold_count`, Etsy's own count of items sold), reviews (count and average), favourites, active and digital listings, currency.
-- **From the order history read** (the newest 2,000 at most; `receipts_read` and `partial` say how many and whether the cap was hit, shown as "based on the latest N orders"): sales (paid, not cancelled or fully refunded), units, gross revenue (grand totals before Etsy's fees, in the shop's currency), average order value (revenue per sale), orders and revenue per month from the first sale's month to this month (in the caller's time zone), the best month by revenue, the top 5 products by units, sales per destination country (country only), and `first_order_at`, the oldest order read.
+- **From the order history read** (the newest 2,000 at most; `receipts_read` and `partial` say how many and whether the cap was hit, shown as "based on the latest N orders"): sales (paid, not cancelled or fully refunded), units, gross revenue (grand totals before Etsy's fees, in the shop's currency), average order value (revenue per sale), orders and revenue per month from the first sale's month to this month (in the caller's time zone), the best month by revenue, the top 5 products by units, sales per destination country (country only), and `first_order_at`, the oldest order read; `refunds_and_cancellations`: refunds and cancellations by Etsy's reason (orders and refunded amount).
+- **From the stored history only** (null when read live): `customers`, unique buyers among the sales (by the stored name and destination country), and `repeat_customers_percent`, the share of them who bought more than once. From the store, `receipts_read` is the whole history and `partial` is false.
 
 ## Caching and rate limits
 
@@ -61,31 +64,54 @@ Etsy's limits are per app (about 10 requests a second and 10,000 a day across ev
 - Tokens: every read uses a token pinned to the connection (`VaultAccessTokenProvider.pinned`), refreshed on demand under the existing per-shop advisory lock (slice 4.4).
 - A successful load sets the connection's `last_successful_call_at`, so the shop card's "Last synced" moves.
 
+## Stored order history
+
+The owner decided (2026-10-22) that Orders and Statistics cover everything since the shop opened and load from HTCO's database (`htco_application.order_history`, `htco_persistence.etsy_orders`, migration `20261022120000_etsy_order_history.sql`).
+
+- **Backfill, once per shop:** every receipt since the shop opened, pages of 100 one after the other with no cap, through the read-only adapter (paced, 429s waited out; a 429 that outlasts the adapter's retries is waited out up to 5 more times, then the run stops). Each page is upserted by `(shop_id, receipt_id)` together with the next offset in one transaction: a crash or restart resumes from the checkpoint, and a replay changes nothing. Etsy lists newest first, so orders placed during the backfill only repeat a few rows, never skip one.
+- **Incremental:** the last 30 days are read again and upserted (new orders, status changes, shipments, refunds, cancellations). A copy older than the stored one (`updated_timestamp`) is ignored; a newer one replaces the order with its items, refunds and buyer row.
+- **Where it runs (until the Phase 5 worker):** reading Orders, Statistics or Overview starts an in-process background task when the backfill is missing or the last sync is older than 10 minutes; the request never waits. A Postgres advisory lock per shop (on a connection of its own) lets one run at a time across instances; the same process does not start another run within 60 seconds. The Owner or an Admin can start one with `POST /order-sync`. A failure records the exception type only.
+- **Reads:** while the backfill runs, Orders and Statistics keep the live read and say `sync.state: syncing_history`; once complete they answer `source: htco_store`, every period whole (`partial: false`). If the database cannot be read, the live read stands in.
+- **Purge:** a disconnect sets `purge_after` (30 days); `private.purge_disconnected_etsy_orders(now)` (`PostgresOrderStore.purge_disconnected`) deletes the shop's stored orders, items, refunds, buyer rows and sync state after it. The Phase 5 worker schedules it.
+
+### Data retention
+
+| Data | Stored? | Where | Who may read it | Why |
+|---|---|---|---|---|
+| Receipt: ID, status, paid/shipped, totals (exact amount/divisor/currency), created/updated times, destination country | Yes | `app.etsy_orders` | Members who may see the shop | Orders screen and statistics over the whole history |
+| Items: listing ID, title, SKU, quantity, unit price, digital, expected ship date (ship-by) | Yes | `app.etsy_order_items` | Members who may see the shop | Orders screen, top products, overdue |
+| Shipments: carrier and time | Yes | `app.etsy_orders.shipments` | Members who may see the shop | Shipping state |
+| Refunds: amount, date, Etsy's reason and status | Yes | `app.etsy_order_refunds` | Members who may see the shop | Refunds and cancellations by reason |
+| Refund note from the seller (`note_from_issuer`) | Yes | `app.etsy_order_refunds` | Answered only to buyer-data roles; never logged | Context for the reason |
+| Buyer's name, shipping address (lines, city, state, postal code, country), tracking numbers | Yes | `app.etsy_order_buyers` | Owner, Admin; Operations and Support with access (RLS and the API) | Order statistics (unique and repeat buyers) and later insights; never logged, reported or audited |
+| Buyer's email, phone, messages, gift message, notes | **No** | Never read by the adapter | — | Contact data is not needed; no column can hold it |
+| Payments, fees, ledger | No | — | — | Phase 13 |
+
 ## Personal data
 
-- **Read minimally.** The adapter maps a receipt to `OrderReceipt` and drops everything else at the boundary: no email, no street address, no messages, no gift text. The buyer's name becomes a display name (first name and last initial, "Dana L.") before it reaches the application. Of the address only the destination country (`country_iso`) is kept, for the statistics' countries mix; it is excluded from `repr` like the name.
+- **Read minimally.** The adapter maps a receipt to `OrderReceipt` and drops everything else at the boundary: no email, phone, messages, gift text or notes. The buyer's name and shipping address are kept for the stored history (see the table above) and excluded from every `repr`; the Orders screen shows only a display name (first name and last initial, "Dana L.").
 - **Statistics are aggregates.** Their cached basis is reduced to sale facts (time, totals, items, country) with no name or tracking number, which is why it may live longer than the receipts; the answer holds counts and sums only.
 - **Shown to few.** The display name and tracking numbers are answered only to Owner, Admin, Operations and Support (`view_buyer_contact` and unmasked `view_orders`). Finance, Developer and Viewer get the order without them; the answer says `buyer_details: false`.
 - **Never logged.** `OrderReceipt.buyer_display_name`, `OrderShipment.tracking_code` and `ShopReview.text` are excluded from `repr`; nothing logs, audits or raises with them; errors name the operation and status only. Tests capture the logs and search for the fake markers.
-- **Not stored.** Nothing is written to the database; the in-memory copy lives at most one hour for receipts. Order answers are `Cache-Control: no-store`; the others `private, no-cache`.
+- **Stored as the table above says**, and nothing else; the live in-memory copy lives at most one hour for receipts. Order answers are `Cache-Control: no-store`; the others `private, no-cache`. Database errors are logged by type only (a message can quote a row).
 - Review text is the buyer's public review on Etsy; it is shown to members who may see the shop and kept out of logs like order data.
 
 ## Read only
 
 Every new adapter method goes through the guarded `_request` (GET only, before any token is fetched) and the client's request hook; a test calls each one against a strict mock that fails on any other method, and the source scan still finds no `allow_write=True`.
 
-## Phase 5 swap
+## Phase 5
 
-The answers name their `source`. When Phase 5 ingests orders exactly once (webhooks plus the polling backstop), `/orders` and the sales in `/overview` read the store and answer `source: "htco_store"` with the same fields; the web app needs no change beyond showing the new source label. The periods' caps (500 to 2,000 orders) go away then, and the statistics cover the whole history.
+The stored history already answers `source: "htco_store"` for Orders and Statistics. Phase 5 moves the syncs from the API process to the worker's queue (and schedules the purge), adds webhooks for near-real-time intake, and may serve the Overview's sales from the store too; the API contract stays.
 
 ## Deferred, with the phase
 
 | What | Why not now | Phase |
 |---|---|---|
-| Exactly-once order ingest, webhooks, polling backstop, order history beyond the newest 2,000 orders | Needs the durable store, the worker and webhook signing | 5 |
+| Webhooks, syncs on the worker's queue, the scheduled purge | Needs the worker and webhook signing | 5 |
 | Late-shipment incidents and alerts, SLA guard, tracking upload (`createReceiptShipment`) | Incidents and any write to Etsy need the incident engine and the owner's approval | 6 |
 | Payments and ledger (`getPayments`, `getShopPaymentAccountLedgerEntries`) | Allowed by `transactions_r`, but raw ledger lines mislead without fee classification, payout matching and supplier costs | 13 |
-| Customer list and segments (repeat buyers) | Needs a customer store built from ingested orders; aggregating buyer data live is not minimal (the statistics show sales per country only, as an aggregate) | 5 (store), 14 (CRM) |
+| Customer list and segments | The stored history gives unique and repeat buyer counts; a customer list and segments need the CRM | 14 (CRM) |
 | Listing health (missing attributes, expiring listings), inventory and variations | Phase 11 audits; inventory needs `getListingInventory` per listing | 11 |
 | Shop stats (visits, conversion, search terms), messages, coupons, ads | Not in Etsy's API | — (CSV upload, Phase 14 for messages) |
 | Review replies, any edit of a listing, price or stock | Writes; Etsy has no review-reply API | 12 (Product Studio, with approval) |
