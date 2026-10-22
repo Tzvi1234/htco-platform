@@ -5,7 +5,7 @@
 | **Milestone** | — |
 | **Repositories** | `htco-platform` (most work), `htco-clients` (workforce directory, kill switches) |
 | **Size** | L |
-| **Depends on** | [Phase 7](phase-07-tasks-approvals.md) |
+| **Depends on** | [Phase 7](phase-07-tasks-approvals.md); runs in parallel with [Phase 8A](phase-08a-browser-infrastructure.md) and [Phase 8B](phase-08b-authenticator.md) |
 | **Requirements** | FR-ADM-03 (kill switches), FR-AGT-01, FR-AGT-02, FR-AGT-03, FR-AGT-04, FR-AGT-05, FR-AGT-06, FR-AGT-07, FR-AGT-09, FR-AGT-10, FR-AUT-02, FR-IAM-07, FR-TOOL-01, FR-TOOL-02, FR-TOOL-03 |
 | **Status** | Not started |
 
@@ -20,8 +20,18 @@
 - [ ] 8.7 Evaluation harness
 - [ ] 8.8 Proof-of-concept gates
 - [ ] 8.9 Workforce directory UI
+- [ ] 8.10 Tool bridge on the Action Gateway
 
 **Foundation already in code.** The organization exists as plain domain types and pure rules, without a database: `htco_domain.workforce` (`EmployeeIdentity`, `EmployeeProfile`, the 22 `EMPLOYEE_SPEC_SECTIONS`, `AutonomyLevel`), `htco_domain.tooling` (`ToolDefinition`), `htco_application.workforce.registry` (loads and validates [`registry/`](../../../registry)), `htco_application.workforce.tool_access` (`decide_tool_access`), `htco_application.automation.engine` (employee triggers through `agent_tool`) and the `AgentRuntime` port in `htco_application.agents.runtime` (`invoke`, `resume`, `interrupt`, `cancel`, `inspect`). Tests: `tests/application/test_registry.py`, `test_tool_access.py`, `test_framework_independence.py`, `tests/domain/test_workforce.py`, `tests/tools/test_registry_files.py`. `packages/agent-runtime` is a placeholder with the pinned LangGraph dependency; import-linter already confines LangGraph to it. Everything below that is not listed here is planned.
+
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
+
+- **The tool bridge is a client of the Action Gateway.** Slice 8.4's checks (`decide_tool_access`, the policy engine, approvals, the outbox, `tool_invocations`) run inside the gateway's algorithm, not in a second implementation. The bridge adds only the session's identity and the interrupt and resume plumbing.
+- **The LangGraph runtime uses the Postgres checkpointer** (`AsyncPostgresSaver`, `agent_runtime` schema; ADR-0003). A session waiting on an approval or a Human-channel task is interrupted and resumed from its checkpoint. Checkpoints never hold business state.
+- **Employees reach every channel only through the gateway:** API tools, browser actions (Phase 8A, Browser Use bindings allowed for employees only), Internal and Human.
+- **Etsy write tools** granted in the registry become approvals at every autonomy level (ADR-0022 rule 6). The write executes under the approval's execution identity, never inside the session.
 
 ## Goal
 
@@ -146,6 +156,14 @@ Read-only directory in the web app: departments, employees with readiness (`draf
 |---|---|
 | AC-8.9.1 | A `draft` employee is never shown as working or available; states shown come only from recorded sessions and activity. |
 | AC-8.9.2 | Kill switch controls are hidden for roles without the capability and require step-up for those with it. |
+
+### 8.10 — Tool bridge on the Action Gateway
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-8.10.1 | Every tool call of a fixture session produces exactly one `action_executions` row and one `tool_invocations` row that reference each other. |
+| AC-8.10.2 | A session calling an Etsy write tool is interrupted with `PENDING_APPROVAL`; after the decision, the write runs once outside the session and the session resumes with the verified result. |
+| AC-8.10.3 | An architecture test proves that `htco_agent_runtime` imports no channel adapter (API, Browser) directly. |
 
 ## Test plan
 

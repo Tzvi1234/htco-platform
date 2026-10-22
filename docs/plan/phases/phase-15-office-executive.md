@@ -24,6 +24,20 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 15.9 Activity Feed & Audit, Notifications & Approvals
 - [ ] 15.10 Maya and Lia activated; daily and weekly office reviews
 
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
+
+The Automation Center and the AI Tools Center (15.5) show the execution chain:
+
+- channels per action;
+- approvals and Human tasks;
+- Browser Environments with their statuses and challenges;
+- the Etsy tool inventory with each tool's first-run state per shop;
+- the browser scope table with its flags.
+
+Lia's morning summary reads the same chain.
+
 ## Goal
 
 The owner sees the AI office as it really is and works with it: the Executive Office, the employee departments and profiles, the Automation Center, the AI Tools Center, the Engineering Console (read-only until [Phase 19](phase-19-engineering.md)), Office Communication, the Decision & Model Observatory, the Activity Feed & Audit, and Notifications & Approvals. Every state shown comes from recorded activity (tasks, sessions, executions, invocations, decisions, findings); nothing is inferred or fabricated, and the office is read-only when the agent worker is offline. **Maya** (General Manager) plans, distributes and coordinates work and runs the daily and weekly office reviews; **Lia** (Owner Assistant) is the owner's conversation partner, delivering reports and presenting approvals.

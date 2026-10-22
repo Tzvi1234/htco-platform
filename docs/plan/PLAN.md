@@ -2,14 +2,16 @@
 
 | | |
 |---|---|
-| **Status** | Version 2.0 — the living-office plan ([ADR-0012](../adr/0012-living-office-organization.md)); awaiting owner approval |
-| **Last updated** | 2026-10-22 |
-| **Current phase** | Phase 5 — Orders ingest is next; Phases 1–4 complete apart from the notes in §6 |
-| **Related** | [PRD](../product/PRD.md) · [MVP](../product/MVP.md) · [Software design](../architecture/SOFTWARE_DESIGN.md) · [Engineering rules](../engineering/ENGINEERING_RULES.md) |
+| **Status** | Version 2.1 — the living-office plan ([ADR-0012](../adr/0012-living-office-organization.md)) with the unified execution architecture ([ADR-0019](../adr/0019-unified-execution-engine-and-action-gateway.md) to [ADR-0022](../adr/0022-etsy-write-tools-and-browser-scope.md)); awaiting owner approval |
+| **Last updated** | 2026-10-23 |
+| **Current phase** | Phase 5 — Unified Automation Foundation (PARTIAL: PRs #53, #55, #58 open, to be aligned first); Phases 1–4 complete apart from the notes in §6 |
+| **Related** | [PRD](../product/PRD.md) · [MVP](../product/MVP.md) · [Feature backlog](../product/FEATURE_BACKLOG.md) · [Execution order](EXECUTION_ORDER.md) · [Software design](../architecture/SOFTWARE_DESIGN.md) · [Execution engine](../architecture/execution-engine.md) · [Engineering rules](../engineering/ENGINEERING_RULES.md) |
 
 This plan supersedes the build order in the original HTCO planning brief (v5), which is kept outside the repository, and version 1.0 of this plan (18 phases built around 18 agent roles). Version 2.0 reorganizes phases 5 to 21 around the four concepts of [ADR-0012](../adr/0012-living-office-organization.md): AI employees, deterministic automations, the tool library, and engineering. Phases 0 to 4 keep their numbers and scope; phase files 8 to 17 of version 1.0 were renamed and rewritten (their history is in Git).
 
-The system is built in **22 phases**. Each phase adds one working, tested increment that the owner can see and use, and ends with a gate that must pass before the next phase starts. Inside a phase, work is split into **slices**: each slice is one pull request with its own failing-tests-first acceptance criteria, so something new is tested and verified every few days.
+**Version 2.1 (2026-10-23)** adds the owner's architecture upgrade: one Unified Automation & Execution Engine with an Action Gateway shared by automations and AI employees, four execution channels (API, Browser, Internal, Human), an optional honest Browser Environment per shop, and an internal Authenticator ([ADR-0019](../adr/0019-unified-execution-engine-and-action-gateway.md)–[ADR-0022](../adr/0022-etsy-write-tools-and-browser-scope.md)). Phase 5 is renamed "Unified Automation Foundation"; two phases are inserted after Phase 8 as **8A Browser Infrastructure** and **8B Authenticator**, so no existing phase number, file or acceptance-criterion ID changes. The owner's request for AdsPower anti-detect browsers and a static ISP proxy per shop is **not** planned; [ADR-0020](../adr/0020-per-shop-browser-environment.md) records why and what replaces it.
+
+The system is built in **24 phases** (0–21 plus 8A and 8B). Each phase adds one working, tested increment that the owner can see and use, and ends with a gate that must pass before the next phase starts. Inside a phase, work is split into **slices**: each slice is one pull request with its own failing-tests-first acceptance criteria, so something new is tested and verified every few days.
 
 ## 1. How a phase works
 
@@ -41,16 +43,18 @@ Every phase file has the same structure: goal, why now, scope in and out, prereq
 | [2](phases/phase-02-identity-tenancy.md) | Identity, tenancy, actors and audit | Organizations, roles, shops (shell), MFA rules, RLS, audit with actor kinds, `/v1/me` | — | platform | M | |
 | [3](phases/phase-03-design-system-web-shell.md) | Design system and web shell | Sign in with MFA on `dash.ht-co.app`, see org and shops, Hebrew/English, light/dark | — | clients, platform | L | |
 | [4](phases/phase-04-etsy-connection.md) | Etsy shop connection | Connect the real shop, see scopes, capabilities and sync health | — | both | M | |
-| [5](phases/phase-05-orders-ingest.md) | Automation engine and orders CRM | Every order ingested exactly once by deterministic workflows; job queue, inbox, outbox, automation registry in the database | Order Intake, Deduplication & Verification, Sales Counters | both | L | |
-| [6](phases/phase-06-fulfillment-incidents.md) | Fulfillment monitoring and incidents | Late or missing tracking raises one incident and one email; auto-resolves on evidence | Tracking Sync, Incident Detection & Escalation | both | M | |
-| [7](phases/phase-07-tasks-approvals.md) | Tasks, approvals and activity records | Approve or reject actions safely; tasks board; one activity trail for every actor | Scheduled Reporting, Task Scheduling & Recovery | both | M | **M2 Operational core (MVP-1)** |
-| [8](phases/phase-08-workforce-runtime.md) | Workforce runtime and tool registry | Employees, tools and automations live in the database with versions; agents run under policy, checkpoints and the tool bridge; POC gates pass | — (runtime only) | platform, clients | L | |
-| [9](phases/phase-09-router-advisor.md) | Model router and Decision Advisor | Per-employee routing, budgets and the Jev benchmark; the first employee works | **Eitan** | platform | M | |
+| [5](phases/phase-05-orders-ingest.md) | Unified Automation Foundation | Every order ingested exactly once by deterministic workflows; job queue, inbox, outbox, durable engine; Action Gateway, Execution Router (API real, Browser interface and fake, Internal, Human), approval, environment, secret and authenticator contracts; breakers, limits, idempotency | Order Intake, Deduplication & Verification, Sales Counters | both | L | |
+| [6](phases/phase-06-fulfillment-incidents.md) | Fulfillment monitoring and incidents | Late or missing tracking raises one incident and one email; auto-resolves on evidence; ship-by and low-review alerts; owner-triggered shipment writes | Tracking Sync, Incident Detection & Escalation | both | M | |
+| [7](phases/phase-07-tasks-approvals.md) | Tasks, approvals and activity records | Approve or reject actions safely (the shared approval contract); tasks as the Human channel; one activity trail for every actor; the owner's first Etsy writes | Scheduled Reporting, Task Scheduling & Recovery | both | M | **M2 Operational core (MVP-1)** |
+| [8](phases/phase-08-workforce-runtime.md) | Workforce runtime and tool registry | Employees, tools and automations live in the database with versions; agents run on the Action Gateway with the LangGraph Postgres checkpointer; POC gates pass | — (runtime only) | platform, clients | L | |
+| [8A](phases/phase-08a-browser-infrastructure.md) | Browser Infrastructure | Optional, honest Browser Environment per shop: Playwright or CDP Chromium, Browser Controller with profile locks, preflight and health, challenges to a person, structured extraction, injection guards, monitoring; first read-only exports where scoped | — | platform, clients | L | |
+| [8B](phases/phase-08b-authenticator.md) | Authenticator | PyOTP on the existing vault: enrolment with consent, several accounts per shop, code view with countdown, injection into the browser worker, RBAC, audit, replay protection | — | platform, clients | M | |
+| [9](phases/phase-09-router-advisor.md) | Model router and Decision Advisor | Per-employee routing, budgets, tool and channel permissions, simple vs complex routing and the Jev benchmark; the first employee works | **Eitan** | platform | M | |
 | [10](phases/phase-10-supervision.md) | Supervision and daily reconciliation | Deterministic monitors, Noa's reviews, the nightly supervisor and the daily operations report | **Noa**; Order & Financial Reconciliation, Quality Review Scheduling | both | M | |
-| [11](phases/phase-11-listing-health.md) | Listing Health (first content workflow) | Audit every listing, approve fixes, see them applied on Etsy | **Daniel**, **Noam** | both | M | **M3 MVP** |
-| [12](phases/phase-12-product-studio.md) | Product Studio | One product from research to an Etsy draft and, after approval, a live listing | **Shon**, **Nika**; Catalog Draft Creation & Publishing | both | L | |
+| [11](phases/phase-11-listing-health.md) | Listing Health (first content workflow) | Audit every listing (API, plus stats export where scoped), approve fixes, see them applied and verified on Etsy | **Daniel**, **Noam** | both | M | **M3 MVP** |
+| [12](phases/phase-12-product-studio.md) | Product Studio | One product from research to an Etsy draft and, after approval, a live listing; shop structure writes | **Shon**, **Nika**; Catalog Draft Creation & Publishing | both | L | |
 | [13](phases/phase-13-suppliers-finance.md) | Suppliers and finance | Supplier quotes and mappings; P&L with verified vs estimated figures | **Tom**, **Roni**; Supplier Quotes, Ledger Ingestion, Price Monitoring | both | L | **M4 Commerce core** |
-| [14](phases/phase-14-email-support.md) | Email and customer service | Shared inbox, tickets, drafted replies with approval | **Dana**; Email Intake & Routing | both | M | |
+| [14](phases/phase-14-email-support.md) | Email and customer service | Shared inbox, tickets, drafted replies with approval; Etsy replies on the central browser engine and the shared authenticator, where scoped | **Dana**; Email Intake & Routing | both | M | |
 | [15](phases/phase-15-office-executive.md) | The office and the executive team | Executive office, departments, employee profiles, communication, activity feed; owner assistant and manager | **Maya**, **Lia** | both | L | **M5 The office** |
 | [16](phases/phase-16-android.md) | Android app | Approvals with push and biometrics, incidents, office summary on the phone | — | clients | L | |
 | [17](phases/phase-17-windows.md) | Windows app | Operations console: orders grid, incident center, engineering console | — | clients | L | **M6 Native apps** |
@@ -63,7 +67,7 @@ Sizes are relative effort for one developer working with AI agents: S ≈ under 
 
 **Web first ([ADR-0016](../adr/0016-web-first.md)).** Every feature ships on the web first and completely; the native apps implement features the web already has, against the same API, and never lead.
 
-**Parallel tracks.** Phase 16 (Android) may start any time after Phase 7, and Phase 17 (Windows) after Phase 15, if the owner wants them earlier; they consume the same API and implement only features the web already has. Phase 3's design system work can overlap the end of Phase 2. Phase 18 can start once Phase 13 has produced real cost data.
+**Parallel tracks.** Phases 8, 8A and 8B run in parallel after Phase 7 (8A's Browser Use slice waits for Phase 9).  Phase 16 (Android) may start any time after Phase 7, and Phase 17 (Windows) after Phase 15, if the owner wants them earlier; they consume the same API and implement only features the web already has. Phase 3's design system work can overlap the end of Phase 2. Phase 18 can start once Phase 13 has produced real cost data.
 
 ## 3. Dependency map
 
@@ -78,12 +82,22 @@ flowchart LR
   P5 --> P6[6 Fulfillment]
   P6 --> P7[7 Tasks + approvals + activity]
   P7 --> P8[8 Workforce runtime + tools]
+  P5 --> P8A[8A Browser infrastructure]
+  P7 --> P8A
+  P5 --> P8B[8B Authenticator]
+  P7 --> P8B
+  P8B -.TOTP injection.-> P8A
+  P9 -.Browser Use slice.-> P8A
   P8 --> P9[9 Router + advisor · Eitan]
   P9 --> P10[10 Supervision · Noa]
   P10 --> P11[11 Listing Health]
+  P8A -.stats export.-> P11
   P11 --> P12[12 Product Studio]
   P12 --> P13[13 Suppliers + finance]
   P10 --> P14[14 Email + support]
+  P8A --> P14
+  P8B --> P14
+  P8A -.POD and money rows.-> P13
   P13 --> P15[15 Office + executive]
   P14 --> P15
   P7 -.parallel.-> P16[16 Android]
@@ -104,7 +118,8 @@ flowchart LR
 | Employee specification and configuration | Domain model, 22-section sheets, `registry/` with 16 drafts | 8 (database, versions, API), each activation phase (sheet completed and evaluated) |
 | Employee runtime and communication | `AgentRuntime` port | 8 (LangGraph adapter, handoffs, messages), 15 (conversations) |
 | Automation engine and workflow registry | Domain model, in-memory engine, 15 draft specifications | 5 (durable engine), 6, 7, 10, 12–14 (workflows) |
-| Tool registry and capability permissions | Domain model, access rules, 39 draft tools | 8 (database, tool bridge, invocation records) |
+| Unified execution: Action Gateway, channels, approvals, limits | — | 5 (gateway, router, contracts), 7 (approvals, Human channel), 8 (tool bridge), 8A (Browser channel), 8B (authenticator) |
+| Tool registry and capability permissions | Domain model, access rules, 81 draft tools (38 Etsy API tools covering all 104 endpoints, 2 browser tools) | 8 (database, tool bridge, invocation records) |
 | Decision Advisor and model router | Advisor chain, router, per-employee policies | 9 (gateway, catalog, budgets, Jev benchmark) |
 | Observability, supervision and daily reconciliation | Activity record model | 2 and 7 (stores), 10 (monitors, Noa, nightly supervisor) |
 | Continuous optimization | Proposal lifecycle | 18 |
@@ -136,10 +151,21 @@ Status words: **COMPLETE** (merged, verified), **PARTIAL** (some slices or parts
 | 2 | COMPLETE | 2026-10-14 | 2026-10-22 | Policy engine v0 for human roles (2.4 part 1, PR #10); living-office domain foundation (PR for ADR-0012); 2.1 database workflow (PR #16); 2.2 identity schema with RLS (PR #21); 2.3 authentication in the API (PR #22); 2.4 part 2 `/v1/me` and `/v1/shops` (PR #23); 2.5 audit writer and owner bootstrap (PR #24); 2.6 member and shop-access management; production database migrated (2026-10-14); API deployed and connected to Supabase (2026-10-14); exit gate open: the owner's account (needs the Phase 3 sign-in screens); Supabase project `htco` created (Frankfurt, Free plan) |
 | 3 | COMPLETE | 2026-10-14 | 2026-10-22 | Design system, web shell, sign-in with MFA and password reset, Design 1C on every screen (clients PRs #1–#34). Open note: email verification through Resend |
 | 4 | COMPLETE | 2026-10-15 | 2026-10-22 | Adapter, token vault, OAuth connect, refresh, capability probes, disconnect, the shop card and the shop's live data on the dashboard ([dashboard data](../features/etsy-integration/dashboard-data.md)). Open note: the restore rehearsal (AC-4.7.2, with the owner) |
-| 5–21 | PLANNED | | | Foundations for 5, 7, 8, 9, 10 and 18 exist as tested domain code (ADR-0012 validation log) |
+| 5 | PARTIAL | 2026-10-22 | | Order history store merged ahead of the phase (PR #57). Open, not merged, to be aligned first ([5.0](phases/phase-05-orders-ingest.md#alignment-of-the-open-pull-requests)): 5.1 job queue and worker (#53), deployment (#54, needs the owner's cost approval), 5.2 inbox and outbox (#55), 5.10 durable engine (#58). New slices 5.12–5.18 planned |
+| 6–21, 8A, 8B | PLANNED | | | Foundations for 7, 8, 9, 10 and 18 exist as tested domain code (ADR-0012 validation log) |
 
 Update this table in the pull request that completes each phase.
 
-## 7. Owner tasks now
+## 7. Phase numbering after version 2.1
+
+No phase was renumbered. The new phases use letters so every existing link, file name and acceptance-criterion ID stays valid.
+
+| Phase | File | Note |
+|---|---|---|
+| 5 | `phase-05-orders-ingest.md` | Renamed "Unified Automation Foundation"; file name kept |
+| 8A | `phase-08a-browser-infrastructure.md` | New; after 5 and 7, parallel with 8 |
+| 8B | `phase-08b-authenticator.md` | New; after 5 and 7, parallel with 8 and 8A |
+
+## 8. Owner tasks now
 
 The owner's Phase 0 tasks (approvals, accounts, Etsy Seller App, AutoVA questions, policy reading) are listed in [Phase 0 — Owner prerequisites](phases/phase-00-groundwork.md#owner-prerequisites), and open decisions in [ASSUMPTIONS.md](../product/ASSUMPTIONS.md#1-owner-decisions-needed).

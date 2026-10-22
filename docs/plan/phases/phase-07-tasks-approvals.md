@@ -21,8 +21,18 @@
 - [ ] 7.8 Activity query API and view
 - [ ] 7.9 Scheduled Reporting & Notifications automation
 - [ ] 7.10 Agent Task Scheduling & Recovery automation
+- [ ] 7.11 Approvals and the Human channel on Postgres (the Phase 5 contract)
+- [ ] 7.12 Owner's first Etsy writes: shop, sections, holiday tools
 
 **Foundation already in code.** `htco_domain.tasks` (`BusinessTask`, `TaskState`), `htco_domain.activity` (`ActivityRecord`, `ActivityKind`, `ActivityOutcome`), `htco_domain.actors` (`ActorRef`) and policy engine v0 (`htco_application.access.policy`, tested in `tests/application/test_access_policy.py`). This phase adds their tables, APIs and screens, and extends the policy engine to employee and automation actors.
+
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
+
+- The approval aggregate of 7.3 implements the **shared approval contract** defined in slice 5.14 ([execution-engine.md §5](../../architecture/execution-engine.md#5-approval-contract)). It is the one approval mechanism for users, automations, employees and browser actions.
+- Tasks implement the **Human channel**: manual login, unsupported authentication, CAPTCHA, refunds in Etsy, and human-only actions. A completed task resumes the waiting execution or session from its checkpoint.
+- The approval policies W1, W2 and W3 of ADR-0022 map onto 7.2 and 7.4: W2 and W3 need a recent step-up, and W3 is Owner only.
 
 ## Goal
 
@@ -147,6 +157,30 @@ Scheduled scan of tasks and automation executions: expired leases, stalled tasks
 | AC-7.10.2 | A task whose business effect is already recorded (for example the order exists) is closed with that evidence and not run again. |
 | AC-7.10.3 | Two scheduler instances never recover the same task twice (lock test). |
 | AC-7.10.4 | The specification has all 18 sections defined; replay, failure and recovery tests pass. |
+
+### 7.11 — Approvals and the Human channel on Postgres
+
+The Phase 5 in-memory approval and Human-task contracts get their Postgres stores, events (`approvals.requested.v1`, `approvals.decided.v1`, `tasks.state_changed.v1`) and the resume path for `WAITING` executions.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-7.11.1 | The gateway's approval tests from 5.14 pass unchanged against the Postgres implementation. |
+| AC-7.11.2 | A Human task completed by a person resumes the waiting execution exactly once; a cancelled task cancels it, with the reason. |
+
+### 7.12 — The owner's first Etsy writes
+
+The first write tools reach the dashboard, owner-trigger only:
+
+- `etsy.shop.update` (announcement, sale message, vacation mode and message);
+- `etsy.sections.manage`;
+- `etsy.holiday_preferences.update`.
+
+The Owner re-consents to `shops_w`. Each tool runs through the gateway with approval policy, step-up, outbox, re-read and audit. Etsy's error is shown as it is.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-7.12.1 | Turning vacation mode on and off from HTCO changes the shop and is verified by re-reading it; both runs are audited. |
+| AC-7.12.2 | A write that Etsy refuses shows Etsy's error, records it, and leaves the tool owner-trigger only. |
 
 ## Test plan
 
