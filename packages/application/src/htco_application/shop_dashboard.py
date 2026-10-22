@@ -72,12 +72,10 @@ class OrderPeriod(StrEnum):
     ALL = "all"
 
 
-# Days back for each period; None: the shop's whole history.
-_PERIOD_DAYS: dict[OrderPeriod, int | None] = {
+# Days back for the periods counted in days; 12 months are calendar months (`_period_start`).
+_PERIOD_DAYS: dict[OrderPeriod, int] = {
     OrderPeriod.DAYS_30: SALES_WINDOW_DAYS,
     OrderPeriod.DAYS_90: 90,
-    OrderPeriod.MONTHS_12: 365,
-    OrderPeriod.ALL: None,
 }
 # Receipts read per load at most (pages of 100): up to 20 sequential calls for the long periods,
 # well inside Etsy's 10 a second and 10,000 a day.
@@ -509,15 +507,15 @@ async def shop_orders(  # noqa: PLR0913 - the shop, the caller, the period, filt
     contact = _sees_buyer_contact(opened, auth, now)
     window = await opened.get(_RECEIPTS[period], opened.history(period))
     parts: list[Fetched[object]] = [window]
-    days = _PERIOD_DAYS[period]
-    if days is None:
+    start = _period_start(period, now)
+    if start is None:
         profile = await opened.get("profile", opened.profile)
         parts.append(profile)
         since = profile.value.created_at
         listed = window.value.receipts
     else:
         # The load reads one day more (for the callers' time zones); the list keeps to the period.
-        since = now - timedelta(days=days)
+        since = start
         listed = tuple(r for r in window.value.receipts if r.created_at >= since)
     orders = [_order_view(r, now, contact=contact) for r in listed]
     counts = Counter[OrderFilter]()
@@ -556,7 +554,7 @@ async def shop_stats(
     profile = await opened.get("profile", opened.profile)
     history: Fetched[_History] | None
     try:
-        history = await opened.get(_STATS, opened.history_facts)
+        history = await opened.get_dated(_STATS, opened.history_facts)
     except ShopDataUnavailableError, ShopDataScopeMissingError:
         history = None
     sales = None
@@ -680,10 +678,18 @@ class _Opened:
     async def get[ValueT](
         self, resource: str, load: Callable[[], Awaitable[ValueT]]
     ) -> Fetched[ValueT]:
+        async def undated() -> tuple[ValueT, datetime | None]:
+            return await load(), None
+
+        return await self.get_dated(resource, undated)
+
+    async def get_dated[ValueT](
+        self, resource: str, load: Callable[[], Awaitable[tuple[ValueT, datetime | None]]]
+    ) -> Fetched[ValueT]:
         integration = self.integration
         key = CacheKey(integration.shop_id, integration.generation, resource)
         try:
-            fetched = await self.dashboard.cache.get(key, load, POLICIES[resource])
+            fetched = await self.dashboard.cache.get_dated(key, load, POLICIES[resource])
         except MarketplaceAuthError:
             raise ShopNotConnectedError(f"shop {integration.shop_id} is not connected") from None
         except MarketplacePermissionError:
@@ -724,9 +730,9 @@ class _Opened:
         return load
 
     async def _read_receipts(self, period: OrderPeriod) -> _ReceiptWindow:
-        days = _PERIOD_DAYS[period]
+        start = _period_start(period, self.now)
         # One day more than the period, so every caller's local window is covered.
-        since = None if days is None else self.now - timedelta(days=days + 1)
+        since = None if start is None else start - timedelta(days=1)
         found: list[OrderReceipt] = []
         offset: int | None = 0
         # One page after the other (never in parallel): the adapter paces each call and waits
@@ -742,7 +748,7 @@ class _Opened:
         newest_first = sorted(found, key=lambda r: (r.created_at, r.receipt_id), reverse=True)
         return _ReceiptWindow(since=since, receipts=tuple(newest_first), partial=offset is not None)
 
-    async def history_facts(self) -> _History:
+    async def history_facts(self) -> tuple[_History, datetime]:
         """The statistics' basis, from the all-time receipts (shared with the Orders screen's
         All time under their own key), reduced to sale facts without buyer data."""
         resource = _RECEIPTS[OrderPeriod.ALL]
@@ -757,7 +763,10 @@ class _Opened:
         if fetched.loaded:
             await self._record_success()
         window = fetched.value
-        return _History(facts=tuple(_fact(r) for r in window.receipts), partial=window.partial)
+        history = _History(facts=tuple(_fact(r) for r in window.receipts), partial=window.partial)
+        # The receipts' fetch time, not now: a basis built from receipts cached minutes ago is
+        # that old (Codex review of #51).
+        return history, fetched.fetched_at
 
     async def listings(self) -> _Catalog:
         found: list[ListingDetails] = []
@@ -1070,3 +1079,16 @@ def _all_time(
         receipts_read=len(history.facts),
         partial=history.partial,
     )
+
+
+def _period_start(period: OrderPeriod, now: datetime) -> datetime | None:
+    """The period's first moment; None for all time. Twelve months are calendar months, from 29
+    February to 28 February (Codex review of #51)."""
+    if period is OrderPeriod.ALL:
+        return None
+    if period is OrderPeriod.MONTHS_12:
+        try:
+            return now.replace(year=now.year - 1)
+        except ValueError:  # 29 February
+            return now.replace(year=now.year - 1, day=28)
+    return now - timedelta(days=_PERIOD_DAYS[period])
