@@ -24,6 +24,7 @@ from htco_domain.automation import RetryPolicy
 from htco_persistence.database import Database
 from htco_persistence.jobs import PostgresJobQueue
 from htco_persistence.messaging import PostgresOutbox
+from tests.automation_fakes import EffectBook
 from tests.integration.test_durable_engine import engine_on, register, trigger
 from tests.integration.test_etsy_connection import Tenant, _url, scalar
 from tests.integration.worker_harness import MARKS_TABLE
@@ -235,7 +236,8 @@ async def test_worker_killed_during_a_running_execution__one_success_and_one_eff
     automation = register(admin)
     mark = uuid.uuid4()
     request = trigger(automation, tenant)
-    execution = engine_on(admin, automation, None).trigger(
+    # The trigger side only checks that a handler is deployed; the worker process runs its own.
+    execution = engine_on(admin, automation, EffectBook().handle).trigger(
         replace(request, payload={"hold_first": True, "mark_id": str(mark)})
     )
     first = spawn(EXECUTION_JOB, lease=3, grace=5, mode=f"automation:{automation}")
