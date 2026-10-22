@@ -545,3 +545,22 @@ async def test_orders__the_look_past_the_cap_fails__partial_rather_than_whole(
 
     assert page.partial is True
     assert page.total == 500
+
+
+async def test_orders__the_look_past_the_cap_follows_its_window(world: World) -> None:
+    """Codex review of #52: the overview refreshes the shared 30-day window; the look past the
+    cap belongs to the window it was made for, never to a newer one."""
+    world.source.receipts = [
+        receipt(10_000 + n, created=NOW - timedelta(minutes=n + 10)) for n in range(500)
+    ]
+    first = await shop_orders(world.dashboard, auth(), SHOP, now=NOW)
+    assert first.partial is False
+    # A new order arrives; three minutes later the overview reloads the window (2 min fresh).
+    world.source.receipts.insert(0, receipt(30_000, created=NOW))
+    world.clock.now = NOW + timedelta(minutes=3)
+    await shop_overview(world.dashboard, auth(), SHOP, now=world.clock.now)
+
+    later = await shop_orders(world.dashboard, auth(), SHOP, now=world.clock.now)
+
+    assert later.total == 500
+    assert later.partial is True
