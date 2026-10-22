@@ -19,8 +19,11 @@ import anyio
 import httpx
 import structlog
 
+from htco_application.automation.durable import EXECUTION_JOB, DurableAutomationEngine
+from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_tokens import VaultAccessTokenProvider
-from htco_application.jobs import ClaimedJob, JobQueue
+from htco_application.execution.gateway import UnavailableGateway
+from htco_application.jobs import ClaimedJob, JobError, JobQueue
 from htco_application.maintenance import (
     EXPIRY_JOB,
     EXPIRY_SCHEDULE,
@@ -49,6 +52,7 @@ from htco_application.messaging import (
     deliver_outbox_message,
 )
 from htco_application.shop_capabilities import CapabilityChecks
+from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.integrations import TokenHealth
 from htco_integrations.etsy import (
     EtsyAdapter,
@@ -57,6 +61,7 @@ from htco_integrations.etsy import (
     app_key_fingerprint,
 )
 from htco_integrations.etsy_oauth import EtsyOAuthClient
+from htco_persistence.automation import PostgresAutomationCatalog, PostgresExecutionStore
 from htco_persistence.database import Database, tenant_scope
 from htco_persistence.jobs import PostgresJobQueue, PostgresWorkerHeartbeats
 from htco_persistence.maintenance import PostgresPurgeStore, PostgresShopDirectory
@@ -171,6 +176,36 @@ def outbox_handlers(
     return {OUTBOX_DELIVERY_JOB: deliver}
 
 
+def automation_handlers(engine: DurableAutomationEngine, worker_id: str) -> dict[str, JobHandler]:
+    """The `automation.execute` job (slice 5.10): one run of a durable execution."""
+    actor = ActorRef(ActorKind.SYSTEM, f"agent-worker:{worker_id}"[:200])
+
+    async def execute(job: ClaimedJob) -> None:
+        raw = job.payload.get("execution_id")
+        if not isinstance(raw, str):
+            raise JobError("an execution job names its execution")
+        execution_id = uuid.UUID(raw)
+        await engine.execute(execution_id, worker=actor)
+
+    return {EXECUTION_JOB: execute}
+
+
+def worker_engine(database: Database) -> DurableAutomationEngine:
+    """The engine on the worker's pool: definitions from the database, no handler deployed yet
+    (no automation is ready; slice 5.11 adds the first three)."""
+    catalog = PostgresAutomationCatalog(database)
+    return DurableAutomationEngine(
+        lambda: registry_from_rows(catalog.current()),
+        PostgresExecutionStore(database),
+        {},
+        clock=_now,
+        jitter=random.random,
+        # The Action Gateway arrives in slice 5.12; until then every action is refused.
+        gateway=UnavailableGateway(),
+        offload=anyio.to_thread.run_sync,
+    )
+
+
 def _etsy_checks(
     settings: WorkerSettings, database: Database, http: httpx.AsyncClient
 ) -> tuple[PostgresTokenVault | None, CapabilityChecks | None]:
@@ -231,6 +266,7 @@ async def _serve(settings: WorkerSettings) -> None:
         checks=checks,
         purge=PostgresPurgeStore(database),
     ) | outbox_handlers(PostgresOutbox(database), {})
+    handlers |= automation_handlers(worker_engine(database), settings.worker_id)
     worker = Worker(
         queue,
         PostgresWorkerHeartbeats(database),

@@ -128,6 +128,11 @@ jobs:
           version: "0.13.0"
           enable-cache: true
           cache-python: true
+      # AC-5.10.7: the definitions load from registry/automations/, and the database then matches.
+      - name: Automation definitions match the registry
+        run: |
+          uv run htco registry sync --automations --apply
+          uv run htco registry sync --automations --check
       - name: Integration tests against the database
         run: uv run just test-db
 

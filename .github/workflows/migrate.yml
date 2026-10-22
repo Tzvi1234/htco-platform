@@ -3,8 +3,12 @@
 # access alone is enough to dispatch a workflow). Every run shows a dry run first; applying needs `apply: true` and
 # then records the applied versions in the run summary.
 #
+# After the migrations it loads the reviewed automation definitions (`htco registry sync
+# --automations`, slice 5.10): a dry run always, applied with `apply: true`.
+#
 # Repository configuration (Settings → Secrets and variables → Actions):
 #   variable SUPABASE_PROJECT_REF   the project's reference ID
+#   variable SUPABASE_POOLER_HOST   the session pooler's host (as for the deploy)
 #   secret   SUPABASE_ACCESS_TOKEN  a personal access token of the owner's Supabase account
 #   secret   SUPABASE_DB_PASSWORD   the project's database password
 name: Migrate database
@@ -61,6 +65,25 @@ jobs:
       - name: Apply the migrations
         if: ${{ inputs.apply }}
         run: supabase db push --password "$SUPABASE_DB_PASSWORD"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        if: ${{ !cancelled() }}
+        with:
+          version: "0.13.0"
+      # Slice 5.10: the reviewed automation definitions of registry/automations/ (dry run first).
+      - name: Automation definitions (dry run)
+        if: ${{ !cancelled() }}
+        # Before the 5.10 migration is applied the table does not exist yet: a dry run reports it.
+        continue-on-error: ${{ !inputs.apply }}
+        env:
+          HTCO_DATABASE_URL: postgresql://postgres.${{ vars.SUPABASE_PROJECT_REF }}@${{ vars.SUPABASE_POOLER_HOST }}:5432/postgres?sslmode=require
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: uv run --package htco-api htco registry sync --automations
+      - name: Automation definitions (apply)
+        if: ${{ inputs.apply }}
+        env:
+          HTCO_DATABASE_URL: postgresql://postgres.${{ vars.SUPABASE_PROJECT_REF }}@${{ vars.SUPABASE_POOLER_HOST }}:5432/postgres?sslmode=require
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: uv run --package htco-api htco registry sync --automations --apply
       - name: Record the applied versions
         # Also after a failed apply: earlier migrations may have been applied before the failure.
         if: ${{ !cancelled() }}

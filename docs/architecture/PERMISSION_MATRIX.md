@@ -54,7 +54,7 @@ These rows come from [ADR-0020](../adr/0020-per-shop-browser-environment.md) to 
 
 ## 2. Automations
 
-Automations run under their own service identities with least-privilege database grants ([ADR-0013](../adr/0013-automation-engine.md)). The full list and each one's permissions section are in [`registry/automations/`](../../registry/automations).
+Automations run under their own service identities with least-privilege database grants ([ADR-0013](../adr/0013-automation-engine.md)); executions run in the `agent-worker`'s `htco_worker` role, one organization per job (slice 5.1). A user may start an automation by hand only when its registry definition names a `user_capability` from section 1 and the user's role holds it; listing automations and executions is "View the office"; retrying a dead-lettered execution is an organization-wide "Retry allowlisted sync" (Owner, Admin), audited (slice 5.10). The full list and each one's permissions section are in [`registry/automations/`](../../registry/automations).
 
 | Automation | Allowed | Not allowed |
 |---|---|---|

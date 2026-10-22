@@ -8,29 +8,16 @@ Each employee, automation and advisor is one TOML file; tools are grouped by fam
 
 import argparse
 import sys
-import tomllib
-from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
+from htco_application.workforce.files import read_registry
 from htco_application.workforce.registry import Registry, RegistryError
 
 REGISTRY_ROOT = Path(__file__).resolve().parents[1] / "registry"
 
 
-def _documents(folder: Path) -> Iterator[dict[str, Any]]:
-    for path in sorted(folder.glob("*.toml")):
-        yield tomllib.loads(path.read_text(encoding="utf-8"))
-
-
 def load_registry(root: Path = REGISTRY_ROOT) -> Registry:
-    tools = [tool for family in _documents(root / "tools") for tool in family.get("tools", [])]
-    return Registry.from_documents(
-        employees=list(_documents(root / "employees")),
-        tools=tools,
-        automations=list(_documents(root / "automations")),
-        advisors=list(_documents(root / "advisors")),
-    )
+    return read_registry(root).registry()
 
 
 def main(argv: list[str]) -> int:

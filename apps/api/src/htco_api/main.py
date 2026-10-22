@@ -1,6 +1,7 @@
 """Process entry point and composition root: `python -m htco_api`."""
 
 import contextlib
+import random
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from htco_api.access import InvitationFailedError
 from htco_api.app import AppOptions, Resource, create_app
 from htco_api.auth import Authenticator, VerifiedTokenReader
+from htco_api.automations import AutomationServices
 from htco_api.problems import AUTH_UNAVAILABLE, ProblemError
 from htco_api.settings import ApiSettings, Environment
 from htco_api.web_auth import WebAuth
@@ -23,8 +25,11 @@ from htco_application.access.management import (
     InvitedUser,
     InviteeAlreadyRegisteredError,
 )
+from htco_application.automation.durable import DurableAutomationEngine
+from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_tokens import VaultAccessTokenProvider
+from htco_application.execution.gateway import UnavailableGateway
 from htco_application.marketplace import MarketplacePort
 from htco_application.mfa import Enrollment, Factor
 from htco_application.order_history import OrderSync
@@ -42,13 +47,20 @@ from htco_application.web_sessions import (
     TooManyAttemptsError,
     WeakPasswordError,
 )
+from htco_application.workforce.registry import Registry
 from htco_integrations.etsy import EtsyAdapter, EtsyConfig, EtsyCredentials, app_key_fingerprint
 from htco_integrations.etsy_oauth import EtsyOAuthClient
 from htco_persistence.access import PostgresAccessStore
 from htco_persistence.audit import PostgresAuditLog
+from htco_persistence.automation import (
+    PostgresAutomationCatalog,
+    PostgresExecutionReader,
+    PostgresExecutionStore,
+)
 from htco_persistence.database import Database
 from htco_persistence.etsy_connect import PostgresPendingAuthorizations, PostgresShopConnector
 from htco_persistence.etsy_orders import PostgresOrderStore
+from htco_persistence.idempotency import PostgresIdempotencyStore
 from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.readiness import DatabaseCheck
 from htco_persistence.shop_integrations import (
@@ -136,6 +148,10 @@ def main(
         etsy_token_vault="on" if wiring.token_vault is not None else "off",
         # Off without the Etsy credentials, the redirect URI, the vault key or web sign-in.
         etsy_connect="on" if wiring.etsy is not None else "off",
+        # Off without HTCO_AUTOMATIONS_ENABLED: automations are listed, never started (5.10).
+        automation_triggers="on"
+        if wiring.automations is not None and wiring.automations.engine is not None
+        else "off",
     )
     readiness_checks = (
         [DatabaseCheck(settings.database_url.get_secret_value())]
@@ -158,6 +174,7 @@ def main(
         token_vault=wiring.token_vault,
         shop_remover=wiring.shop_remover,
         dashboard=wiring.dashboard,
+        automations=wiring.automations,
         resources=wiring.resources,
     )
     try:
@@ -313,6 +330,7 @@ class _Wiring:
     # The connected shop's live data for the dashboard: read-only adapter calls through a short
     # in-memory cache; off when the connect flow is off.
     dashboard: ShopDashboard | None = None
+    automations: AutomationServices | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -397,6 +415,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         shops=PostgresShopReader(database),
         access=PostgresAccessStore(database),
         inviter=inviter,
+        automations=automation_services(database, enabled=settings.automations_enabled),
         resources=resources,
     )
 
@@ -471,6 +490,36 @@ def _etsy_wiring(
         history=history,
     )
     return etsy, adapter, checks, dashboard
+
+
+def automation_services(database: Database, *, enabled: bool) -> AutomationServices:
+    """The catalog and executions from the database; the engine only when enabled. No handler is
+    deployed yet (no automation is ready), so every trigger is refused until one is (5.11)."""
+    catalog = PostgresAutomationCatalog(database)
+    store = PostgresExecutionStore(database)
+
+    def registry() -> Registry:
+        return registry_from_rows(catalog.current())
+
+    engine = (
+        DurableAutomationEngine(
+            registry,
+            store,
+            {},
+            clock=lambda: datetime.now(UTC),
+            jitter=random.random,
+            gateway=UnavailableGateway(),
+        )
+        if enabled
+        else None
+    )
+    return AutomationServices(
+        definitions=lambda: list(registry().automations.values()),
+        executions=PostgresExecutionReader(database),
+        shops=store,
+        idempotency=PostgresIdempotencyStore(database),
+        engine=engine,
+    )
 
 
 def _error_reporter(settings: ApiSettings) -> ErrorReporter:

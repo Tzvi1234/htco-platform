@@ -18,4 +18,5 @@ Every feature has its own folder here, created from [`_template/`](_template/) a
 | [identity-access](identity-access/overview.md) | 2 | In progress |
 | [living-office](living-office/overview.md) | 2 (foundation), 5–19 | Foundation complete |
 | [etsy-integration](etsy-integration/overview.md) | 4 | In progress (4.1 to 4.5 done at the platform; 4.7 disconnect done, restore rehearsal pending) |
-| [job-queue](job-queue/overview.md) | 5 | 5.1 built; worker deployment pending the owner |
+| [job-queue](job-queue/overview.md) | 5 | 5.1 and 5.2 built; worker deployment pending the owner |
+| [automation-engine](automation-engine/overview.md) | 5 | 5.10 built; first automations in 5.11 |

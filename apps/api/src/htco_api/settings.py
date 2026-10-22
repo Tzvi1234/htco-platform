@@ -69,6 +69,9 @@ class ApiSettings(BaseSettings):
     # off and the API still starts.
     token_vault_key: SecretStr | None = None
     token_vault_previous_keys: SecretStr | None = None
+    # Slice 5.10: user triggers and admin retries of automations (`POST /v1/automations/...`).
+    # Off by default, so executions never pile up while no agent-worker runs (ER-OPS-04).
+    automations_enabled: bool = False
 
     @property
     def token_key_ring(self) -> KeyRing | None:
