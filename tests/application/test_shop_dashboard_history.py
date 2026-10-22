@@ -554,11 +554,14 @@ async def test_orders__the_look_past_the_cap_follows_its_window(world: World) ->
         *(receipt(10_000 + n, created=NOW - timedelta(minutes=n + 10)) for n in range(500)),
         receipt(20_000, created=NOW - timedelta(days=30, hours=2)),  # the extra day
     ]
-    first = await shop_orders(world.dashboard, auth(), SHOP, now=NOW)
+    await shop_overview(world.dashboard, auth(), SHOP, now=NOW)  # loads the window
+    world.clock.now = NOW + timedelta(seconds=90)
+    first = await shop_orders(world.dashboard, auth(), SHOP, now=world.clock.now)  # the look
     assert first.partial is False
-    # A new order arrives; three minutes later the overview reloads the window (2 min fresh).
-    world.source.receipts.insert(0, receipt(30_000, created=NOW))
-    world.clock.now = NOW + timedelta(minutes=3)
+    # A new order arrives; the overview reloads the window (fresh for 2 minutes) while the look,
+    # a minute younger, would still be fresh.
+    world.source.receipts.insert(0, receipt(30_000, created=NOW + timedelta(seconds=100)))
+    world.clock.now = NOW + timedelta(seconds=150)
     await shop_overview(world.dashboard, auth(), SHOP, now=world.clock.now)
 
     later = await shop_orders(world.dashboard, auth(), SHOP, now=world.clock.now)
