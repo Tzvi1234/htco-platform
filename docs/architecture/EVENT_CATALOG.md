@@ -30,6 +30,18 @@ Events are published through the outbox, which arrives in Phase 5. Shop connecti
 | `orders.cancelled.v1`, `orders.refunded.v1` | Etsy Order Intake | Product Sales Counters, finance, incidents (close) | 5 |
 | `automations.execution_finished.v1` | Automation engine | Activity records, metrics, monitors (Phase 10) | 5 |
 | `automations.execution_dead_lettered.v1` | Automation engine | Incident Detection & Escalation, Noa (Phase 10) | 5 |
+| `automations.execution_state_changed.v1` | Automation engine (including `WAITING`) | Status views, Agent Task Scheduling & Recovery | 5 |
+| `actions.executed.v1` | Action Gateway | Activity records, metrics, monitors (unverified writes) | 5 |
+| `actions.approval_required.v1` | Action Gateway | Approvals (Phase 7), notifications | 5 |
+| `actions.handed_to_human.v1` | Execution Router (Human channel) | Tasks (Phase 7), notifications | 5 |
+| `catalog.listing_changed.v1` | Webhook ingress (`listing.created`, `listing.updated`, `listing.deleted`) | Listing Health re-audit (11), Product Studio verification (12) | 5 |
+| `catalog.inventory_changed.v1` | Webhook ingress (`inventory.created`, `inventory.updated`, `inventory.deleted`) | Price and stock monitoring (13) | 5 |
+| `catalog.out_of_stock.v1` | Webhook ingress (`inventory.out_of_stock`) | Notifications (6), Daniel (11) | 5 |
+| `browser.environment_status_changed.v1` | Shop Environment Registry | Notifications, monitors, the office | 5 (contract), 8A |
+| `browser.challenge_detected.v1` | Browser Controller | Human task, notifications, monitors | 8A |
+| `browser.export_ingested.v1` | Browser recipes (B-02, B-03, B-11) | Listing Health, finance, reports | 8A |
+| `authenticator.code_viewed.v1`, `authenticator.code_injected.v1` | Authenticator (never the code) | Audit, security monitors | 8B |
+| `alerts.ship_by_at_risk.v1`, `alerts.low_review.v1` | Ship-by SLA and review alerts | Notifications, Eitan (9), Dana (14) | 6 |
 | `fulfillment.tracking_detected.v1` | Tracking Synchronization | Order state machine, incident auto-resolution | 6 |
 | `fulfillment.sla_breached.v1` | Incident Detection & Escalation | Incidents, Eitan (Phase 9) | 6 |
 | `incidents.opened.v1` | Incidents | Notifications, Eitan (Phase 9), Amir (Phase 19) | 6 |

@@ -7,7 +7,7 @@ version = 1
 autonomy = "L1"
 readiness = "draft"
 activation_phase = 10
-allowed_tools = ["activity.query", "tasks.read", "tasks.create", "quality.record_finding", "incidents.open", "orders.read", "observability.query_logs", "decisions.advise", "models.complete"]
+allowed_tools = ["activity.query", "tasks.read", "tasks.create", "quality.record_finding", "incidents.open", "orders.read", "observability.query_logs", "decisions.advise", "models.complete", "etsy.receipts.read", "etsy.listings.read"]
 allowed_automations = ["quality-review-scheduling", "agent-task-scheduling-recovery", "order-financial-reconciliation"]
 
 [routing]

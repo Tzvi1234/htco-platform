@@ -18,8 +18,19 @@
 - [ ] 6.5 Incident center UI
 - [ ] 6.6 Guarded shipment write
 - [ ] 6.7 Fulfillment automations activated
+- [ ] 6.8 Owner-triggered fulfillment writes (receipt and shipment tools)
+- [ ] 6.9 Ship-by SLA, holiday calendar and low-review alerts (deterministic)
 
 Slices 6.1 to 6.4 are built as two automations on the engine of [Phase 5](phase-05-orders-ingest.md): **Tracking Synchronization** (slice 6.1) and **Incident Detection & Escalation** (slices 6.2 to 6.4). Slice 6.7 completes their specifications and activates them.
+
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
+
+- Tracking Synchronization and Incident Detection & Escalation perform every business step through the Action Gateway (Internal and API channels). Neither has an AI step.
+- Slice 6.6 (guarded shipment write) becomes the `etsy.shipments.create` and `etsy.receipts.update` tools, policy W2. On each shop they start **owner-trigger only**: the owner runs the first write himself (slice 6.8). Only after a verified success may Tracking Synchronization request them, and each request is an approval.
+- Webhooks `order.shipped`, `order.delivered` and `inventory.out_of_stock` from slice 5.3 feed this phase's automations.
+- Where tracking upload is blocked for an Israeli key (A-04), the order moves to a Human task, or to a POD partner's tracking (Phase 13, browser row only if scoped). Phase 6 never uses a browser.
 
 ## Goal
 
@@ -127,6 +138,29 @@ Tracking Synchronization runs on a schedule and on `order.shipped` events (idemp
 | AC-6.7.3 | Replaying the same breach N times through Incident Detection & Escalation yields one incident, one in-app notification and one email (extends AC-6.3.1 and AC-6.4.1 to the automation path). |
 | AC-6.7.4 | When Incident Detection & Escalation itself fails until dead-lettered, the failure reaches the owner through the error-monitoring alert rules of Phase 1 and the queue health view of slice 5.9, never silently. |
 | AC-6.7.5 | An escalation step that would need a non-allowlisted remediation creates a task for a person (an approval from Phase 7) and runs nothing itself. |
+
+### 6.8 — Owner-triggered fulfillment writes
+
+The Owner re-consents to `transactions_w` and runs `etsy.shipments.create` or `etsy.receipts.update` by hand on one real order, through the gateway (W2: step-up, flag, audit, re-read). The first result, success or Etsy's error, is shown as it is and recorded as the tool's first run on that shop.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-6.8.1 | Before the owner's first verified run on a shop, every automation or employee request for these tools is refused with `owner_trigger_required`. |
+| AC-6.8.2 | A missing `transactions_w` scope refuses the write before any Etsy call, with a "reconnect to grant" link. |
+| AC-6.8.3 | Tests and CI never reach Etsy for these tools (fakes only); the adapter refuses a write without an owner-trigger record or a decided approval. |
+
+### 6.9 — Ship-by SLA, holiday calendar and low-review alerts
+
+- **Ship-by SLA:** alerts from `expected_ship_date` and processing profiles (`etsy.policies.read`), with the shop's holiday preferences in the business-day calendar. Changes to holidays use `etsy.holiday_preferences.update` (W1, owner-trigger first).
+- **Low reviews:** an alert for a review of 3 stars or fewer (`etsy.reviews.read`, hourly).
+- **Stock:** an out-of-stock alert from `inventory.out_of_stock`.
+
+All deterministic ([feature backlog](../../product/FEATURE_BACKLOG.md)).
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-6.9.1 | An order whose ship-by date is within the warning window without a shipment raises one alert; holidays from the shop's preferences are excluded. |
+| AC-6.9.2 | A new review of 3 stars or fewer raises one alert, once, with the listing and order linked. |
 
 ## Test plan
 

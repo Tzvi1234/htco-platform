@@ -19,8 +19,20 @@
 - [ ] 9.6 Decision benchmark
 - [ ] 9.7 Eitan activated: fulfillment exception investigation
 - [ ] 9.8 Budget and routing settings UI
+- [ ] 9.9 Simple vs complex routing and browser-agent budgets
 
 **Foundation already in code.** The router and the advisor chain are pure, tested functions: `htco_domain.routing` (`ModelRoutingPolicy`, tiers, data classes), `htco_application.routing.router` (`route`, `RoutingRequest`, `RoutingDecision`, `RoutingRefused`) and `htco_application.decisions.advisor` (`DecisionQuestion`, `advise`, `RulesAdvisor`, `DecisionRecord`). Tests with fakes: `tests/application/test_model_router.py` (Scenario E) and `tests/application/test_decision_advisor.py` (Scenario F). Every employee document in [`registry/employees/`](../../../registry/employees) carries a draft routing policy; [`registry/advisors/jev.toml`](../../../registry/advisors/jev.toml) describes the advisor. The gateway adapters, catalog, budgets, records, benchmark and Eitan's workflow are planned in this phase.
+
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
+
+- **Tool permissions:** the router and the gateway share one actor context. The per-employee routing policy also caps which channels an employee's actions may use: the Browser channel only where the employee's sheet allows it.
+- **Simple vs complex routing:**
+  - small structured decisions (triage, "which recipe step next", yes/no on a validated page state) go to rules first, then Jev "Ultrafast" where its benchmark passed (ADR-0015);
+  - open-ended work goes to the employee's tier;
+  - Browser Use's model calls (Phase 8A slice 8A.6) are routed and budgeted like any other employee call.
+- **Budgets** include browser-agent model spend per employee and per shop.
 
 ## Goal
 
@@ -138,6 +150,13 @@ Owner and Admin screens: budgets and thresholds per level, current spend and res
 |---|---|
 | AC-9.8.1 | Budget changes require an `aal2` session with step-up, write an audit record and take effect for the next reservation. |
 | AC-9.8.2 | Spend figures state their as-of time and come from `model_usage`, never from estimates shown as actuals. |
+
+### 9.9 — Simple vs complex routing and browser-agent budgets
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-9.9.1 | A fixture set of 200 labelled "simple" browser decisions is answered by rules or Jev only after the benchmark passes; otherwise by the economy tier. |
+| AC-9.9.2 | A Browser Use session that would exceed the employee's per-task budget is stopped before the call, and the task is handed to a person. |
 
 ## Test plan
 

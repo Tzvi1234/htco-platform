@@ -7,7 +7,7 @@ version = 1
 autonomy = "L1"
 readiness = "draft"
 activation_phase = 15
-allowed_tools = ["tasks.create", "tasks.update", "tasks.read", "activity.query", "approvals.request", "messages.send_internal", "decisions.advise", "models.complete"]
+allowed_tools = ["tasks.create", "tasks.update", "tasks.read", "activity.query", "approvals.request", "messages.send_internal", "decisions.advise", "models.complete", "etsy.shop.read"]
 allowed_automations = ["agent-task-scheduling-recovery"]
 
 [routing]

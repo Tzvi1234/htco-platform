@@ -1,6 +1,6 @@
 # ADR-0003: LangGraph agent runtime behind a port
 
-- **Status:** Accepted; to be validated by the Phase 8 proof-of-concept gates. Scope narrowed on 2026-10-14 by [ADR-0012](0012-living-office-organization.md) and [ADR-0013](0013-automation-engine.md): LangGraph orchestrates employees' reasoning only; deterministic workflows run in the automation engine, and the organization's model never imports it.
+- **Status:** Accepted; to be validated by the Phase 8 proof-of-concept gates. Scope narrowed on 2026-10-14 by [ADR-0012](0012-living-office-organization.md) and [ADR-0013](0013-automation-engine.md): LangGraph orchestrates employees' reasoning only; deterministic workflows run in the automation engine, and the organization's model never imports it. Amended 2026-10-23 by [ADR-0019](0019-unified-execution-engine-and-action-gateway.md): sessions act only through the Action Gateway; the LangGraph Postgres checkpointer serves employees' sessions only.
 - **Date:** 2026-10-14
 - **Deciders:** Owner, engineering
 
@@ -46,3 +46,4 @@ Six gates (defined in Phase 8) must pass before any agent gains autonomy: a dupl
 ## Validation log
 
 - 2026-10-14 — LangGraph 1.2.14 imports and runs on CPython 3.14.8 (`tests/agent_runtime`). The `AgentRuntime` port now has `invoke`, `resume`, `interrupt`, `cancel` and `inspect` (`htco_application.agents.runtime`), proven framework-neutral by Scenario J.
+- 2026-10-23 — ADR-0019: every tool call of a session goes through the tool bridge into the Action Gateway; checkpoints (`AsyncPostgresSaver`, `agent_runtime` schema) serve sessions only and never hold business state. A session waiting on a Human-channel task or an approval is interrupted and resumed from its checkpoint.

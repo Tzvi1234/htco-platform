@@ -1,6 +1,6 @@
 # ADR-0008: Etsy integration — Seller App, webhooks plus reconciliation, read-first tracking
 
-- **Status:** Accepted; access details to be validated in Phase 0 (spike) and Phase 4 (capability probes) with the owner's account
+- **Status:** Accepted; access details to be validated in Phase 0 (spike) and Phase 4 (capability probes) with the owner's account; amended 2026-10-23 by [ADR-0022](0022-etsy-write-tools-and-browser-scope.md) (every API endpoint as a tool, writes behind approvals and the owner's first trigger)
 - **Date:** 2026-10-14
 - **Deciders:** Owner, engineering
 
@@ -53,3 +53,4 @@ Phase 5 tests: duplicate and replayed webhooks, missed webhook recovered by reco
 ## Validation log
 
 No entries yet.
+- 2026-10-23 — Amended by ADR-0022: "read-first" stays the order of delivery, but every write endpoint becomes a draft tool with an approval policy (W1–W3), write scopes requested at the owner's first write, and an owner-trigger-only start on each shop.

@@ -1,6 +1,6 @@
 # ADR-0007: Postgres-native job queue behind a port
 
-- **Status:** Proposed; implementation chosen by a spike at the start of Phase 5
+- **Status:** Proposed; implementation chosen by a spike at the start of Phase 5 (accepted in PR #53); amended 2026-10-23 by [ADR-0019](0019-unified-execution-engine-and-action-gateway.md) (the only transport of the execution engine; Postgres advisory locks for browser profiles; Valkey optional)
 - **Date:** 2026-10-14
 - **Deciders:** Owner, engineering
 
@@ -37,3 +37,4 @@ The Phase 5 spike result is recorded in the validation log below and the status 
 ## Validation log
 
 - 2026-10-14 — The automation engine ([ADR-0013](0013-automation-engine.md)) is the queue's main consumer; its `ExecutionStore` port moves onto the queue in Phase 5.
+- 2026-10-23 — Amended by ADR-0019: the queue is the single transport for every execution channel (API, Browser, Internal, Human resumption). Browser profiles are serialized by Postgres advisory locks held for a session, not by `lock_key` alone. A Postgres token bucket backs the cross-worker Etsy rate limit; Valkey is an optional backend for the limiter, added only on measured need.

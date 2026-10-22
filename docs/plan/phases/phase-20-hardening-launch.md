@@ -21,6 +21,14 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 20.6 Privacy operations: retention jobs, export and deletion requests
 - [ ] 20.7 Office readiness review
 
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope), [ADR-0020](../../adr/0020-per-shop-browser-environment.md) and [ADR-0021](../../adr/0021-authenticator-service.md):
+
+- The security review covers the gateway, browser workers (profile theft, session hijack, injection), the authenticator and the secret broker.
+- The recovery drill restores `totp_accounts` and sealed profiles.
+- Runbooks cover a suspended environment, a challenge spike and a suspected secret exposure.
+
 ## Goal
 
 Make HTCO OS dependable for the long run: a staging environment, verified recovery, an external-quality security review, runbooks and service levels, release pipelines with SBOMs, a cost and alerting baseline, and a readiness review of the whole office (every active employee and automation evaluated, every office scenario green, kill switches proven). Then call it v1.0.

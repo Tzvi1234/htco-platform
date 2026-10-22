@@ -120,10 +120,12 @@ Controls are built into the phases where the risk first appears:
 | 2 | RLS and authorization model, MFA enforcement, audit schema, two-tenant test matrix |
 | 3 | BFF sessions, CSRF, CSP and security headers, step-up re-authentication, password reset and MFA recovery, new-device sign-in records |
 | 4 | Token encryption, OAuth state and PKCE, capability probes |
-| 5 | Webhook verification and rate limits, inbox and outbox, idempotency keys, dead-letter, queue alerts, restore and kill-worker drills |
+| 5 | Webhook verification and rate limits, inbox and outbox, idempotency keys, dead-letter, queue alerts, restore and kill-worker drills; the Action Gateway as the single path for actions (Scenario H at the gateway), secret types that cannot serialize, no tool output that can carry a secret |
 | 6 | Security notifications by email (new device, MFA change, shop connected or disconnected) |
 | 7 | Approvals with server-side re-checks, policy engine, self-approval prevention |
 | 8 | Agent controls ASI01–ASI10, tool bridge and registry, injection corpus, kill switches, validated memory writes |
+| 8A | Browser environments ([ADR-0020](../adr/0020-per-shop-browser-environment.md)): sealed profiles, one engine per profile (advisory lock), no OAuth tokens in browser workers, URL and action allowlists per recipe, page content as untrusted data, challenges to a person, fixed egress checked by preflight, dependency allowlist (no stealth or proxy packages), Etsy actions only inside the recorded scope with flags off by default |
+| 8B | Authenticator ([ADR-0021](../adr/0021-authenticator-service.md)): TOTP secrets sealed by the vault, single-use injection grants, replay protection per period, rate limits, step-up for views, audit of every use, model-input scanner for codes and secrets |
 | 9 | Budgets, per-employee routing and data classes, PII masking before model calls, Decision Advisor isolation |
 | 10 | Supervision: monitors cannot be disabled by employees; findings close only on evidence |
 | 19 | Engineering safety: Scenario I; no self-granted permissions |
@@ -134,3 +136,14 @@ Controls are built into the phases where the risk first appears:
 ## 6. Did we do a good enough job?
 
 At the end of every phase: re-read this page, add new elements and threats, confirm each control in the phase has a passing test, and record residual risks in [ASSUMPTIONS.md](../product/ASSUMPTIONS.md) with an owner.
+
+## 7. Additions for the unified execution architecture (2026-10-23)
+
+| Asset or element | Threat | Control | Phase |
+|---|---|---|---|
+| Browser profile (cookies, sessions) | Theft gives a live Etsy session | Sealed at rest; unpacked only in tmpfs for one session; browser worker has its own role and storage prefix | 8A |
+| Shop password and TOTP secret | Exposure lets an attacker sign in as the shop | Vault sealing with associated data; grants bound to one execution; never in prompts, logs or tools | 8A, 8B |
+| TOTP code view | Shoulder-surfing, scraping by malware in the owner's browser | Step-up, per-period fetch, `no-store`, rate limits, audit | 8B |
+| Browser agent | Prompt injection from Etsy pages, buyer messages or partner sites | Recipe allowlists, quoted page content, schema-validated outputs, no secret in model input | 8A |
+| Etsy account standing | A browser action outside Etsy's approval leads to suspension of the shop and related shops | Scope table filled in by the owner, flags off by default, written confirmation before writes, global kill switch, challenge counter | 8A |
+| Action Gateway | A bypass (an adapter called directly) skips approvals and audit | Architecture tests forbid importing channel adapters outside the router; Scenario H at the gateway | 5 |

@@ -7,7 +7,7 @@ version = 1
 autonomy = "L1"
 readiness = "draft"
 activation_phase = 9
-allowed_tools = ["orders.read", "incidents.open", "tasks.create", "activity.query", "automation.trigger", "models.complete", "orders.annotate"]
+allowed_tools = ["orders.read", "incidents.open", "tasks.create", "activity.query", "automation.trigger", "models.complete", "orders.annotate", "etsy.receipts.read", "etsy.shipping_carriers.read", "etsy.policies.read"]
 allowed_automations = ["etsy-order-intake", "order-dedup-verification", "tracking-sync"]
 
 [routing]

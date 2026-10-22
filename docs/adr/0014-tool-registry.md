@@ -1,6 +1,6 @@
 # ADR-0014: A central tool registry with capability-level, least-privilege access
 
-- **Status:** Accepted
+- **Status:** Accepted; amended 2026-10-23 by [ADR-0019](0019-unified-execution-engine-and-action-gateway.md) (every tool call of every actor passes the Action Gateway)
 - **Date:** 2026-10-14
 - **Deciders:** Owner, engineering
 - **Related:** [ADR-0012](0012-living-office-organization.md), [PERMISSION_MATRIX §2](../architecture/PERMISSION_MATRIX.md)
@@ -45,3 +45,4 @@ Scenario H passes now for tools and automations (`tests/application/test_tool_ac
 ## Validation log
 
 - 2026-10-14 — Pure access rules tested; the registry validates grants against definitions.
+- 2026-10-23 — Amended by ADR-0019 and ADR-0022: the registry holds 81 draft tools, including 38 Etsy Open API v3 tools (`registry/tools/etsy_open_api.toml`) and two browser tools; `decide_tool_access` runs inside the Action Gateway for employees, automations and users alike. No tool returns a secret or a one-time code (ADR-0021).

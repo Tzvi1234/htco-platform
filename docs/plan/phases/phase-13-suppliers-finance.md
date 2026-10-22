@@ -22,6 +22,16 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 13.7 P&L views and unit costs
 - [ ] 13.8 Roni's review and narrative
 - [ ] 13.9 Tom and Roni activated
+- [ ] 13.10 Money actions that the API cannot do (Human channel; browser rows B-08 to B-11 only if scoped)
+
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
+
+- **Finance:** Finance Ledger Ingestion reads `etsy.ledger.read` and `etsy.payments.read` through the gateway.
+- **Price and stock:** Inventory & Supplier Price Monitoring proposes `etsy.inventory.update` (W2) through approvals. Each shop starts owner-trigger first.
+- **POD and supplier sites** without an API (tracking, order status) are read by deterministic browser recipes only with their own scope rows (Phase 8A engine), or handed to a person.
+- **Money actions Etsy's API lacks** (refunds, cancellations, coupons and sales, Ads budgets) are Human-channel tasks with the approved values. Browser rows B-08 to B-11 are used only if the owner records their scope and the written confirmation exists (ADR-0022).
 
 ## Goal
 
@@ -72,6 +82,7 @@ Employees follow the activation rule of [Phase 9](phase-09-router-advisor.md) sl
 | 13.7 | P&L views with `ESTIMATED`/`VERIFIED` labels; unit costs per employee and department | Every figure links to its source entries |
 | 13.8 | Roni's monthly narrative and anomaly review | No figure in the narrative differs from the ledger; Roni has no tool that records entries |
 | 13.9 | Tom and Roni activated | Sheets defined, evaluations passed, autonomy approved, routing measured |
+| 13.10 | Refunds, cancellations, coupons, sales and Ads budget changes as Human tasks with approved values; the monthly statement download (B-11) as a recipe if scoped | No money action runs without an Owner (W3) approval; a browser money action is refused while its scope row is empty or the written confirmation is missing |
 
 ## Test plan
 

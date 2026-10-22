@@ -19,6 +19,15 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 21.4 Shopify adapter
 - [ ] 21.5 Worker split if measurements require it
 
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope) and [ADR-0020](../../adr/0020-per-shop-browser-environment.md):
+
+- Multi-shop operations add shops with OAuth only. A Browser Environment stays optional per shop.
+- Shops share one honest egress IP for the browser workers. No per-shop proxy is ever added for scale.
+- The Etsy rate-limit token bucket (slice 5.15) is the shared budget across every shop.
+- A Shopify adapter is a new API-channel binding for the same actions.
+
 ## Goal
 
 Grow sales and run more shops without cloning the system. **Gal** (Marketing & Growth) analyzes store and product performance and proposes authorized campaigns and experiments with Noam and Daniel; routes and prompts are improved by controlled A/B tests; a second shop and a second marketplace run on the same platform.

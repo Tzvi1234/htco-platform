@@ -74,7 +74,7 @@ flowchart TB
 | `web` | Static site, built by App Platform from `htco-clients` `main` | `htco-clients/apps/web` | Serves the web app; CSP and referrer policy in the page, HTTPS-only through the `.app` HSTS preload, no framing ([client ADR-0006](https://github.com/Tzvi1234/htco-clients/blob/main/docs/adr/0006-static-web-hosting.md)) | Static assets, CDN |
 | `api` | Web service | `htco-platform/apps/api` | HTTP API, BFF session handling for the web, bearer auth for native apps, webhook ingress, health | More instances; dedicated CPU when needed |
 | `agent-worker` | Worker | `htco-platform/workers` | The automation engine (ingest, sync, reconciliation, outbox delivery, schedules) and, from Phase 8, the AI employees through the agent runtime | An `automation-worker` splits out when isolation or measured load requires it (ADR); never one container per employee |
-| `browser-runner` | Isolated worker or job, later | `htco-platform/workers/browser` | Playwright automation only if an approved AutoVA path needs it | Possibly a separate droplet for sandboxing (ADR) |
+| `browser-worker` | Worker, from Phase 8A ([ADR-0020](../adr/0020-per-shop-browser-environment.md)) | `htco-platform/workers/browser` | The Browser channel of the Action Gateway: per-shop persistent Chromium profiles (Playwright or CDP), Browser Use for employees, preflight and challenge handling, structured extraction; its own database role, storage prefix and fixed egress IP; no Etsy OAuth tokens | One instance per few shops; a separate droplet if Chromium memory needs it |
 
 Routing: `dash.ht-co.app/` goes to `web`, `dash.ht-co.app/api` to `api` (same origin, so the web session cookie needs no CORS), and `api.ht-co.app` to `api` for native clients and webhooks. `office.ht-co.app` and `agents.ht-co.app` are **mail domains only** (MX, SPF, DKIM, DMARC) and never get web records.
 
@@ -337,6 +337,8 @@ flowchart LR
 Each employee has a gold dataset, metrics and thresholds (for example precision on "high risk" listing findings, false-approve rate, cost per item, p95 latency). Evals run nightly and before any autonomy promotion. Deterministic fakes drive unit and graph tests; evals are the only place real models run in automation. An employee or automation is `ready` only with every specification section defined and a passed evaluation; the domain refuses anything else.
 
 ### 9.6 Automation engine
+
+From 2026-10-23 every business action of an automation or an employee goes through the **Action Gateway** and the **Execution Router** (API, Browser, Internal and Human channels): [execution-engine.md](execution-engine.md), [ADR-0019](../adr/0019-unified-execution-engine-and-action-gateway.md).
 
 `AutomationEngine.trigger` is the single entry for events, schedules, user actions, workflows and employees (through `automation.trigger`). It checks readiness, the deployed handler, the trigger kind and the employee's grants; executions are unique per `(automation_id, idempotency_key)`, so a replay returns the existing execution; failures follow the retry policy into the dead-letter state. From Phase 5 executions live on the Postgres job queue with leases and heartbeats, inbox and outbox ([ADR-0013](../adr/0013-automation-engine.md)).
 
