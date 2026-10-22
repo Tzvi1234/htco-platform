@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Logical model 2.0 (the living office, [ADR-0012](../adr/0012-living-office-organization.md)). Physical tables are created phase by phase, and this page is updated in the same pull request as each migration. Created so far: the base schemas (slice 2.1); `organizations`, `user_profiles`, `memberships`, `shops` (shell), `shop_access` and `audit.audit_log` (slice 2.2, `supabase/migrations/20261014160000_identity_access.sql`). |
-| **Last updated** | 2026-10-14 |
+| **Last updated** | 2026-10-23 (unified execution architecture: [execution-engine.md](execution-engine.md)) |
 | **Rules** | [ER-DATA](../engineering/ENGINEERING_RULES.md#5-data-er-data), [ADR-0011](../adr/0011-data-access-and-migrations.md) |
 
 ## 1. Conventions
@@ -91,10 +91,10 @@ The phase column says when a table first appears.
 | `etsy_orders`, `etsy_order_items`, `etsy_order_refunds` | The shop's stored order history from Etsy (owner's decision of 2026-10-22): one row per receipt (status, totals as amount/divisor/currency, country, shipments' carrier and time), its items, its refunds with Etsy's reason; upserted by `(shop_id, receipt_id)`; members of the shop read through RLS ([dashboard data](../features/etsy-integration/dashboard-data.md#stored-order-history)) | 4 (ahead of 5) |
 | `etsy_order_buyers` | The buyer's name, shipping address and tracking numbers per stored order; RLS for buyer-data roles only (Owner, Admin; Operations and Support with access); no contact columns | 4 (ahead of 5) |
 | `etsy_order_sync_state` | Per shop: the backfill's offset checkpoint, when it completed, the last 30-day sync, the last error type | 4 (ahead of 5) |
-| `orders` | One per receipt; status, totals, `external_updated_at`, raw payload hash | 5 |
-| `order_items` | One per transaction; quantity, SKU, price; `variant_id` nullable until the catalog maps it (Phases 11–12) | 5 |
-| `order_status_events` | Every order state transition with source and proof | 5 |
-| `shipments` | Shipment records from the marketplace (carrier, tracking code) | 5 |
+| `orders` | **Not created as a separate table** (2026-10-23): `etsy_orders` (#57) is the order store, and Phase 5 extends it (`external_updated_at`, raw payload hash). A channel-neutral `orders` view over the marketplace stores is added with the Shopify adapter (Phase 21) | 21 (view) |
+| `order_items` | As `orders`: `etsy_order_items` is the store; `variant_id` (nullable until the catalog maps it, Phases 11–12) is added to it | 5 (column), 21 (view) |
+| `order_status_events` | Every order state transition with source and proof; references `etsy_orders` | 5 |
+| `shipments` | Shipment records from the marketplace (carrier, tracking code); today embedded in `etsy_orders` and `etsy_order_buyers` (tracking numbers); split into a table only when Phase 6 needs one row per shipment | 6 |
 | `tracking_events` | Tracking facts with source and `observed_at` | 6 |
 | `sla_policies` | SLA windows per shop, supplier and shipping method | 6 |
 
@@ -105,7 +105,8 @@ The phase column says when a table first appears.
 | `products`, `variants` | Internal catalog | 11–12 |
 | `product_facts` | Verified attributes (dimensions, material, contents) with source | 11 |
 | `product_sales_counters` | Units and orders per product, net of cancellations and refunds (Product Sales Counters automation) | 5 |
-| `listings`, `listing_variants`, `listing_metrics` | Per-shop publication and stats | 11–12 |
+| `listings`, `listing_variants`, `listing_metrics` | Per-shop publication and stats; `listing_metrics` also takes the stats export (CSV upload, or recipe B-02 where scoped) | 11–12 |
+| `shop_traffic_daily`, `ads_daily` | Shop visits, views, conversion and search terms per day; Etsy Ads spend and results per day; from CSV uploads or scoped browser exports (B-02, B-03), with source and `observed_at` | 8A, 11 |
 | `listing_audits`, `listing_findings` | Listing Health results and evidence | 11 |
 | `product_candidates` | Shon's candidates with APPROVED / REVIEW / REJECTED, reasons, sources and confidence | 12 |
 | `product_sources`, `product_assets`, `asset_provenance` | Sources and media lineage | 12 |
@@ -161,6 +162,32 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 | `automation_executions` | One per `(automation_id, idempotency_key)`: state, attempts, trigger, actor, correlation ID | 5 |
 | `tool_definitions` | Versioned tool definitions: family, owner, side effect, risk, data scope, readiness | 8 |
 | `tool_invocations` | Every tool call: employee, profile and tool versions, access decision, outcome, cost | 8 |
+
+### Execution (Action Gateway and channels)
+
+[execution-engine.md](execution-engine.md) holds the contracts and state machines.
+
+| Table | Purpose | Phase |
+|---|---|---|
+| `action_executions` | One per `(action_name, idempotency_key)`: action and version, actor, on-behalf-of user, organization, shop, state, channel, attempts, approval ID, owner-trigger flag, verification, evidence references, error code, correlation and causation IDs, cost; transition trigger; RLS by organization and shop | 5 |
+| `action_first_runs` | Per shop and write tool: the owner's first verified run (or its error) that unlocks the tool for automations and employees (ADR-0022) | 6–7 |
+| `rate_limit_buckets` | Postgres token buckets for app-wide limits (Etsy QPS and QPD) and per-shop browser pace | 5 |
+| `circuit_breakers` | Shared breaker state per key (`etsy:api`, `etsy:web`, `browser:{shop}`) | 5 |
+| `human_tasks` (as `tasks` with `assignee_kind = user` and a waiting reason) | Human-channel work: manual login, challenge, refund in Etsy, unsupported authentication; resumes the waiting execution | 7 |
+
+### Browser environments and secrets
+
+| Table | Purpose | Phase |
+|---|---|---|
+| `shop_browser_environments` | One per shop (optional): status (`NOT_CONFIGURED`, `PROVISIONING`, `READY`, `LOGIN_REQUIRED`, `DEGRADED`, `SUSPENDED`, `FAILED`), profile storage key, profile key ID, last health, last session, challenge count, consent reference, enabled actions | 5 (table and state machine), 8A |
+| `browser_environment_events` | Append-only transitions and health results with actor, reason and correlation ID | 5, 8A |
+| `browser_sessions` | Each session: environment, execution, purpose, recipe, started and ended, outcome, preflight report, challenge kind | 8A |
+| `browser_artifacts` | Downloaded exports and challenge screenshots (by storage key and hash; screenshots kept 7 days) | 8A |
+| `browser_scope_flags` | Mirror of [etsy-automation-approval.md](etsy-automation-approval.md): action ID, scope version, flag state, changed by | 8A |
+| `shop_credentials` (`private`) | Sealed Etsy password per environment (envelope encryption with the token vault's key ring; DC0) | 8A |
+| `totp_accounts` (`private`) | Sealed TOTP secrets: organization, shop, label, issuer, digits, period, algorithm, key ID, status, consent reference; never the code | 8B |
+| `totp_events` | Append-only enrol, rotate, remove, view, inject and refuse events; never the code | 8B |
+| `secret_grants` | Single-use injection grants: execution, environment, secret reference, field, expiry, redeemed at | 8B |
 
 ### Decisions and routing
 
@@ -236,7 +263,7 @@ Data classes are written DC0–DC4 so they are never confused with requirement p
 
 | Class | Examples | Where | Default handling |
 |---|---|---|---|
-| DC0 Secret | OAuth tokens, API keys, session tokens, PKCE verifiers | `shop_integrations`, `web_sessions`, `oauth_authorizations` | Application-level encryption; never logged or shown |
+| DC0 Secret | OAuth tokens, API keys, session tokens, PKCE verifiers, shop passwords, TOTP secrets and codes, browser profiles (cookies) | `shop_integrations`, `web_sessions`, `oauth_authorizations`, `shop_credentials`, `totp_accounts`, sealed profile archives | Application-level encryption with the one key ring; never logged, never shown (a TOTP code only on the code view), never sent to a model |
 | DC1 Buyer contact | Buyer name, shipping address, email (if granted) | `orders`, `customers` | Masked in lists and logs; visible only to roles that need it |
 | DC2 Buyer content | Messages, emails, attachments | `customer_messages`, `email_*` | Untrusted; masked before model calls unless needed |
 | DC3 User account | Team members' names and emails | `user_profiles` | Visible inside the organization |

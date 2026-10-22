@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Purpose** | Every unverified assumption and every pending decision, with an owner and a deadline. Nothing here may silently become "fact" in code. |
-| **Last updated** | 2026-10-14 |
+| **Last updated** | 2026-10-23 |
 
 Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong; plan adjusted) · **Decided**.
 
@@ -26,6 +26,13 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 | D-13 | The living-office organization (16 employees, Jev, automations, tools, engineering) | Accepted as [ADR-0012](../adr/0012-living-office-organization.md) | Now | Decided (owner's brief, 2026-10-14) |
 | D-14 | Autonomy level of each employee at activation | Start at the level in PRD §8.1; promote only after its evaluation | Each activation phase | Open |
 | D-15 | Whether engineering employees (Alex, Amir, Iris) may open pull requests under a machine account | Yes, with D-08; merging and releasing stay with the owner | Phase 19 | Open |
+| D-16 | Etsy's approval of browser automation: (a) keep it verbal and enable read-only exports only; (b) obtain the signed confirmation first and then enable rows as scoped; (c) do not use browser automation on Etsy | (b) before any write row; (a) is acceptable for B-02 and B-03 ([approval page](../architecture/etsy-automation-approval.md)) | Phase 8A | Open (verbal, per the owner, 2026-10-23) |
+| D-17 | Ask Etsy, in the same confirmation, that several managed shops' browser sessions come from one HTCO egress IP: (a) yes; (b) no | (a) | Phase 8A | Open |
+| D-18 | Fixed egress for browser workers: (a) a basic droplet with its own static IP ($12, recommended); (b) App Platform with a dedicated egress IP (up to $25 more); (c) the same egress as the API | (a) | Phase 8A | Open |
+| D-19 | Order store naming: (a) keep `etsy_orders` (#57) as the store and add a channel-neutral `orders` view at Phase 21; (b) rename now to `orders` with a `marketplace` column | (a), so merged #57 is untouched ([Phase 5](../plan/phases/phase-05-orders-ingest.md#merged-57--order-history-store)) | Phase 5 | Open |
+| D-20 | The owner's request for AdsPower and per-shop ISP proxies: (a) accept the honest design of ADR-0020; (b) revisit after Etsy's written answer to D-17 | (a) | Now | Decided 2026-10-23: (a) |
+| D-21 | Which write tools the owner tries first, in what order: (a) vacation mode, a section, holiday preferences (Phase 7, reversible); (b) shipment upload first (Phase 6, where A-04 allows it) | (a), then (b) | Phase 6–7 | Open |
+| D-22 | `agent-worker` deployment (PR #54, +$5/month) | Approve before slice 5.11 | Phase 5 | Open |
 
 ## 2. Assumptions to verify
 

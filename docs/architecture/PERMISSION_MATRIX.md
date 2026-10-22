@@ -33,6 +33,15 @@ Owner and Admin have organization-wide access to every shop; all other roles see
 | View the office: employees, automations, tools and costs | ✓ | ✓ | S | S | — | S | — |
 | View agent sessions, routing decisions and traces | ✓ | ✓ | S | — | — | S | — |
 | View audit log | ✓ | ✓ | — | — | — | S | — |
+| Run an Etsy write tool by hand (first run, owner-trigger; ADR-0022) | ✓ MFA RA | — | — | — | — | — | — |
+| Decide Etsy write approvals W1 (planned, Phase 7) | ✓ MFA | ✓ MFA | — | — | — | — | — |
+| Decide Etsy write approvals W2 (planned, Phase 7) | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| Decide W3 approvals: listing deletion, activation with fee, money actions (planned, Phase 7) | ✓ MFA RA | — | — | — | — | — | — |
+| Create, suspend, resume or delete a Browser Environment (planned, Phase 8A) | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| Sign in through the live view of a Browser Environment (planned, Phase 8A) | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| Switch a browser scope flag on (only when its scope row is recorded; planned, Phase 8A) | ✓ MFA RA | — | — | — | — | — | — |
+| Enrol, rotate or remove a TOTP account (planned, Phase 8B) | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| View a TOTP code (`view_totp_code`, per shop; planned, Phase 8B) | ✓ MFA RA | S MFA RA | — | — | — | — | — |
 
 While the organization has a single owner, high-risk approvals rely on step-up re-authentication; a two-person rule (requester plus a different approver, or two approvers) becomes a policy option once a second Admin exists.
 
