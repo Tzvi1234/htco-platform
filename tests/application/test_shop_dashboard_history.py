@@ -142,7 +142,10 @@ async def test_orders__more_than_the_cap__reads_pages_in_turn_up_to_it_and_says_
 
     page = await shop_orders(world.dashboard, auth(), SHOP, now=NOW, period=period)
 
-    assert world.source.operations().count("list_order_receipts") == pages
+    # The pages in turn, and for a bounded period one look at the first receipt past the cap
+    # (is it still inside the period?) (Codex review of #52).
+    peek = 0 if period is OrderPeriod.ALL else 1
+    assert world.source.operations().count("list_order_receipts") == pages + peek
     assert page.partial is True
     assert page.cap == cap
     assert page.total == cap
@@ -492,3 +495,32 @@ async def test_orders__cap_hit_only_by_the_extra_day__not_partial(world: World) 
 
     assert page.total == 999
     assert page.partial is False
+
+
+@pytest.mark.parametrize(("extra", "partial"), [(1, False), (0, False)])
+async def test_orders__exactly_the_cap_in_the_period__not_partial(
+    world: World, extra: int, partial: bool
+) -> None:
+    """Codex review of #52: exactly the cap inside the period plus receipts from the extra day
+    (or none at all) is the whole period."""
+    in_period = [receipt(10_000 + n, created=NOW - timedelta(minutes=n)) for n in range(1000)]
+    before = [
+        receipt(20_000 + n, created=NOW - timedelta(days=90, hours=2 + n)) for n in range(extra)
+    ]
+    world.source.receipts = [*in_period, *before]
+
+    page = await shop_orders(world.dashboard, auth(), SHOP, now=NOW, period=OrderPeriod.DAYS_90)
+
+    assert page.total == 1000
+    assert page.partial is partial
+
+
+async def test_orders__the_look_past_the_cap_is_cached_with_the_period(world: World) -> None:
+    world.source.receipts = [
+        receipt(10_000 + n, created=NOW - timedelta(minutes=n)) for n in range(501)
+    ]
+
+    await shop_orders(world.dashboard, auth(), SHOP, now=NOW)
+    await shop_orders(world.dashboard, auth(), SHOP, now=NOW, state=OrderFilter.PAID)
+
+    assert world.source.operations().count("list_order_receipts") == 6
