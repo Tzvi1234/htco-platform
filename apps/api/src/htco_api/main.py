@@ -27,6 +27,7 @@ from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_tokens import VaultAccessTokenProvider
 from htco_application.marketplace import MarketplacePort
 from htco_application.mfa import Enrollment, Factor
+from htco_application.order_history import OrderSync
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
 from htco_application.shop_data_cache import ShopDataCache
@@ -47,6 +48,7 @@ from htco_persistence.access import PostgresAccessStore
 from htco_persistence.audit import PostgresAuditLog
 from htco_persistence.database import Database
 from htco_persistence.etsy_connect import PostgresPendingAuthorizations, PostgresShopConnector
+from htco_persistence.etsy_orders import PostgresOrderStore
 from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.readiness import DatabaseCheck
 from htco_persistence.shop_integrations import (
@@ -348,6 +350,9 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
     etsy, marketplace, checks, dashboard = _etsy_wiring(
         settings, database, http, token_vault, web_auth
     )
+    resources: list[Resource] = [database, _HttpClient(http)]
+    if dashboard is not None and dashboard.history is not None:
+        resources.append(dashboard.history)  # running syncs stop with the app
     return _Wiring(
         web_auth=web_auth,
         token_vault=token_vault,
@@ -360,7 +365,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         shops=PostgresShopReader(database),
         access=PostgresAccessStore(database),
         inviter=inviter,
-        resources=[database, _HttpClient(http)],
+        resources=resources,
     )
 
 
@@ -417,12 +422,21 @@ def _etsy_wiring(
         # Etsy webhooks arrive with Phase 5 (signing secret, endpoint); until then not configured.
         webhooks_configured=False,
     )
+    # The stored order history: synced from the API process until the Phase 5 worker exists.
+    history = OrderSync(
+        store=PostgresOrderStore(database),
+        source=adapter,
+        tokens=tokens,
+        clock=lambda: datetime.now(UTC),
+        audit=PostgresAuditLog(database),
+    )
     dashboard = ShopDashboard(
         connections=vault,
         source=adapter,
         tokens=tokens,
         cache=ShopDataCache(clock=lambda: datetime.now(UTC)),
         successes=vault,
+        history=history,
     )
     return etsy, adapter, checks, dashboard
 

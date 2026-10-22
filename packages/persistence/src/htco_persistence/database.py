@@ -24,6 +24,7 @@ class Database:
     def __init__(
         self, conninfo: str, *, min_size: int = 1, max_size: int = 4, timeout: float = 5.0
     ) -> None:
+        self._conninfo = conninfo
         self._pool = ConnectionPool(
             conninfo,
             min_size=min_size,
@@ -44,6 +45,11 @@ class Database:
         """A pooled connection with the login role's privileges. Not for user requests."""
         with self._pool.connection() as connection:
             yield connection
+
+    def dedicated_connection(self) -> psycopg.Connection[Any]:
+        """A new connection outside the pool (autocommit), for a session-level lock held for
+        minutes; the caller closes it."""
+        return psycopg.connect(self._conninfo, autocommit=True, connect_timeout=5)
 
     @contextmanager
     def user_transaction(self, claims: Mapping[str, Any]) -> Iterator[psycopg.Connection[Any]]:

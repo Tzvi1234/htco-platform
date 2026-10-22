@@ -64,6 +64,7 @@ from htco_application.marketplace import (
     MarketplaceWriteRefusedError,
     OrderLine,
     OrderReceipt,
+    OrderRefund,
     OrderShipment,
     Page,
     ProductionPartner,
@@ -73,11 +74,13 @@ from htco_application.marketplace import (
     ReceiptAddressCheck,
     ReceiptLine,
     ReturnPolicy,
+    ShippingAddress,
     ShippingDestination,
     ShippingProfile,
     ShopProfile,
     ShopReview,
     ShopSection,
+    display_name,
 )
 
 ETSY_BASE_URL = "https://openapi.etsy.com/v3/application"
@@ -1038,16 +1041,30 @@ def _section(value: object) -> ShopSection:
     )
 
 
-def _display_name(value: object) -> str | None:
-    """First name and last initial: all the Orders screen needs to tell buyers apart."""
+def _full_name(value: object) -> str | None:
     if not isinstance(value, str):
         return None
-    words = value.split()
-    if not words:
-        return None
-    if len(words) == 1:
-        return words[0]
-    return f"{words[0]} {words[-1][0]}."
+    return " ".join(value.split()) or None
+
+
+def _shipping_address(data: Mapping[str, Any]) -> ShippingAddress | None:
+    """The address fields Etsy shares with the seller; None when it shares none of them."""
+    address = ShippingAddress(
+        first_line=_text(data, "first_line"),
+        second_line=_text(data, "second_line"),
+        city=_text(data, "city"),
+        state=_text(data, "state"),
+        postal_code=_text(data, "zip"),
+        country_code=_text(data, "country_iso"),
+    )
+    parts = (
+        address.first_line,
+        address.second_line,
+        address.city,
+        address.state,
+        address.postal_code,
+    )
+    return None if all(part is None for part in parts) else address
 
 
 def _order_line(value: object) -> OrderLine:
@@ -1073,11 +1090,23 @@ def _shipment(value: object) -> OrderShipment:
     )
 
 
-def _order_receipt(value: object) -> OrderReceipt:
-    """Reads only what the Orders screen shows. The buyer's email, address and messages are never
-    read, the name only to make the display name, and of the address only the country (for the
-    statistics' countries mix)."""
+def _refund(value: object) -> OrderRefund:
     data = _object(value)
+    return OrderRefund(
+        amount=_money(data["amount"]),
+        created_at=_timestamp(data, "created_timestamp"),
+        reason=_text(data, "reason"),
+        status=_text(data, "status"),
+        note_from_issuer=_text(data, "note_from_issuer"),
+    )
+
+
+def _order_receipt(value: object) -> OrderReceipt:
+    """Reads what the Orders screen shows and the order history stores. The buyer's email, phone,
+    messages, gift message and notes are never read; the name and the shipping address are kept
+    out of every repr (see `OrderReceipt`)."""
+    data = _object(value)
+    name = _full_name(data.get("name"))
     return OrderReceipt(
         receipt_id=_int(data, "receipt_id"),
         status=_str(data, "status").lower(),
@@ -1091,8 +1120,16 @@ def _order_receipt(value: object) -> OrderReceipt:
         discount_total=_money(data["discount_amt"]),
         lines=tuple(_order_line(entry) for entry in _list_of(data, "transactions")),
         shipments=tuple(_shipment(entry) for entry in _list_of(data, "shipments")),
-        buyer_display_name=_display_name(data.get("name")),
+        buyer_display_name=display_name(name),
         country_code=_text(data, "country_iso"),
+        buyer_name=name,
+        shipping_address=_shipping_address(data),
+        refunds=tuple(
+            sorted(
+                (_refund(entry) for entry in _list_of(data, "refunds")),
+                key=lambda refund: refund.created_at,
+            )
+        ),
     )
 
 

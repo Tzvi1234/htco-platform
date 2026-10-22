@@ -88,6 +88,9 @@ The phase column says when a table first appears.
 
 | Table | Purpose | Phase |
 |---|---|---|
+| `etsy_orders`, `etsy_order_items`, `etsy_order_refunds` | The shop's stored order history from Etsy (owner's decision of 2026-10-22): one row per receipt (status, totals as amount/divisor/currency, country, shipments' carrier and time), its items, its refunds with Etsy's reason; upserted by `(shop_id, receipt_id)`; members of the shop read through RLS ([dashboard data](../features/etsy-integration/dashboard-data.md#stored-order-history)) | 4 (ahead of 5) |
+| `etsy_order_buyers` | The buyer's name, shipping address and tracking numbers per stored order; RLS for buyer-data roles only (Owner, Admin; Operations and Support with access); no contact columns | 4 (ahead of 5) |
+| `etsy_order_sync_state` | Per shop: the backfill's offset checkpoint, when it completed, the last 30-day sync, the last error type | 4 (ahead of 5) |
 | `orders` | One per receipt; status, totals, `external_updated_at`, raw payload hash | 5 |
 | `order_items` | One per transaction; quantity, SKU, price; `variant_id` nullable until the catalog maps it (Phases 11–12) | 5 |
 | `order_status_events` | Every order state transition with source and proof | 5 |
