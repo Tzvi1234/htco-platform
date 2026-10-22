@@ -1,0 +1,19 @@
+{
+  "count": 2,
+  "results": [
+    {
+      "shop_section_id": 11000001,
+      "title": "Fake mugs",
+      "rank": 1,
+      "user_id": 20000001,
+      "active_listing_count": 1
+    },
+    {
+      "shop_section_id": 11000002,
+      "title": "Fake kitchen",
+      "rank": 2,
+      "user_id": 20000001,
+      "active_listing_count": 1
+    }
+  ]
+}
