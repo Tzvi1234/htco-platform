@@ -128,6 +128,7 @@ Eitan ([`registry/employees/eitan.toml`](../../../registry/employees/eitan.toml)
 | AC-9.7.3 | Eitan cannot write shipments, contact buyers or trigger an automation outside his `allowed_automations` (denials recorded). |
 | AC-9.7.4 | Repeated failure on a task escalates to a person with evidence (Maya from Phase 15; Amir for technical causes from Phase 19). |
 | AC-9.7.5 | Cost per inspected order and routing outcomes are reported per week, and stay within his policy's per-task cap. |
+| AC-9.7.6 | For every cancelled or refunded order whose cause is not given by Etsy (Etsy's API carries no cancellation reason, and a refund's reason is often empty), Eitan writes a suggested reason from the evidence: the refund note, order and shipment timeline, tracking, and, from Phase 14, Dana's linked buyer conversation. The suggestion is stored as an internal annotation marked "AI-suggested" with its evidence and confidence, shown on the order and in the refunds-by-reason statistics, and editable by the owner; Etsy's own reason, when present, always wins. Nothing is written to Etsy or sent to the buyer. |
 
 ### 9.8 — Budget and routing settings UI
 

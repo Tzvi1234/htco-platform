@@ -13,6 +13,18 @@ readiness = "draft"
 description = "Read orders, items and shipments of granted shops (buyer data masked by default)."
 
 [[tools]]
+name = "orders.annotate"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "internal"
+risk = "low"
+data_scope = "confidential"
+audit_required = true
+readiness = "draft"
+description = "Write an internal, AI-suggested annotation on an order (for example a cancellation or refund reason with evidence and confidence). Never writes to Etsy or contacts the buyer; the owner can edit or remove it."
+
+[[tools]]
 name = "catalog.read"
 version = 1
 family = "commerce_catalog"
