@@ -1,12 +1,16 @@
 """A real worker process for the crash and shutdown tests (slice 5.1):
 
-    python -m tests.integration.worker_harness <kind> <lease seconds> <grace seconds>
+    python -m tests.integration.worker_harness <kind> <lease seconds> <grace seconds> [outbox]
 
 It runs the production `Worker` loop and signal handling on the worker role against
 `HTCO_TEST_DATABASE_URL`, with one test handler for `<kind>`: it records `started`, then holds
 the job forever when the payload says `hold_first` and this is the first attempt (the test kills
 the process there), or sleeps `seconds`; then it records the business effect once per job (a
 unique insert, like every real handler's idempotent write) and `finished`.
+
+With `outbox` it runs the production `outbox.deliver` job instead (slice 5.2), delivering to a
+test destination that holds its first delivery forever when the payload says `hold_first` and
+records each delivery once per idempotency key, as a deduplicating destination does.
 """
 
 import os
@@ -18,11 +22,13 @@ from datetime import UTC, datetime, timedelta
 import anyio
 
 from htco_application.jobs import ClaimedJob
+from htco_application.messaging import PendingDelivery
 from htco_persistence.database import Database, tenant_scope
 from htco_persistence.jobs import PostgresJobQueue, PostgresWorkerHeartbeats
+from htco_persistence.messaging import PostgresOutbox
 from htco_platform.logs import configure_logging
-from htco_worker.main import WORKER_ROLE, stop_on_signal
-from htco_worker.runner import Worker, WorkerConfig
+from htco_worker.main import WORKER_ROLE, outbox_handlers, stop_on_signal
+from htco_worker.runner import JobHandler, Worker, WorkerConfig
 
 MARKS_TABLE = "public.job_test_marks"
 
@@ -36,7 +42,32 @@ def _mark(database: Database, job: ClaimedJob, phase: str) -> None:
         )
 
 
-async def _serve(kind: str, lease: float, grace: float) -> None:
+class HoldingSink:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def _record(self, delivery: PendingDelivery, phase: str) -> int:
+        with self._database.connection() as connection, connection.transaction():
+            row = connection.execute(
+                f"select count(*) from {MARKS_TABLE} where job_id = %s and phase = 'started'",  # noqa: S608 - constant table
+                [delivery.id],
+            ).fetchone()
+            seen = 0 if row is None else int(row[0])
+            connection.execute(
+                f"insert into {MARKS_TABLE} (job_id, attempt, phase, pid) "  # noqa: S608 - constant table
+                "values (%s, %s, %s, %s) on conflict do nothing",
+                [delivery.id, seen + 1 if phase == "started" else seen, phase, os.getpid()],
+            )
+        return seen
+
+    async def deliver(self, delivery: PendingDelivery) -> None:
+        before = await anyio.to_thread.run_sync(self._record, delivery, "started")
+        if delivery.message.payload.get("hold_first") and before == 0:
+            await anyio.sleep_forever()
+        await anyio.to_thread.run_sync(self._record, delivery, "effect")
+
+
+async def _serve(kind: str, lease: float, grace: float, mode: str) -> None:
     database = Database(os.environ["HTCO_TEST_DATABASE_URL"], max_size=3, role=WORKER_ROLE)
 
     async def handle(job: ClaimedJob) -> None:
@@ -48,10 +79,15 @@ async def _serve(kind: str, lease: float, grace: float) -> None:
         await anyio.to_thread.run_sync(_mark, database, job, "effect")
         await anyio.to_thread.run_sync(_mark, database, job, "finished")
 
+    handlers: dict[str, JobHandler] = (
+        outbox_handlers(PostgresOutbox(database), {"test.sink": HoldingSink(database)})
+        if mode == "outbox"
+        else {kind: handle}
+    )
     worker = Worker(
         PostgresJobQueue(database),
         PostgresWorkerHeartbeats(database),
-        {kind: handle},
+        handlers,
         config=WorkerConfig(
             worker_id=f"harness-{os.getpid()}-{uuid.uuid4().hex[:6]}",
             lease=timedelta(seconds=lease),
@@ -75,8 +111,9 @@ async def _serve(kind: str, lease: float, grace: float) -> None:
 
 def main(argv: list[str]) -> int:
     kind, lease, grace = argv[0], float(argv[1]), float(argv[2])
+    mode = argv[3] if len(argv) > 3 else "job"
     configure_logging(level="INFO")
-    anyio.run(_serve, kind, lease, grace)
+    anyio.run(_serve, kind, lease, grace, mode)
     return 0
 
 
