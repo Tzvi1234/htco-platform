@@ -5,6 +5,9 @@
 required-version = ">=0.13,<0.14"
 # Minimum release age for every dependency (ER-SEC-09): new versions are adopted only after a week.
 exclude-newer = "7 days"
+# Exceptions for security fixes newer than a week, each with its advisory; remove once a week old.
+# certifi 2026.10.19 fixes PYSEC-2026-4320 / GHSA-6q48-6c7w-9gw2 (critical), released 2026-10-19.
+exclude-newer-package = { certifi = "2026-10-22T00:00:00Z" }
 
 [tool.uv.workspace]
 members = ["packages/*", "apps/*"]
