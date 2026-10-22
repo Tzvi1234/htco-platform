@@ -2,10 +2,13 @@
 
 `GET /v1/shops/{shop_id}/overview`: the shop card and Home: profile, counts, reputation and the
 sales of today, the last 7 and 30 days (in the caller's time zone, `utc_offset_minutes`).
-`GET /v1/shops/{shop_id}/orders`: the Orders screen, the last 30 days, newest first.
+`GET /v1/shops/{shop_id}/orders`: the Orders screen, newest first, for a period (`period`: 30
+days by default, 90 days, 12 months or all time).
 `GET /v1/shops/{shop_id}/listings`: the Products screen, active listings with images.
 `GET /v1/shops/{shop_id}/reviews`: the newest reviews and the spread of stars.
 `GET /v1/shops/{shop_id}/shipping`: shipping profiles, return policies, production partners.
+`GET /v1/shops/{shop_id}/stats`: the Shops screen's Statistics: Etsy's counts since the shop
+opened and the aggregates of the whole order history (no buyer data).
 
 Every answer says where it comes from (`source`: `etsy_live` today; Phase 5 serves orders from
 HTCO's own store with the same contract), when it was fetched and whether it is `stale` (Etsy did
@@ -31,6 +34,7 @@ from htco_application import shop_dashboard as dashboards
 from htco_application.marketplace import (
     ListingState,
     MarketplaceMoney,
+    ShopProfile,
     ShopReview,
 )
 from htco_application.shop_capabilities import ShopNotConnectedError
@@ -39,6 +43,7 @@ from htco_application.shop_dashboard import (
     Freshness,
     Money,
     OrderFilter,
+    OrderPeriod,
     OrderState,
     ShopDashboard,
     ShopDataScopeMissingError,
@@ -194,13 +199,17 @@ class OrderCountsView(BaseModel):
 
 class OrdersView(FreshnessView):
     shop_id: uuid.UUID
+    period: OrderPeriod
+    # The period's first moment; for all time, when the shop opened.
     window_start: datetime
     items: list[OrderView]
     total: int
     counts: OrderCountsView
     # True when buyer names and tracking numbers are included for this caller.
     buyer_details: bool
+    # True when the period had more orders than `cap`: the newest `cap` are listed.
     partial: bool
+    cap: int
 
 
 class ListingView(BaseModel):
@@ -301,6 +310,47 @@ class ShippingView(FreshnessView):
     production_partners: list[ProductionPartnerView]
 
 
+class MonthlySalesView(BaseModel):
+    # The first day of the month in the caller's time zone.
+    month: date
+    orders: int
+    revenue: Decimal
+
+
+class CountryOrdersView(BaseModel):
+    # ISO 3166-1 alpha-2 of the orders' destination (country only).
+    country: str
+    orders: int
+
+
+class AllTimeSalesView(BaseModel):
+    currency: str
+    # Paid orders that were not cancelled or fully refunded.
+    orders: int
+    units: int
+    # Gross: the orders' grand total (items, shipping, tax) before Etsy's fees.
+    revenue: MoneyView
+    average_order_value: MoneyView | None
+    # Oldest first, from the first sale's month to this month.
+    monthly: list[MonthlySalesView]
+    best_month: MonthlySalesView | None
+    top_products: list[TopListingView]
+    countries: list[CountryOrdersView]
+    # The oldest order read: where the figures start.
+    first_order_at: datetime | None
+    receipts_read: int
+    # True when the shop had more orders than one load reads: the figures cover the newest
+    # `receipts_read`.
+    partial: bool
+
+
+class ShopStatsView(FreshnessView):
+    shop_id: uuid.UUID
+    profile: ShopProfileView
+    # Null when the orders could not be read (the profile still shows).
+    sales: AllTimeSalesView | None
+
+
 # --- Mapping -----------------------------------------------------------------------------------
 
 
@@ -321,33 +371,80 @@ def _marketplace_money(money: MarketplaceMoney) -> MoneyView:
 
 
 def _overview(found: dashboards.ShopOverview) -> ShopOverviewView:
-    p = found.profile
     sales = found.sales
     return ShopOverviewView(
         **_fresh(found.freshness),
         shop_id=found.shop_id,
-        profile=ShopProfileView(
-            etsy_shop_id=p.shop_id,
-            name=p.name,
-            title=p.title,
-            url=p.url,
-            currency=p.currency_code,
-            icon_url=p.icon_url,
-            banner_url=p.banner_url,
-            is_vacation=p.is_vacation,
-            active_listing_count=p.active_listing_count,
-            digital_listing_count=p.digital_listing_count,
-            sold_count=p.sold_transaction_count,
-            favorer_count=p.favorer_count,
-            review_average=p.review_average,
-            review_count=p.review_count,
-            opened_at=p.created_at,
-            ships_from_country=p.ships_from_country,
-            location_country=p.location_country,
-            languages=list(p.languages),
-            accepts_custom_requests=p.accepts_custom_requests,
-        ),
+        profile=_profile(found.profile),
         sales=None if sales is None else _sales(sales),
+    )
+
+
+def _profile(p: ShopProfile) -> ShopProfileView:
+    return ShopProfileView(
+        etsy_shop_id=p.shop_id,
+        name=p.name,
+        title=p.title,
+        url=p.url,
+        currency=p.currency_code,
+        icon_url=p.icon_url,
+        banner_url=p.banner_url,
+        is_vacation=p.is_vacation,
+        active_listing_count=p.active_listing_count,
+        digital_listing_count=p.digital_listing_count,
+        sold_count=p.sold_transaction_count,
+        favorer_count=p.favorer_count,
+        review_average=p.review_average,
+        review_count=p.review_count,
+        opened_at=p.created_at,
+        ships_from_country=p.ships_from_country,
+        location_country=p.location_country,
+        languages=list(p.languages),
+        accepts_custom_requests=p.accepts_custom_requests,
+    )
+
+
+def _month(month: dashboards.MonthlySales) -> MonthlySalesView:
+    return MonthlySalesView(month=month.month, orders=month.orders, revenue=month.revenue)
+
+
+def _all_time(sales: dashboards.AllTimeSales) -> AllTimeSalesView:
+    currency = sales.currency
+    average = sales.average_order_value
+    return AllTimeSalesView(
+        currency=currency,
+        orders=sales.orders,
+        units=sales.units,
+        revenue=MoneyView(amount=sales.revenue, currency=currency),
+        average_order_value=None
+        if average is None
+        else MoneyView(amount=average, currency=currency),
+        monthly=[_month(m) for m in sales.monthly],
+        best_month=None if sales.best_month is None else _month(sales.best_month),
+        top_products=[
+            TopListingView(
+                listing_id=t.listing_id,
+                title=t.title,
+                units=t.units,
+                revenue=MoneyView(amount=t.revenue, currency=currency),
+            )
+            for t in sales.top_products
+        ],
+        countries=[
+            CountryOrdersView(country=c.country_code, orders=c.orders) for c in sales.countries
+        ],
+        first_order_at=sales.first_order_at,
+        receipts_read=sales.receipts_read,
+        partial=sales.partial,
+    )
+
+
+def _stats(found: dashboards.ShopStats) -> ShopStatsView:
+    return ShopStatsView(
+        **_fresh(found.freshness),
+        shop_id=found.shop_id,
+        profile=_profile(found.profile),
+        sales=None if found.sales is None else _all_time(found.sales),
     )
 
 
@@ -419,12 +516,14 @@ def _orders(page: dashboards.OrdersPage) -> OrdersView:
     return OrdersView(
         **_fresh(page.freshness),
         shop_id=page.shop_id,
+        period=page.period,
         window_start=page.window_start,
         items=[_order(order) for order in page.items],
         total=page.total,
         counts=OrderCountsView(**counts),
         buyer_details=page.buyer_details,
         partial=page.partial,
+        cap=page.cap,
     )
 
 
@@ -594,7 +693,7 @@ def shop_data_router(*, clock: Callable[[], datetime]) -> APIRouter:
 
     @router.get(
         "/orders",
-        summary="The shop's orders of the last 30 days, live from the marketplace",
+        summary="The shop's orders of a period, live from the marketplace",
         responses=problem_responses(_SHOP_ERRORS),
     )
     async def list_shop_orders(  # noqa: PLR0913, PLR0917 - FastAPI passes one parameter per query filter
@@ -602,15 +701,25 @@ def shop_data_router(*, clock: Callable[[], datetime]) -> APIRouter:
         response: Response,
         auth: CurrentAuth,
         dashboard: _Dashboard,
+        period: OrderPeriod = OrderPeriod.DAYS_30,
         state: OrderFilter | None = None,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
         offset: Annotated[int, Query(ge=0, le=10_000)] = 0,
     ) -> OrdersView:
-        """Newest first. Buyer display names and tracking numbers only for Owner, Admin,
-        Operations and Support; never cached by the browser."""
+        """Newest first, every state (completed and shipped included). `period`: `30d` (the
+        default), `90d`, `12m` or `all`; up to `cap` orders a period (500, 1,000, 2,000, 2,000).
+        Buyer display names and tracking numbers only for Owner, Admin, Operations and Support;
+        never cached by the browser."""
         try:
             page = await dashboards.shop_orders(
-                dashboard, auth, shop_id, now=clock(), state=state, limit=limit, offset=offset
+                dashboard,
+                auth,
+                shop_id,
+                now=clock(),
+                period=period,
+                state=state,
+                limit=limit,
+                offset=offset,
             )
         except _KNOWN as error:
             raise _problem_of(error) from None
@@ -664,5 +773,30 @@ def shop_data_router(*, clock: Callable[[], datetime]) -> APIRouter:
             raise _problem_of(error) from None
         response.headers["Cache-Control"] = _PRIVATE
         return _shipping(found)
+
+    @router.get(
+        "/stats",
+        summary="The shop's statistics since it opened, live from the marketplace",
+        responses=problem_responses(_SHOP_ERRORS),
+    )
+    async def get_shop_stats(
+        shop_id: uuid.UUID,
+        response: Response,
+        auth: CurrentAuth,
+        dashboard: _Dashboard,
+        utc_offset_minutes: Annotated[int, Query(ge=-840, le=840)] = 0,
+    ) -> ShopStatsView:
+        """Every role that sees the shop: Etsy's counts (opened, total sales, reviews,
+        favourites, listings) and the aggregates of the order history read (up to 2,000 orders;
+        `partial` says the cap was hit), with months at `utc_offset_minutes` from UTC. No buyer
+        data."""
+        try:
+            found = await dashboards.shop_stats(
+                dashboard, auth, shop_id, now=clock(), utc_offset_minutes=utc_offset_minutes
+            )
+        except _KNOWN as error:
+            raise _problem_of(error) from None
+        response.headers["Cache-Control"] = _PRIVATE
+        return _stats(found)
 
     return router
