@@ -31,7 +31,7 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 | D-18 | Fixed egress for browser workers: (a) a basic droplet with its own static IP ($12, recommended); (b) App Platform with a dedicated egress IP (up to $25 more); (c) the same egress as the API | (a) | Phase 8A | Open |
 | D-19 | Order store naming: (a) keep `etsy_orders` (#57) as the store and add a channel-neutral `orders` view at Phase 21; (b) rename now to `orders` with a `marketplace` column | (a), so merged #57 is untouched ([Phase 5](../plan/phases/phase-05-orders-ingest.md#merged-57--order-history-store)) | Phase 5 | Open |
 | D-20 | The owner's request for AdsPower and per-shop ISP proxies: (a) accept the honest design of ADR-0020; (b) revisit after Etsy's written answer to D-17 | (a) | Now | Decided 2026-10-23: (a) |
-| D-21 | Which write tools the owner tries first, in what order: (a) vacation mode, a section, holiday preferences (Phase 7, reversible); (b) shipment upload first (Phase 6, where A-04 allows it) | (a), then (b) | Phase 6–7 | Open |
+| D-21 | Which Etsy write the owner tries first: (a) as planned, the shipment upload in Phase 6 (slice 6.8, where A-04 allows it), then the reversible shop writes in Phase 7 (7.12); (b) move the reversible shop writes (vacation mode, a section) forward into Phase 6, so the first write is easy to undo | (b) if A-04 shows shipments are blocked for our key; otherwise (a) | Phase 6 | Open |
 | D-22 | `agent-worker` deployment (PR #54, +$5/month) | Approve before slice 5.11 | Phase 5 | Open |
 
 ## 2. Assumptions to verify
