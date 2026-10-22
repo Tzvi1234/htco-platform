@@ -7,7 +7,7 @@ version = 1
 autonomy = "L0"
 readiness = "draft"
 activation_phase = 12
-allowed_tools = ["research.web_search", "research.fetch_page", "suppliers.search", "catalog.read", "decisions.advise", "models.complete"]
+allowed_tools = ["research.web_search", "research.fetch_page", "suppliers.search", "catalog.read", "decisions.advise", "models.complete", "etsy.taxonomy.read", "etsy.listings.search_public", "etsy.shops.search"]
 allowed_automations = []
 
 [routing]

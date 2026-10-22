@@ -7,7 +7,7 @@ version = 1
 autonomy = "L1"
 readiness = "draft"
 activation_phase = 12
-allowed_tools = ["media.read_asset", "media.edit_image", "media.generate_image", "catalog.read"]
+allowed_tools = ["media.read_asset", "media.edit_image", "media.generate_image", "catalog.read", "etsy.listing_media.read", "etsy.listing_media.manage"]
 allowed_automations = []
 
 [routing]

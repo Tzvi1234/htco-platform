@@ -7,7 +7,7 @@ version = 1
 autonomy = "L0"
 readiness = "draft"
 activation_phase = 21
-allowed_tools = ["catalog.read", "listings.read_stats", "orders.read", "models.complete"]
+allowed_tools = ["catalog.read", "listings.read_stats", "orders.read", "models.complete", "etsy.shop.read", "etsy.reviews.read", "etsy.listings.read"]
 allowed_automations = []
 
 [routing]

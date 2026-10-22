@@ -7,7 +7,7 @@ version = 1
 autonomy = "L2"
 readiness = "draft"
 activation_phase = 13
-allowed_tools = ["suppliers.read_quotes", "suppliers.search", "pricing.calculate", "automation.trigger", "approvals.request", "models.complete"]
+allowed_tools = ["suppliers.read_quotes", "suppliers.search", "pricing.calculate", "automation.trigger", "approvals.request", "models.complete", "etsy.production_partners.read", "etsy.inventory.read"]
 allowed_automations = ["supplier-quote-followup"]
 
 [routing]

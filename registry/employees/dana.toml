@@ -7,7 +7,7 @@ version = 1
 autonomy = "L2"
 readiness = "draft"
 activation_phase = 14
-allowed_tools = ["orders.read", "email.draft_reply", "email.send", "tasks.create", "decisions.advise", "models.complete"]
+allowed_tools = ["orders.read", "email.draft_reply", "email.send", "tasks.create", "decisions.advise", "models.complete", "etsy.receipts.read", "etsy.reviews.read"]
 allowed_automations = []
 
 [routing]
