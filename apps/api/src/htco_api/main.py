@@ -28,6 +28,8 @@ from htco_application.etsy_tokens import VaultAccessTokenProvider
 from htco_application.marketplace import MarketplacePort
 from htco_application.mfa import Enrollment, Factor
 from htco_application.shop_capabilities import CapabilityChecks
+from htco_application.shop_dashboard import ShopDashboard
+from htco_application.shop_data_cache import ShopDataCache
 from htco_application.shop_integrations import IntegrationReader, TokenVault
 from htco_application.shops import ShopReader
 from htco_application.web_sessions import (
@@ -152,6 +154,7 @@ def main(
         integrations=wiring.integrations,
         capability_checks=wiring.capability_checks,
         token_vault=wiring.token_vault,
+        dashboard=wiring.dashboard,
         resources=wiring.resources,
     )
     try:
@@ -283,6 +286,9 @@ class _Wiring:
     marketplace: MarketplacePort | None = None
     # Read-only capability probes (slice 4.5), with the adapter; off when the connect flow is off.
     capability_checks: CapabilityChecks | None = None
+    # The connected shop's live data for the dashboard: read-only adapter calls through a short
+    # in-memory cache; off when the connect flow is off.
+    dashboard: ShopDashboard | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -339,13 +345,16 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
     token_vault = (
         None if key_ring is None else PostgresTokenVault(database, EnvelopeSealer(key_ring))
     )
-    etsy, marketplace, checks = _etsy_wiring(settings, database, http, token_vault, web_auth)
+    etsy, marketplace, checks, dashboard = _etsy_wiring(
+        settings, database, http, token_vault, web_auth
+    )
     return _Wiring(
         web_auth=web_auth,
         token_vault=token_vault,
         etsy=etsy,
         marketplace=marketplace,
         capability_checks=checks,
+        dashboard=dashboard,
         integrations=PostgresIntegrationReader(database),
         authenticator=Authenticator(verifier, PostgresMembershipReader(database)),
         shops=PostgresShopReader(database),
@@ -361,9 +370,12 @@ def _etsy_wiring(
     http: httpx.AsyncClient,
     vault: PostgresTokenVault | None,
     web_auth: WebAuth | None,
-) -> tuple[EtsyConnect | None, MarketplacePort | None, CapabilityChecks | None]:
-    """The connect flow, the adapter and the capability probes, when every piece they need is
-    configured. The adapter only reads: it refuses any other method towards Etsy's shop API."""
+) -> tuple[
+    EtsyConnect | None, MarketplacePort | None, CapabilityChecks | None, ShopDashboard | None
+]:
+    """The connect flow, the adapter, the capability probes and the dashboard's live shop data,
+    when every piece they need is configured. The adapter only reads: it refuses any other method
+    towards Etsy's shop API."""
     if (
         vault is None
         or web_auth is None
@@ -372,7 +384,7 @@ def _etsy_wiring(
         or settings.etsy_shared_secret is None
         or settings.etsy_redirect_uri is None
     ):
-        return None, None, None
+        return None, None, None, None
     credentials = EtsyCredentials(
         keystring=settings.etsy_keystring.get_secret_value(),
         shared_secret=settings.etsy_shared_secret.get_secret_value(),
@@ -405,7 +417,14 @@ def _etsy_wiring(
         # Etsy webhooks arrive with Phase 5 (signing secret, endpoint); until then not configured.
         webhooks_configured=False,
     )
-    return etsy, adapter, checks
+    dashboard = ShopDashboard(
+        connections=vault,
+        source=adapter,
+        tokens=tokens,
+        cache=ShopDataCache(clock=lambda: datetime.now(UTC)),
+        successes=vault,
+    )
+    return etsy, adapter, checks, dashboard
 
 
 def _error_reporter(settings: ApiSettings) -> ErrorReporter:

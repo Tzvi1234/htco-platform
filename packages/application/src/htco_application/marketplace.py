@@ -10,7 +10,7 @@ kept for urgent work such as reacting to a paid order (AC-4.1.2).
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -109,6 +109,171 @@ class ReceiptAddressCheck:
 
     receipts_seen: int
     address_present: bool | None
+
+
+# --- What the dashboard shows (read through, never stored; see shop_dashboard) -------------------
+
+
+@dataclass(frozen=True)
+class ShopProfile:
+    """The shop as its public page and the seller see it: identity, counts and reputation."""
+
+    shop_id: int
+    name: str
+    title: str | None
+    url: str | None
+    currency_code: str
+    icon_url: str | None
+    banner_url: str | None
+    is_vacation: bool
+    active_listing_count: int
+    digital_listing_count: int
+    sold_transaction_count: int
+    favorer_count: int
+    # None until the shop has reviews.
+    review_average: Decimal | None
+    review_count: int | None
+    created_at: datetime
+    ships_from_country: str | None
+    location_country: str | None
+    languages: tuple[str, ...]
+    accepts_custom_requests: bool
+
+
+@dataclass(frozen=True)
+class ListingImage:
+    # About 170 by 135 pixels, for lists and strips.
+    thumbnail_url: str
+    # 570 pixels wide, for cards.
+    url: str
+    alt_text: str | None
+
+
+@dataclass(frozen=True)
+class ListingDetails:
+    """A listing with what the Products screen shows. Views and favourites are Etsy's counts."""
+
+    listing_id: int
+    title: str
+    state: ListingState
+    quantity: int
+    price: MarketplaceMoney
+    url: str | None
+    image: ListingImage | None
+    views: int
+    favorer_count: int
+    tags: tuple[str, ...]
+    section_id: int | None
+    is_digital: bool
+    is_personalizable: bool
+    has_variations: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class ShopSection:
+    section_id: int
+    title: str
+    rank: int
+    active_listing_count: int
+
+
+@dataclass(frozen=True)
+class OrderLine:
+    transaction_id: int
+    listing_id: int | None
+    title: str
+    sku: str | None
+    quantity: int
+    unit_price: MarketplaceMoney
+    is_digital: bool
+    # When Etsy expects the item to ship (processing time after payment); None when unknown.
+    expected_ship_date: datetime | None
+
+
+@dataclass(frozen=True)
+class OrderShipment:
+    carrier: str
+    # A tracking number can locate the parcel and so the buyer: never in a repr or a log.
+    tracking_code: str = field(repr=False)
+    notified_at: datetime
+
+
+@dataclass(frozen=True)
+class OrderReceipt:
+    """An order as the Orders screen shows it.
+
+    Buyer data is minimised by the adapter before it reaches HTCO: only a display name made of
+    the first name and the last initial (`buyer_display_name`) is kept, and never in a repr or a
+    log. Email addresses, street addresses and messages are not read at all.
+    """
+
+    receipt_id: int
+    # Lower-case marketplace status: "paid", "completed", "open", "payment processing",
+    # "canceled", "fully refunded" or "partially refunded".
+    status: str
+    is_paid: bool
+    is_shipped: bool
+    created_at: datetime
+    updated_at: datetime
+    grand_total: MarketplaceMoney
+    subtotal: MarketplaceMoney
+    shipping_total: MarketplaceMoney
+    discount_total: MarketplaceMoney
+    lines: tuple[OrderLine, ...]
+    shipments: tuple[OrderShipment, ...]
+    buyer_display_name: str | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class ShopReview:
+    """A buyer's public review. The text is the buyer's words: never in a repr or a log."""
+
+    listing_id: int
+    rating: int
+    language: str | None
+    created_at: datetime
+    text: str | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class ShippingDestination:
+    # None with a region (for example "eu" or "non_eu") instead of one country.
+    country_code: str | None
+    region: str | None
+    first_item_cost: MarketplaceMoney
+    additional_item_cost: MarketplaceMoney
+    min_delivery_days: int | None
+    max_delivery_days: int | None
+    mail_class: str | None
+
+
+@dataclass(frozen=True)
+class ShippingProfile:
+    profile_id: int
+    title: str | None
+    origin_country: str
+    # "manual" or "calculated".
+    profile_type: str
+    destinations: tuple[ShippingDestination, ...]
+    upgrade_count: int
+
+
+@dataclass(frozen=True)
+class ReturnPolicy:
+    policy_id: int
+    accepts_returns: bool
+    accepts_exchanges: bool
+    # Days the buyer has to return; None when returns are not accepted.
+    return_deadline_days: int | None
+
+
+@dataclass(frozen=True)
+class ProductionPartner:
+    partner_id: int
+    name: str
+    location: str
 
 
 @dataclass(frozen=True)

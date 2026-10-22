@@ -35,6 +35,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from typing import Any, NoReturn
 
@@ -46,6 +47,8 @@ from opentelemetry import metrics
 from htco_application.marketplace import (
     AccessTokenProvider,
     Listing,
+    ListingDetails,
+    ListingImage,
     ListingState,
     MarketplaceAuthError,
     MarketplaceConflictError,
@@ -59,12 +62,22 @@ from htco_application.marketplace import (
     MarketplaceShop,
     MarketplaceUnavailableError,
     MarketplaceWriteRefusedError,
+    OrderLine,
+    OrderReceipt,
+    OrderShipment,
     Page,
+    ProductionPartner,
     QuotaDeferredError,
     QuotaSnapshot,
     Receipt,
     ReceiptAddressCheck,
     ReceiptLine,
+    ReturnPolicy,
+    ShippingDestination,
+    ShippingProfile,
+    ShopProfile,
+    ShopReview,
+    ShopSection,
 )
 
 ETSY_BASE_URL = "https://openapi.etsy.com/v3/application"
@@ -288,6 +301,170 @@ class EtsyAdapter:
             tokens=tokens,
         )
         return _parse("check_receipt_addresses", _address_check, body)
+
+    # --- Dashboard reads (the shop's live data on the dashboard) -----------------------------
+
+    async def get_shop_profile(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> ShopProfile:
+        """getShop with what the shop card shows: counts, reputation and identity."""
+        body = await self._request(
+            "GET",
+            "get_shop_profile",
+            shop_id,
+            f"/shops/{shop_id}",
+            {},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse("get_shop_profile", _shop_profile, body)
+
+    async def list_listing_details(
+        self,
+        shop_id: int,
+        *,
+        limit: int = MAX_PAGE_SIZE,
+        offset: int = 0,
+        urgent: bool = False,
+        tokens: AccessTokenProvider | None = None,
+    ) -> Page[ListingDetails]:
+        """getListingsByShop: active listings with their images (`listings_r`)."""
+        _check_page(limit, offset)
+        params: dict[str, str | int] = {
+            "state": ListingState.ACTIVE.value,
+            "includes": "Images",
+            "limit": limit,
+            "offset": offset,
+        }
+        body = await self._request(
+            "GET",
+            "list_listing_details",
+            shop_id,
+            f"/shops/{shop_id}/listings",
+            params,
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse(
+            "list_listing_details", lambda data: _page(data, _listing_details, offset), body
+        )
+
+    async def list_sections(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> tuple[ShopSection, ...]:
+        """getShopSections."""
+        body = await self._request(
+            "GET",
+            "list_sections",
+            shop_id,
+            f"/shops/{shop_id}/sections",
+            {},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse("list_sections", lambda data: _results(data, _section), body)
+
+    async def list_order_receipts(  # noqa: PLR0913 - the window, the page and the token source
+        self,
+        shop_id: int,
+        *,
+        min_created: datetime,
+        limit: int = MAX_PAGE_SIZE,
+        offset: int = 0,
+        urgent: bool = False,
+        tokens: AccessTokenProvider | None = None,
+    ) -> Page[OrderReceipt]:
+        """getShopReceipts created since `min_created`, newest first (`transactions_r`). Buyer
+        data is minimised here: only a display name is kept (see `OrderReceipt`)."""
+        _check_page(limit, offset)
+        params: dict[str, str | int] = {
+            "min_created": _epoch(min_created, "min_created"),
+            "sort_on": "created",
+            "sort_order": "desc",
+            "limit": limit,
+            "offset": offset,
+        }
+        body = await self._request(
+            "GET",
+            "list_order_receipts",
+            shop_id,
+            f"/shops/{shop_id}/receipts",
+            params,
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse("list_order_receipts", lambda data: _page(data, _order_receipt, offset), body)
+
+    async def list_reviews(
+        self,
+        shop_id: int,
+        *,
+        limit: int = MAX_PAGE_SIZE,
+        offset: int = 0,
+        urgent: bool = False,
+        tokens: AccessTokenProvider | None = None,
+    ) -> Page[ShopReview]:
+        """getReviewsByShop, newest first."""
+        _check_page(limit, offset)
+        body = await self._request(
+            "GET",
+            "list_reviews",
+            shop_id,
+            f"/shops/{shop_id}/reviews",
+            {"limit": limit, "offset": offset},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse("list_reviews", lambda data: _page(data, _review, offset), body)
+
+    async def list_shipping_profiles(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> tuple[ShippingProfile, ...]:
+        """getShopShippingProfiles (`shops_r`)."""
+        body = await self._request(
+            "GET",
+            "list_shipping_profiles",
+            shop_id,
+            f"/shops/{shop_id}/shipping-profiles",
+            {},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse(
+            "list_shipping_profiles", lambda data: _results(data, _shipping_profile), body
+        )
+
+    async def list_return_policies(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> tuple[ReturnPolicy, ...]:
+        """getShopReturnPolicies."""
+        body = await self._request(
+            "GET",
+            "list_return_policies",
+            shop_id,
+            f"/shops/{shop_id}/policies/return",
+            {},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse("list_return_policies", lambda data: _results(data, _return_policy), body)
+
+    async def list_production_partners(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> tuple[ProductionPartner, ...]:
+        """getShopProductionPartners (`shops_r`)."""
+        body = await self._request(
+            "GET",
+            "list_production_partners",
+            shop_id,
+            f"/shops/{shop_id}/production-partners",
+            {},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse(
+            "list_production_partners", lambda data: _results(data, _production_partner), body
+        )
 
     # --- One call: write guard, floor, throttle, retries ------------------------------------
 
@@ -736,4 +913,243 @@ def _listing(value: object) -> Listing:
         price=_money(data["price"]),
         url=_optional_str(data, "url"),
         updated_at=_timestamp(data, "updated_timestamp"),
+    )
+
+
+# --- Dashboard payloads ---------------------------------------------------------------------------
+
+
+def _results[ItemT](body: object, item: Callable[[Any], ItemT]) -> tuple[ItemT, ...]:
+    data = _object(body)
+    results = data["results"]
+    if not isinstance(results, list):
+        raise TypeError("results must be a list")
+    return tuple(item(entry) for entry in results)
+
+
+def _list_of(data: Mapping[str, Any], key: str) -> list[Any]:
+    value = data.get(key) or []
+    if not isinstance(value, list):
+        raise TypeError(f"{key} must be a list")
+    return value
+
+
+def _strings(data: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    value = _list_of(data, key)
+    if not all(isinstance(v, str) for v in value):
+        raise TypeError(f"{key} must be a list of strings")
+    return tuple(value)
+
+
+def _optional_bool(data: Mapping[str, Any], key: str) -> bool:
+    return False if data.get(key) is None else _bool(data, key)
+
+
+def _optional_timestamp(data: Mapping[str, Any], key: str) -> datetime | None:
+    return None if data.get(key) is None else _timestamp(data, key)
+
+
+def _decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TypeError("expected a number")
+    return Decimal(str(value))
+
+
+def _text(data: Mapping[str, Any], key: str) -> str | None:
+    """An optional string; blank counts as missing."""
+    value = _optional_str(data, key)
+    return value if value is not None and value.strip() else None
+
+
+def _shop_profile(body: object) -> ShopProfile:
+    data = _object(body)
+    return ShopProfile(
+        shop_id=_int(data, "shop_id"),
+        name=_str(data, "shop_name"),
+        title=_text(data, "title"),
+        url=_text(data, "url"),
+        currency_code=_str(data, "currency_code"),
+        icon_url=_text(data, "icon_url_fullxfull"),
+        banner_url=_text(data, "image_url_760x100"),
+        is_vacation=_bool(data, "is_vacation"),
+        active_listing_count=_int(data, "listing_active_count"),
+        digital_listing_count=_optional_int(data, "digital_listing_count") or 0,
+        sold_transaction_count=_int(data, "transaction_sold_count"),
+        favorer_count=_optional_int(data, "num_favorers") or 0,
+        review_average=_decimal(data.get("review_average")),
+        review_count=_optional_int(data, "review_count"),
+        created_at=_timestamp(data, "created_timestamp"),
+        ships_from_country=_text(data, "shipping_from_country_iso"),
+        location_country=_text(data, "shop_location_country_iso"),
+        languages=_strings(data, "languages"),
+        accepts_custom_requests=_optional_bool(data, "accepts_custom_requests"),
+    )
+
+
+def _first_image(data: Mapping[str, Any]) -> ListingImage | None:
+    images = sorted(
+        (_object(image) for image in _list_of(data, "images")),
+        key=lambda image: _int(image, "rank"),
+    )
+    if not images:
+        return None
+    image = images[0]
+    return ListingImage(
+        thumbnail_url=_str(image, "url_170x135"),
+        url=_str(image, "url_570xN"),
+        alt_text=_text(image, "alt_text"),
+    )
+
+
+def _listing_details(value: object) -> ListingDetails:
+    data = _object(value)
+    return ListingDetails(
+        listing_id=_int(data, "listing_id"),
+        title=_str(data, "title"),
+        state=ListingState(_str(data, "state")),
+        quantity=_int(data, "quantity"),
+        price=_money(data["price"]),
+        url=_text(data, "url"),
+        image=_first_image(data),
+        views=_optional_int(data, "views") or 0,
+        favorer_count=_optional_int(data, "num_favorers") or 0,
+        tags=_strings(data, "tags"),
+        section_id=_optional_int(data, "shop_section_id"),
+        is_digital=_optional_str(data, "listing_type") == "download",
+        is_personalizable=_optional_bool(data, "is_personalizable"),
+        has_variations=_optional_bool(data, "has_variations"),
+        created_at=_timestamp(data, "created_timestamp"),
+        updated_at=_timestamp(data, "updated_timestamp"),
+    )
+
+
+def _section(value: object) -> ShopSection:
+    data = _object(value)
+    return ShopSection(
+        section_id=_int(data, "shop_section_id"),
+        title=_str(data, "title"),
+        rank=_int(data, "rank"),
+        active_listing_count=_int(data, "active_listing_count"),
+    )
+
+
+def _display_name(value: object) -> str | None:
+    """First name and last initial: all the Orders screen needs to tell buyers apart."""
+    if not isinstance(value, str):
+        return None
+    words = value.split()
+    if not words:
+        return None
+    if len(words) == 1:
+        return words[0]
+    return f"{words[0]} {words[-1][0]}."
+
+
+def _order_line(value: object) -> OrderLine:
+    data = _object(value)
+    return OrderLine(
+        transaction_id=_int(data, "transaction_id"),
+        listing_id=_optional_int(data, "listing_id"),
+        title=_optional_str(data, "title") or "",
+        sku=_text(data, "sku"),
+        quantity=_int(data, "quantity"),
+        unit_price=_money(data["price"]),
+        is_digital=_optional_bool(data, "is_digital"),
+        expected_ship_date=_optional_timestamp(data, "expected_ship_date"),
+    )
+
+
+def _shipment(value: object) -> OrderShipment:
+    data = _object(value)
+    return OrderShipment(
+        carrier=_optional_str(data, "carrier_name") or "",
+        tracking_code=_optional_str(data, "tracking_code") or "",
+        notified_at=_timestamp(data, "shipment_notification_timestamp"),
+    )
+
+
+def _order_receipt(value: object) -> OrderReceipt:
+    """Reads only what the Orders screen shows. The buyer's email, address and messages are never
+    read, and the name only to make the display name."""
+    data = _object(value)
+    return OrderReceipt(
+        receipt_id=_int(data, "receipt_id"),
+        status=_str(data, "status").lower(),
+        is_paid=_bool(data, "is_paid"),
+        is_shipped=_bool(data, "is_shipped"),
+        created_at=_timestamp(data, "created_timestamp"),
+        updated_at=_timestamp(data, "updated_timestamp"),
+        grand_total=_money(data["grandtotal"]),
+        subtotal=_money(data["subtotal"]),
+        shipping_total=_money(data["total_shipping_cost"]),
+        discount_total=_money(data["discount_amt"]),
+        lines=tuple(_order_line(entry) for entry in _list_of(data, "transactions")),
+        shipments=tuple(_shipment(entry) for entry in _list_of(data, "shipments")),
+        buyer_display_name=_display_name(data.get("name")),
+    )
+
+
+_STARS = range(1, 6)
+
+
+def _review(value: object) -> ShopReview:
+    data = _object(value)
+    rating = _int(data, "rating")
+    if rating not in _STARS:
+        raise ValueError("rating must be between 1 and 5")
+    return ShopReview(
+        listing_id=_int(data, "listing_id"),
+        rating=rating,
+        language=_text(data, "language"),
+        created_at=_timestamp(data, "created_timestamp"),
+        text=_text(data, "review"),
+    )
+
+
+def _destination(value: object) -> ShippingDestination:
+    data = _object(value)
+    region = _text(data, "destination_region")
+    return ShippingDestination(
+        country_code=_text(data, "destination_country_iso"),
+        region=None if region == "none" else region,
+        first_item_cost=_money(data["primary_cost"]),
+        additional_item_cost=_money(data["secondary_cost"]),
+        min_delivery_days=_optional_int(data, "min_delivery_days"),
+        max_delivery_days=_optional_int(data, "max_delivery_days"),
+        mail_class=_text(data, "mail_class"),
+    )
+
+
+def _shipping_profile(value: object) -> ShippingProfile:
+    data = _object(value)
+    return ShippingProfile(
+        profile_id=_int(data, "shipping_profile_id"),
+        title=_text(data, "title"),
+        origin_country=_str(data, "origin_country_iso"),
+        profile_type=_text(data, "profile_type") or "manual",
+        destinations=tuple(
+            _destination(entry) for entry in _list_of(data, "shipping_profile_destinations")
+        ),
+        upgrade_count=len(_list_of(data, "shipping_profile_upgrades")),
+    )
+
+
+def _return_policy(value: object) -> ReturnPolicy:
+    data = _object(value)
+    return ReturnPolicy(
+        policy_id=_int(data, "return_policy_id"),
+        accepts_returns=_bool(data, "accepts_returns"),
+        accepts_exchanges=_bool(data, "accepts_exchanges"),
+        return_deadline_days=_optional_int(data, "return_deadline"),
+    )
+
+
+def _production_partner(value: object) -> ProductionPartner:
+    data = _object(value)
+    return ProductionPartner(
+        partner_id=_int(data, "production_partner_id"),
+        name=_str(data, "partner_name"),
+        location=_optional_str(data, "location") or "",
     )
