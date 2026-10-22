@@ -114,6 +114,21 @@ class ShopDataCache:
         Raises the load's `MarketplaceError` when no usable value exists, or immediately (no
         call) during the cooldown after a failure.
         """
+
+        async def undated() -> tuple[ValueT, datetime | None]:
+            return await load(), None
+
+        return await self.get_dated(key, undated, policy)
+
+    async def get_dated[ValueT](
+        self,
+        key: CacheKey,
+        load: Callable[[], Awaitable[tuple[ValueT, datetime | None]]],
+        policy: CachePolicy,
+    ) -> Fetched[ValueT]:
+        """As `get`, for a value built from older data: the load also answers when that data was
+        fetched (None: now), and freshness, staleness and expiry count from then (Codex review of
+        #51)."""
         now = self._clock()
         self._sweep(now)
         entry = self._entries.get(key)
@@ -152,13 +167,13 @@ class ShopDataCache:
     async def _load[ValueT](
         self,
         key: CacheKey,
-        load: Callable[[], Awaitable[ValueT]],
+        load: Callable[[], Awaitable[tuple[ValueT, datetime | None]]],
         policy: CachePolicy,
         epoch: int,
     ) -> tuple[ValueT, datetime]:
         flight = asyncio.current_task()
         try:
-            value = await load()
+            value, dated = await load()
         except MarketplaceError as error:
             if self._epochs.get(key.shop_id, 0) == epoch:
                 self._failures[key] = _Failure(self._clock(), error)
@@ -168,14 +183,16 @@ class ShopDataCache:
         finally:
             if self._flights.get(key) is flight:
                 del self._flights[key]
-        fetched_at = self._clock()
+        now = self._clock()
+        fetched_at = now if dated is None else min(dated, now)
         if self._epochs.get(key.shop_id, 0) != epoch:
             return value, fetched_at  # forgotten meanwhile: answer the waiters, keep nothing
         self._drop(key)
         self._entries[key] = _Entry(value, fetched_at, policy)
         self._failures.pop(key, None)
+        remaining = policy.max_stale - (now - fetched_at)
         self._timers[key] = asyncio.get_running_loop().call_later(
-            policy.max_stale.total_seconds(), self._expire, key
+            max(0.0, remaining.total_seconds()), self._expire, key
         )
         return value, fetched_at
 

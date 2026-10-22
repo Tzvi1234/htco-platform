@@ -206,7 +206,8 @@ class OrderReceipt:
 
     Buyer data is minimised by the adapter before it reaches HTCO: only a display name made of
     the first name and the last initial (`buyer_display_name`) is kept, and never in a repr or a
-    log. Email addresses, street addresses and messages are not read at all.
+    log. Of the address only the country is kept (`country_code`), for aggregate statistics.
+    Email addresses, street addresses and messages are not read at all.
     """
 
     receipt_id: int
@@ -224,6 +225,8 @@ class OrderReceipt:
     lines: tuple[OrderLine, ...]
     shipments: tuple[OrderShipment, ...]
     buyer_display_name: str | None = field(default=None, repr=False)
+    # The destination country (ISO 3166-1 alpha-2); no other part of the address is read.
+    country_code: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)

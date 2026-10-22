@@ -32,8 +32,11 @@ from htco_application.marketplace import (
     ListingDetails,
     MarketplaceAuthError,
     MarketplaceError,
+    MarketplaceMoney,
     MarketplacePermissionError,
     MarketplaceRateLimitedError,
+    MarketplaceUnavailableError,
+    OrderLine,
     OrderReceipt,
     Page,
     ProductionPartner,
@@ -51,14 +54,47 @@ from htco_domain.integrations import IntegrationStatus
 
 _log = logging.getLogger(__name__)
 
-# Orders and sales cover the last 30 days (the Orders screen's window; older orders arrive with
-# the Phase 5 store).
+# Sales (the overview, Home) cover the last 30 days; the Orders screen chooses a period.
 SALES_WINDOW_DAYS = 30
-# Pages of 100 read per load at most: 500 orders, 300 listings. Beyond that the result says
-# `partial` / `truncated`.
-MAX_RECEIPT_PAGES = 5
+# Pages of 100 read per load at most: 300 listings; receipts by period (RECEIPT_CAPS). Beyond
+# that the result says `partial` / `truncated`.
 MAX_LISTING_PAGES = 3
 PAGE = 100
+
+
+class OrderPeriod(StrEnum):
+    """The Orders screen's periods. The longer ones read Etsy page by page, one page after the
+    other, up to a cap (`RECEIPT_CAPS`)."""
+
+    DAYS_30 = "30d"
+    DAYS_90 = "90d"
+    MONTHS_12 = "12m"
+    ALL = "all"
+
+
+# Days back for the periods counted in days; 12 months are calendar months (`_period_start`).
+_PERIOD_DAYS: dict[OrderPeriod, int] = {
+    OrderPeriod.DAYS_30: SALES_WINDOW_DAYS,
+    OrderPeriod.DAYS_90: 90,
+}
+# Receipts read per load at most (pages of 100): up to 20 sequential calls for the long periods,
+# well inside Etsy's 10 a second and 10,000 a day.
+RECEIPT_CAPS: dict[OrderPeriod, int] = {
+    OrderPeriod.DAYS_30: 500,
+    OrderPeriod.DAYS_90: 1000,
+    OrderPeriod.MONTHS_12: 2000,
+    OrderPeriod.ALL: 2000,
+}
+# The cache resource of each period's receipts ("receipts" is the 30-day window the overview
+# shares).
+_RECEIPTS: dict[OrderPeriod, str] = {
+    OrderPeriod.DAYS_30: "receipts",
+    OrderPeriod.DAYS_90: "receipts:90d",
+    OrderPeriod.MONTHS_12: "receipts:12m",
+    OrderPeriod.ALL: "receipts:all",
+}
+# The statistics' basis: sale facts of the whole history, without buyer data.
+_STATS = "stats"
 REVIEW_ITEMS = 25
 TOP_LISTINGS = 5
 MAX_UTC_OFFSET_MINUTES = 14 * 60
@@ -69,6 +105,14 @@ POLICIES = {
     "profile": CachePolicy(ttl=timedelta(minutes=5), max_stale=timedelta(hours=6)),
     "listings": CachePolicy(ttl=timedelta(minutes=5), max_stale=timedelta(hours=6)),
     "receipts": CachePolicy(ttl=timedelta(minutes=2), max_stale=timedelta(hours=1)),
+    # Longer periods change little within minutes and cost up to 20 calls a load; they carry
+    # buyer names too, so they also leave memory after one hour.
+    "receipts:90d": CachePolicy(ttl=timedelta(minutes=30), max_stale=timedelta(hours=1)),
+    "receipts:12m": CachePolicy(ttl=timedelta(minutes=30), max_stale=timedelta(hours=1)),
+    "receipts:all": CachePolicy(ttl=timedelta(minutes=30), max_stale=timedelta(hours=1)),
+    # The statistics' basis holds no buyer data (time, totals, items, country), so it is kept
+    # longer: fresh for 6 hours, standing in up to Etsy's 24 hours.
+    _STATS: CachePolicy(ttl=timedelta(hours=6), max_stale=timedelta(hours=24)),
     "reviews": CachePolicy(ttl=timedelta(minutes=15), max_stale=timedelta(hours=6)),
     "shipping": CachePolicy(ttl=timedelta(minutes=30), max_stale=timedelta(hours=6)),
 }
@@ -160,7 +204,7 @@ class ShopDataSource(Protocol):
         self,
         shop_id: int,
         *,
-        min_created: datetime,
+        min_created: datetime | None,
         limit: int = PAGE,
         offset: int = 0,
         urgent: bool = False,
@@ -312,13 +356,17 @@ class OrderView:
 class OrdersPage:
     shop_id: uuid.UUID
     freshness: Freshness
+    period: OrderPeriod
+    # The period's first moment; for all time, when the shop opened.
     window_start: datetime
     items: tuple[OrderView, ...]
     # Orders matching the filter (before paging).
     total: int
     counts: dict[OrderFilter, int]
     buyer_details: bool
+    # True: the period had more orders than `cap`; the newest `cap` are listed.
     partial: bool
+    cap: int
 
 
 @dataclass(frozen=True)
@@ -347,6 +395,57 @@ class ShopReviews:
     distribution: dict[int, int]
     sample_size: int
     items: tuple[ShopReview, ...]
+
+
+@dataclass(frozen=True)
+class MonthlySales:
+    # The first day of the month, in the caller's time zone.
+    month: date
+    orders: int
+    revenue: Decimal
+
+
+@dataclass(frozen=True)
+class CountryOrders:
+    # ISO 3166-1 alpha-2 of the orders' destination; country only, never more of the address.
+    country_code: str
+    orders: int
+
+
+@dataclass(frozen=True)
+class AllTimeSales:
+    """Aggregates of the shop's whole order history as read (up to the all-time cap). Sales are
+    paid orders that were not cancelled or fully refunded; revenue is their grand total (items,
+    shipping and tax, before Etsy's fees) in the shop's currency. No buyer data."""
+
+    currency: str
+    orders: int
+    units: int
+    revenue: Decimal
+    # Revenue per sale; None without sales.
+    average_order_value: Decimal | None
+    # One per month, oldest first, from the first sale's month to this month (none without sales).
+    monthly: tuple[MonthlySales, ...]
+    best_month: MonthlySales | None
+    # Top products by units sold.
+    top_products: tuple[TopListing, ...]
+    # Sales per destination country, most first; orders without a country are left out.
+    countries: tuple[CountryOrders, ...]
+    # The oldest order read (any state): where the data starts.
+    first_order_at: datetime | None
+    receipts_read: int
+    # True: the shop had more orders than the cap; the figures cover the newest `receipts_read`.
+    partial: bool
+
+
+@dataclass(frozen=True)
+class ShopStats:
+    shop_id: uuid.UUID
+    freshness: Freshness
+    # Opened (`created_at`), total sales, reviews, favourites and listings, from Etsy's counts.
+    profile: ShopProfile
+    # None when the orders could not be read.
+    sales: AllTimeSales | None
 
 
 @dataclass(frozen=True)
@@ -389,27 +488,36 @@ async def shop_overview(
     )
 
 
-async def shop_orders(  # noqa: PLR0913 - the shop, the caller, the filter and the page
+async def shop_orders(  # noqa: PLR0913 - the shop, the caller, the period, filter and page
     dashboard: ShopDashboard,
     auth: AuthContext,
     shop_id: uuid.UUID,
     *,
     now: datetime,
+    period: OrderPeriod = OrderPeriod.DAYS_30,
     state: OrderFilter | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> OrdersPage:
-    """The Orders screen: the last 30 days of orders, newest first, live from the marketplace."""
+    """The Orders screen: the period's orders (30 days by default), newest first, live from the
+    marketplace. Completed and shipped orders are included like any other state."""
     if not 1 <= limit <= PAGE or offset < 0:
         raise ValueError("limit must be between 1 and 100 and offset not negative")
     opened = await _open(dashboard, auth, shop_id, Capability.VIEW_ORDERS, now)
     contact = _sees_buyer_contact(opened, auth, now)
-    window = await opened.get("receipts", opened.receipts)
-    # The load reads one day more (for the callers' time zones); the list keeps to 30 days.
-    since = now - timedelta(days=SALES_WINDOW_DAYS)
-    orders = [
-        _order_view(r, now, contact=contact) for r in window.value.receipts if r.created_at >= since
-    ]
+    window = await opened.get(_RECEIPTS[period], opened.history(period))
+    parts: list[Fetched[object]] = [window]
+    start = _period_start(period, now)
+    if start is None:
+        profile = await opened.get("profile", opened.profile)
+        parts.append(profile)
+        since = profile.value.created_at
+        listed = window.value.receipts
+    else:
+        # The load reads one day more (for the callers' time zones); the list keeps to the period.
+        since = start
+        listed = tuple(r for r in window.value.receipts if r.created_at >= since)
+    orders = [_order_view(r, now, contact=contact) for r in listed]
     counts = Counter[OrderFilter]()
     for order in orders:
         counts[OrderFilter(order.state.value)] += 1
@@ -418,13 +526,45 @@ async def shop_orders(  # noqa: PLR0913 - the shop, the caller, the filter and t
     matching = [o for o in orders if _matches(o, state)]
     return OrdersPage(
         shop_id=shop_id,
-        freshness=_freshness(window),
+        freshness=_freshness(*parts),
+        period=period,
         window_start=since,
         items=tuple(matching[offset : offset + limit]),
         total=len(matching),
         counts={f: counts.get(f, 0) for f in OrderFilter},
         buyer_details=contact,
         partial=window.value.partial,
+        cap=RECEIPT_CAPS[period],
+    )
+
+
+async def shop_stats(
+    dashboard: ShopDashboard,
+    auth: AuthContext,
+    shop_id: uuid.UUID,
+    *,
+    now: datetime,
+    utc_offset_minutes: int = 0,
+) -> ShopStats:
+    """The Shops screen's Statistics: Etsy's counts since the shop opened and the aggregates of
+    the whole order history (months in the caller's time zone). Aggregates only, no buyer data:
+    every role that sees the shop may see them."""
+    _check_offset(utc_offset_minutes)
+    opened = await _open(dashboard, auth, shop_id, Capability.VIEW_OVERVIEW, now)
+    profile = await opened.get("profile", opened.profile)
+    history: Fetched[_History] | None
+    try:
+        history = await opened.get_dated(_STATS, opened.history_facts)
+    except ShopDataUnavailableError, ShopDataScopeMissingError:
+        history = None
+    sales = None
+    if history is not None:
+        sales = _all_time(history.value, profile.value.currency_code, now, utc_offset_minutes)
+    return ShopStats(
+        shop_id=shop_id,
+        freshness=_freshness(profile, *([] if history is None else [history])),
+        profile=profile.value,
+        sales=sales,
     )
 
 
@@ -489,8 +629,26 @@ async def shop_shipping(
 
 @dataclass(frozen=True)
 class _ReceiptWindow:
-    since: datetime
+    # None: the whole history.
+    since: datetime | None
     receipts: tuple[OrderReceipt, ...]
+    partial: bool
+
+
+@dataclass(frozen=True)
+class _SaleFact:
+    """What the statistics need of one receipt: no buyer name, no tracking, country only."""
+
+    created_at: datetime
+    is_sale: bool
+    total: MarketplaceMoney
+    lines: tuple[OrderLine, ...]
+    country_code: str | None
+
+
+@dataclass(frozen=True)
+class _History:
+    facts: tuple[_SaleFact, ...]
     partial: bool
 
 
@@ -520,10 +678,18 @@ class _Opened:
     async def get[ValueT](
         self, resource: str, load: Callable[[], Awaitable[ValueT]]
     ) -> Fetched[ValueT]:
+        async def undated() -> tuple[ValueT, datetime | None]:
+            return await load(), None
+
+        return await self.get_dated(resource, undated)
+
+    async def get_dated[ValueT](
+        self, resource: str, load: Callable[[], Awaitable[tuple[ValueT, datetime | None]]]
+    ) -> Fetched[ValueT]:
         integration = self.integration
         key = CacheKey(integration.shop_id, integration.generation, resource)
         try:
-            fetched = await self.dashboard.cache.get(key, load, POLICIES[resource])
+            fetched = await self.dashboard.cache.get_dated(key, load, POLICIES[resource])
         except MarketplaceAuthError:
             raise ShopNotConnectedError(f"shop {integration.shop_id} is not connected") from None
         except MarketplacePermissionError:
@@ -554,11 +720,24 @@ class _Opened:
         return await self.dashboard.source.get_shop_profile(self.etsy, tokens=self.tokens)
 
     async def receipts(self) -> _ReceiptWindow:
-        # One day more than the window, so every caller's local "30 days" is covered.
-        since = self.now - timedelta(days=SALES_WINDOW_DAYS + 1)
+        """The last 30 days (the overview's and the default Orders window)."""
+        return await self._read_receipts(OrderPeriod.DAYS_30)
+
+    def history(self, period: OrderPeriod) -> Callable[[], Awaitable[_ReceiptWindow]]:
+        async def load() -> _ReceiptWindow:
+            return await self._read_receipts(period)
+
+        return load
+
+    async def _read_receipts(self, period: OrderPeriod) -> _ReceiptWindow:
+        start = _period_start(period, self.now)
+        # One day more than the period, so every caller's local window is covered.
+        since = None if start is None else start - timedelta(days=1)
         found: list[OrderReceipt] = []
         offset: int | None = 0
-        for _ in range(MAX_RECEIPT_PAGES):
+        # One page after the other (never in parallel): the adapter paces each call and waits
+        # out a 429 before the next.
+        for _ in range(RECEIPT_CAPS[period] // PAGE):
             if offset is None:
                 break
             page = await self.dashboard.source.list_order_receipts(
@@ -568,6 +747,26 @@ class _Opened:
             offset = page.next_offset
         newest_first = sorted(found, key=lambda r: (r.created_at, r.receipt_id), reverse=True)
         return _ReceiptWindow(since=since, receipts=tuple(newest_first), partial=offset is not None)
+
+    async def history_facts(self) -> tuple[_History, datetime]:
+        """The statistics' basis, from the all-time receipts (shared with the Orders screen's
+        All time under their own key), reduced to sale facts without buyer data."""
+        resource = _RECEIPTS[OrderPeriod.ALL]
+        integration = self.integration
+        key = CacheKey(integration.shop_id, integration.generation, resource)
+        fetched = await self.dashboard.cache.get(
+            key, self.history(OrderPeriod.ALL), POLICIES[resource]
+        )
+        if fetched.stale:
+            # Never stamp old receipts as a fresh basis: the basis' own stale copy stands in.
+            raise MarketplaceUnavailableError("the order history is not current")
+        if fetched.loaded:
+            await self._record_success()
+        window = fetched.value
+        history = _History(facts=tuple(_fact(r) for r in window.receipts), partial=window.partial)
+        # The receipts' fetch time, not now: a basis built from receipts cached minutes ago is
+        # that old (Codex review of #51).
+        return history, fetched.fetched_at
 
     async def listings(self) -> _Catalog:
         found: list[ListingDetails] = []
@@ -751,7 +950,7 @@ def _summarise(
             units[day] += sum(line.quantity for line in receipt.lines)
             if receipt.grand_total.currency_code == currency:
                 revenue[day] += receipt.grand_total.as_decimal()
-            _count_listings(top, receipt, currency)
+            _count_listings(top, receipt.lines, currency)
             if order_state(receipt) is OrderState.PAID and _needs_shipping(receipt):
                 awaiting += 1
                 ship_by = _ship_by(receipt)
@@ -786,8 +985,8 @@ class _Tally:
     revenue: Decimal = Decimal(0)
 
 
-def _count_listings(top: dict[int, _Tally], receipt: OrderReceipt, currency: str) -> None:
-    for line in receipt.lines:
+def _count_listings(top: dict[int, _Tally], lines: tuple[OrderLine, ...], currency: str) -> None:
+    for line in lines:
         if line.listing_id is None:
             continue
         tally = top.setdefault(line.listing_id, _Tally(line.title))
@@ -802,3 +1001,94 @@ def _top(top: dict[int, _Tally]) -> tuple[TopListing, ...]:
         key=lambda t: (-t.units, -t.revenue, t.listing_id or 0),
     )
     return tuple(ranked[:TOP_LISTINGS])
+
+
+# --- Statistics ----------------------------------------------------------------------------------
+
+
+def _fact(receipt: OrderReceipt) -> _SaleFact:
+    return _SaleFact(
+        created_at=receipt.created_at,
+        is_sale=_is_sale(receipt),
+        total=receipt.grand_total,
+        lines=receipt.lines,
+        country_code=receipt.country_code,
+    )
+
+
+def _months(first: date, last: date) -> list[date]:
+    months = []
+    month = first
+    while month <= last:
+        months.append(month)
+        month = date(month.year + month.month // 12, month.month % 12 + 1, 1)
+    return months
+
+
+def _average(revenue: Decimal, priced: list[_SaleFact]) -> Decimal | None:
+    if not priced:
+        return None
+    exponent = priced[0].total.as_decimal().as_tuple().exponent
+    places = exponent if isinstance(exponent, int) else -2
+    return (revenue / len(priced)).quantize(Decimal(1).scaleb(places))
+
+
+def _all_time(
+    history: _History, currency: str, now: datetime, utc_offset_minutes: int
+) -> AllTimeSales:
+    offset = timedelta(minutes=utc_offset_minutes)
+
+    def month_of(moment: datetime) -> date:
+        return (moment.astimezone(UTC) + offset).date().replace(day=1)
+
+    sales = [fact for fact in history.facts if fact.is_sale]
+    priced = [fact for fact in sales if fact.total.currency_code == currency]
+    revenue = sum((fact.total.as_decimal() for fact in priced), Decimal(0))
+    monthly: tuple[MonthlySales, ...] = ()
+    if sales:
+        months = _months(min(month_of(f.created_at) for f in sales), month_of(now))
+        orders = dict.fromkeys(months, 0)
+        takings = dict.fromkeys(months, Decimal(0))
+        for fact in sales:
+            month = month_of(fact.created_at)
+            if month in orders:
+                orders[month] += 1
+                if fact.total.currency_code == currency:
+                    takings[month] += fact.total.as_decimal()
+        monthly = tuple(MonthlySales(m, orders[m], takings[m]) for m in months)
+    top: dict[int, _Tally] = {}
+    for fact in sales:
+        _count_listings(top, fact.lines, currency)
+    countries = Counter(fact.country_code for fact in sales if fact.country_code)
+    return AllTimeSales(
+        currency=currency,
+        orders=len(sales),
+        units=sum(line.quantity for fact in sales for line in fact.lines),
+        revenue=revenue,
+        average_order_value=_average(revenue, priced),
+        monthly=monthly,
+        best_month=max(
+            (m for m in monthly if m.orders), key=lambda m: (m.revenue, m.orders), default=None
+        ),
+        top_products=_top(top),
+        countries=tuple(
+            CountryOrders(code, n)
+            for code, n in sorted(countries.items(), key=lambda item: (-item[1], item[0]))
+        ),
+        first_order_at=min((fact.created_at for fact in history.facts), default=None),
+        receipts_read=len(history.facts),
+        partial=history.partial,
+    )
+
+
+def _period_start(period: OrderPeriod, now: datetime) -> datetime | None:
+    """The period's first moment; None for all time. Twelve months are calendar months, from 29
+    February to 28 February (Codex review of #51)."""
+    if period is OrderPeriod.ALL:
+        return None
+    if period is OrderPeriod.MONTHS_12:
+        try:
+            return now.replace(year=now.year - 1)
+        except ValueError:  # 29 February
+            return now.replace(year=now.year - 1, day=28)
+    return now - timedelta(days=_PERIOD_DAYS[period])

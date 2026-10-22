@@ -63,8 +63,9 @@ Phase 4 (slice 4.6) shows every read our granted scopes (`shops_r`, `transaction
 
 | Etsy endpoint | Scope | Screen / panel | Now or deferred |
 |---|---|---|---|
-| `getShop` | API key | Shops: shop card tiles (favourites, rating) and freshness; Home: shop card; Customers: review average and count | Now |
-| `getShopReceipts` (30 days, newest first) | `transactions_r` | Orders (live view); Home: Revenue and Orders today, 7-day orders; Shops: orders and revenue today; Shipping: awaiting and shipped orders | Now (read-through); exactly-once ingest, history and webhooks in Phase 5 |
+| `getShop` | API key | Shops: shop card tiles (favourites, rating) and freshness, the Statistics tab (opened, total sales, reviews, favourites, listings); Home: shop card; Customers: review average and count | Now |
+| `getShopReceipts` (30 days, newest first) | `transactions_r` | Orders (live view, default period); Home: Revenue and Orders today, 7-day orders; Shops: orders and revenue today; Shipping: awaiting and shipped orders | Now (read-through); exactly-once ingest and webhooks in Phase 5 |
+| `getShopReceipts` (90 days, 12 months, all time; pages of 100 in turn, up to 1,000 or 2,000) | `transactions_r` | Orders: the period selector; Shops: the Statistics tab (revenue, orders per month, best month, top products, countries) | Now (read-through, capped); the full history from the Phase 5 store |
 | Receipt `transactions` (embedded) | `transactions_r` | Orders: items, ship-by dates; Home: top listings by units | Now |
 | Receipt `shipments` (embedded) | `transactions_r` | Orders and Shipping: carrier, shipped date; tracking number for buyer-contact roles | Now |
 | `getListingsByShop` (`active`, `includes=Images`) | `listings_r` | Products: catalog and details; Shops: top listings strip | Now |
@@ -79,7 +80,7 @@ Phase 4 (slice 4.6) shows every read our granted scopes (`shops_r`, `transaction
 | `getPayments`, `getShopPaymentAccountLedgerEntries` | `transactions_r` | Finance overview and ledger | Deferred to Phase 13: allowed by our scope, but meaningful only with fee classification, payout matching and supplier costs |
 | Webhooks (`order.*`, `listing.*`, `inventory.*`) | app setting | Live updates instead of the 2-minute cache | Phase 5 |
 | `updateShopReceipt`, `createReceiptShipment`, any listing or shop write | `*_w` | — | Never without the owner's approval; Phases 6 and 12 |
-| Buyer email and address (`buyer_email`, `first_line` …) | `transactions_r` (address hidden for Israeli keys) | — | Not read: only a display name (first name, last initial) for Owner, Admin, Operations and Support |
+| Buyer email and address (`buyer_email`, `first_line` …) | `transactions_r` (address hidden for Israeli keys) | — | Not read: only a display name (first name, last initial) for Owner, Admin, Operations and Support, and the destination country (`country_iso`) for the statistics' aggregate countries mix |
 
 ## Rules we keep (API Terms, 2026-08-18)
 

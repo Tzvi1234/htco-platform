@@ -368,17 +368,20 @@ class EtsyAdapter:
         self,
         shop_id: int,
         *,
-        min_created: datetime,
+        min_created: datetime | None,
         limit: int = MAX_PAGE_SIZE,
         offset: int = 0,
         urgent: bool = False,
         tokens: AccessTokenProvider | None = None,
     ) -> Page[OrderReceipt]:
-        """getShopReceipts created since `min_created`, newest first (`transactions_r`). Buyer
-        data is minimised here: only a display name is kept (see `OrderReceipt`)."""
+        """getShopReceipts created since `min_created` (None: the whole history), newest first
+        (`transactions_r`), with no status filter. Buyer data is minimised here: only a display
+        name and the destination country are kept (see `OrderReceipt`)."""
         _check_page(limit, offset)
-        params: dict[str, str | int] = {
-            "min_created": _epoch(min_created, "min_created"),
+        params: dict[str, str | int] = {}
+        if min_created is not None:
+            params["min_created"] = _epoch(min_created, "min_created")
+        params |= {
             "sort_on": "created",
             "sort_order": "desc",
             "limit": limit,
@@ -1072,7 +1075,8 @@ def _shipment(value: object) -> OrderShipment:
 
 def _order_receipt(value: object) -> OrderReceipt:
     """Reads only what the Orders screen shows. The buyer's email, address and messages are never
-    read, and the name only to make the display name."""
+    read, the name only to make the display name, and of the address only the country (for the
+    statistics' countries mix)."""
     data = _object(value)
     return OrderReceipt(
         receipt_id=_int(data, "receipt_id"),
@@ -1088,6 +1092,7 @@ def _order_receipt(value: object) -> OrderReceipt:
         lines=tuple(_order_line(entry) for entry in _list_of(data, "transactions")),
         shipments=tuple(_shipment(entry) for entry in _list_of(data, "shipments")),
         buyer_display_name=_display_name(data.get("name")),
+        country_code=_text(data, "country_iso"),
     )
 
 

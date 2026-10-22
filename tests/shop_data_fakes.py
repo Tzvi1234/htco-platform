@@ -96,6 +96,7 @@ def receipt(  # noqa: PLR0913 - one receipt's fields
     lines: tuple[OrderLine, ...] | None = None,
     shipments: tuple[OrderShipment, ...] = (),
     buyer: str | None = BUYER,
+    country: str | None = None,
 ) -> OrderReceipt:
     return OrderReceipt(
         receipt_id=receipt_id,
@@ -111,6 +112,7 @@ def receipt(  # noqa: PLR0913 - one receipt's fields
         lines=lines if lines is not None else (line(receipt_id * 10),),
         shipments=shipments,
         buyer_display_name=buyer,
+        country_code=country,
     )
 
 
@@ -206,6 +208,8 @@ class ShopData:
     )
     fail: dict[str, MarketplaceError] = field(default_factory=dict)
     calls: list[tuple[str, int, object]] = field(default_factory=list)
+    # The `min_created` of every receipts read (None: the whole history).
+    windows: list[datetime | None] = field(default_factory=list)
 
     def _record(
         self, operation: str, shop_id: int, tokens: AccessTokenProvider | None, *, urgent: bool
@@ -247,14 +251,15 @@ class ShopData:
         self,
         shop_id: int,
         *,
-        min_created: datetime,
+        min_created: datetime | None,
         limit: int = 100,
         offset: int = 0,
         urgent: bool = False,
         tokens: AccessTokenProvider | None = None,
     ) -> Page[OrderReceipt]:
         self._record("list_order_receipts", shop_id, tokens, urgent=urgent)
-        found = [r for r in self.receipts if r.created_at >= min_created]
+        self.windows.append(min_created)
+        found = [r for r in self.receipts if min_created is None or r.created_at >= min_created]
         found.sort(key=lambda r: r.created_at, reverse=True)
         return Page(tuple(found[offset : offset + limit]), len(found), offset)
 
