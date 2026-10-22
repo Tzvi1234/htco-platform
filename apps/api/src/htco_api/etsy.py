@@ -44,6 +44,7 @@ from htco_api.problems import (
     NOT_READY,
     ProblemError,
     ProblemType,
+    ShopNotConnectedProblem,
     ValidationProblem,
     request_id_of,
 )
@@ -74,8 +75,11 @@ from htco_application.shop_integrations import (
     DisconnectNotAllowedError,
     IntegrationReader,
     IntegrationSummary,
+    RemoveNotAllowedError,
+    ShopRemover,
     disconnect_shop,
     list_integrations,
+    remove_shop,
 )
 from htco_application.shops import (
     OrganizationRequiredError,
@@ -141,6 +145,13 @@ SHOP_NOT_CONNECTED = ProblemType(
     409,
     "This shop is not connected to Etsy right now. Reconnect it first.",
 )
+
+
+def not_connected(error: ShopNotConnectedError) -> ProblemError:
+    """`shop-not-connected` with its reason, so the web app can offer to reconnect."""
+    return ProblemError(SHOP_NOT_CONNECTED, extra={"reason": error.reason})
+
+
 CAPABILITY_CHECK_TOO_SOON = ProblemType(
     "capability-check-too-soon",
     "Checked moments ago",
@@ -261,6 +272,14 @@ def _checks(request: Request) -> CapabilityChecks:
     if not isinstance(checks, CapabilityChecks):
         raise ProblemError(ETSY_UNAVAILABLE)
     return checks
+
+
+def _remover(request: Request) -> ShopRemover:
+    remover = getattr(request.app.state, "shop_remover", None)
+    if remover is None:
+        raise ProblemError(ETSY_UNAVAILABLE)
+    found: ShopRemover = remover
+    return found
 
 
 def _vault(request: Request) -> DisconnectingVault:
@@ -448,7 +467,10 @@ def _add_connection_routes(router: APIRouter, *, clock: Callable[[], datetime]) 
                 403: "Only the Owner and Admins re-check (forbidden), or the request did not "
                 "come from the web app (csrf-failed)",
                 404: "No such shop connection for the caller",
-                409: "The shop is not connected (shop-not-connected)",
+                409: (
+                    "The shop is not connected (shop-not-connected; `reason` says why)",
+                    ShopNotConnectedProblem,
+                ),
                 422: ("Invalid shop ID", ValidationProblem),
                 429: "Checked moments ago (capability-check-too-soon); see Retry-After",
                 503: "The Etsy connection is not set up on this server (etsy-unavailable)",
@@ -471,8 +493,8 @@ def _add_connection_routes(router: APIRouter, *, clock: Callable[[], datetime]) 
             raise ProblemError(NOT_FOUND) from None
         except ShopAccessDeniedError:
             raise ProblemError(FORBIDDEN) from None
-        except ShopNotConnectedError:
-            raise ProblemError(SHOP_NOT_CONNECTED) from None
+        except ShopNotConnectedError as error:
+            raise not_connected(error) from None
         except RecheckTooSoonError as error:
             raise ProblemError(
                 CAPABILITY_CHECK_TOO_SOON,
@@ -518,3 +540,41 @@ def _add_connection_routes(router: APIRouter, *, clock: Callable[[], datetime]) 
         if isinstance(dashboard, ShopDashboard):
             dashboard.cache.forget(shop_id)
         return _view(IntegrationSummary.of(after), now)
+
+    @router.delete(
+        "/shops/{shop_id}",
+        status_code=204,
+        summary="Remove a shop and every piece of data stored about it",
+        responses=problem_responses(
+            {
+                403: "Not the Owner, no second factor, no recent step-up "
+                "(forbidden, mfa-required, step-up-required), or the request did not come from "
+                "the web app (csrf-failed)",
+                404: "No such shop for the caller, or it was already removed",
+                422: ("Invalid shop ID", ValidationProblem),
+                503: "Removing shops is not set up on this server (etsy-unavailable)",
+            }
+        ),
+    )
+    async def remove_etsy_shop(
+        shop_id: uuid.UUID,
+        request: Request,
+        auth: CurrentAuth,
+        remover: Annotated[ShopRemover, Depends(_remover)],
+    ) -> Response:
+        """Disconnects the shop (its tokens are deleted) and deletes at once its stored order
+        history (orders, items, refunds, buyers, sync state), its capability results, its
+        members' grants and the shop itself, in one transaction, then audits it without buyer
+        data. Nothing is sent to Etsy. Cannot be undone; repeating it answers 404."""
+        try:
+            await remove_shop(
+                remover, auth, shop_id, now=clock(), correlation_id=request_id_of(request)
+            )
+        except ShopNotFoundError:
+            raise ProblemError(NOT_FOUND) from None
+        except RemoveNotAllowedError as error:
+            raise ProblemError(_PROBLEM_FOR_OUTCOME.get(error.outcome, FORBIDDEN)) from None
+        dashboard = getattr(request.app.state, "dashboard", None)
+        if isinstance(dashboard, ShopDashboard):
+            dashboard.cache.forget(shop_id)
+        return Response(status_code=204)

@@ -24,7 +24,11 @@ from htco_application.access.management import AccessStore, Inviter
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
-from htco_application.shop_integrations import DisconnectingVault, IntegrationReader
+from htco_application.shop_integrations import (
+    DisconnectingVault,
+    IntegrationReader,
+    ShopRemover,
+)
 from htco_application.shops import ShopReader
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter
 from htco_platform.readiness import ReadinessCheck
@@ -111,6 +115,8 @@ class AppOptions:
     capability_checks: CapabilityChecks | None = None
     # Disconnect (slice 4.7) deletes tokens through the vault; without it, disconnect answers 503.
     token_vault: DisconnectingVault | None = None
+    # Removes a shop with all its stored data; without it, removing answers 503.
+    shop_remover: ShopRemover | None = None
     # The connected shop's live data (overview, orders, listings, reviews, shipping); without
     # it, those routes answer 503.
     dashboard: ShopDashboard | None = None
@@ -156,6 +162,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.integrations = options.integrations
     app.state.capability_checks = options.capability_checks
     app.state.token_vault = options.token_vault
+    app.state.shop_remover = options.shop_remover
     app.state.dashboard = options.dashboard
     app.state.clock = options.clock
     app.include_router(

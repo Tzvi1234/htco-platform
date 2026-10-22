@@ -30,13 +30,15 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, WithJsonSchema
 
 from htco_api.auth import CurrentAuth
-from htco_api.etsy import SHOP_NOT_CONNECTED
+from htco_api.etsy import not_connected
 from htco_api.identity import problem_responses
 from htco_api.policy_guard import FORBIDDEN
 from htco_api.problems import (
     NOT_FOUND,
+    Problem,
     ProblemError,
     ProblemType,
+    ShopNotConnectedProblem,
     ValidationProblem,
     request_id_of,
 )
@@ -80,10 +82,13 @@ ETSY_SCOPE_MISSING = ProblemType(
     409,
     "The shop's connection does not allow reading this. Reconnect the shop to grant it.",
 )
-_SHOP_ERRORS: dict[int, str | tuple[str, type[ValidationProblem]]] = {
+_SHOP_ERRORS: dict[int, str | tuple[str, type[Problem]]] = {
     404: "No such shop for the caller (or the caller's role may not see it)",
-    409: "The shop is not connected (shop-not-connected), or the connection lacks the scope "
-    "(etsy-scope-missing)",
+    409: (
+        "The shop is not connected (shop-not-connected; `reason` says why, `needs_reauth` "
+        "means reconnect it), or the connection lacks the scope (etsy-scope-missing)",
+        ShopNotConnectedProblem,
+    ),
     422: ("Invalid shop ID or query", ValidationProblem),
     503: "Etsy did not answer and nothing recent is cached (etsy-data-unavailable; see "
     "Retry-After), or live shop data is not set up (shop-data-unavailable)",
@@ -747,7 +752,7 @@ def _problem_of(error: Exception) -> ProblemError:
         case ShopNotFoundError():
             return ProblemError(NOT_FOUND)
         case ShopNotConnectedError():
-            return ProblemError(SHOP_NOT_CONNECTED)
+            return not_connected(error)
         case ShopDataScopeMissingError():
             return ProblemError(ETSY_SCOPE_MISSING)
         case ShopDataUnavailableError(retry_after_seconds=wait):
@@ -914,7 +919,10 @@ def _add_sync_route(router: APIRouter, *, clock: Callable[[], datetime]) -> None
                 403: "Only the Owner and Admins start a sync (forbidden), or the request did not "
                 "come from the web app (csrf-failed)",
                 404: "No such shop for the caller",
-                409: "The shop is not connected (shop-not-connected)",
+                409: (
+                    "The shop is not connected (shop-not-connected; `reason` says why)",
+                    ShopNotConnectedProblem,
+                ),
                 422: ("Invalid shop ID", ValidationProblem),
                 503: "The stored order history is not set up on this server "
                 "(shop-data-unavailable)",
@@ -943,8 +951,8 @@ def _add_sync_route(router: APIRouter, *, clock: Callable[[], datetime]) -> None
             raise ProblemError(NOT_FOUND) from None
         except ShopAccessDeniedError:
             raise ProblemError(FORBIDDEN) from None
-        except ShopNotConnectedError:
-            raise ProblemError(SHOP_NOT_CONNECTED) from None
+        except ShopNotConnectedError as error:
+            raise not_connected(error) from None
         return SyncView(
             state=sync.state, orders_stored=sync.orders_stored, last_synced_at=sync.last_synced_at
         )

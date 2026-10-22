@@ -57,6 +57,32 @@ Runbook:
 
 **Purge:** only the date is stored now. The purge job (Phase 5) deletes the shop's synced data after `purge_after`, keeping records under legal retention.
 
+## Removing a shop
+
+`DELETE /v1/shops/{shop_id}` (Owner, `aal2`, step-up within 10 minutes, web app with CSRF) removes the shop completely, without the 30-day grace of a disconnect. In one transaction, as the API's login role: the integration row and its tokens, the probe results, the stored order history (orders, items, refunds, buyer rows) and its sync state, the members' shop grants, and finally the shop. Every table naming a shop also references `app.shops` with `on delete cascade`, so nothing can outlive it. The audit record `shop.removed` keeps the shop's name, its statuses and the number of orders deleted, never buyer data. Nothing is sent to Etsy. Repeating it answers 404 and changes nothing. It cannot be undone: connecting the shop again starts a new, empty history.
+
+## Rotating or replacing the Etsy app key
+
+Tokens are issued per Etsy app. When the app's keystring changes (a new app, or a Seller App replaced by a Personal App), every stored token belongs to the old app and Etsy refuses it.
+
+What HTCO does on its own:
+
+- Each connection stores `app_key_fingerprint`, the first 16 hex characters of the SHA-256 of the keystring its tokens were issued for (never the key). At startup the API marks every connected row with another fingerprint `needs_reauth` and audits it (`shop.integration_needs_reauth`, reason `app_key_changed`); the vault and the shop card read such rows as `needs_reauth` even before that. No Etsy call is made with them.
+- Rows connected before the fingerprint existed have none. Their first successful call or refresh records the current key. If Etsy refuses them instead, the next point applies.
+- A data call Etsy answers with 401 (`invalid_token`) or with a 403 about the API key, and a refresh answered `invalid_client` or `invalid_grant`, mark the connection `needs_reauth` at once (audited with that reason).
+- Data endpoints then answer 409 `shop-not-connected` with `"reason": "needs_reauth"`; the web app shows "This shop needs reconnecting" with a Reconnect button on every shop screen.
+
+Runbook:
+
+1. Create or open the new app at Etsy and note its keystring and shared secret. Check its redirect URI is the one in `HTCO_ETSY_REDIRECT_URI`.
+2. Replace the GitHub secrets `ETSY_KEYSTRING` and `ETSY_SHARED_SECRET` (both together) and deploy.
+3. After the deploy, the log line `token_vault.app_key_changed` names how many connections were retired (none for connections without a fingerprint).
+4. The Owner opens Shops and presses Reconnect on each shop (step-up code, then Etsy's approval). The new tokens carry the new fingerprint.
+5. Check the shop card: status connected, Re-check green, Home shows data.
+6. If a shop should not come back, remove it instead (Shops, the card's menu, Remove shop).
+
+Rotating only the shared secret keeps the keystring, so the fingerprint and the tokens stay valid; if Etsy refuses them anyway, the connection turns `needs_reauth` on the first refused call and step 4 applies.
+
 ## Backups and the restore rehearsal (AC-4.7.2)
 
 ### What the Supabase plan gives us

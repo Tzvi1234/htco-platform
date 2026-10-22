@@ -381,7 +381,7 @@ async def request_order_sync(  # noqa: PLR0913 - the sync, the caller, the shop 
     if decision.outcome is not Outcome.ALLOW or decision.scope is not Scope.ORGANIZATION:
         raise ShopAccessDeniedError("only the Owner and Admins sync the order history")
     if integration.status is not IntegrationStatus.CONNECTED:
-        raise ShopNotConnectedError(f"shop {shop_id} is not connected")
+        raise ShopNotConnectedError.of(integration)
     state = await sync.store.state(shop_id)
     started = sync.kick(integration, now=now, force=True)
     if sync.audit is not None:

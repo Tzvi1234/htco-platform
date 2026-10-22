@@ -22,6 +22,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from htco_application.etsy_connect import (
     EtsyAuthorizationServer,
     EtsyShopDirectory,
+    OAuthClientRejectedError,
     OAuthInvalidGrantError,
     OAuthUnavailableError,
 )
@@ -171,6 +172,20 @@ async def test_token_request__invalid_grant__invalid_grant_error(status: int) ->
 
     with pytest.raises(OAuthInvalidGrantError):
         await oauth(recorder).refresh(REFRESH)
+
+
+@pytest.mark.parametrize("status", [400, 401, 403])
+async def test_token_request__invalid_client__client_rejected_error(status: int) -> None:
+    """The app key was replaced: the refresh token belongs to another app."""
+    body = {"error": "invalid_client", "error_description": "client authentication failed"}
+    recorder = Recorder(httpx.Response(status, json=body))
+
+    with pytest.raises(OAuthClientRejectedError) as raised:
+        await oauth(recorder).refresh(REFRESH)
+
+    assert isinstance(raised.value, OAuthInvalidGrantError)
+    assert REFRESH not in str(raised.value)
+    assert len(recorder.requests) == 1
 
 
 @pytest.mark.parametrize(

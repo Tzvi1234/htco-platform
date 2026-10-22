@@ -53,7 +53,12 @@ from htco_application.marketplace import (
 from htco_application.shop_integrations import ShopIntegration
 from htco_application.shops import ShopAccessDeniedError, ShopNotFoundError
 from htco_domain.actors import ActorKind, ActorRef
-from htco_domain.integrations import CapabilityResult, CapabilityState, ShopCapability
+from htco_domain.integrations import (
+    CapabilityResult,
+    CapabilityState,
+    IntegrationStatus,
+    ShopCapability,
+)
 
 # A re-check calls Etsy three times; the owner's button may not be pressed faster than this.
 RECHECK_COOLDOWN = timedelta(seconds=30)
@@ -68,7 +73,21 @@ _READS = (
 
 class ShopNotConnectedError(Exception):
     """The shop's connection is not usable (needs re-authentication or disconnected): no probe
-    runs and no marketplace call is made."""
+    runs and no marketplace call is made. `reason` tells the owner what to do: `needs_reauth`
+    (reconnect: the tokens were refused, expired or belong to another app key), `disconnected`,
+    or `not_connected` when nothing more precise is known."""
+
+    def __init__(self, message: str, *, reason: str = "not_connected") -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    @classmethod
+    def of(cls, integration: ShopIntegration) -> ShopNotConnectedError:
+        reason = {
+            IntegrationStatus.NEEDS_REAUTH: "needs_reauth",
+            IntegrationStatus.DISCONNECTED: "disconnected",
+        }.get(integration.status, "needs_reauth" if integration.tokens is None else "not_connected")
+        return cls(f"shop {integration.shop_id} is not connected", reason=reason)
 
 
 class ProbeSupersededError(ShopNotConnectedError):
@@ -175,7 +194,7 @@ async def probe_capabilities(  # noqa: PLR0913 - the shop, who asked, and why
     """Probe one connected shop, store and audit the results. Raises `ShopNotConnectedError`
     (without any marketplace call) unless the connection is usable."""
     if not integration.is_usable:
-        raise ShopNotConnectedError(f"shop {integration.shop_id} is not connected")
+        raise ShopNotConnectedError.of(integration)
     results = await _probe(checks, integration, now)
     read_ok = any(r.state is CapabilityState.AVAILABLE and r.detail == "read_ok" for r in results)
     # Results, success time and audit commit together, or not at all (Codex review of #49).
@@ -226,7 +245,7 @@ async def recheck_capabilities(
     if decision.outcome is not Outcome.ALLOW or decision.scope is not Scope.ORGANIZATION:
         raise ShopAccessDeniedError("only organization-wide roles re-check a connection")
     if not integration.is_usable:
-        raise ShopNotConnectedError(f"shop {shop_id} is not connected")
+        raise ShopNotConnectedError.of(integration)
     # Claimed before probing, so two presses at once cannot both call Etsy (Codex review of #49).
     wait = await checks.store.reserve_check(
         shop_id, now=now, cooldown=RECHECK_COOLDOWN, generation=integration.generation

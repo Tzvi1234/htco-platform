@@ -415,3 +415,67 @@ async def test_refresh__connection_replaced_meanwhile__never_touches_the_new_one
     assert row.status is IntegrationStatus.CONNECTED
     assert row.failure_count == 0
     assert world.vault.updates == []
+
+
+# --- A replaced app key: Etsy refuses the credentials themselves -------------------------------
+
+
+async def test_refresh__invalid_client__needs_reauth_at_once_audited_with_its_reason() -> None:
+    world = World(access_left=timedelta(0))
+    world.server.refresh_outcome = "invalid_client"
+
+    with pytest.raises(MarketplaceAuthError):
+        await world.provider.access_token(ETSY_SHOP)
+
+    assert world.row.status is IntegrationStatus.NEEDS_REAUTH
+    assert [r.after for r in world.vault.audit] == [
+        {"reason": "invalid_client", "provider": "etsy"}
+    ]
+    assert world.server.refreshed == [OLD_REFRESH]  # one try, no loop
+
+
+async def test_credentials_rejected__marks_the_connection_holding_the_etsy_shop() -> None:
+    world = World(access_left=timedelta(hours=1))
+
+    await world.provider.credentials_rejected(ETSY_SHOP, reason="invalid_token")
+
+    assert world.row.status is IntegrationStatus.NEEDS_REAUTH
+    (record,) = world.vault.audit
+    assert record.action == "shop.integration_needs_reauth"
+    assert record.after == {"reason": "invalid_token", "provider": "etsy"}
+    with pytest.raises(MarketplaceAuthError):  # no further call is made with these tokens
+        await world.provider.access_token(ETSY_SHOP)
+
+
+async def test_credentials_rejected__twice__audited_once() -> None:
+    world = World(access_left=timedelta(hours=1))
+
+    await world.provider.credentials_rejected(ETSY_SHOP, reason="invalid_token")
+    await world.provider.credentials_rejected(ETSY_SHOP, reason="api_key_rejected")
+
+    assert len(world.vault.audit) == 1
+
+
+async def test_credentials_rejected__unknown_etsy_shop__changes_nothing() -> None:
+    world = World(access_left=timedelta(hours=1))
+
+    await world.provider.credentials_rejected(ETSY_SHOP + 1, reason="invalid_token")
+
+    assert world.row.status is IntegrationStatus.CONNECTED
+    assert world.vault.audit == []
+
+
+async def test_pinned__credentials_rejected__marks_only_its_own_connection() -> None:
+    world = World(access_left=timedelta(hours=1))
+    generation = world.row.generation
+    stale = world.provider.pinned(SHOP, generation=generation - 1)
+    current = world.provider.pinned(SHOP, generation=generation)
+
+    await stale.credentials_rejected(ETSY_SHOP, reason="invalid_token")
+    assert world.vault.audit == []  # a replaced connection is left alone
+
+    await current.credentials_rejected(ETSY_SHOP, reason="api_key_rejected")
+    assert world.row.status is IntegrationStatus.NEEDS_REAUTH
+    assert [r.after for r in world.vault.audit] == [
+        {"reason": "api_key_rejected", "provider": "etsy"}
+    ]

@@ -17,6 +17,7 @@ from htco_application.audit import AuditRecord
 from htco_application.etsy_connect import (
     ConnectedShop,
     EtsyShopConnectedElsewhereError,
+    OAuthClientRejectedError,
     OAuthInvalidGrantError,
     OAuthUnavailableError,
     PendingAuthorization,
@@ -71,7 +72,7 @@ class AuthorizationServer:
     exchanged: list[tuple[str, str, str]] = field(default_factory=list)
     refreshed: list[str] = field(default_factory=list)
     issued: int = 0
-    # What the next refreshes do: "ok", "invalid_grant" or "unavailable".
+    # What the next refreshes do: "ok", "invalid_grant", "invalid_client" or "unavailable".
     refresh_outcome: str = "ok"
     exchange_outcome: str = "ok"
     # Slows the refresh down so concurrent callers overlap.
@@ -110,6 +111,8 @@ class AuthorizationServer:
             await anyio.sleep(self.refresh_delay)
         if self.refresh_outcome == "invalid_grant":
             raise OAuthInvalidGrantError("Etsy refused the refresh token")
+        if self.refresh_outcome == "invalid_client":
+            raise OAuthClientRejectedError("Etsy refused the app's credentials")
         if self.refresh_outcome == "unavailable":
             raise OAuthUnavailableError("Etsy did not answer the token request")
         self.issued += 1
