@@ -533,7 +533,9 @@ async def shop_orders(  # noqa: PLR0913 - the shop, the caller, the period, filt
         total=len(matching),
         counts={f: counts.get(f, 0) for f in OrderFilter},
         buyer_details=contact,
-        partial=window.value.partial,
+        # Partial only when the cap cut into the period itself: if any receipt read is from the
+        # extra day before it, every order of the period was read (Codex review of #51).
+        partial=window.value.partial and len(listed) == len(window.value.receipts),
         cap=RECEIPT_CAPS[period],
     )
 
