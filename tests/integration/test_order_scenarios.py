@@ -6,6 +6,7 @@ by an audited admin retry). Also the two new automations' stores (AC-5.11.4, AC-
 
 TESTING_STRATEGY §10. Invented values only."""
 
+import logging
 import random
 import uuid
 from collections.abc import AsyncIterator, Sequence
@@ -397,7 +398,7 @@ async def test_verification__a_matching_order_none__a_changed_one_drifts_once(
 
 def test_snapshot_type__holds_no_buyer_field() -> None:
     assert set(StoredSnapshot.__dataclass_fields__) == {
-        "etsy_updated_at", "total_matches", "items", "orders",
+        "etsy_updated_at", "total_matches", "items",
     }  # fmt: skip
 
 
@@ -477,3 +478,44 @@ async def test_counters__orders_stored_by_the_history_backfill__counted_by_the_r
             [shop],
         ).fetchone()
     assert row == (4, 2)  # two paid orders of two units; the cancelled one counts nothing
+
+
+@pytest.mark.ac("AC-5.11.5")
+async def test_counters__a_move_below_zero__clamped_at_zero_and_logged(
+    admin: Database, worker_db: Database, caplog: pytest.LogCaptureFixture
+) -> None:
+    """With the ledger a counter can only go below zero through drift or a bug: it stays at
+    zero (the check constraint) and the clamp is logged, never silent (sage, #90)."""
+    receipt = order(53_201)
+    tenant, integration = await stored(admin, worker_db, receipt)
+    store = PostgresOrderAutomationStore(worker_db)
+    shop = integration.shop_id
+    with tenant_scope(tenant.organization_id):
+        await store.recount(tenant.organization_id, shop, receipt.receipt_id,
+                            execution_id=uuid.uuid4(), now=NOW)  # fmt: skip
+    with admin.connection() as c:  # drift: the counter lost the order's units
+        c.execute(
+            "update app.product_sales_counters set units = 1 where shop_id = %s and listing_id = 777",  # noqa: E501
+            [shop],
+        )
+    cancelled = replace(
+        receipt, status="canceled", updated_at=receipt.updated_at + timedelta(hours=1)
+    )
+    with tenant_scope(tenant.organization_id):
+        await PostgresOrderStore(worker_db).ingest_receipts(
+            integration, [cancelled],
+            context=IngestContext(IngestSource.WEBHOOK, correlation_id="c"), now=NOW,
+        )  # fmt: skip
+        with caplog.at_level(logging.WARNING, logger="htco_persistence.order_automations"):
+            await store.recount(tenant.organization_id, shop, receipt.receipt_id,
+                                execution_id=uuid.uuid4(), now=NOW)  # fmt: skip
+
+    with admin.connection() as c:
+        row = c.execute(
+            "select units, orders from app.product_sales_counters where shop_id = %s and listing_id = 777",  # noqa: E501
+            [shop],
+        ).fetchone()
+    assert row == (0, 0)
+    clamps = [r for r in caplog.records if r.getMessage().startswith("product_sales.clamped")]
+    assert len(clamps) == 1
+    assert clamps[0].levelno == logging.WARNING
