@@ -21,8 +21,8 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 - [x] 5.3 Webhook ingress for all 11 Etsy events (behind `HTCO_ETSY_WEBHOOKS_ENABLED`, off; migration `20261024100000_etsy_webhook_intake.sql`, pgTAP `15_etsy_webhook_intake`; the owner registers the endpoint and the `ETSY_WEBHOOK_SECRET`, see [orders-ingest operations](../../features/orders-ingest/operations.md#registering-the-webhook-in-the-etsy-developer-portal))
 - [x] 5.4 Receipt ingest on the order history store (#57) (migration `20261024210000_order_intake.sql`, pgTAP `17_order_intake`; the worker's gateway is real for reads behind `HTCO_WORKER_ACTION_GATEWAY`; the API's sync stays as the fallback behind `HTCO_ORDER_SYNC_IN_API` until 5.11; Etsy fees are not estimated yet: the receipt carries none, they come with the ledger in Phase 13)
 - [x] 5.5 Reconciliation and backfill on the queue (migration `20261024220000_order_reconciliation.sql`, pgTAP `18_order_reconciliation`; the owner's decision of 2026-10-24: webhooks first, reconciliation twice a day by `HTCO_RECONCILIATION_SCHEDULE` in `HTCO_RECONCILIATION_TZ`, default 06:00 and 18:00 Asia/Jerusalem, the second run the full sweep with every paid, unshipped order; the hourly tick `orders.reconciliation` is off until named in `HTCO_WORKER_SCHEDULES`; drifts in `sync_drifts`; 8 Etsy calls a day for the pilot shop)
-- [ ] 5.6 Orders API
-- [ ] 5.7 Orders UI
+- [ ] 5.6 Orders API onto the stored order (rewritten after the audit: no second endpoint)
+- [ ] 5.7 Orders UI onto the stored order (no second screen)
 - [ ] 5.8 Drills
 - [ ] 5.9 Queue, execution and sync health (Prometheus metrics)
 - [x] 5.10 Durable automation engine (PR #58; aligned: migration `20261023140000_automation_engine.sql`, pgTAP `12_automation_engine`, handlers get a `HandlerContext` with an `ActionGateway` client, `WAITING` state; no automation is ready yet)
@@ -273,27 +273,37 @@ The #57 backfill and 30-day re-read become jobs of Etsy Order Intake:
 | AC-5.5.4 | A difference between a stored order and Etsy (status, items or shipments) is recorded in `sync_drifts` with both values and emits `orders.drift_detected.v1`; from Phase 6 it opens an incident (FR-ORD-09). |
 | AC-5.5.5 | No order sync runs in the API process any more; a dashboard read on a stale shop enqueues one job, and returns at once with the store's data and its age. |
 
-### 5.6 — Orders API
+### 5.6 — Orders API onto the stored order
 
-`GET /v1/shops/{shop_id}/orders` (filters: status, date range, tracking state; search by receipt number or SKU; cursor pagination) and `GET /v1/orders/{order_id}`. Buyer fields are masked unless the role allows them.
+Rewritten 2026-10-23 (architecture audit P0-1): the Orders endpoint and its screens already exist (Phase 4.6, htco-clients #38 and #40). This slice **moves them onto the stored order**. It builds no second endpoint, no second order vocabulary and no second Orders UI.
+
+- `GET /v1/shops/{shop_id}/orders` (and Home's `overview`, `stats`, and the Shipping screen, which reads the same orders) answer from `app.etsy_orders` once the shop's backfill is complete. An order's state is the stored `order_state` of the FR-ORD-03 machine, mapped to the screen's view states (`ORDER_VIEW_STATES`).
+- The live read-through stays in two places only: as the fallback while the backfill runs or when the store cannot be read, and for the buyer display fields the role rules allow (a display name and tracking numbers; ADR-0018).
+- One order: `GET /v1/shops/{shop_id}/orders/{order_id}`, the same order view plus its **status timeline** from `order_status_events` (every transition with its source and `observed_at`). An order not stored yet falls back to the live 30-day read, with an empty timeline. It is a sub-resource of the existing endpoint, not a second list.
+- Every answer carries `last_synced_at`: when the stored history last synced, or null while it is not set up.
 
 | ID | Acceptance criterion |
 |---|---|
-| AC-5.6.1 | Cross-tenant and non-granted shop requests return 404. |
+| AC-5.6.1 | Cross-tenant and non-granted shop requests return 404, for the list and the order. |
 | AC-5.6.2 | Viewer responses contain no buyer contact fields. |
 | AC-5.6.3 | Every response includes `last_synced_at` for the shop. |
+| AC-5.6.4 | Orders, Home and Statistics read the store once it is complete, with no Etsy receipt call; the screen's state is the stored `order_state`. |
+| AC-5.6.5 | The order's timeline lists its stored transitions in causal order, each with its source. |
 
-### 5.7 — Orders UI
+### 5.7 — Orders UI onto the stored order
 
-- **Orders list:** filters, search, a freshness banner, empty states, and safe bulk actions: export selected to CSV with an audit record, and re-sync selected (through the engine).
-- **Order detail:** items, shipments, a status timeline with sources, and a financial summary labelled estimated.
+The existing Orders screen in htco-clients, moved onto 5.6. No second screen.
+
+- **Freshness:** a sync indicator in the header: the history's age (`last_synced_at`), "syncing" while the backfill runs, and a stale banner past the window.
+- **Order detail:** the existing detail adds the status timeline with sources, and a slot for the Phase 6 order-to-incident link (filled by 6.3).
+- Deferred, for the owner to confirm: the bulk actions of the first plan (export selected to CSV with an audit record, the old AC-5.7.4, and re-sync of selected orders through the engine). The Owner's existing manual sync of the whole shop stays.
 
 | ID | Acceptance criterion |
 |---|---|
 | AC-5.7.1 | Data older than the sync window shows a stale banner with the age. |
 | AC-5.7.2 | Receipt numbers, SKUs and tracking numbers display LTR inside Hebrew UI. |
 | AC-5.7.3 | Keyboard-only: find an order by search and open its detail. |
-| AC-5.7.4 | Exporting selected orders produces a CSV with buyer fields masked by role and writes an audit record. |
+| AC-5.7.4 | The order detail shows the status timeline from the store, each step with its source, in Hebrew and English. |
 
 ### 5.8 — Drills
 
