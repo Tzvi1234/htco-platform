@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
 from htco_application.fulfillment_schedule import INCIDENT_DETECTION
@@ -223,7 +224,10 @@ class IncidentDetection:
                         dedup_key=f"ship_by:{shop_id}:{order.receipt_id}",
                         params={
                             "receipt_id": order.receipt_id,
-                            "ship_by": order.expected_ship.date().isoformat(),
+                            # The shop's own day, as the warning window counts it.
+                            "ship_by": order.expected_ship.astimezone(ZoneInfo(calendar.timezone))
+                            .date()
+                            .isoformat(),
                         },
                         shop_id=shop_id,
                         correlation_id=ctx.correlation_id,
