@@ -8,7 +8,8 @@
 | `HTCO_ETSY_WEBHOOK_SECRET` | unset | The endpoint's signing secret (`whsec_...`), from the GitHub secret `ETSY_WEBHOOK_SECRET`; required when enabled; checked at startup without being repeated |
 | `HTCO_ETSY_WEBHOOK_RATE_PER_SECOND` | `50` | Per API instance; above it the answer is 429 with `Retry-After` |
 | `HTCO_ORDER_SYNC_IN_API` | `true` | Slice 5.4: the API process runs the order history sync as before (the fallback). `false`: a stale read or the manual sync enqueues `etsy.order_sync` for the worker and returns at once |
-| `HTCO_RECONCILIATION_SCHEDULE` | `03:00,15:00` | Slice 5.5, worker: when reconciliation runs, UTC `HH:MM` comma-separated (06:00 and 18:00 Israel summer time); the day's last run is the full sweep. Runs only when `orders.reconciliation` is in `HTCO_WORKER_SCHEDULES` |
+| `HTCO_RECONCILIATION_SCHEDULE` | `06:00,18:00` | Slice 5.5, worker: when reconciliation runs, local `HH:MM` comma-separated; the day's last run is the full sweep. Runs only when `orders.reconciliation` is in `HTCO_WORKER_SCHEDULES` |
+| `HTCO_RECONCILIATION_TZ` | `Asia/Jerusalem` | The IANA time zone of those times: 06:00 stays 06:00 across a DST change (the image carries `tzdata`) |
 | `HTCO_WORKER_ACTION_GATEWAY` | `reads` | Slice 5.4, worker: automations' Etsy reads through the real Action Gateway. `off`: every action refused (`UnavailableGateway`), a switch back without a code change |
 
 The worker needs no other new setting: it processes `etsy.webhook_event` jobs whenever the Etsy app credentials and the vault key are set (as for the probes).

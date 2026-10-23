@@ -604,6 +604,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic-settings" },
     { name = "structlog" },
+    { name = "tzdata" },
 ]
 
 [package.metadata]
@@ -617,6 +618,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28,<0.29" },
     { name = "pydantic-settings", specifier = ">=2.15,<3" },
     { name = "structlog", specifier = ">=26.1,<27" },
+    { name = "tzdata", specifier = ">=2026.5" },
 ]
 
 [[package]]

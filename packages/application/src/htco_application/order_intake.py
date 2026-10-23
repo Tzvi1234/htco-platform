@@ -23,7 +23,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta, tzinfo
 from typing import Any, Protocol
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
@@ -72,12 +72,14 @@ SWEEP = "sweep"
 RECONCILE_WINDOW = timedelta(days=INCREMENTAL_DAYS)
 # Reconciliation (slice 5.5, the owner's decision of 2026-10-24: webhooks are the primary path,
 # reconciliation runs twice a day). An hourly tick, off unless named in HTCO_WORKER_SCHEDULES,
-# enqueues the runs whose configured time (UTC, HTCO_RECONCILIATION_SCHEDULE) falls in its hour:
+# enqueues the runs whose configured local time (HTCO_RECONCILIATION_SCHEDULE in
+# HTCO_RECONCILIATION_TZ) falls in its hour:
 # the day's last run is the full sweep, any earlier one a 30-day reconcile.
 RECONCILIATION_TICK = Schedule("orders.reconciliation", timedelta(hours=1))
 ORDER_SCHEDULES = {RECONCILIATION_TICK.kind: RECONCILIATION_TICK}
-# 06:00 and 18:00 Israel summer time (05:00 and 17:00 in winter).
-DEFAULT_RECONCILIATION_TIMES = "03:00,15:00"
+# 06:00 and 18:00 in the owner's time zone, whatever the season.
+DEFAULT_RECONCILIATION_TIMES = "06:00,18:00"
+DEFAULT_RECONCILIATION_TZ = "Asia/Jerusalem"
 _MODES = {"stale": "history", "manual": "history", RECONCILE: RECONCILE, SWEEP: SWEEP}
 
 _log = logging.getLogger(__name__)
@@ -107,6 +109,10 @@ class IntakeStore(OrderStore, Protocol):
 
 class IntakeShops(Protocol):
     async def describe(self, shop_id: uuid.UUID) -> ShopIntegration | None: ...
+
+
+class ShopBusyError(JobError):
+    """Another run holds the shop's order lock: retried by the execution's policy."""
 
 
 class IntakeActionError(JobError):
@@ -261,7 +267,8 @@ class OrderIntake:
         kind = SWEEP if sweep else RECONCILE
         async with self.store.lock(integration.shop_id) as held:
             if not held:
-                return Completed({"mode": kind, "skipped": "locked"})
+                # Never lost (Codex review of #75): the execution retries after its backoff.
+                raise ShopBusyError("another order sync of the shop is running")
             started = self.clock()
             context = IngestContext(
                 IngestSource.RECONCILIATION,
@@ -460,7 +467,7 @@ class ConnectedShops(Protocol):
 
 
 def parse_reconciliation_times(text: str) -> tuple[time, ...]:
-    """`"HH:MM,HH:MM"` (UTC) into the day's run times, sorted; raises `ValueError`."""
+    """`"HH:MM,HH:MM"` (local times) into the day's run times, sorted; raises `ValueError`."""
     times: list[time] = []
     for part in text.split(","):
         raw = part.strip()
@@ -476,15 +483,21 @@ def parse_reconciliation_times(text: str) -> tuple[time, ...]:
     return tuple(sorted(times))
 
 
-def due_reconciliation(times: tuple[time, ...], *, now: datetime) -> tuple[str, str] | None:
-    """The run whose time falls in the tick's hour, and its slot key: the day's last time is the
-    full sweep, any earlier one a reconcile. None when no run is due in this hour."""
+def due_reconciliation(
+    times: tuple[time, ...], *, now: datetime, tz: tzinfo
+) -> tuple[str, str] | None:
+    """The run whose local time (in `tz`, so 06:00 stays 06:00 across a DST change) falls in
+    the tick's hour, and its slot key: the day's last time is the full sweep, any earlier one a
+    reconcile. None when no run is due in this hour."""
     hour = now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
-    for at in times:
-        moment = datetime.combine(hour.date(), at, tzinfo=UTC)
-        if hour <= moment < hour + RECONCILIATION_TICK.every:
-            reason = SWEEP if at == times[-1] else RECONCILE
-            return reason, moment.strftime("%Y-%m-%dT%H:%M")
+    end = hour + RECONCILIATION_TICK.every
+    days = {hour.astimezone(tz).date(), (end - timedelta(microseconds=1)).astimezone(tz).date()}
+    for day in sorted(days):
+        for at in times:
+            moment = datetime.combine(day, at, tzinfo=tz)
+            if hour <= moment.astimezone(UTC) < end:
+                reason = SWEEP if at == times[-1] else RECONCILE
+                return reason, moment.isoformat(timespec="minutes")
     return None
 
 

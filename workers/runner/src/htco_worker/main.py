@@ -13,7 +13,7 @@ import signal
 import sys
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta, tzinfo
 
 import anyio
 import httpx
@@ -311,12 +311,13 @@ def intake_handlers(database: Database, vault: PostgresTokenVault) -> dict[str, 
     return {ORDER_INTAKE: OrderIntake(store=PostgresOrderStore(database), shops=vault, clock=_now)}
 
 
-def reconciliation_handlers(
+def reconciliation_handlers(  # noqa: PLR0913 - the tick and its collaborators
     enabled: tuple[str, ...],
     *,
     queue: JobQueue,
     directory: ShopDirectory,
     times: tuple[time, ...],
+    tz: tzinfo,
     clock: Callable[[], datetime] = _now,
 ) -> dict[str, JobHandler]:
     """The hourly reconciliation tick (slice 5.5), when named: in the hour of a configured time
@@ -327,7 +328,7 @@ def reconciliation_handlers(
 
     def tick() -> int:
         now = clock()
-        due = due_reconciliation(times, now=now)
+        due = due_reconciliation(times, now=now, tz=tz)
         if due is None:
             return 0
         reason, slot = due
@@ -444,6 +445,7 @@ async def _serve(settings: WorkerSettings) -> None:
             queue=queue,
             directory=PostgresShopDirectory(database),
             times=settings.reconciliation_times,
+            tz=settings.reconciliation_zone,
         )
     worker = Worker(
         queue,

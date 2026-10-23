@@ -13,6 +13,8 @@ dependencies = [
   "httpx>=0.28,<0.29",
   "pydantic-settings>=2.15,<3",
   "structlog>=26.1,<27",
+  # The IANA time zones where the system has none (the slim image): reconciliation (5.5).
+  "tzdata>=2026.5",
 ]
 
 [tool.uv.sources]
