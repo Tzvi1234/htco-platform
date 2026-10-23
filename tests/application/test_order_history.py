@@ -31,7 +31,7 @@ from htco_application.shop_dashboard import (
     RECEIPT_CAPS,
     DataSource,
     OrderPeriod,
-    OrderState,
+    OrderViewState,
     shop_orders,
     shop_overview,
     shop_stats,
@@ -401,7 +401,7 @@ async def test_orders_from_the_store__refunds_with_reason_and_total() -> None:
     finance = await shop_orders(setup.dashboard, auth(Role.FINANCE), SHOP, now=NOW)
 
     [order] = owner.items
-    assert order.state is OrderState.PAID
+    assert order.state is OrderViewState.PAID
     [view] = order.refunds
     assert (view.reason, view.status, view.note) == ("damaged", "refunded", "Fake note")
     assert order.refunded is not None

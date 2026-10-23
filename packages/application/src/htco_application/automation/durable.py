@@ -190,6 +190,9 @@ def execution_job(
         # One run of an execution at a time: a job replayed after a crash and the retry job its
         # run had enqueued never run the handler side by side (post-merge review of 2026-10-23).
         lock_key=f"automation_execution:{execution.id}",
+        # The trigger's correlation ID, and the execution as the job's cause (AC-5.0.2).
+        correlation_id=execution.correlation_id,
+        causation_id=str(execution.id),
     )
 
 

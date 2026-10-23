@@ -80,6 +80,7 @@ We use these as tools for judgment, not as goals in themselves.
 - **ER-DATA-07 Classify personal data.** Every column holding personal data is marked in the data model doc with its class (buyer contact, address, message content…) and retention period.
 - **ER-DATA-08 Source of truth is explicit.** Every stored fact records where it came from (`source`, `observed_at`). Derived figures are recomputable from source records.
 - **ER-DATA-09 Audit is append-only.** Audit tables have no update or delete grants for application roles.
+- **ER-DATA-10 Migration versions only increase.** A new migration's version is `max(now, newest on main + 1)`, and each pgTAP file takes the next free number. Supabase's `db push` refuses a version older than the newest applied one. CI's `migration-order` job (`tools/migration_order.py`, AC-5.0.1) fails a pull request whose new migration sorts before or with the newest on main, renames or removes a merged migration, or reuses a pgTAP prefix. Before opening a pull request, rebase and renumber.
 
 ## 6. Reliability (ER-REL)
 

@@ -6819,22 +6819,13 @@ components:
         the
 
         other, up to a cap (`RECEIPT_CAPS`).'
-    OrderState:
-      type: string
-      enum:
-      - unpaid
-      - paid
-      - shipped
-      - canceled
-      - refunded
-      title: OrderState
     OrderView:
       properties:
         order_id:
           type: integer
           title: Order Id
         state:
-          $ref: '#/components/schemas/OrderState'
+          $ref: '#/components/schemas/OrderViewState'
         created_at:
           type: string
           format: date-time
@@ -6905,6 +6896,20 @@ components:
       - shipments
       - buyer
       title: OrderView
+    OrderViewState:
+      type: string
+      enum:
+      - unpaid
+      - paid
+      - shipped
+      - canceled
+      - refunded
+      title: OrderViewState
+      description: 'The Orders screen''s five states: a view of the order store''s state machine
+
+        (`htco_domain.orders.OrderState`, FR-ORD-03), mapped by `ORDER_VIEW_STATES`. The API keeps
+
+        Etsy''s spelling `canceled`.'
     OrdersView:
       properties:
         source:

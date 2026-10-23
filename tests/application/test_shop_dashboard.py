@@ -19,7 +19,7 @@ from htco_application.shop_capabilities import ShopNotConnectedError
 from htco_application.shop_dashboard import (
     DataSource,
     OrderFilter,
-    OrderState,
+    OrderViewState,
     ShopDashboard,
     ShopDataScopeMissingError,
     ShopDataUnavailableError,
@@ -226,18 +226,18 @@ async def test_overview__more_orders_than_one_load_reads__partial(world: World) 
 @pytest.mark.parametrize(
     ("status", "paid", "shipped", "state"),
     [
-        ("open", False, False, OrderState.UNPAID),
-        ("payment processing", False, False, OrderState.UNPAID),
-        ("paid", True, False, OrderState.PAID),
-        ("partially refunded", True, False, OrderState.PAID),
-        ("paid", True, True, OrderState.SHIPPED),
-        ("completed", True, False, OrderState.SHIPPED),
-        ("canceled", True, False, OrderState.CANCELED),
-        ("fully refunded", True, True, OrderState.REFUNDED),
+        ("open", False, False, OrderViewState.UNPAID),
+        ("payment processing", False, False, OrderViewState.UNPAID),
+        ("paid", True, False, OrderViewState.PAID),
+        ("partially refunded", True, False, OrderViewState.PAID),
+        ("paid", True, True, OrderViewState.SHIPPED),
+        ("completed", True, False, OrderViewState.SHIPPED),
+        ("canceled", True, False, OrderViewState.CANCELED),
+        ("fully refunded", True, True, OrderViewState.REFUNDED),
     ],
 )
 def test_order_state__names_each_receipt_status(
-    status: str, paid: bool, shipped: bool, state: OrderState
+    status: str, paid: bool, shipped: bool, state: OrderViewState
 ) -> None:
     found = receipt(1, created=NOW, status=status, paid=paid, shipped=shipped)
 
