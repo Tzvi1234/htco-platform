@@ -82,7 +82,9 @@ The phase column says when a table first appears.
 | `shop_integrations` | Etsy tokens sealed by envelope encryption (key ID, wrapped data key, ciphertexts), scopes, token expiry, status, failure count ([token vault](../features/etsy-integration/token-vault.md)); one per Etsy shop and organization; `disconnected_at` and `purge_after` (30 days) once disconnected | 4 |
 | `shop_capabilities` | Latest read-only probe result per shop and capability: state (`available` only after a successful probe), detail code, `checked_at`; Owner/Admin read through RLS ([operations](../features/etsy-integration/operations.md#capability-probes)) | 4 |
 | `sync_cursors` | Reconciliation cursors per shop and resource (created: migration `20261024220000_order_reconciliation.sql`; kinds `reconcile`, `sweep`) | 5 |
-| `sync_drifts` | Differences found by reconciliation between our records and the marketplace (created: migration `20261024220000_order_reconciliation.sql`; kinds `missing`, `status`, `items`, `shipments`, both values, no money or buyer data) | 5 |
+| `sync_drifts` | Differences found by reconciliation between our records and the marketplace (created: migration `20261024220000_order_reconciliation.sql`; kinds `missing`, `status`, `items`, `shipments`, both values, no money or buyer data; `totals` and source `verification` added by `20261025150000_order_automations.sql` for Order Deduplication & Verification, naming the field, never the amount) | 5 |
+| `product_sales_counters` | Per shop and listing: units and orders that count as sales (created: migration `20261025150000_order_automations.sql`; Product Sales Counters; numbers only) | 5 |
+| `product_sales_applications` | Per receipt: what the counters hold for it now (listing → units), so a replay moves nothing (created: migration `20261025150000_order_automations.sql`) | 5 |
 
 ### Orders & Fulfillment
 

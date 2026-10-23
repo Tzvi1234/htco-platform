@@ -290,12 +290,15 @@ class OrderEventTriggers:
     offload: Offload = _inline
 
     async def deliver(self, delivery: PendingDelivery) -> None:
-        message = delivery.message
+        """As an `events.publish` deliverer on its own."""
+        await self.handle(delivery.message)
+
+    async def handle(self, message: OutboxMessage) -> None:
+        """As a subscriber of the shared `events.publish` deliverer (slice 6.4)."""
         payload = message.payload
         event_type = payload.get("event_type")
         receipt_id = payload.get("receipt_id")
         version = str(payload.get("etsy_updated_at") or "")
-        _log.info("event.accepted: %s %s", event_type, delivery.id)
         if (
             not isinstance(event_type, str)
             or not isinstance(receipt_id, int)
@@ -303,7 +306,8 @@ class OrderEventTriggers:
             or message.organization_id is None
         ):
             return
-        correlation = message.correlation_id or f"outbox:{delivery.id}"
+        cause = f"outbox:{message.idempotency_key}"[:200]
+        correlation = message.correlation_id or cause
         if event_type in VERIFIED_EVENTS:
             await self._trigger(
                 TriggerRequest(
@@ -311,7 +315,7 @@ class OrderEventTriggers:
                     idempotency_key=f"verify:{message.shop_id}:{receipt_id}:{version}"[:200],
                     payload={"receipt_id": receipt_id}, correlation_id=correlation,
                     organization_id=message.organization_id, shop_id=message.shop_id,
-                    causation_id=f"outbox:{delivery.id}",
+                    causation_id=cause,
                 )
             )  # fmt: skip
         if event_type in COUNTED_EVENTS:
@@ -324,7 +328,7 @@ class OrderEventTriggers:
                     )[:200],
                     payload={"receipt_id": receipt_id, "event_type": event_type},
                     correlation_id=correlation, organization_id=message.organization_id,
-                    shop_id=message.shop_id, causation_id=f"outbox:{delivery.id}",
+                    shop_id=message.shop_id, causation_id=cause,
                 )
             )  # fmt: skip
 

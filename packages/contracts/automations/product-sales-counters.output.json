@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/automations/product-sales-counters.output.json",
+  "title": "Product Sales Counters output",
+  "description": "Units and orders moved per listing (keys are listing IDs); never buyer data.",
+  "type": "object",
+  "properties": {
+    "receipt_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "units": {
+      "type": "object"
+    },
+    "orders": {
+      "type": "object"
+    },
+    "skipped": {
+      "type": "string",
+      "enum": [
+        "not_stored"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

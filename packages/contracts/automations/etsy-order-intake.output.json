@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/automations/etsy-order-intake.output.json",
+  "title": "Etsy Order Intake output",
+  "description": "What a run did: IDs, states and counts only.",
+  "type": "object",
+  "properties": {
+    "receipt_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "written": {
+      "type": "boolean"
+    },
+    "state": {
+      "enum": [
+        null,
+        "unpaid",
+        "paid",
+        "ingested",
+        "awaiting_shipment",
+        "shipped",
+        "delivered",
+        "cancelled",
+        "refunded"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "history",
+        "reconcile",
+        "sweep"
+      ]
+    },
+    "orders_stored": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "receipts_read": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "drifts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "etsy_receipts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "skipped": {
+      "type": "string",
+      "enum": [
+        "not_connected",
+        "locked"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

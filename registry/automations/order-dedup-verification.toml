@@ -1,4 +1,5 @@
-# Order Deduplication & Verification. Automation specification (ADR-0013). DRAFT: not production-ready.
+# Order Deduplication & Verification. Automation specification (ADR-0013). All sections
+# defined (slice 5.11); readiness stays "draft" until the owner approves the activation.
 id = "order-dedup-verification"
 name = "Order Deduplication & Verification"
 version = 1
@@ -9,6 +10,8 @@ timeout_seconds = 120
 side_effect = "internal"
 approval_required = false
 ai_steps = []
+# It re-reads the receipt through the Action Gateway (GET-only) to compare it with the store.
+allowed_actions = ["etsy.receipts.read"]
 readiness = "draft"
 activation_phase = 5
 
@@ -18,73 +21,73 @@ initial_backoff_seconds = 5
 max_backoff_seconds = 900
 
 [specification.identity]
-status = "draft"
-text = "Order Deduplication & Verification (order-dedup-verification), version 1. Deterministic: no model calls."
+status = "defined"
+text = "Order Deduplication & Verification (order-dedup-verification), version 1. Deterministic: no model calls, no browser, no Etsy write."
 
 [specification.business_owner]
-status = "draft"
-text = "eitan: accountable for the outcome; Engineering maintains the code."
+status = "defined"
+text = "eitan: accountable for the outcome (the owner until Eitan is active in Phase 9); Engineering maintains the code."
 
 [specification.trigger]
-status = "draft"
-text = "Primary: workflow. Also callable from: workflow, schedule, agent_tool, each through the API and authorization checks."
+status = "defined"
+text = "Primary: workflow, a step of Etsy Order Intake: each orders.ingested.v1 or orders.updated.v1 event starts it (key verify:{shop_id}:{receipt_id}:{etsy_updated_at}). Also schedule and agent_tool, through the engine's authorization."
 
 [specification.input_schema]
-status = "draft"
-text = "DRAFT: JSON Schema in packages/contracts/automations/order-dedup-verification.json, written in Phase 5."
+status = "defined"
+text = "packages/contracts/automations/order-dedup-verification.input.json: the receipt_id. No buyer data."
 
 [specification.preconditions]
-status = "draft"
-text = "DRAFT: shop connected and capability verified where external systems are involved."
+status = "defined"
+text = "The shop is connected in the execution's organization; otherwise the run completes as skipped: not_connected."
 
 [specification.steps]
-status = "draft"
-text = "Check that exactly one logical order exists per receipt; compare totals and items with the receipt; open a discrepancy finding otherwise."
+status = "defined"
+text = "Re-read the receipt through the Action Gateway (etsy.receipts.read, GET-only); read the stored order's version, grand total and items; for the same version compare: exactly one stored order (missing otherwise), the grand total (totals) and the item quantities (items); record each difference once in app.sync_drifts (source verification) with an orders.drift_detected.v1 event."
 
 [specification.output_schema]
-status = "draft"
-text = "DRAFT: defined with the input schema in Phase 5."
+status = "defined"
+text = "packages/contracts/automations/order-dedup-verification.output.json: the receipt_id, the kinds of the differences found and how many were new. No amounts."
 
 [specification.dependencies]
-status = "draft"
-text = "orders tables"
+status = "defined"
+text = "Etsy Open API v3 through the Action Gateway; the order history store; app.sync_drifts and the outbox."
 
 [specification.error_handling]
-status = "draft"
-text = "Typed errors per dependency; a capability blocked by the marketplace is recorded, never retried in a loop."
+status = "defined"
+text = "A refused or failed read raises into the retry policy; another version of the order is not compared (its own verification follows). Errors are recorded as their type name only."
 
 [specification.retry_policy]
-status = "draft"
-text = "Exponential backoff from the retry table; then dead-letter and an incident."
+status = "defined"
+text = "Five attempts, exponential backoff from 5 s to 15 min with jitter; then dead-lettered, recoverable by an audited admin retry."
 
 [specification.idempotency]
-status = "draft"
-text = "Key order:{shop_id}:{receipt_id}:verify; unique per automation; a replay returns the existing execution."
+status = "defined"
+text = "The engine's unique key per order version; a drift is unique per receipt, kind and Etsy update time, so a replay records nothing new."
 
 [specification.timeouts_and_sla]
-status = "draft"
-text = "Within 1 minute of ingest"
+status = "defined"
+text = "120 s per attempt; within a minute of the ingest at p95."
 
 [specification.permissions]
-status = "draft"
-text = "Runs under its own service identity with least-privilege database grants; employees trigger it only when it is in their allowed_automations."
+status = "defined"
+text = "Runs as the htco_worker role inside its job's organization; reads the stored order's version, grand total and items, writes sync_drifts and the outbox; its only action is etsy.receipts.read."
 
 [specification.audit]
-status = "draft"
-text = "One activity record per execution and per external side effect, with correlation and causation IDs."
+status = "defined"
+text = "Execution state changes with actor and correlation ID; one action_executions row per read; each drift and its event carry the execution and correlation IDs."
 
 [specification.tests]
-status = "draft"
-text = "DRAFT: replay, failure and recovery tests in Phase 5 (Scenario G pattern)."
+status = "defined"
+text = "tests/application/test_order_automations.py (table-driven verification, AC-5.11.4); tests/integration/test_order_scenarios.py (a matching order records nothing, a changed one one drift once)."
 
 [specification.recovery]
-status = "draft"
-text = "DRAFT: compensation or manual recovery runbook written in Phase 5."
+status = "defined"
+text = "Runbook: docs/features/orders-ingest/operations.md (Order Deduplication & Verification). A drift is a finding, never a change: re-sync the order from the Orders screen or wait for reconciliation; from Phase 6 a drift opens an incident."
 
 [specification.approvals]
-status = "draft"
-text = "None for internal effects; external effects go through the outbox."
+status = "defined"
+text = "None: it records findings only."
 
 [specification.metrics]
-status = "draft"
-text = "Executions, success rate, retries, dead letters, latency p50/p95, cost per execution."
+status = "defined"
+text = "Admin › Health: executions, success rate, retries, dead letters and latency; the shops' drift counts."

@@ -88,10 +88,20 @@ from htco_application.notifications import (
     EmailDeliverer,
     EmailPort,
     EventDeliverer,
+    EventSubscriber,
     IncidentNotifications,
     NotificationRequest,
     NotificationService,
     RequestedNotifications,
+)
+from htco_application.order_automations import (
+    COUNTED_EVENTS,
+    ORDER_DEDUP,
+    SALES_COUNTERS,
+    VERIFIED_EVENTS,
+    OrderEventTriggers,
+    OrderVerification,
+    ProductSalesCounters,
 )
 from htco_application.order_intake import (
     ORDER_SYNC_JOB,
@@ -132,6 +142,7 @@ from htco_persistence.jobs import PostgresJobQueue, PostgresWorkerHeartbeats
 from htco_persistence.maintenance import PostgresPurgeStore, PostgresShopDirectory
 from htco_persistence.messaging import PostgresOutbox
 from htco_persistence.notifications import PostgresEmailDirectory, PostgresNotificationStore
+from htco_persistence.order_automations import PostgresOrderAutomationStore
 from htco_persistence.shop_integrations import (
     PostgresCapabilityStore,
     PostgresRefreshLock,
@@ -268,9 +279,14 @@ def email_port(settings: WorkerSettings, http: httpx.AsyncClient) -> EmailPort:
 
 
 def notification_deliverers(
-    settings: WorkerSettings, database: Database, http: httpx.AsyncClient
+    settings: WorkerSettings,
+    database: Database,
+    http: httpx.AsyncClient,
+    *,
+    order_events: Mapping[str, EventSubscriber] | None = None,
 ) -> dict[str, Deliverer]:
-    """`events.publish` with the notification subscribers (slice 6.4), and `email.send`."""
+    """`events.publish` with the notification subscribers (slice 6.4) and the order events
+    (slice 5.11), and `email.send`."""
     service = NotificationService(
         PostgresNotificationStore(database), clock=_now, offload=anyio.to_thread.run_sync
     )
@@ -280,6 +296,7 @@ def notification_deliverers(
                 INCIDENT_OPENED: IncidentNotifications(service),
                 INCIDENT_RESOLVED: IncidentNotifications(service),
                 NOTIFICATION_REQUESTED: RequestedNotifications(service),
+                **(order_events or {}),
             }
         ),
         EMAIL_DESTINATION: EmailDeliverer(
@@ -388,8 +405,21 @@ def worker_gateway(
 
 
 def intake_handlers(database: Database, vault: PostgresTokenVault) -> dict[str, Handler]:
-    """Etsy Order Intake's handler (slice 5.4)."""
-    return {ORDER_INTAKE: OrderIntake(store=PostgresOrderStore(database), shops=vault, clock=_now)}
+    """Etsy Order Intake (slice 5.4), and the two automations its events start (slice 5.11):
+    Order Deduplication & Verification and Product Sales Counters. Each runs only once the owner
+    activates it; until then the engine refuses its triggers."""
+    automations = PostgresOrderAutomationStore(database)
+    return {
+        ORDER_INTAKE: OrderIntake(store=PostgresOrderStore(database), shops=vault, clock=_now),
+        ORDER_DEDUP: OrderVerification(automations, vault, clock=_now),
+        SALES_COUNTERS: ProductSalesCounters(automations, clock=_now),
+    }
+
+
+def order_event_subscribers(engine: DurableAutomationEngine) -> dict[str, EventSubscriber]:
+    """The order events that start the order automations (slice 5.11)."""
+    triggers = OrderEventTriggers(engine, offload=anyio.to_thread.run_sync)
+    return dict.fromkeys(sorted(VERIFIED_EVENTS | COUNTED_EVENTS), triggers)
 
 
 def fulfillment_handlers(
@@ -595,11 +625,17 @@ async def _serve(settings: WorkerSettings) -> None:
                 PostgresNotificationStore(database), clock=_now, offload=anyio.to_thread.run_sync
             )
         ),
-    ) | outbox_handlers(PostgresOutbox(database), notification_deliverers(settings, database, http))
+    )
     gateway = worker_gateway(settings, database, etsy.gateway_adapter)
     deployed = {} if vault is None or adapter is None else intake_handlers(database, vault)
     deployed |= fulfillment_handlers(database, None if adapter is None else vault)
     engine = worker_engine(database, gateway=gateway, handlers=deployed)
+    handlers |= outbox_handlers(
+        PostgresOutbox(database),
+        notification_deliverers(
+            settings, database, http, order_events=order_event_subscribers(engine)
+        ),
+    )
     handlers |= automation_handlers(engine, settings.worker_id)
     handlers |= fulfillment_schedule_handlers(
         settings.schedules, engine=engine, queue=queue, directory=PostgresShopDirectory(database)
