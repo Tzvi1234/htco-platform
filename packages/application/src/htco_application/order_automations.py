@@ -51,6 +51,7 @@ from htco_application.order_ingest import (
     INGESTED,
     REFUNDED,
     UPDATED,
+    IngestSource,
 )
 from htco_application.order_intake import GatewayReceipts, IntakeShops
 from htco_application.shop_integrations import ShopIntegration
@@ -67,7 +68,7 @@ EVENT_TRIGGER_ACTOR = ActorRef(ActorKind.SYSTEM, "order-events")
 INTAKE_ACTOR = ActorRef(ActorKind.AUTOMATION, ORDER_INTAKE)
 VERIFIED_EVENTS = frozenset({INGESTED, UPDATED})
 # Sources whose events verification skips: they have just compared the receipt with Etsy.
-COMPARED_SOURCES = frozenset({"reconciliation"})
+COMPARED_SOURCES = frozenset({IngestSource.RECONCILIATION.value})
 COUNTED_EVENTS = frozenset({INGESTED, UPDATED, CANCELLED, REFUNDED})
 
 type Offload = Callable[[Callable[[], Any]], Any]
