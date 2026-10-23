@@ -24,7 +24,7 @@ This folder is the system's source of truth: what we are building, in what order
 | **Engineering** | [Engineering rules](engineering/ENGINEERING_RULES.md) · [Testing strategy](engineering/TESTING_STRATEGY.md) · [Toolchain](engineering/TOOLCHAIN.md) |
 | **Features** | [Feature docs and template](features/README.md) |
 | **Cost** | [Cost model](cost/COST_MODEL.md) |
-| **Reviews** | [Post-merge review, 2026-10-23](reviews/2026-10-23-post-merge-review.md) |
+| **Reviews** | [Post-merge review, 2026-10-23](reviews/2026-10-23-post-merge-review.md); [architecture audit, 2026-10-23](reviews/2026-10-23-architecture-audit.md) |
 
 ## Documents created later, in the phase that needs them
 
