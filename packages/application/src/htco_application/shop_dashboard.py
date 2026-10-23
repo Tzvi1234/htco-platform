@@ -50,6 +50,7 @@ from htco_application.marketplace import (
 from htco_application.order_history import (
     STALE_AFTER,
     HistorySync,
+    OrderStatusChange,
     OrderSync,
     SyncState,
     history_sync,
@@ -186,6 +187,13 @@ class ShopDataUnavailableError(Exception):
     def __init__(self, retry_after_seconds: int) -> None:
         super().__init__("the shop's live data is unavailable right now")
         self.retry_after_seconds = retry_after_seconds
+
+
+class OrderNotFoundError(Exception):
+    """No such order in the shop (stored, or in the live 30-day read)."""
+
+    def __init__(self, order_id: int) -> None:
+        super().__init__(f"order {order_id} not found")
 
 
 class ShopDataScopeMissingError(Exception):
@@ -345,6 +353,10 @@ class ShopOverview:
     profile: ShopProfile
     # None when the orders could not be read (for example a scope is missing).
     sales: SalesSummary | None
+    # Where the sales come from: the stored history once complete, Etsy live until then.
+    sales_source: DataSource | None = None
+    # The stored history's state; None when the store is not set up.
+    sync: HistorySync | None = None
 
 
 @dataclass(frozen=True)
@@ -415,6 +427,17 @@ class OrdersPage:
     partial: bool
     cap: int
     # The stored history's state; None when the store is not set up.
+    sync: HistorySync | None = None
+
+
+@dataclass(frozen=True)
+class OrderDetail:
+    shop_id: uuid.UUID
+    freshness: Freshness
+    order: OrderView
+    # Recorded transitions, oldest first; empty for an order read live.
+    timeline: tuple[OrderStatusChange, ...]
+    buyer_details: bool
     sync: HistorySync | None = None
 
 
@@ -540,8 +563,23 @@ async def shop_overview(
     """The shop card and the Home screen: the shop's profile and its sales of the last 30 days."""
     _check_offset(utc_offset_minutes)
     opened = await _open(dashboard, auth, shop_id, Capability.VIEW_OVERVIEW, now)
-    await _sync_state(opened)  # starts the history's sync when due; never waits for it
+    sync_state = await _sync_state(opened)  # starts the history's sync when due; never waits
+    sync = None if dashboard.history is None else history_sync(sync_state, opened.etsy)
     profile = await opened.get("profile", opened.profile)
+    currency = profile.value.currency_code
+    # One day more than the window, so every caller's local window is covered.
+    since = now - timedelta(days=SALES_WINDOW_DAYS + 1)
+    stored = await _stored(opened, sync_state, since=since, buyer_data=False)
+    if stored is not None and sync_state is not None:
+        window = _ReceiptWindow(since=since, receipts=stored, partial=False)
+        return ShopOverview(
+            shop_id=shop_id,
+            freshness=_freshness(profile),
+            profile=profile.value,
+            sales=_summarise(window, currency, now, utc_offset_minutes),
+            sales_source=DataSource.HTCO_STORE,
+            sync=sync,
+        )
     sales: Fetched[_ReceiptWindow] | None
     try:
         sales = await opened.get("receipts", opened.receipts)
@@ -549,12 +587,62 @@ async def shop_overview(
         sales = None
     summary = None
     if sales is not None:
-        summary = _summarise(sales.value, profile.value.currency_code, now, utc_offset_minutes)
+        summary = _summarise(sales.value, currency, now, utc_offset_minutes)
     return ShopOverview(
         shop_id=shop_id,
         freshness=_freshness(profile, *([] if sales is None else [sales])),
         profile=profile.value,
         sales=summary,
+        sales_source=None if sales is None else DataSource.ETSY_LIVE,
+        sync=sync,
+    )
+
+
+async def shop_order(
+    dashboard: ShopDashboard,
+    auth: AuthContext,
+    shop_id: uuid.UUID,
+    order_id: int,
+    *,
+    now: datetime,
+) -> OrderDetail:
+    """One order with its status timeline (slice 5.6): from the stored history, or, for an
+    order not stored yet, from the live 30-day read with an empty timeline."""
+    opened = await _open(dashboard, auth, shop_id, Capability.VIEW_ORDERS, now)
+    contact = _sees_buyer_contact(opened, auth, now)
+    sync_state = await _sync_state(opened)
+    history = dashboard.history
+    sync = None if history is None else history_sync(sync_state, opened.etsy)
+    if history is not None and sync_state is not None:
+        timeline: tuple[OrderStatusChange, ...] = ()
+        try:
+            found = await history.store.load_order(
+                shop_id, opened.etsy, order_id, buyer_data=contact
+            )
+            timeline = await history.store.timeline(shop_id, order_id) if found else ()
+        except Exception as error:
+            _log.warning("order_history.read_failed: %s", type(error).__name__)
+            found = None
+        if found is not None:
+            return OrderDetail(
+                shop_id=shop_id,
+                freshness=_store_freshness(sync_state, now),
+                order=_order_view(found, now, contact=contact),
+                timeline=tuple(sorted(timeline, key=lambda c: c.observed_at)),
+                buyer_details=contact,
+                sync=sync,
+            )
+    window = await opened.get("receipts", opened.receipts)
+    live = next((r for r in window.value.receipts if r.receipt_id == order_id), None)
+    if live is None:
+        raise OrderNotFoundError(order_id)
+    return OrderDetail(
+        shop_id=shop_id,
+        freshness=_freshness(window),
+        order=_order_view(live, now, contact=contact),
+        timeline=(),
+        buyer_details=contact,
+        sync=sync,
     )
 
 
@@ -1028,14 +1116,22 @@ def _money(amount: Decimal, currency: str) -> Money:
     return Money(amount=amount, currency=currency)
 
 
+def _machine_state(receipt: OrderReceipt) -> StoreOrderState:
+    """The stored `order_state` (slice 5.6); for a receipt read live, what the machine reads
+    from its facts."""
+    if receipt.stored_state is not None:
+        return receipt.stored_state
+    return observed_state(receipt_facts(receipt))
+
+
 def order_state(receipt: OrderReceipt) -> OrderViewState:
     """How the Orders screen names a receipt's state: the store's machine, viewed."""
-    return ORDER_VIEW_STATES[observed_state(receipt_facts(receipt))]
+    return ORDER_VIEW_STATES[_machine_state(receipt)]
 
 
 def is_sale(receipt: OrderReceipt) -> bool:
     """Cancelled, fully refunded and unpaid orders are not sales (the store's rule)."""
-    return observed_state(receipt_facts(receipt)).counts_as_sale
+    return _machine_state(receipt).counts_as_sale
 
 
 def _ship_by(receipt: OrderReceipt) -> datetime | None:

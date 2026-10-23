@@ -44,12 +44,13 @@ from htco_application.marketplace import (
     OrderReceipt,
     Page,
 )
-from htco_application.order_ingest import BACKFILL, SYNC, IngestContext
+from htco_application.order_ingest import BACKFILL, SYNC, IngestContext, IngestSource
 from htco_application.shop_capabilities import ShopNotConnectedError, TokenPinning
 from htco_application.shop_integrations import ShopIntegration
 from htco_application.shops import ShopAccessDeniedError, ShopNotFoundError
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.integrations import IntegrationStatus
+from htco_domain.orders import OrderState
 
 _log = logging.getLogger(__name__)
 
@@ -106,6 +107,16 @@ class HistorySync:
     last_synced_at: datetime | None
 
 
+@dataclass(frozen=True)
+class OrderStatusChange:
+    """One recorded transition of an order (`order_status_events`): no buyer data."""
+
+    from_state: OrderState | None
+    to_state: OrderState
+    source: IngestSource
+    observed_at: datetime
+
+
 # --- Ports -------------------------------------------------------------------------------------
 
 
@@ -153,6 +164,16 @@ class OrderStore(Protocol):
     ) -> tuple[OrderReceipt, ...]:
         """Stored orders created since `since` (None: all), newest first. Without `buyer_data`
         the buyer table is not read: no name, no address, no tracking number."""
+        ...
+
+    async def load_order(
+        self, shop_id: uuid.UUID, etsy_shop_id: int, receipt_id: int, *, buyer_data: bool
+    ) -> OrderReceipt | None:
+        """One stored order, under the same buyer-data rule as `load`."""
+        ...
+
+    async def timeline(self, shop_id: uuid.UUID, receipt_id: int) -> tuple[OrderStatusChange, ...]:
+        """The order's recorded transitions, oldest first (causal order)."""
         ...
 
     def lock(self, shop_id: uuid.UUID) -> AbstractAsyncContextManager[bool]:

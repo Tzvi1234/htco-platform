@@ -64,8 +64,7 @@ async def test_one_order__unknown_or_another_shop__none(database: Database) -> N
         is None
     )
     assert (
-        await store.load_order(uuid.uuid4(), integration.etsy_shop_id, 83, buyer_data=True)
-        is None
+        await store.load_order(uuid.uuid4(), integration.etsy_shop_id, 83, buyer_data=True) is None
     )
     assert await store.timeline(uuid.uuid4(), 83) == ()
 

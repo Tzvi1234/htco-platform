@@ -91,9 +91,7 @@ async def test_one_order__a_shop_not_granted__404(synced: Wired) -> None:
 
 @pytest.mark.ac("AC-5.6.1")
 async def test_one_order__another_shop_id__404(synced: Wired) -> None:
-    response = await synced.world.get(
-        f"orders/{first_order(synced)[1]}", shop_id=str(uuid.uuid4())
-    )
+    response = await synced.world.get(f"orders/{first_order(synced)[1]}", shop_id=str(uuid.uuid4()))
 
     problem(response, "not-found", 404)
 
