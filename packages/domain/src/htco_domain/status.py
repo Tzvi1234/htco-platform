@@ -4,8 +4,8 @@ Every lifecycle keeps its own state machine: automation executions (`ExecutionSt
 executions (`ActionState`), browser environments (`EnvironmentStatus`), business tasks
 (`TaskState`) and incidents (`IncidentState`, Phase 6). For the office, each state also has one
 `StatusKind`, so a screen or a monitor can say "running", "waiting", "done", "failed" or
-"stopped" the same way for all of them. A task or an execution that waits says why with a `WaitingReason`; the engine records these on the task
-rather than as new task states.
+"stopped" the same way for all of them. A task or an execution that waits says why with a
+`WaitingReason`; the engine records these on the task rather than as new task states.
 """
 
 from collections.abc import Mapping
