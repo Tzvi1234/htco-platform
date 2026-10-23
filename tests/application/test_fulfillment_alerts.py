@@ -132,3 +132,16 @@ async def test_a_stock_event_without_a_listing_is_ignored() -> None:
     message = OutboxMessage(ORG, EVENTS, "x", {"event_type": "catalog.out_of_stock.v1"}, SHOP)
     await StockAlerts(NotificationService(notes, clock=lambda: PAID)).handle(message)
     assert notes.rows == {}
+
+
+async def test_the_ship_by_date_is_shown_in_the_shops_time_zone() -> None:
+    """Codex review of #93: 23:30 UTC on the 26th is the 27th in Jerusalem."""
+    late = datetime(2026, 10, 26, 23, 30, tzinfo=UTC)
+    handler, notes = run(
+        datetime(2026, 10, 26, 9, 0, tzinfo=UTC),
+        calendar=BusinessCalendar(timezone="Asia/Jerusalem"),
+        ship_by=late,
+    )
+    await handler(context())
+    [row] = notes.rows.values()
+    assert row.params["ship_by"] == "2026-10-27"
