@@ -32,7 +32,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 - [x] 5.14 Shared approval contract (in-memory; Postgres in Phase 7; `htco_application.approvals`: `ApprovalService`, `MemoryApprovalService`, the gateway's `GatewayApprovals` and the `ApprovalResumer` for waiting automations; no migration)
 - [x] 5.15 Circuit breaker, rate and concurrency control, idempotency for actions (standard-library rules with Postgres state instead of PyBreaker, aiolimiter and Tenacity; see execution-engine.md §8; the real Etsy QPS and QPD figures are an owner question)
 - [x] 5.16 Shop Environment Registry: data model, statuses, state machine (contracts only; migration `20261024200000_browser_environments.sql`, pgTAP `16_browser_environments`, `GET /v1/shops/{shop_id}/browser-environment` for the Owner and Admins; creation stays off until 8A)
-- [ ] 5.17 Secret Broker and Authenticator contracts
+- [x] 5.17 Secret Broker and Authenticator contracts (`htco_domain.secrets`, `htco_application.secrets` with in-memory broker and authenticator on the existing vault, the PyOTP adapter `htco_integrations.totp`, the catalog's secret-output rule; tables in 8B; no migration)
 - [ ] 5.18 Status management for tasks, executions and environments
 
 **Order of work** ([EXECUTION_ORDER](../EXECUTION_ORDER.md)):
@@ -470,7 +470,7 @@ The `SecretBroker` and `Authenticator` Protocols, `InjectionGrant`, `SecretRef`,
 - [ ] Workers use their own database role and explicit tenant filters; tested.
 - [ ] Buyer PII masked by role; never logged; no contact data stored (ADR-0018).
 - [ ] The gateway is the only path to Etsy for automations; an architecture test forbids importing the Etsy adapter outside the API channel and the maintenance probes.
-- [ ] No secret or code type reachable by a tool or model (5.17).
+- [x] No secret or code type reachable by a tool or model (5.17).
 
 ## Documentation
 

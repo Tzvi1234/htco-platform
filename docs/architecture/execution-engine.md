@@ -382,6 +382,8 @@ class ConsentRecord(BaseModel):
     ip_hash: str
 ```
 
+**As built (slice 5.17):** standard-library dataclasses in `htco_domain.secrets` and `htco_application.secrets` (the layer rule). `SecretStr` is `SecretValue` throughout. `issue_injection_grant` also takes `by` (the asking run), and `enrol` also takes the `environment_id` its codes are injected into. The vault is a port (`SecretVault`) that `EnvelopeSealer` satisfies. PyOTP sits behind the `TotpCodes` port in `htco_integrations.totp`, because the application layer imports only the standard library. The action catalog refuses any output schema that could carry a secret or a code (`secret_carrying_fields`).
+
 Invariants (all tested):
 
 - no model input, tool output, log line, error, audit row or activity record contains a secret or code;

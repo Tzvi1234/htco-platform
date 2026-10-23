@@ -18,6 +18,7 @@ from htco_application.execution.gateway import Channel
 from htco_application.execution.guards import RateBudget
 from htco_application.execution.schema import check_schema
 from htco_application.jobs import JsonValue
+from htco_application.secrets import secret_carrying_fields, secret_tool_names
 from htco_domain.actions import ApprovalPolicy, VerifyMode
 from htco_domain.tooling import ToolDefinition
 
@@ -169,6 +170,12 @@ def _parse(
     output_schema = schemas[str(document["output_schema"])]
     for schema in (input_schema, output_schema):
         check_schema(schema)
+    leaks = secret_carrying_fields(output_schema)
+    if leaks or secret_tool_names([tool.name]):
+        # ADR-0021: no tool hands a secret or a one-time code to its caller (slice 5.17).
+        raise ValueError(
+            f"the output could carry a secret or a code: {', '.join(leaks) or tool.name}"
+        )
     capability = document.get("user_capability")
     return ActionDefinition(
         tool=tool,
