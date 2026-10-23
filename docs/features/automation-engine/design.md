@@ -58,7 +58,7 @@ A handler is `async def handler(context: HandlerContext) -> Completed | Waiting`
 
 | Decision | Alternatives considered | Why |
 |---|---|---|
-| A new `DurableAutomationEngine` beside the in-memory engine, sharing `authorize` | Rewriting `AutomationEngine` | The in-memory engine and its tests stay as they are (Scenario G in memory keeps passing) |
+| A new `DurableAutomationEngine` sharing `authorize`; the first in-memory engine was later retired (5.11, audit P2-5) | Rewriting `AutomationEngine` | Its tests now run against the durable engine with `MemoryExecutionStore` |
 | One job per attempt; handler failures follow the definition's policy, crashes the job's | One job retried by the queue | The definition owns attempts and backoff bounds (AC-5.10.4); a crash still counts as an attempt |
 | Optimistic `advance` on the stored state and attempts | Row locks held during the handler | No transaction stays open while a handler runs; two runs cannot both move an execution |
 | Definitions from the database at run time | The registry files in the image | Rollback is a sync (`readiness` back to `draft`), and the image does not carry `registry/` |

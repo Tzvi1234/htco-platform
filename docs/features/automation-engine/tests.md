@@ -4,7 +4,7 @@
 
 | Level | What is covered | Location |
 |---|---|---|
-| Domain | Execution transitions including the admin retry; the in-memory engine unchanged | `tests/domain/test_lifecycles.py`, `tests/application/test_automation_engine.py` |
+| Domain | Execution transitions including the admin retry; the first engine's cases ported to the durable engine | `tests/domain/test_lifecycles.py`, `tests/application/test_automation_engine.py` |
 | Application | The durable engine with an in-memory store: replay (also concurrent), refusals logged with reasons, retry within backoff bounds, dead letter, admin retry, crash recovery, the full state-change record, races | `tests/application/test_durable_engine.py` |
 | Application | User actions decided by the policy engine (roles, shops, organizations), admin retry, the sync plan, the registry from rows | `tests/application/test_automation_requests.py` |
 | API | The routes: list, replayed trigger with `Idempotency-Key`, 400/403/404/409/422/503, executions paging, admin retry | `tests/api/test_automation_routes.py` |
