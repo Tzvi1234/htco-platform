@@ -35,12 +35,6 @@ class GitError(Exception):
 MIGRATIONS_DIR = "supabase/migrations"
 PGTAP_DIR = "supabase/tests/database"
 
-# A duplicate that predates this check. The second file is renamed once the open Phase 6 pgTAP
-# files have taken their numbers; until then it is the only one tolerated.
-KNOWN_PGTAP_DUPLICATES: dict[str, frozenset[str]] = {
-    "14": frozenset({"14_action_guards.test.sql", "14_worker_order_purge.test.sql"}),
-}
-
 _MIGRATION = re.compile(r"^(?P<version>\d{14})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$")
 _PGTAP = re.compile(r"^(?P<prefix>\d+)_[a-z0-9_]+\.test\.sql$")
 
@@ -98,7 +92,7 @@ def order_findings(
 
 
 def pgtap_findings(names: Iterable[str]) -> list[Finding]:
-    """Report a pgTAP prefix used by more than one test file (the known duplicate aside)."""
+    """Report a pgTAP prefix used by more than one test file."""
     by_prefix: dict[str, list[str]] = {}
     for name in sorted(names):
         match = _PGTAP.match(name)
@@ -106,17 +100,13 @@ def pgtap_findings(names: Iterable[str]) -> list[Finding]:
             by_prefix.setdefault(match.group("prefix"), []).append(name)
     findings = []
     for prefix, files in sorted(by_prefix.items()):
-        tolerated = KNOWN_PGTAP_DUPLICATES.get(prefix, frozenset())
-        first = files[0]
-        for name in files[1:]:
-            if name in tolerated and first in tolerated:
-                continue
-            findings.append(
-                Finding(
-                    f"{PGTAP_DIR}/{name}",
-                    f"uses prefix {prefix}, already used by {first}; take the next free one",
-                )
+        findings.extend(
+            Finding(
+                f"{PGTAP_DIR}/{name}",
+                f"uses prefix {prefix}, already used by {files[0]}; take the next free one",
             )
+            for name in files[1:]
+        )
     return findings
 
 

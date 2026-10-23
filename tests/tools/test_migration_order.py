@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from tools.migration_order import (
-    KNOWN_PGTAP_DUPLICATES,
     Finding,
     GitError,
     main,
@@ -141,18 +140,6 @@ def test_pgtap_findings__new_duplicate_prefix__is_reported() -> None:
             "uses prefix 18, already used by 18_order_reconciliation.test.sql; "
             "take the next free one",
         )
-    ]
-
-
-def test_pgtap_findings__the_known_duplicate__is_tolerated_until_renamed() -> None:
-    assert pgtap_findings(sorted(KNOWN_PGTAP_DUPLICATES["14"])) == []
-
-
-def test_pgtap_findings__a_third_file_on_the_known_duplicate__is_reported() -> None:
-    names = [*sorted(KNOWN_PGTAP_DUPLICATES["14"]), "14_more.test.sql"]
-
-    assert [finding.path for finding in pgtap_findings(names)] == [
-        "supabase/tests/database/14_more.test.sql"
     ]
 
 
