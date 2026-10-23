@@ -519,3 +519,54 @@ async def test_counters__a_move_below_zero__clamped_at_zero_and_logged(
     clamps = [r for r in caplog.records if r.getMessage().startswith("product_sales.clamped")]
     assert len(clamps) == 1
     assert clamps[0].levelno == logging.WARNING
+
+
+@pytest.mark.ac("AC-5.11.5")
+async def test_counters__two_receipts_at_once_on_a_listing_with_no_counter_row__both_counted(
+    admin: Database, worker_db: Database
+) -> None:
+    """Two recounts of a listing whose counter row does not exist yet (sage, #97): neither may
+    overwrite the other. A SHARE lock on the counters lets both recounts read but holds their
+    writes until both wait, so the interleaving is the race's, every run."""
+    tenant, integration = await connected(admin)
+    shop = integration.shop_id
+    first, second = order(53_301), order(53_302)  # two units of listing 777 each
+    with tenant_scope(tenant.organization_id):
+        await PostgresOrderStore(worker_db).ingest_receipts(
+            integration, [first, second],
+            context=IngestContext(IngestSource.WEBHOOK, correlation_id="c"), now=NOW,
+        )  # fmt: skip
+    store = PostgresOrderAutomationStore(worker_db)
+
+    async def recount(receipt_id: int) -> None:
+        with tenant_scope(tenant.organization_id):
+            await store.recount(tenant.organization_id, shop, receipt_id,
+                                execution_id=uuid.uuid4(), now=NOW)  # fmt: skip
+
+    def waiting() -> int:
+        return int(
+            scalar(
+                admin,
+                "select count(*) from pg_locks l join pg_class c on c.oid = l.relation "
+                "where c.relname = 'product_sales_counters' and not l.granted",
+                [],
+            )
+        )
+
+    async with anyio.create_task_group() as group:
+        with admin.connection() as holder, holder.transaction():
+            holder.execute("lock table app.product_sales_counters in share mode")
+            group.start_soon(recount, first.receipt_id)
+            group.start_soon(recount, second.receipt_id)
+            # Wait until both recounts have read and are waiting to write.
+            with anyio.fail_after(30):
+                while waiting() < 2:  # noqa: ASYNC110 - polls pg_locks
+                    await anyio.sleep(0.05)
+        # The lock is released here; the two writes now race.
+
+    with admin.connection() as c:
+        row = c.execute(
+            "select units, orders from app.product_sales_counters where shop_id = %s and listing_id = 777",  # noqa: E501
+            [shop],
+        ).fetchone()
+    assert row == (4, 2)
