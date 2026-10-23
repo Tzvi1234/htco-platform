@@ -63,6 +63,8 @@ class MemoryActionStore:
                 state=row.state,
                 result=final,
                 approval_id=row.approval_id,
+                retry_at=None if row.result is None else row.result.retry_at,
+                error_code=None if row.result is None else row.result.error_code,
             )
 
     def record(self, execution_id: uuid.UUID, step: Finish, *, now: datetime) -> None:  # noqa: ARG002

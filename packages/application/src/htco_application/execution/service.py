@@ -26,6 +26,7 @@ Every refusal is a result with a stable `error_code` and a reason that never con
 (it may be personal) or a secret.
 """
 
+import asyncio
 import hashlib
 import json
 import uuid
@@ -52,7 +53,7 @@ from htco_application.execution.gateway import (
 from htco_application.execution.guards import Guards, InlineRetry
 from htco_application.execution.schema import validate
 from htco_application.jobs import JsonValue, describe_error
-from htco_application.marketplace import QuotaDeferredError
+from htco_application.marketplace import MarketplaceUnavailableError, QuotaDeferredError
 from htco_application.messaging import OutboxMessage
 from htco_application.workforce.registry import Registry
 from htco_application.workforce.tool_access import ToolVerdict, decide_tool_access
@@ -73,11 +74,18 @@ _CLIENT_ERRORS = range(400, 500)
 _TOO_MANY_REQUESTS = 429
 
 
+_SERVER_ERRORS = 500
+# Deferrals whose wait nothing else re-checks (a 429's Retry-After, the daily quota) or that end
+# at a known time: a resubmission before retry_at sends nothing. A busy slot is checked again.
+_HELD_UNTIL_RETRY_AT = frozenset({"rate_limited", "breaker_open"})
+_TRANSPORT_ERRORS = (MarketplaceUnavailableError, ConnectionError, TimeoutError)
+
+
 class _Failure(Enum):
     RATE_LIMITED = auto()  # 429: wait for Retry-After
     QUOTA = auto()  # the daily budget floor: the next UTC day
-    PERMANENT = auto()  # another 4xx: never retried, not a breaker failure
-    TRANSIENT = auto()  # 5xx, no answer, anything else: a breaker failure
+    PERMANENT = auto()  # another 4xx, or a local error: never retried, not a breaker failure
+    TRANSIENT = auto()  # 5xx or a transport failure: retried for reads, a breaker failure
 
 
 def _classify(error: Exception) -> tuple[_Failure, float | None]:
@@ -89,7 +97,13 @@ def _classify(error: Exception) -> tuple[_Failure, float | None]:
         return _Failure.RATE_LIMITED, None if wait is None else float(wait)
     if isinstance(status, int) and status in _CLIENT_ERRORS:
         return _Failure.PERMANENT, None
-    return _Failure.TRANSIENT, None
+    if (isinstance(status, int) and status >= _SERVER_ERRORS) or isinstance(
+        error, _TRANSPORT_ERRORS
+    ):
+        return _Failure.TRANSIENT, None
+    # A bug or an unexpected local error: running it again cannot help, and it says nothing
+    # about the channel's health.
+    return _Failure.PERMANENT, None
 
 
 def request_hash(request: ActionRequest) -> str:
@@ -116,6 +130,8 @@ class Claim:
     state: ActionState
     result: ActionResult | None  # the stored result of a finished action
     approval_id: uuid.UUID | None = None
+    retry_at: datetime | None = None  # a deferred action runs again from then on
+    error_code: str | None = None  # why it was deferred or failed
 
 
 @dataclass(frozen=True)
@@ -213,6 +229,16 @@ class ActionGatewayService:
             return claim.result
         if not claim.created and claim.state not in _RESUMABLE:
             return self._result(claim.execution_id, ActionOutcome.DEFERRED, error="in_progress")
+        if (
+            claim.state is _S.DEFERRED
+            and claim.error_code in _HELD_UNTIL_RETRY_AT
+            and claim.retry_at is not None
+            and now < claim.retry_at
+        ):
+            return replace(  # not yet: nothing is sent before retry_at (a 429, the daily quota)
+                self._result(claim.execution_id, ActionOutcome.DEFERRED, error="not_yet"),
+                retry_at=claim.retry_at,
+            )
         path: list[ActionState] = [claim.state]
         try:
             definition = self._definition(request)
@@ -388,7 +414,14 @@ class ActionGatewayService:
             if retry_at is not None:
                 return self._defer(claim, request, definition, path, "slot_busy", retry_at)
         try:
-            return await self._attempts(claim, request, definition, binding, adapter, path)
+            # The whole execution is bounded by the action's timeout, so a slot's lease (the
+            # timeout plus a margin) always outlives the call it protects.
+            async with asyncio.timeout(definition.timeout.total_seconds()):
+                return await self._attempts(claim, request, definition, binding, adapter, path)
+        except TimeoutError as error:
+            self._breaker(binding, failed=True)
+            run = path if path[-1] is _S.RUNNING else [*path, _S.RUNNING]
+            return self._fail(claim, request, definition, binding, run, error, 1)
         finally:
             if guards is not None and slot is not None:
                 guards.slots.release(slot, holder=claim.execution_id)
