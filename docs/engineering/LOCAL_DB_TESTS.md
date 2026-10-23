@@ -66,10 +66,19 @@ wsl -d Ubuntu -u root -- bash /mnt/c/<path to clone>/scripts/local-db-ci.sh /mnt
 
 ## Timing
 
-Measured on the owner's PC (WSL 2, 16 cores, 8 GB for WSL) against `main` at 88c372f:
+Measured on 2026-10-23 on the owner's PC (WSL 2, 16 cores, 8 GB for WSL) against `main` at
+88c372f; every step passed (pgTAP, then 203 integration tests):
 
 | Run | Time |
 |---|---|
-| First run (pulls the Supabase images) | see the pull request |
-| Later runs | see the pull request |
+| First run on the machine, clone inside WSL | 4m47s (starting Postgres the first time takes 2m16s) |
+| Later runs, clone inside WSL | 2m05s |
+| Later runs, Windows checkout under `/mnt/c` | 3m24s (`just test-db` is slower on the Windows disk) |
 | CI `database` job, for comparison | about 20 minutes |
+
+## Known limits
+
+- A Windows **git worktree** (not a plain clone) can be tested, but git commands inside WSL cannot
+  read it, because its `.git` file points to a Windows path. The run itself does not need git; the
+  header then shows `?` for the commit.
+- Docker images and the uv cache live in the distro; deleting the distro means a new first run.
