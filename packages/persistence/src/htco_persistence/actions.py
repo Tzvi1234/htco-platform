@@ -24,7 +24,8 @@ from htco_persistence.database import Database
 from htco_persistence.messaging import add_outbox_in
 
 _COLUMNS = (
-    "id, state, outcome, channel, attempts, verified, error_code, output, approval_id, retry_at"
+    "id, state, outcome, channel, attempts, verified, error_code, output, approval_id, retry_at, "
+    "request_hash"
 )
 
 
@@ -95,6 +96,8 @@ class PostgresActionStore:
             approval_id=row[8],
             retry_at=row[9],
             error_code=row[6],
+            request_hash=row[10],
+            channel=None if row[3] is None else Channel(row[3]),
         )
 
     def record(self, execution_id: uuid.UUID, step: Finish, *, now: datetime) -> None:

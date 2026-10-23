@@ -531,7 +531,7 @@ async def test_deferred__recorded_resumable_and_rechecked_on_resubmission() -> N
     assert store.only().steps[-1].path[:2] == (ActionState.DEFERRED, ActionState.AUTHORIZED)
 
 
-async def test_deferred__a_resubmission_by_an_actor_who_lost_the_permission__denied() -> None:
+async def test_deferred__the_same_key_for_another_request__idempotency_conflict() -> None:
     clock = Clock()
     channel = Scripted(clock, script=[MarketplaceRateLimitedError("429", retry_after_seconds=90)])
     store = MemoryActionStore()
@@ -540,10 +540,12 @@ async def test_deferred__a_resubmission_by_an_actor_who_lost_the_permission__den
     request = ask(actor=ActorRef(ActorKind.AUTOMATION, "no-such-automation"))
     clock.now += timedelta(seconds=90)
 
-    # The same key from another actor: the claim finds the deferred row and every check runs.
+    # The same key from another actor is another request: refused, the deferred row is kept.
     result = await service.submit(request)
+    resumed = await service.submit(ask())
 
-    assert result.outcome is ActionOutcome.DENIED
+    assert (result.outcome, result.error_code) == (ActionOutcome.DENIED, "idempotency_conflict")
+    assert resumed.outcome is ActionOutcome.SUCCEEDED
 
 
 @pytest.mark.ac("AC-5.15.3")

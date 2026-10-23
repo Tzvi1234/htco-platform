@@ -7,6 +7,11 @@
 | AC-5.12.3 | `test_write__without_approval__pending_and_nothing_runs_then_runs_once_approved`, `test_write__the_approval_is_checked_again_at_execution_time`, `test_write__an_approval_for_another_request__is_refused`, `test_write__the_owners_own_trigger__runs_without_an_approval` |
 | AC-5.12.4 | `test_result__one_row_an_audit_for_personal_data_and_an_event_without_secrets` (log capture), `test_result__an_r0_read__has_no_audit_record`, the Postgres submit test |
 | AC-5.12.5 | `test_scenario_h__an_automation_outside_its_permissions__denied`, `test_scenario_h__an_employee_outside_its_grants__denied` |
+| AC-5.13.1 | `tests/application/test_execution_router.py::test_one_action__same_result_audit_and_event_through_api_internal_and_browser` |
+| AC-5.13.2 | `test_automation__never_routed_to_browser_use__scope_missing`, `test_automation__takes_the_next_deterministic_binding`, `test_employee__may_use_browser_use`, `test_catalog__browser_rules` |
+| AC-5.13.3 | `test_browser__never_chosen_unless_ready_flagged_and_scoped` (9 cases), `test_browser__ready_flagged_and_scoped__chosen` |
+| AC-5.13.4 | `test_challenge__handed_to_human_one_task_and_no_retry`, `test_handed_to_human__resumes_once_the_task_is_completed`, `..._cancelled_by_the_person__cancelled`; `tests/integration/test_execution_router_store.py` |
+| AC-5.13.5 | `test_missing_capability__no_fall_through_to_a_browser_without_its_own_scope`, `test_missing_capability__the_browser_with_its_own_recorded_scope_runs`, `test_api_refusal_at_execution__failed_never_the_browser` |
 | AC-5.15.1 | `tests/application/test_action_guards.py::test_two_workers_four_shops__never_above_the_qps_or_the_qpd`; `tests/integration/test_action_guards_store.py::test_two_workers_four_shops__never_above_the_qps`, `::test_two_workers_four_shops__never_above_the_qpd` |
 | AC-5.15.2 | `tests/domain/test_guards.py` (open, cooldown, probe), `test_five_failures__open_the_breaker__deferred_then_one_probe_closes_it`, `test_half_open__only_one_call_goes_through_at_a_time`, `test_breaker__shared_by_the_workers__one_probe_after_the_cooldown` (Postgres) |
 | AC-5.15.3 | `test_a_4xx__never_retried_and_not_a_breaker_failure`, `test_a_429__waits_for_retry_after_then_runs`, `test_a_429_with_a_long_or_unknown_wait__deferred_until_then`, `test_a_5xx_write__never_retried_inside_the_attempt` |

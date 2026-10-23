@@ -279,6 +279,8 @@ class ConcurrencyLimiter(Protocol):
     def slot(self, key: str, *, limit: int) -> AbstractAsyncContextManager[bool]: ...
 ```
 
+**As built (slice 5.13):** `ExecutionRouter.choose(definition, request)` returns a `Route` (binding and adapter) or a `NoRoute` (code and reason); the routing context is the request itself. The browser checks go through a `BrowserGate` port (environment status, flag time, scope time) that the registry of 5.16 implements. Adapters take `(request, binding)` and `verify` returns a `bool`; the `ExecutionLease` and `Verification` values arrive with the browser controller (8A). `HumanChannel.hand_off` is the gateway's `HumanTasks.hand_off(execution_id, request, reason)`, one task per execution.
+
 ## 4. Gateway algorithm
 
 1. **Validate.** Load the `ActionDefinition` and validate `input` against its model. If the action or its version is unknown, the result is `DENIED`.
