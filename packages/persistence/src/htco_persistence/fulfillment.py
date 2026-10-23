@@ -377,25 +377,41 @@ class PostgresIncidentReader:
     def __init__(self, database: Database) -> None:
         self._database = database
 
-    def list_incidents(
+    def list_incidents(  # noqa: PLR0913 - the scope, the filters and the page
         self,
         organization_id: uuid.UUID,
         *,
         open_only: bool,
         limit: int,
         shop_ids: frozenset[uuid.UUID] | None = None,
+        shop_id: uuid.UUID | None = None,
+        receipt_id: int | None = None,
+        before: uuid.UUID | None = None,
     ) -> tuple[IncidentRecord, ...]:
         shops = None if shop_ids is None else list(shop_ids)
         with self._database.connection() as connection:
             rows = connection.execute(
                 f"""
                 select {_INCIDENT_COLUMNS} from app.incidents
-                where organization_id = %s and (not %s or state <> 'resolved')
-                  and (%s::uuid[] is null or shop_id = any(%s::uuid[]))
-                order by detected_at desc
-                limit %s
+                where organization_id = %(org)s and (not %(open)s or state <> 'resolved')
+                  and (%(shops)s::uuid[] is null or shop_id = any(%(shops)s::uuid[]))
+                  and (%(shop)s::uuid is null or shop_id = %(shop)s::uuid)
+                  and (%(receipt)s::bigint is null or receipt_id = %(receipt)s::bigint)
+                  and (%(before)s::uuid is null or (detected_at, id) < (
+                    select b.detected_at, b.id from app.incidents b
+                    where b.organization_id = %(org)s and b.id = %(before)s::uuid))
+                order by detected_at desc, id desc
+                limit %(limit)s
                 """,  # noqa: S608 - a constant column list
-                [organization_id, open_only, shops, shops, limit],
+                {
+                    "org": organization_id,
+                    "open": open_only,
+                    "shops": shops,
+                    "shop": shop_id,
+                    "receipt": receipt_id,
+                    "before": before,
+                    "limit": limit,
+                },
             ).fetchall()
         return tuple(_incident(r) for r in rows)
 

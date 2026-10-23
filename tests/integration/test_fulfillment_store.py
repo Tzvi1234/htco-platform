@@ -33,6 +33,7 @@ from htco_domain.incidents import (
 from htco_persistence.database import Database, tenant_scope
 from htco_persistence.etsy_orders import PostgresOrderStore
 from htco_persistence.fulfillment import (
+    PostgresIncidentReader,
     PostgresIncidentStore,
     PostgresSlaStore,
     PostgresTrackingStore,
@@ -281,3 +282,23 @@ async def test_worker__a_checked_receipt_is_due_again_only_after_it_changes_on_e
         again = store.untracked_shipped(shop, limit=10)
 
     assert (before, after, again) == ((86,), (), (86,))
+
+
+async def test_reader__one_orders_incidents_and_keyset_pages(database: Database) -> None:
+    """Review of clients#48: filters by shop and receipt, and pages newest first by keyset."""
+    tenant, integration = await connected(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    incidents = IncidentService(PostgresIncidentStore(database), clock=lambda: NOW)
+    for receipt in (91, 92, 93):
+        await incidents.open(detection(org, shop, receipt), actor=ACTOR)
+    reader = PostgresIncidentReader(database)
+
+    [one] = reader.list_incidents(org, open_only=False, limit=10, shop_id=shop, receipt_id=92)
+    assert (one.shop_id, one.receipt_id) == (shop, 92)
+    assert reader.list_incidents(org, open_only=False, limit=10, shop_id=uuid.uuid4()) == ()
+
+    first = reader.list_incidents(org, open_only=False, limit=2, shop_id=shop)
+    rest = reader.list_incidents(org, open_only=False, limit=2, shop_id=shop, before=first[-1].id)
+    receipts = [i.receipt_id or 0 for i in (*first, *rest)]
+    assert sorted(receipts) == [91, 92, 93]
+    assert len(rest) == 1
