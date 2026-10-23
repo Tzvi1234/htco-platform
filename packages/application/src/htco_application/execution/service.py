@@ -199,6 +199,10 @@ class ApprovalGate(Protocol):
 
     def is_approved(self, approval_id: uuid.UUID, *, request_hash: str) -> bool: ...
 
+    def executed(self, approval_id: uuid.UUID, *, execution_id: uuid.UUID) -> None:
+        """The approved request succeeded as this execution: it never runs again (5.14)."""
+        ...
+
 
 class ChannelAdapter(Protocol):
     channel: Channel
@@ -256,13 +260,18 @@ class ActionGatewayService:
         early = self._answer_from_claim(claim, request, digest, now)
         if early is not None:
             return early
+        # A resubmission without its approval (an automation resumed after the decision, slice
+        # 5.14) uses the approval requested for this very request; the hash still has to match.
+        implicit = request.approval_id is None and claim.approval_id is not None
+        if implicit:
+            request = replace(request, approval_id=claim.approval_id)
         path: list[ActionState] = [claim.state]
         try:
             definition = self._definition(request)
             forced_approval = self._authorize(request, definition)
             path.append(_S.AUTHORIZED)
             if (definition.approval_policy.is_write or forced_approval) and not (
-                self._approved(request, digest, definition)
+                self._approved(request, digest, implicit=implicit)
             ):
                 return self._wait_for_approval(claim, request, definition, digest, path, now)
         except Refusal as refusal:
@@ -361,17 +370,15 @@ class ActionGatewayService:
         if request.owner_trigger and principal.role is not Role.OWNER:
             raise Refusal("forbidden", "only the Owner triggers a write by hand")
 
-    def _approved(
-        self,
-        request: ActionRequest,
-        digest: str,
-        definition: ActionDefinition,  # noqa: ARG002 - W3's Owner-only rule arrives with 5.14
-    ) -> bool:
+    def _approved(self, request: ActionRequest, digest: str, *, implicit: bool) -> bool:
+        """The deciders' roles, step-up and expiry are the approval service's rules (5.14)."""
         if request.owner_trigger and request.actor.kind is ActorKind.USER:
             return True  # `_authorize_user` checked that the Owner triggered it
         if request.approval_id is None:
             return False
         if not self._p.approvals.is_approved(request.approval_id, request_hash=digest):
+            if implicit:
+                return False  # not decided yet: the request keeps waiting for it
             raise Refusal("approval_invalid", "the approval does not cover this request")
         return True
 
@@ -761,6 +768,8 @@ class ActionGatewayService:
             ),
             now=now,
         )
+        if final and result.outcome is ActionOutcome.SUCCEEDED and request.approval_id is not None:
+            self._p.approvals.executed(request.approval_id, execution_id=execution_id)
 
 
 def _event_payload(
