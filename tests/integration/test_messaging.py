@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import anyio
+import psycopg
 import pytest
 
 from htco_application.idempotency import (
@@ -304,9 +305,23 @@ async def test_outbox__a_crash_on_the_last_delivery_attempt__marks_the_message_d
     assert scalar(admin, "select status from jobs.outbox where id = %s", [message_id]) == "dead"
 
 
+def an_action_execution(admin: Database, tenant: Tenant) -> uuid.UUID:
+    """A row of `app.action_executions` (slice 5.12), which the outbox now references."""
+    action = uuid.uuid7()
+    with admin.connection() as connection:
+        connection.execute(
+            "insert into app.action_executions (id, organization_id, action_name, "
+            "action_version, idempotency_key, request_hash, state, actor_kind, actor_id, "
+            "correlation_id) values (%s, %s, 'etsy.inventory.update', 1, %s, %s, 'running', "
+            "'system', 'test', 'req-db')",
+            [action, tenant.organization_id, f"k:{action}", "a" * 64],
+        )
+    return action
+
+
 async def test_outbox__keeps_the_action_and_correlation(admin: Database) -> None:
     tenant = Tenant(admin)
-    action = uuid.uuid7()
+    action = an_action_execution(admin, tenant)
     message = OutboxMessage(
         organization_id=tenant.organization_id,
         destination="etsy.inventory.update",
@@ -331,3 +346,17 @@ async def test_outbox__keeps_the_action_and_correlation(admin: Database) -> None
         )
         == "req-db"
     )
+
+
+async def test_outbox__an_unknown_action_execution__refused(admin: Database) -> None:
+    tenant = Tenant(admin)
+    message = OutboxMessage(
+        organization_id=tenant.organization_id,
+        destination="etsy.inventory.update",
+        idempotency_key=f"etsy:{uuid.uuid4()}",
+        action_execution_id=uuid.uuid7(),
+        correlation_id="req-db",
+    )
+
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        PostgresOutbox(admin).add(message, now=NOW)
