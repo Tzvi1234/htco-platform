@@ -58,12 +58,12 @@ Log events: `job.started`, `job.succeeded`, `job.retry_scheduled`, `job.dead_let
 
 1. **Check:** `htco admin dead-letters [--organization <ID>]` (needs `HTCO_DATABASE_URL`) shows its kind, attempts and last error.
 2. **Likely cause:** a dependency down for longer than the retries (Etsy, the database), or a bug in the handler.
-3. **Fix:** fix the cause; retrying from the admin view is slice 5.9. Until then an operator may requeue one job with `update jobs.jobs set state = 'queued', attempts = 0, finished_at = null, run_at = now() where id = '<ID>' and state = 'dead'` (record it in the audit notes).
+3. **Fix:** fix the cause, then retry it from the admin screen (Admin › Operations, slice 5.9), or call `POST /v1/operations/dead-letters/{job_id}/retry` as the Owner or an Admin. The job is queued again with attempts from zero, due now, and the audit records `job.dead_letter_retried` with its kind and last error. A job of the engine (`automation.execute`) answers `409 retry-through-execution` with its `execution_id`: retry that execution instead (`POST /v1/automations/{automation_id}/executions/{execution_id}/retry`).
 4. **Verify:** the job reaches `succeeded`.
 
 ### Jobs are due but nothing runs
 
-1. **Check:** `jobs.worker_heartbeats`: is any `last_beat_at` recent?
+1. **Check:** the admin screen's Workers panel (`GET /v1/operations/health`, `workers[]`: `alive` is false once the last beat is older than two minutes), or `jobs.worker_heartbeats`: is any `last_beat_at` recent?
 2. **Likely cause:** no worker deployed or running, or the worker's kinds do not include the job's kind (its schedule is not enabled).
 3. **Fix:** start the worker; enable the schedule in `HTCO_WORKER_SCHEDULES`.
 

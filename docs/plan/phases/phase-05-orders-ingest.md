@@ -24,7 +24,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 - [x] 5.6 Orders API onto the stored order (rewritten after the audit: no second endpoint; `GET /v1/shops/{shop_id}/orders/{order_id}` with the status timeline; `last_synced_at` everywhere; no migration)
 - [ ] 5.7 Orders UI onto the stored order (no second screen)
 - [ ] 5.8 Drills
-- [ ] 5.9 Queue, execution and sync health (Prometheus metrics)
+- [x] 5.9 Queue, execution and sync health: the admin view (htco-clients Admin › Health) and its API (`GET /v1/operations/health`, the audited `POST /v1/operations/dead-letters/{job_id}/retry`, per-automation metrics), exception messages scrubbed from logs and Sentry (#86). Moved by the owner's decision of 2026-10-23: AC-5.9.1's alert goes through the one alert model (Phase 6.4 notifications now, Phase 10's monitors later), and AC-5.9.4's Prometheus `/metrics` goes with Phase 8A's monitoring slice, once a monitoring host is chosen
 - [x] 5.10 Durable automation engine (PR #58; aligned: migration `20261023140000_automation_engine.sql`, pgTAP `12_automation_engine`, handlers get a `HandlerContext` with an `ActionGateway` client, `WAITING` state; no automation is ready yet)
 - [ ] 5.11 Order automations activated
 - [x] 5.12 Action Gateway and the generic execution contract (standard-library dataclasses and JSON Schemas, see execution-engine.md §2; production wiring with the channels of 5.13)
@@ -331,6 +331,8 @@ Alerts go through the error-monitoring service's alert rules until Grafana arriv
 | AC-5.9.2 | A dead-lettered job appears in the admin view with its last error and can be retried by an admin (audited). |
 | AC-5.9.3 | A shop whose last successful sync is older than its window shows as stale in the UI and raises one alert. |
 | AC-5.9.4 | `/metrics` exposes the series above with no organization or buyer data in labels (only IDs that are not personal, and shop IDs). |
+
+**Moved (the owner's decision of 2026-10-23).** AC-5.9.1's alert is raised through the single alert model: Phase 6.4's notifications now, Phase 10's declared monitors later; 5.9 shows the stopped worker on the admin screen. AC-5.9.4's Prometheus `/metrics` moves to Phase 8A's monitoring slice, because no monitoring host is chosen yet. AC-5.9.2 and the view parts of AC-5.9.1 and AC-5.9.3 are built here.
 
 ### 5.10 — Durable automation engine (PR #58)
 

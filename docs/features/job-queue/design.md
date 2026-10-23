@@ -82,3 +82,22 @@ sequenceDiagram
   W->>DB: delivered
   Note over W,D: crash before delivered: the job runs again with the same key
 ```
+
+## Queue, execution and sync health (slice 5.9)
+
+One read for the Owner and Admins, `GET /v1/operations/health` (`htco_application.operations_health`, `htco_persistence.operations_health`), answers the admin screen:
+
+| Part | Source | Notes |
+|---|---|---|
+| `jobs` | `jobs.jobs` grouped by kind and state | The organization's jobs and the system's (no organization) |
+| `dead_letters` | `jobs.jobs` in `dead`, newest 50 | Kind, attempts, last error (a type or a safe code), and for the engine's jobs the `execution_id` |
+| `workers` | `jobs.worker_heartbeats`, last 7 days | `alive` false after two minutes without a beat (`WORKER_STALE_AFTER`), or while stopping |
+| `shops` | `app.sync_cursors` with `app.sync_drifts` counts | `stale` after 13 hours without a success (reconciliation runs twice a day) |
+| `webhooks` | `jobs.inbox` by source and type | Received in the last day; unprocessed |
+| `executions` | `app.automation_executions`, newest 25 | Each opens in the chain view, `GET /v1/executions/{id}` |
+| `outbox_failures` | `jobs.outbox` dead, or pending after a failed attempt | Destination, attempts, last error |
+| `automations` | `app.automation_executions` of the last 7 days (at most 5,000) | Executions, succeeded, dead-lettered, retries (attempts beyond the first), success rate among finished ones, p50 and p95 seconds from trigger to the last change |
+
+IDs, kinds, states, counts, times and error codes only: no job or outbox payload is read beyond the engine's execution ID, and nothing about a buyer. The retry, `POST /v1/operations/dead-letters/{job_id}/retry`, moves a dead job to `queued` and writes the audit record in one transaction (`409 job-not-dead`, `409 retry-through-execution`, `404` for another organization's job). Capability: `retry_sync` with organization scope (Owner, Admin).
+
+Moved by the owner's decision of 2026-10-23: AC-5.9.1's alert goes through the one alert model (Phase 6.4 notifications now, Phase 10's monitors later), and AC-5.9.4's Prometheus `/metrics` goes with Phase 8A's monitoring slice once a monitoring host is chosen.

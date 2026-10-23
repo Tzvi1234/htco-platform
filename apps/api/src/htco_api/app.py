@@ -24,6 +24,7 @@ from htco_api.health import health_router
 from htco_api.identity import identity_router
 from htco_api.incidents import IncidentCenter, incidents_router
 from htco_api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+from htco_api.operations import OperationsPorts, operations_router
 from htco_api.problems import PROBLEM_MEDIA_TYPE, UNEXPECTED_ERROR_RESPONSES, add_problem_handlers
 from htco_api.shop_data import shop_data_router
 from htco_api.web_auth import WebAuth, web_auth_router
@@ -144,6 +145,8 @@ class AppOptions:
     # The incident center and inbox (slices 6.4, 6.5); security notices (AC-6.4.4).
     incident_center: IncidentCenter | None = None
     security_notices: SecurityNotices | None = None
+    # Queue, execution and sync health (slice 5.9); without it, those routes answer 503.
+    operations: OperationsPorts | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -195,6 +198,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.execution_chain = options.execution_chain
     app.state.incident_center = options.incident_center
     app.state.security_notices = options.security_notices
+    app.state.operations = options.operations
     app.state.clock = options.clock
     app.include_router(
         health_router(
@@ -217,6 +221,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     )
     app.include_router(executions_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(incidents_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
+    app.include_router(operations_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     if options.diagnostics:
         app.include_router(diagnostics_router(), responses=UNEXPECTED_ERROR_RESPONSES)
     add_problem_handlers(app)
