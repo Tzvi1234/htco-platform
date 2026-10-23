@@ -224,15 +224,15 @@ forbidden_modules = ["pydantic", "pydantic_settings"]
 
 [[tool.importlinter.contracts]]
 id = "api-routers-use-application-only"
-name = "API routers reach adapters only through the main and cli composition roots"
+name = "API modules reach adapters only through the main and cli composition roots"
 type = "forbidden"
-# Every htco_api module except main.py and cli.py (the composition roots); add new routers here.
-source_modules = [
-  "htco_api.access", "htco_api.app", "htco_api.auth", "htco_api.automations",
-  "htco_api.browser_environments", "htco_api.diagnostics", "htco_api.etsy", "htco_api.executions",
-  "htco_api.health", "htco_api.idempotency", "htco_api.identity", "htco_api.middleware",
-  "htco_api.policy_guard", "htco_api.problems", "htco_api.settings", "htco_api.shop_data",
-  "htco_api.web_auth", "htco_api.webhooks",
-]
+# The whole package, so a new router is covered without being listed; only the two
+# composition roots may wire adapters.
+source_modules = ["htco_api"]
 forbidden_modules = ["htco_persistence", "htco_integrations", "psycopg", "httpx"]
+ignore_imports = [
+  "htco_api.main -> htco_persistence.**", "htco_api.main -> htco_integrations.**",
+  "htco_api.main -> httpx", "htco_api.cli -> htco_persistence.**",
+]
+# Unmatched ignores fail the run, so widen this list only when cli.py or main.py needs it.
 allow_indirect_imports = true

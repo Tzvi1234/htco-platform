@@ -143,7 +143,7 @@ Arrows point from the dependent module to its dependency. Enforced by `import-li
 5. Nothing imports from `apps` or `workers`.
 6. Only `htco_integrations`, `htco_platform` and the composition roots import the HTTP client (`httpx`); only `htco_api` imports the web framework.
 7. Persistence, integrations and the agent runtime map to dataclasses, never Pydantic; Pydantic stays at the API edge and in settings.
-8. API routers reach adapters only through the `main` and `cli` composition roots; a new router module is added to that contract's list.
+8. Every `htco_api` module except the `main` and `cli` composition roots reaches adapters only through application ports; a new router is covered automatically.
 
 ### 4.4 Bounded contexts
 
