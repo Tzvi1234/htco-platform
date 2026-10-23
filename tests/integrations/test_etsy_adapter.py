@@ -23,6 +23,7 @@ from htco_application.marketplace import (
     ListingState,
     MarketplaceAuthError,
     MarketplaceConflictError,
+    MarketplaceCredentialsRejectedError,
     MarketplaceError,
     MarketplaceMoney,
     MarketplaceNotFoundError,
@@ -43,6 +44,7 @@ from htco_integrations.etsy import (
     EtsyConfig,
     EtsyCredentials,
     Timekeeping,
+    app_key_fingerprint,
 )
 from htco_platform.http import new_async_http_client
 from tests.log_capture import LogCapture, capture_logs
@@ -853,3 +855,155 @@ def _assert_no_secrets(logs: LogCapture) -> None:
 def test_config__out_of_range__is_refused(config: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match="Etsy"):
         EtsyConfig(**config)
+
+
+# --- Refused credentials: a replaced app key or a token of another app ------------------------
+
+
+class RejectionAwareTokens(FakeTokens):
+    def __init__(self, *, fail: bool = False) -> None:
+        super().__init__()
+        self.rejected: list[tuple[int, str]] = []
+        self._fail = fail
+
+    async def credentials_rejected(self, shop_id: int, *, reason: str) -> None:
+        self.rejected.append((shop_id, reason))
+        if self._fail:
+            raise RuntimeError("the vault is down")
+
+
+def _harness_with(make: Callable[..., Harness], script: Scripted, tokens: FakeTokens) -> Harness:
+    harness = make(script)
+    harness.adapter = EtsyAdapter(
+        harness.client,
+        credentials=EtsyCredentials(keystring=KEYSTRING, shared_secret=SHARED_SECRET),
+        access_tokens=tokens,
+        timekeeping=Timekeeping(
+            now=harness.time.now, monotonic=harness.time.monotonic, sleep=harness.time.sleep
+        ),
+    )
+    return harness
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "reason"),
+    [
+        (401, {"error": "invalid_token"}, "invalid_token"),
+        (
+            401,
+            {"error": "invalid_token", "error_description": "access token is invalid"},
+            "invalid_token",
+        ),
+        (401, {"error": "Invalid API key"}, "api_key_rejected"),
+        (403, {"error": "Invalid API key: the keystring is not active"}, "api_key_rejected"),
+        (403, {"error": "invalid_client"}, "api_key_rejected"),
+    ],
+)
+async def test_refused_credentials__typed__and_reported_to_the_token_source_once(
+    make: Callable[..., Harness], status: int, body: dict[str, str], reason: str
+) -> None:
+    script = Scripted(httpx.Response(status, json=body, headers=quota_headers()))
+    tokens = RejectionAwareTokens()
+    harness = _harness_with(make, script, tokens)
+
+    async with harness.client:
+        with pytest.raises(MarketplaceCredentialsRejectedError) as raised:
+            await harness.adapter.get_shop(SHOP_ID)
+
+    assert raised.value.reason == reason
+    assert isinstance(raised.value, MarketplaceAuthError)  # callers that catch 401s still do
+    assert tokens.rejected == [(SHOP_ID, reason)]
+    assert len(script.requests) == 1
+    assert "API key" not in str(raised.value)  # the body is looked at, never repeated
+
+
+async def test_scope_403__stays_a_permission_error__and_reports_nothing(
+    make: Callable[..., Harness],
+) -> None:
+    script = Scripted(httpx.Response(403, json=error_body(403), headers=quota_headers()))
+    tokens = RejectionAwareTokens()
+    harness = _harness_with(make, script, tokens)
+
+    async with harness.client:
+        with pytest.raises(MarketplacePermissionError):
+            await harness.adapter.get_shop(SHOP_ID)
+
+    assert tokens.rejected == []
+
+
+async def test_refused_credentials__a_failing_report__never_hides_etsys_answer(
+    make: Callable[..., Harness],
+) -> None:
+    script = Scripted(httpx.Response(401, json=error_body(401), headers=quota_headers()))
+    harness = _harness_with(make, script, RejectionAwareTokens(fail=True))
+
+    async with harness.client:
+        with pytest.raises(MarketplaceCredentialsRejectedError):
+            await harness.adapter.get_shop(SHOP_ID)
+
+
+async def test_refused_credentials__with_a_token_given_by_the_caller__report_nothing(
+    make: Callable[..., Harness],
+) -> None:
+    """The connect flow's lookup uses a token not yet stored: there is no connection to mark."""
+    script = Scripted(httpx.Response(401, json=error_body(401), headers=quota_headers()))
+    tokens = RejectionAwareTokens()
+    harness = _harness_with(make, script, tokens)
+
+    async with harness.client:
+        with pytest.raises(MarketplaceCredentialsRejectedError):
+            await harness.adapter.shop_of_user(12345678, access_token=ACCESS_TOKEN)
+
+    assert tokens.rejected == []
+
+
+def test_app_key_fingerprint__short_stable_and_never_the_key() -> None:
+    first = app_key_fingerprint(KEYSTRING)
+
+    assert first == app_key_fingerprint(KEYSTRING)
+    assert first != app_key_fingerprint(KEYSTRING + "x")
+    assert len(first) == 16
+    assert all(c in "0123456789abcdef" for c in first)
+    assert KEYSTRING not in first
+    credentials = EtsyCredentials(keystring=KEYSTRING, shared_secret=SHARED_SECRET)
+    assert credentials.fingerprint == first
+
+
+def test_app_key_fingerprint__the_same_key_pasted_with_surrounding_whitespace__the_same_app() -> (
+    None
+):
+    """Post-merge review: the API's startup check marks every connection whose fingerprint
+    differs from the configured key's `needs_reauth`, and that status stays. A secret re-entered
+    with a trailing newline or space (the same Etsy app; HTTP drops the whitespace around a
+    header value) must not make every healthy shop need reconnecting."""
+    first = app_key_fingerprint(KEYSTRING)
+
+    for pasted in (f"{KEYSTRING}\n", f" {KEYSTRING} ", f"{KEYSTRING}\r\n", f"\t{KEYSTRING}"):
+        assert app_key_fingerprint(pasted) == first
+
+
+async def test_get_receipt__one_receipt_by_id__with_a_get(make: Callable[..., Harness]) -> None:
+    script = Scripted(ok(fixture("receipts_page.json")["results"][0]))
+    harness = make(script)
+
+    async with harness.client:
+        receipt = await harness.adapter.get_receipt(SHOP_ID, 3000000001)
+
+    [request] = script.requests
+    assert request.method == "GET"
+    assert request.url.path == f"/v3/application/shops/{SHOP_ID}/receipts/3000000001"
+    assert receipt.receipt_id == 3000000001
+    assert receipt.grand_total == MarketplaceMoney(amount=2599, divisor=100, currency_code="USD")
+
+
+async def test_get_receipt__an_invalid_id__refused_before_any_call(
+    make: Callable[..., Harness],
+) -> None:
+    script = Scripted(ok({}))
+    harness = make(script)
+
+    async with harness.client:
+        with pytest.raises(ValueError, match="receipt_id"):
+            await harness.adapter.get_receipt(SHOP_ID, 0)
+
+    assert script.requests == []

@@ -56,3 +56,9 @@ The owner wants to manage several shops for several people from HTCO, without br
 4. **People.** Staff work in Etsy through Shared Access with their own accounts and 2FA. In HTCO they get roles and shop grants (Phase 2 access model), and each shop's data stays isolated.
 5. **Guardrails in the product.** HTCO warns before copying listings between shops. It does not scrape, does not message buyers through the API, and does not train on Etsy data. It keeps data fresh and caching minimal, and AI drafts need approval.
 6. **A suspended shop is never reopened through HTCO** under another account.
+
+## Update 2026-10-23: optional Browser Environments
+
+The owner reports that Etsy approved browser automation of certain actions. The approval is verbal, and written confirmation is pending ([etsy-automation-approval.md](etsy-automation-approval.md)). This policy's answer stays **no proxy**: [ADR-0020](../adr/0020-per-shop-browser-environment.md) declines the requested anti-detect browser and per-shop ISP proxies, and uses an honest, stable profile per shop with one fixed egress IP for the browser workers.
+
+Rule 1 ("HTCO holds no one's Etsy password") changes only for a shop whose real owner creates a Browser Environment and consents in the product. The password and TOTP secret are then sealed in the existing vault and released only to the browser worker ([ADR-0021](../adr/0021-authenticator-service.md)).

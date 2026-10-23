@@ -9,6 +9,7 @@ the integration `needs_reauth`, audited, with no retry loop (AC-4.4.2).
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta
+from typing import override
 
 import anyio
 import pytest
@@ -18,6 +19,7 @@ from htco_application.etsy_tokens import (
     MAX_REFRESH_FAILURES,
     REFRESH_MARGIN,
     REFRESH_RETRY_INTERVAL,
+    PinnedTokens,
     VaultAccessTokenProvider,
 )
 from htco_application.marketplace import MarketplaceAuthError, MarketplaceUnavailableError
@@ -313,3 +315,167 @@ async def test_access_token__errors_never_carry_a_token() -> None:
     text = f"{raised.value!s} {raised.value!r}"
     assert OLD_ACCESS not in text
     assert OLD_REFRESH not in text
+
+
+# --- Codex review of #49: tokens pinned to the connection a probe started under --------------
+
+
+async def test_pinned_tokens__the_loaded_connection__its_token() -> None:
+    world = World(access_left=REFRESH_MARGIN + timedelta(minutes=1))
+    pinned = PinnedTokens(world.provider, SHOP, generation=world.row.generation)
+
+    assert await pinned.access_token(ETSY_SHOP) == OLD_ACCESS
+
+
+async def test_pinned_tokens__connection_replaced__refused_without_another_tenants_token() -> None:
+    """The same Etsy shop now connected by another organization: a probe of the old connection
+    must not borrow the new one's token, although the Etsy shop ID matches."""
+    world = World(access_left=REFRESH_MARGIN + timedelta(minutes=1))
+    old_generation = world.row.generation
+    world.vault.rows[SHOP] = replace(world.row, status=IntegrationStatus.DISCONNECTED, tokens=None)
+    other_shop = uuid.UUID("b3000000-0000-0000-0000-000000000001")
+    world.vault.add(
+        EtsyConnection(
+            organization_id=uuid.UUID("b0000000-0000-0000-0000-000000000000"),
+            shop_id=other_shop,
+            etsy_shop_id=ETSY_SHOP,
+            etsy_user_id=12345678,
+            scopes=frozenset({"shops_r"}),
+            tokens=OAuthTokens(
+                access_token="12345678.other-tenant-token",  # noqa: S106 - fake
+                refresh_token="12345678.other-tenant-refresh",  # noqa: S106 - fake
+                access_expires_at=NOW + timedelta(hours=1),
+                refresh_expires_at=NOW + timedelta(days=30),
+            ),
+        )
+    )
+    pinned = PinnedTokens(world.provider, SHOP, generation=old_generation)
+
+    assert await world.provider.access_token(ETSY_SHOP) == "12345678.other-tenant-token"
+    with pytest.raises(MarketplaceAuthError):
+        await pinned.access_token(ETSY_SHOP)
+
+
+async def test_pinned_tokens__generation_moved_on__refused() -> None:
+    world = World(access_left=REFRESH_MARGIN + timedelta(minutes=1))
+    pinned = PinnedTokens(world.provider, SHOP, generation=world.row.generation + 1)
+
+    with pytest.raises(MarketplaceAuthError):
+        await pinned.access_token(ETSY_SHOP)
+    assert world.server.refreshed == []
+
+
+async def test_pinned_tokens__expired__refreshed_once_like_the_provider() -> None:
+    world = World(access_left=timedelta(minutes=1))
+    pinned = PinnedTokens(world.provider, SHOP, generation=world.row.generation)
+
+    token = await pinned.access_token(ETSY_SHOP)
+
+    assert token != OLD_ACCESS
+    assert world.server.refreshed == [OLD_REFRESH]
+
+
+class ReconnectDuringRefresh(AuthorizationServer):
+    """While Etsy answers the refresh, the shop is disconnected and connected again."""
+
+    def __init__(self, world: World, outcome: str = "ok") -> None:
+        super().__init__(refresh_outcome=outcome)
+        self.world = world
+
+    @override
+    async def refresh(self, refresh_token: str) -> TokenGrant:
+        row = self.world.row
+        assert row.tokens is not None
+        self.world.vault.rows[SHOP] = replace(
+            row,
+            generation=row.generation + 2,
+            tokens=replace(row.tokens, access_token="12345678.new-connection-token"),  # noqa: S106
+        )
+        return await super().refresh(refresh_token)
+
+
+@pytest.mark.parametrize("outcome", ["ok", "invalid_grant", "unavailable"])
+async def test_refresh__connection_replaced_meanwhile__never_touches_the_new_one(
+    outcome: str,
+) -> None:
+    """Codex review of #49: every vault write after the OAuth call names the generation the
+    refresh started under, so the new connection keeps its tokens, failures and status."""
+    world = World(access_left=timedelta(minutes=1))
+    world.server = ReconnectDuringRefresh(world, outcome)
+    world.provider = VaultAccessTokenProvider(
+        world.vault, world.server, world.lock, clock=world.clock
+    )
+
+    with pytest.raises((MarketplaceAuthError, MarketplaceUnavailableError)):
+        await world.provider.access_token(ETSY_SHOP)
+
+    row = world.row
+    assert row.tokens is not None
+    assert row.tokens.access_token == "12345678.new-connection-token"  # noqa: S105 - fake
+    assert row.status is IntegrationStatus.CONNECTED
+    assert row.failure_count == 0
+    assert world.vault.updates == []
+
+
+# --- A replaced app key: Etsy refuses the credentials themselves -------------------------------
+
+
+async def test_refresh__invalid_client__needs_reauth_at_once_audited_with_its_reason() -> None:
+    world = World(access_left=timedelta(0))
+    world.server.refresh_outcome = "invalid_client"
+
+    with pytest.raises(MarketplaceAuthError):
+        await world.provider.access_token(ETSY_SHOP)
+
+    assert world.row.status is IntegrationStatus.NEEDS_REAUTH
+    assert [r.after for r in world.vault.audit] == [
+        {"reason": "invalid_client", "provider": "etsy"}
+    ]
+    assert world.server.refreshed == [OLD_REFRESH]  # one try, no loop
+
+
+async def test_credentials_rejected__marks_the_connection_holding_the_etsy_shop() -> None:
+    world = World(access_left=timedelta(hours=1))
+
+    await world.provider.credentials_rejected(ETSY_SHOP, reason="invalid_token")
+
+    assert world.row.status is IntegrationStatus.NEEDS_REAUTH
+    (record,) = world.vault.audit
+    assert record.action == "shop.integration_needs_reauth"
+    assert record.after == {"reason": "invalid_token", "provider": "etsy"}
+    with pytest.raises(MarketplaceAuthError):  # no further call is made with these tokens
+        await world.provider.access_token(ETSY_SHOP)
+
+
+async def test_credentials_rejected__twice__audited_once() -> None:
+    world = World(access_left=timedelta(hours=1))
+
+    await world.provider.credentials_rejected(ETSY_SHOP, reason="invalid_token")
+    await world.provider.credentials_rejected(ETSY_SHOP, reason="api_key_rejected")
+
+    assert len(world.vault.audit) == 1
+
+
+async def test_credentials_rejected__unknown_etsy_shop__changes_nothing() -> None:
+    world = World(access_left=timedelta(hours=1))
+
+    await world.provider.credentials_rejected(ETSY_SHOP + 1, reason="invalid_token")
+
+    assert world.row.status is IntegrationStatus.CONNECTED
+    assert world.vault.audit == []
+
+
+async def test_pinned__credentials_rejected__marks_only_its_own_connection() -> None:
+    world = World(access_left=timedelta(hours=1))
+    generation = world.row.generation
+    stale = world.provider.pinned(SHOP, generation=generation - 1)
+    current = world.provider.pinned(SHOP, generation=generation)
+
+    await stale.credentials_rejected(ETSY_SHOP, reason="invalid_token")
+    assert world.vault.audit == []  # a replaced connection is left alone
+
+    await current.credentials_rejected(ETSY_SHOP, reason="api_key_rejected")
+    assert world.row.status is IntegrationStatus.NEEDS_REAUTH
+    assert [r.after for r in world.vault.audit] == [
+        {"reason": "api_key_rejected", "provider": "etsy"}
+    ]

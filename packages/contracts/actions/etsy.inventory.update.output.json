@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.inventory.update.output.json",
+  "title": "etsy.inventory.update output",
+  "type": "object",
+  "required": [
+    "listing_id"
+  ],
+  "properties": {
+    "listing_id": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "additionalProperties": false
+}

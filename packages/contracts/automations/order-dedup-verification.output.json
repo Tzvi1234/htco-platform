@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/automations/order-dedup-verification.output.json",
+  "title": "Order Deduplication & Verification output",
+  "description": "The kinds of difference found and how many were new; never an amount.",
+  "type": "object",
+  "properties": {
+    "receipt_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "differences": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "string",
+        "enum": [
+          "missing",
+          "totals",
+          "items"
+        ]
+      }
+    },
+    "recorded": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "skipped": {
+      "type": "string",
+      "enum": [
+        "not_connected"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

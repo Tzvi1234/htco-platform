@@ -223,6 +223,26 @@ async def test_record_successful_call__keeps_the_time(database: Database) -> Non
     assert loaded.last_successful_call_at == NOW
 
 
+async def test_record_successful_call__another_generation__changes_nothing(
+    database: Database,
+) -> None:
+    """A dashboard load that started under an earlier connection does not stamp the new one
+    (Codex review of #50)."""
+    subject = vault(database, key_id("a"))
+    shop = new_shop(database)
+    stored = await subject.store(connection_for(shop, unique_tokens()))
+
+    await subject.record_successful_call(shop[1], at=NOW, generation=stored.generation + 1)
+    loaded = await subject.load(shop[1])
+    assert loaded is not None
+    assert loaded.last_successful_call_at is None
+
+    await subject.record_successful_call(shop[1], at=NOW, generation=stored.generation)
+    loaded = await subject.load(shop[1])
+    assert loaded is not None
+    assert loaded.last_successful_call_at == NOW
+
+
 async def test_mark_needs_reauth__stops_the_tokens_being_usable(database: Database) -> None:
     subject = vault(database, key_id("a"))
     shop = new_shop(database)

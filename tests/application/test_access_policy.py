@@ -51,6 +51,7 @@ ROWS = {
     "View the office: employees, automations, tools and costs": Capability.VIEW_AGENT_DIRECTORY,
     "View agent sessions, routing decisions and traces": Capability.VIEW_AGENT_RUNS,
     "View audit log": Capability.VIEW_AUDIT_LOG,
+    "View a shop's browser environment status": Capability.VIEW_BROWSER_ENVIRONMENT,
 }
 ROLE_COLUMNS = [
     Role.OWNER,

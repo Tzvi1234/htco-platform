@@ -3,11 +3,11 @@
 | | |
 |---|---|
 | **Slug** | `etsy-integration` |
-| **Phase / slices** | Phase 4 — slices 4.1 to 4.4 (done; 4.4 platform side); 4.5 to 4.7 planned |
+| **Phase / slices** | Phase 4 — slices 4.1 to 4.5 (done at the platform); 4.6 the shop card and the live dashboard data (platform endpoints, screens in `htco-clients`); 4.7 disconnect done, restore rehearsal pending |
 | **Requirements** | [FR-SHOP-01 to FR-SHOP-05](../../product/PRD.md) |
 | **Decision** | [ADR-0008](../../adr/0008-etsy-integration.md); research in [Etsy API capabilities](../../architecture/etsy-api-capabilities.md) |
-| **Status** | In progress (4.1 adapter, 4.2 [token vault](token-vault.md), 4.3 and 4.4 [connect flow and refresh](connect-flow.md)) |
-| **Last updated** | 2026-10-15 |
+| **Status** | Complete except the restore rehearsal (4.1 adapter, 4.2 [token vault](token-vault.md), 4.3 and 4.4 [connect flow and refresh](connect-flow.md), 4.5 and 4.7 [operations](operations.md), 4.6 the shop's [live data on the dashboard](dashboard-data.md)) |
+| **Last updated** | 2026-10-22 |
 
 ## What and why
 
@@ -33,10 +33,15 @@ No Etsy key exists yet, so everything is tested against hand-written fixtures bu
 | AC-4.3.4 | Reconnecting with additional scopes (re-consent) updates the granted scopes on the same shop record. | 4.3 | Pass |
 | AC-4.4.1 | Ten concurrent requests on an expired token cause exactly one refresh call. | 4.4 | Pass (in process and across two database pools) |
 | AC-4.4.2 | A revoked refresh token leads to `needs_reauth`, audited, with no retry loop. | 4.4 | Pass at the platform; the shop card and overview banner show it from slice 4.6 |
+| AC-4.5.1 | Probe results are stored with `checked_at` and shown in the UI; a capability never shows as available without a successful probe. | 4.5 | Pass at the platform (stored and served by `GET /v1/shop-integrations`); shown by the shop card in `htco-clients` |
+| AC-4.5.2 | The probe never performs a write that changes shop data or notifies a buyer. | 4.5 | Pass: only GETs; non-GET refused by the adapter and by a client hook, proven with a strict HTTP mock |
+| AC-4.7.1 | After disconnect, no Etsy call is made for that shop (strict HTTP mock). | 4.7 | Pass |
+| AC-4.7.2 | Restore rehearsal record exists in `operations.md` before the real shop is connected in production. | 4.7 | Open: procedure written; the rehearsal itself needs the owner (Free plan has no automatic backups) |
 
 ## Scope
 
 - **In (4.1):** `MarketplacePort` and its value types and errors (`htco_application.marketplace`); `EtsyAdapter` (`htco_integrations.etsy`); settings `HTCO_ETSY_KEYSTRING`, `HTCO_ETSY_SHARED_SECRET`, `HTCO_ETSY_DAILY_QUOTA_FLOOR`; fixtures under `tests/fixtures/etsy/` and the fixture hygiene test.
+- **Read only, always:** HTCO never writes to Etsy; see [the read-only rule](operations.md#the-read-only-rule).
 - **Out (4.1):** the token vault (4.2; the adapter asks an `AccessTokenProvider` for each call), OAuth (4.3), refresh (4.4), probes (4.5), the shop card (4.6), wiring the adapter into the API (with 4.3), any Etsy write.
 
 ## External facts learned

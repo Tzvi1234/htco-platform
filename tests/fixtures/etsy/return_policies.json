@@ -1,0 +1,12 @@
+{
+  "count": 1,
+  "results": [
+    {
+      "return_policy_id": 9300000001,
+      "shop_id": 10000001,
+      "accepts_returns": true,
+      "accepts_exchanges": false,
+      "return_deadline": 30
+    }
+  ]
+}

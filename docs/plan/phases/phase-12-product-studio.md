@@ -23,6 +23,15 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 12.8 Shon and Nika activated
 - [ ] 12.9 Product Studio UI
 
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
+
+- **Catalog Draft Creation & Publishing** runs every step through the gateway: `etsy.listings.create_draft` → `etsy.listing_media.manage` → `etsy.listing_properties.manage` → `etsy.inventory.update` → `etsy.listing_translations.manage` → approval → `etsy.listings.change_state` (W3, Owner, `financial`: activation charges the listing fee). Each step is verified by re-reading the draft.
+- **Shop structure** writes are W2: `etsy.shipping_profiles.manage`, `etsy.return_policies.manage`, `etsy.processing_profiles.manage`, `etsy.sections.manage`, plus `etsy.listings.delete` (W3).
+- **Research reads** are R0: `etsy.listings.search_public`, `etsy.shops.search` and the buyer taxonomy, for Shon. They are never copied into a listing and never used to train a model.
+- Every write tool is owner-trigger first on each shop. No test writes to the live shop.
+
 ## Goal
 
 One product goes from a research idea to a policy-compliant Etsy draft, and after approval to a live listing, through the Product Research, Content & Catalog department: **Shon** (Product Intelligence) researches, sources and screens; **Noam** writes the copy and **Nika** (Creative & Media) prepares the images, in parallel; **Daniel** prices in code and assembles the publish-ready catalog specification; **Noa** reviews by risk; the **Catalog Draft Creation & Publishing** automation (not an employee) creates the draft and publishes after approval.

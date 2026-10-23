@@ -16,7 +16,7 @@
 
 ## Catalog
 
-Events are published through the outbox, which arrives in Phase 5. Shop connections in Phase 4 write audit records only; their events start in Phase 5.
+Events are published through the outbox (`jobs.outbox`, slice 5.2); the first producers arrive with slices 5.4 and 5.10. Shop connections in Phase 4 write audit records only; their events start in Phase 5.
 
 | Event | Producer | Consumers | Phase |
 |---|---|---|---|
@@ -30,6 +30,19 @@ Events are published through the outbox, which arrives in Phase 5. Shop connecti
 | `orders.cancelled.v1`, `orders.refunded.v1` | Etsy Order Intake | Product Sales Counters, finance, incidents (close) | 5 |
 | `automations.execution_finished.v1` | Automation engine | Activity records, metrics, monitors (Phase 10) | 5 |
 | `automations.execution_dead_lettered.v1` | Automation engine | Incident Detection & Escalation, Noa (Phase 10) | 5 |
+| `automations.execution_state_changed.v1` | Automation engine (including `WAITING`; slice 5.18: one per recorded state change, written by the execution store with the change; execution, from and to state, status kind, actor, time) | Status views, Agent Task Scheduling & Recovery | 5 |
+| `actions.executed.v1` | Action Gateway (5.12; outbox destination `events.publish`, IDs and outcome only) | Activity records, metrics, monitors (unverified writes); accepted by the worker until consumers exist | 5 |
+| `actions.approval_required.v1` | Action Gateway (slice 5.18: the step that starts waiting for an approval) | Approvals (Phase 7), notifications | 5 |
+| `actions.handed_to_human.v1` | Action Gateway, from the Execution Router's hand-off (slice 5.18: the step that hands the action to a person) | Tasks (Phase 7), notifications | 5 |
+| `actions.deferred.v1` | Action Gateway (slice 5.18: a step deferred by a breaker, the rate budget, a slot or a 429; same payload as `actions.executed.v1`) | Monitors, metrics (5.9) | 5 |
+| `catalog.listing_changed.v1` | Webhook ingress (`listing.created`, `listing.updated`, `listing.deleted`) | Listing Health re-audit (11), Product Studio verification (12) | 5 |
+| `catalog.inventory_changed.v1` | Webhook ingress (`inventory.created`, `inventory.updated`, `inventory.deleted`) | Price and stock monitoring (13) | 5 |
+| `catalog.out_of_stock.v1` | Webhook ingress (`inventory.out_of_stock`) | Notifications (6), Daniel (11) | 5 |
+| `browser.environment_status_changed.v1` | Shop Environment Registry (slice 5.16: one per recorded change, in its transaction; environment, shop, from and to status, actor, time) | Notifications, monitors, the office | 5 (contract), 8A |
+| `browser.challenge_detected.v1` | Browser Controller | Human task, notifications, monitors | 8A |
+| `browser.export_ingested.v1` | Browser recipes (B-02, B-03, B-11) | Listing Health, finance, reports | 8A |
+| `authenticator.code_viewed.v1`, `authenticator.code_injected.v1` | Authenticator (never the code) | Audit, security monitors | 8B |
+| `alerts.ship_by_at_risk.v1`, `alerts.low_review.v1` | Ship-by SLA and review alerts | Notifications, Eitan (9), Dana (14) | 6 |
 | `fulfillment.tracking_detected.v1` | Tracking Synchronization | Order state machine, incident auto-resolution | 6 |
 | `fulfillment.sla_breached.v1` | Incident Detection & Escalation | Incidents, Eitan (Phase 9) | 6 |
 | `incidents.opened.v1` | Incidents | Notifications, Eitan (Phase 9), Amir (Phase 19) | 6 |
@@ -51,7 +64,9 @@ Events are published through the outbox, which arrives in Phase 5. Shop connecti
 | `catalog.listing_audited.v1` | Listing Health (Daniel) | Approvals, metrics | 11 |
 | `catalog.listing_updated.v1` | Listing update automation | Listing Health (verify), audit | 11 |
 | `catalog.draft_created.v1`, `catalog.listing_published.v1` | Catalog Draft Creation & Publishing | Supplier onboarding, metrics | 12 |
-| `sourcing.quotes_received.v1`, `sourcing.mapping_activated.v1` | Supplier Quote Request & Follow-up | Tom, finance | 13 |
+| `sourcing.quotes_received.v1`, `sourcing.mapping_activated.v1` | Supplier Quote Request & Follow-up | The quote screen and notifications (7), Tom (13), finance | 7 (moved from 13) |
+| `sourcing.quote_chosen.v1` | The owner's approval of a quote (7.17) | AutoVA hand-off (Human task, then A-02) | 7 |
+| `autova.order_status_changed.v1` | Recipe A-01 | Tracking relay (6.10), Unpaid alert, Eitan (9) | 8A |
 | `support.ticket_opened.v1`, `support.reply_drafted.v1` | Support | Dana, approvals | 14 |
 | `email.received.v1` | Email Intake & Routing | Quarantined extractor, support | 14 |
 | `optimization.proposal_state_changed.v1` | Optimization | Maya, Engineering, office | 18 |

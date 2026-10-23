@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | Logical model 2.0 (the living office, [ADR-0012](../adr/0012-living-office-organization.md)). Physical tables are created phase by phase, and this page is updated in the same pull request as each migration. Created so far: the base schemas (slice 2.1); `organizations`, `user_profiles`, `memberships`, `shops` (shell), `shop_access` and `audit.audit_log` (slice 2.2, `supabase/migrations/20261014160000_identity_access.sql`). |
-| **Last updated** | 2026-10-14 |
+| **Status** | Logical model 2.0 (the living office, [ADR-0012](../adr/0012-living-office-organization.md)). Physical tables are created phase by phase, and this page is updated in the same pull request as each migration. Created so far: the base schemas (slice 2.1); `organizations`, `user_profiles`, `memberships`, `shops` (shell), `shop_access` and `audit.audit_log` (slice 2.2, `supabase/migrations/20261014160000_identity_access.sql`); the `jobs` schema with `jobs.jobs` and `jobs.worker_heartbeats`, and the `htco_worker` role (slice 5.1, `20261023120000_job_queue.sql`). |
+| **Last updated** | 2026-10-23 (unified execution architecture: [execution-engine.md](execution-engine.md)) |
 | **Rules** | [ER-DATA](../engineering/ENGINEERING_RULES.md#5-data-er-data), [ADR-0011](../adr/0011-data-access-and-migrations.md) |
 
 ## 1. Conventions
@@ -79,19 +79,24 @@ The phase column says when a table first appears.
 | Table | Purpose | Phase |
 |---|---|---|
 | `shops` | Shop per marketplace account | 2 (shell), 4 |
-| `shop_integrations` | Etsy tokens sealed by envelope encryption (key ID, wrapped data key, ciphertexts), scopes, token expiry, status, failure count ([token vault](../features/etsy-integration/token-vault.md)); one per Etsy shop and organization | 4 |
-| `shop_capabilities` | Probe results with `checked_at` | 4 |
-| `sync_cursors` | Reconciliation cursors per shop and resource | 5 |
-| `sync_drifts` | Differences found by reconciliation between our records and the marketplace | 5 |
+| `shop_integrations` | Etsy tokens sealed by envelope encryption (key ID, wrapped data key, ciphertexts), scopes, token expiry, status, failure count ([token vault](../features/etsy-integration/token-vault.md)); one per Etsy shop and organization; `disconnected_at` and `purge_after` (30 days) once disconnected | 4 |
+| `shop_capabilities` | Latest read-only probe result per shop and capability: state (`available` only after a successful probe), detail code, `checked_at`; Owner/Admin read through RLS ([operations](../features/etsy-integration/operations.md#capability-probes)) | 4 |
+| `sync_cursors` | Reconciliation cursors per shop and resource (created: migration `20261024220000_order_reconciliation.sql`; kinds `reconcile`, `sweep`) | 5 |
+| `sync_drifts` | Differences found by reconciliation between our records and the marketplace (created: migration `20261024220000_order_reconciliation.sql`; kinds `missing`, `status`, `items`, `shipments`, both values, no money or buyer data; `totals` and source `verification` added by `20261025150000_order_automations.sql` for Order Deduplication & Verification, naming the field, never the amount) | 5 |
+| `product_sales_counters` | Per shop and listing: units and orders that count as sales (created: migration `20261025150000_order_automations.sql`; Product Sales Counters; numbers only) | 5 |
+| `product_sales_applications` | Per receipt: what the counters hold for it now (listing → units), so a replay moves nothing (created: migration `20261025150000_order_automations.sql`) | 5 |
 
 ### Orders & Fulfillment
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `orders` | One per receipt; status, totals, `external_updated_at`, raw payload hash | 5 |
-| `order_items` | One per transaction; quantity, SKU, price; `variant_id` nullable until the catalog maps it (Phases 11–12) | 5 |
-| `order_status_events` | Every order state transition with source and proof | 5 |
-| `shipments` | Shipment records from the marketplace (carrier, tracking code) | 5 |
+| `etsy_orders`, `etsy_order_items`, `etsy_order_refunds` | The shop's stored order history from Etsy (owner's decision of 2026-10-22): one row per receipt (status, totals as amount/divisor/currency, country, shipments' carrier and time), its items, its refunds with Etsy's reason; upserted by `(shop_id, receipt_id)`; members of the shop read through RLS ([dashboard data](../features/etsy-integration/dashboard-data.md#stored-order-history)) | 4 (ahead of 5) |
+| `etsy_order_buyers` | The buyer's name, shipping address and tracking numbers per stored order; RLS for buyer-data roles only (Owner, Admin; Operations and Support with access); no contact columns | 4 (ahead of 5) |
+| `etsy_order_sync_state` | Per shop: the backfill's offset checkpoint, when it completed, the last 30-day sync, the last error type | 4 (ahead of 5) |
+| `orders` | **Not created as a separate table** (2026-10-23): `etsy_orders` (#57) is the order store, and Phase 5 extends it (`external_updated_at`, raw payload hash). A channel-neutral `orders` view over the marketplace stores is added with the Shopify adapter (Phase 21) | 21 (view) |
+| `order_items` | As `orders`: `etsy_order_items` is the store; `variant_id` (nullable until the catalog maps it, Phases 11–12) is added to it | 5 (column), 21 (view) |
+| `order_status_events` | Every order state transition with source and proof; references `etsy_orders` (created: migration `20261024210000_order_intake.sql`) | 5 |
+| `shipments` | Shipment records from the marketplace (carrier, tracking code); today embedded in `etsy_orders` and `etsy_order_buyers` (tracking numbers); split into a table only when Phase 6 needs one row per shipment | 6 |
 | `tracking_events` | Tracking facts with source and `observed_at` | 6 |
 | `sla_policies` | SLA windows per shop, supplier and shipping method | 6 |
 
@@ -102,17 +107,19 @@ The phase column says when a table first appears.
 | `products`, `variants` | Internal catalog | 11–12 |
 | `product_facts` | Verified attributes (dimensions, material, contents) with source | 11 |
 | `product_sales_counters` | Units and orders per product, net of cancellations and refunds (Product Sales Counters automation) | 5 |
-| `listings`, `listing_variants`, `listing_metrics` | Per-shop publication and stats | 11–12 |
+| `listings`, `listing_variants`, `listing_metrics` | Per-shop publication and stats; `listing_metrics` also takes the stats export (CSV upload, or recipe B-02 where scoped) | 11–12 |
+| `shop_traffic_daily`, `ads_daily` | Shop visits, views, conversion and search terms per day; Etsy Ads spend and results per day; from CSV uploads or scoped browser exports (B-02, B-03), with source and `observed_at` | 8A, 11 |
 | `listing_audits`, `listing_findings` | Listing Health results and evidence | 11 |
 | `product_candidates` | Shon's candidates with APPROVED / REVIEW / REJECTED, reasons, sources and confidence | 12 |
 | `product_sources`, `product_assets`, `asset_provenance` | Sources and media lineage | 12 |
-| `quote_requests`, `supplier_quotes`, `supplier_mappings` | Supplier onboarding and active mappings | 13 |
+| `suppliers`, `quote_requests`, `supplier_quotes`, `supplier_mappings` | Supplier onboarding and active mappings; quotes parsed from AutoVA's emails; one active mapping per product or variant ([AutoVA integration](autova-integration.md)) | 7 (moved from 13) |
+| `autova_orders` | Snapshots of AutoVA orders from recipe A-01 (export or screen): AutoVA ID, receipt, supplier, status, paid, mode, carrier, tracking, profit, `source`, `observed_at` | 8A |
 
 ### Finance
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `financial_entries` | Ledger lines (revenue, fees, refunds, costs) with source and `ESTIMATED`/`VERIFIED` | 5 (basic), 13 |
+| `financial_entries` | Ledger lines (revenue, fees, refunds, costs) with source and `ESTIMATED`/`VERIFIED` (created: migration `20261024210000_order_intake.sql`, revenue and refunds only; fees with the ledger) | 5 (basic), 13 |
 | `payouts`, `fees`, `refunds`, `cost_snapshots` | Marketplace and supplier finance detail | 13 |
 | `budgets`, `budget_ledger` | AI and infrastructure budgets, reserved and actual, per organization, shop, employee, task, day and month | 9 |
 
@@ -120,7 +127,7 @@ The phase column says when a table first appears.
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `customers`, `customer_consents` | Minimal buyer records per shop; consent ledger | 14 |
+| `customers`, `customer_consents` | Not for Etsy buyers: no stored customer list, segments or marketing profiles ([ADR-0018](../adr/0018-order-history-and-buyer-data.md)); a per-buyer view is computed from the order history on demand. Only email support contacts (Phase 14), if the owner approves | 14 |
 | `support_tickets`, `customer_messages` | Tickets and messages | 14 |
 | `email_domains`, `email_identities`, `mailboxes` | Sending and receiving identities | 6, 14 |
 | `email_threads`, `email_messages`, `email_attachments` | Mail content (untrusted) | 14 |
@@ -154,10 +161,37 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `automation_definitions` | Versioned automation definitions with their 18-section specification | 5 |
-| `automation_executions` | One per `(automation_id, idempotency_key)`: state, attempts, trigger, actor, correlation ID | 5 |
+| `automation_definitions` | Versioned automation definitions (`(id, version)`) with their 18-section specification, the whole reviewed document, its SHA-256 and the registry commit; written only by `htco registry sync --automations`. **Created** (slice 5.10, `20261023140000_automation_engine.sql`) | 5 |
+| `automation_executions` | One per `(automation_id, idempotency_key)`: organization, shop, definition version, state (machine enforced by a trigger), attempts, trigger, actor, correlation and causation IDs, last error, payload. **Created** (slice 5.10) | 5 |
+| `automation_execution_events` | Every execution state change with its actor and correlation ID; append-only. **Created** (slice 5.10) | 5 |
 | `tool_definitions` | Versioned tool definitions: family, owner, side effect, risk, data scope, readiness | 8 |
 | `tool_invocations` | Every tool call: employee, profile and tool versions, access decision, outcome, cost | 8 |
+
+### Execution (Action Gateway and channels)
+
+[execution-engine.md](execution-engine.md) holds the contracts and state machines.
+
+| Table | Purpose | Phase |
+|---|---|---|
+| `action_executions` | One per `(organization_id, action_name, idempotency_key)` (created in `20261023150000`): action and version, request hash, actor, on-behalf-of user, organization, shop, state, outcome, channel, attempts, approval ID, verification, evidence, error code and reason, output (never for R1 reads), correlation and causation IDs; finished rows never change (trigger); RLS by organization and shop for users (no output column), by the job's organization for the worker. Owner-trigger flag and cost follow with 5.14 and 5.15 | 5 |
+| `action_first_runs` | Per shop and write tool: the owner's first verified run (or its error) that unlocks the tool for automations and employees (ADR-0022) | 6–7 |
+| `rate_limit_buckets` | Postgres token buckets for app-wide limits (Etsy QPS and QPD) and per-shop browser pace | 5 |
+| `circuit_breakers` | Shared breaker state per key (`etsy:api`, `etsy:web`, `browser:{shop}`) | 5 |
+| `human_tasks` (as `tasks` with `assignee_kind = user` and a waiting reason) | Human-channel work: manual login, challenge, refund in Etsy, unsupported authentication; resumes the waiting execution | 7 |
+
+### Browser environments and secrets
+
+| Table | Purpose | Phase |
+|---|---|---|
+| `shop_browser_environments` | One per shop (optional; created in `20261024200000`): status (`NOT_CONFIGURED`, `PROVISIONING`, `READY`, `LOGIN_REQUIRED`, `DEGRADED`, `SUSPENDED`, `FAILED`; created `PROVISIONING`, every change checked against the transition table by a trigger), consent (text version, user, time, address hash; all or none), profile storage key and key ID (8A), last health, last session, challenge count; no proxy or fingerprint columns (ADR-0020). RLS: Owner and Admin read their organization's rows (no consent or profile columns); the worker reads its job's organization's statuses. Enabled actions follow with the scope flags (8A) | 5 (table and state machine), 8A |
+| `browser_environment_events` | Append-only (created in `20261024200000`): `transition` rows (from, to, actor, reason, correlation ID; only the table's edges) and `health` rows (ok, problem codes) | 5, 8A |
+| `browser_sessions` | Each session: environment, execution, purpose, recipe, started and ended, outcome, preflight report, challenge kind | 8A |
+| `browser_artifacts` | Downloaded exports and challenge screenshots (by storage key and hash; screenshots kept 7 days) | 8A |
+| `browser_scope_flags` | Mirror of [etsy-automation-approval.md](etsy-automation-approval.md): action ID, scope version, flag state, changed by | 8A |
+| `shop_credentials` (`private`) | Sealed Etsy password per environment (envelope encryption with the token vault's key ring; DC0) | 8A |
+| `totp_accounts` (`private`) | Sealed TOTP secrets: organization, shop, label, issuer, digits, period, algorithm, key ID, status, consent reference; never the code | 8B |
+| `totp_events` | Append-only enrol, rotate, remove, view, inject and refuse events; never the code | 8B |
+| `secret_grants` | Single-use injection grants: execution, environment, secret reference, field, expiry, redeemed at | 8B |
 
 ### Decisions and routing
 
@@ -182,20 +216,22 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `incidents`, `incident_events`, `remediations` | Incident lifecycle and fixes | 6 |
+| `incidents`, `incident_events`, `remediations` | Incident lifecycle and fixes. `incidents` and `incident_events` **created** (slice 6.3, `20261025100000_fulfillment_incidents.sql`); `remediations` later | 6 |
+| `tracking_events`, `sla_policies` | First sighting of each parcel per order (fingerprint and last four only); SLA windows per organization, shop, supplier and shipping method. **Created** (slices 6.1, 6.2, `20261025100000_fulfillment_incidents.sql`) | 6 |
 | `debug_reports` | Amir's diagnoses | 19 |
 | `audit.audit_log` | Append-only audit of sensitive actions | 2 |
-| `system_alerts`, `notifications`, `notification_preferences` | Alerts and user notifications | 6–7 |
-| `worker_heartbeats` | Liveness of workers | 5 |
+| `system_alerts`, `notifications`, `notification_preferences` | Alerts and user notifications. `notifications`, `notification_preferences`, `notification_settings` and `email_deliveries` **created** (slice 6.4, `20261025110000_notifications.sql`); alerts are notifications (no `system_alerts` table, audit P2-2) | 6–7 |
+| `jobs.worker_heartbeats` | Liveness of workers: last beat, current job, stopping. **Created** (slice 5.1, `20261023120000_job_queue.sql`) | 5 |
 
 ### Infrastructure tables
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `inbox` | External events, unique by `(source, event_id)` | 5 |
-| `idempotency_keys` | Stored request hash and response for unsafe API requests with an `Idempotency-Key` (24 h) | 5 |
-| `outbox` | Pending external side effects, unique by idempotency key | 5 |
-| `jobs.*` | Technical job queue (implementation per ADR-0007) | 5 |
+| `jobs.inbox` | External events, unique by `(source, event_id)`, with payload hash and processing job. **Created** (slice 5.2, `20261023130000_inbox_outbox.sql`) | 5 |
+| `private.idempotency_keys` | Stored request hash and response for unsafe API requests with an `Idempotency-Key` (24 h), per user. **Created** (slice 5.2) | 5 |
+| `jobs.outbox` | Pending external side effects, unique by idempotency key, with status, attempts, next attempt (kept equal to its delivery job's), and the optional `action_execution_id` and `correlation_id` of the gateway (ADR-0019). **Created** (slice 5.2) | 5 |
+| `jobs.rate_windows`, `jobs.circuit_breakers`, `jobs.concurrency_slots` | The Action Gateway's guards: calls spent per key per UTC second and day, one breaker per key, leased slots. No tenant data; worker role only. **Created** (slice 5.15, `20261023160000_action_guards.sql`, which also adds `app.action_executions.retry_at`) | 5 |
+| `jobs.jobs` | Technical job queue ([ADR-0007](../adr/0007-job-queue.md)): unique `(kind, idempotency_key)`, optional `organization_id`/`shop_id`, `lock_key` (one running job per key), state, attempts and backoff, lease, last error, `correlation_id`, `causation_id`. RLS on; only the `htco_worker` role and the login role. **Created** (slice 5.1) | 5 |
 | `agent_runtime.*` | LangGraph checkpoints, writes, blobs, store | 8 |
 
 ## 4. Row-level security pattern
@@ -233,7 +269,7 @@ Data classes are written DC0–DC4 so they are never confused with requirement p
 
 | Class | Examples | Where | Default handling |
 |---|---|---|---|
-| DC0 Secret | OAuth tokens, API keys, session tokens, PKCE verifiers | `shop_integrations`, `web_sessions`, `oauth_authorizations` | Application-level encryption; never logged or shown |
+| DC0 Secret | OAuth tokens, API keys, session tokens, PKCE verifiers, shop passwords, TOTP secrets and codes, browser profiles (cookies) | `shop_integrations`, `web_sessions`, `oauth_authorizations`, `shop_credentials`, `totp_accounts`, sealed profile archives | Application-level encryption with the one key ring; never logged, never shown (a TOTP code only on the code view), never sent to a model |
 | DC1 Buyer contact | Buyer name, shipping address, email (if granted) | `orders`, `customers` | Masked in lists and logs; visible only to roles that need it |
 | DC2 Buyer content | Messages, emails, attachments | `customer_messages`, `email_*` | Untrusted; masked before model calls unless needed |
 | DC3 User account | Team members' names and emails | `user_profiles` | Visible inside the organization |
@@ -246,7 +282,7 @@ Proposed defaults, confirmed with the owner before Phase 5 and checked against E
 | Data | Retention |
 |---|---|
 | Orders, items, financial entries | 7 years (bookkeeping) with buyer PII minimized after the support window |
-| Buyer contact details (DC1) | Until the order is closed plus 180 days, then masked |
+| Buyer name and shipping address (DC1) | With the order while the shop is connected, masked after the support window per this table's review; purged 30 days after a disconnect ([ADR-0018](../adr/0018-order-history-and-buyer-data.md)). Email, phone and messages are never stored |
 | Buyer messages and inbound email (DC2) | 365 days, then deleted |
 | Audit log | 7 years |
 | Agent checkpoints | 30 days after a thread completes |

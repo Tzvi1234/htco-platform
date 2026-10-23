@@ -17,13 +17,14 @@ This folder is the system's source of truth: what we are building, in what order
 
 | Area | Documents |
 |---|---|
-| **Product** | [PRD](product/PRD.md) · [MVP](product/MVP.md) · [Glossary](product/GLOSSARY.md) · [Assumptions and open decisions](product/ASSUMPTIONS.md) |
-| **Plan** | [Master plan](plan/PLAN.md) · [Phases 0–17](plan/phases/) |
-| **Architecture** | [Software design](architecture/SOFTWARE_DESIGN.md) · [Data model](architecture/DATA_MODEL.md) · [Event catalog](architecture/EVENT_CATALOG.md) · [Permission matrix](architecture/PERMISSION_MATRIX.md) · [Threat model](architecture/THREAT_MODEL.md) |
+| **Product** | [PRD](product/PRD.md) · [MVP](product/MVP.md) · [Feature backlog](product/FEATURE_BACKLOG.md) · [Glossary](product/GLOSSARY.md) · [Assumptions and open decisions](product/ASSUMPTIONS.md) |
+| **Plan** | [Master plan](plan/PLAN.md) · [Execution order](plan/EXECUTION_ORDER.md) · [Phases 0–21, 8A, 8B](plan/phases/) |
+| **Architecture** | [Software design](architecture/SOFTWARE_DESIGN.md) · [Data model](architecture/DATA_MODEL.md) · [Event catalog](architecture/EVENT_CATALOG.md) · [Permission matrix](architecture/PERMISSION_MATRIX.md) · [Threat model](architecture/THREAT_MODEL.md) · [Execution engine](architecture/execution-engine.md) · [Etsy API capabilities](architecture/etsy-api-capabilities.md) · [Etsy multi-shop policy](architecture/etsy-multi-shop-policy.md) · [Etsy automation approval](architecture/etsy-automation-approval.md) · [AutoVA integration](architecture/autova-integration.md) |
 | **Decisions** | [Architecture decision records](adr/README.md) |
 | **Engineering** | [Engineering rules](engineering/ENGINEERING_RULES.md) · [Testing strategy](engineering/TESTING_STRATEGY.md) · [Toolchain](engineering/TOOLCHAIN.md) |
 | **Features** | [Feature docs and template](features/README.md) |
 | **Cost** | [Cost model](cost/COST_MODEL.md) |
+| **Reviews** | [Post-merge review, 2026-10-23](reviews/2026-10-23-post-merge-review.md); [architecture audit, 2026-10-23](reviews/2026-10-23-architecture-audit.md) |
 
 ## Documents created later, in the phase that needs them
 

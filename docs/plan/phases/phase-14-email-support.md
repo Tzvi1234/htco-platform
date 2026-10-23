@@ -5,7 +5,7 @@
 | **Milestone** | — |
 | **Repositories** | both |
 | **Size** | M |
-| **Depends on** | [Phase 10](phase-10-supervision.md) (can run in parallel with Phases 11–13) |
+| **Depends on** | [Phase 10](phase-10-supervision.md) (can run in parallel with Phases 11–13); [Phase 8A](phase-08a-browser-infrastructure.md) (browser engine) and [Phase 8B](phase-08b-authenticator.md) (authenticator) for delivery A |
 | **Requirements** | FR-AGT-06, FR-AGT-09, FR-AUT-05, FR-EML-02, FR-EML-03, FR-MKT-02, FR-SVC-01, FR-SVC-02, FR-SVC-03 |
 | **Status** | Not started |
 
@@ -13,13 +13,23 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 
 ## Progress
 
-- [ ] 14.1 Inbound pipeline: webhook, inbox, fetch, attachments, quarantine
+- [ ] 14.1 Inbound pipeline: webhook, inbox, fetch, attachments, quarantine (generalizes the quote mailbox of slice 7.14)
 - [ ] 14.2 Email Intake & Routing automation: threads, tickets, customer linking
 - [ ] 14.3 Quarantined extractor to a validated ticket schema
 - [ ] 14.4 Dana's drafts and approval-to-send
 - [ ] 14.5 Etsy assisted replies
 - [ ] 14.6 Support UI: inbox, ticket view, SLA
 - [ ] 14.7 Dana activated
+
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope), [ADR-0020](../../adr/0020-per-shop-browser-environment.md) and [ADR-0021](../../adr/0021-authenticator-service.md):
+
+- **Delivery A runs on the central browser engine.** "An AI agent sends approved replies in an isolated browser session" is the shop's Browser Environment (Phase 8A), its Browser Controller and lock, the shared authenticator (Phase 8B) for sign-in, and the challenge handler that hands off to a person. It is not a separate browser.
+- **Scope rows:** reading messages is B-04, sending an approved reply B-05, reading cases B-06, and replying to reviews B-07. Each is off until the owner records its scope, and B-05 and B-07 also need the written confirmation (recommended in ADR-0022).
+- **The send itself** is a deterministic Playwright recipe that types the exact approved text. Dana drafts in HTCO; she never drives the browser to compose.
+- **Delivery B** (assisted reply through the owner's own browser) stays the fallback, and is the default whenever a flag is off.
+- **Etsy's notification emails** stay the primary signal for new messages and cases, with no browser needed for detection.
 
 ## Goal
 

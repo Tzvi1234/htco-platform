@@ -7,9 +7,13 @@ reads the row again, since another caller may have refreshed it meanwhile, and r
 ten concurrent requests on an expired token cause one refresh call (AC-4.4.1). The newest tokens
 are stored every time, including the new refresh token.
 
-Failures never loop (AC-4.4.2): `invalid_grant` (a revoked or expired refresh token) marks the
+Failures never loop (AC-4.4.2): `invalid_grant` (a revoked or expired refresh token) and
+`invalid_client` (the app's key was replaced, so the tokens belong to another app) mark the
 integration `needs_reauth` at once; any other failure is counted, and the third in a row marks it
-`needs_reauth`. Both are audited once. A failed attempt is shared: for `REFRESH_RETRY_INTERVAL`
+`needs_reauth`. Both are audited once. A data call Etsy refuses for the credentials themselves
+(`MarketplaceCredentialsRejectedError`: a 401, or a 403 about the API key) is reported here by
+the adapter (`credentials_rejected`) and marks the connection `needs_reauth` the same way.
+A failed attempt is shared: for `REFRESH_RETRY_INTERVAL`
 nobody tries again, so callers queued behind it (in any process) and calls during one outage do
 not each spend one of the three tries. While the old access token still works it is returned.
 Errors and audit records never carry a token.
@@ -25,6 +29,7 @@ from typing import Protocol
 from htco_application.audit import AuditRecord
 from htco_application.etsy_connect import (
     EtsyAuthorizationServer,
+    OAuthClientRejectedError,
     OAuthInvalidGrantError,
     OAuthUnavailableError,
 )
@@ -47,14 +52,22 @@ class RefreshableTokens(Protocol):
 
     async def find_by_marketplace_shop(self, etsy_shop_id: int) -> ShopIntegration | None: ...
 
-    async def update_tokens(self, shop_id: uuid.UUID, tokens: OAuthTokens) -> bool: ...
+    async def describe(self, shop_id: uuid.UUID) -> ShopIntegration | None: ...
+
+    async def update_tokens(
+        self, shop_id: uuid.UUID, tokens: OAuthTokens, *, generation: int | None = None
+    ) -> bool: ...
 
     async def record_refresh_failure(
-        self, shop_id: uuid.UUID, *, at: datetime | None = None
+        self, shop_id: uuid.UUID, *, at: datetime | None = None, generation: int | None = None
     ) -> int: ...
 
     async def mark_needs_reauth(
-        self, shop_id: uuid.UUID, *, audit: AuditRecord | None = None
+        self,
+        shop_id: uuid.UUID,
+        *,
+        audit: AuditRecord | None = None,
+        generation: int | None = None,
     ) -> bool: ...
 
 
@@ -83,13 +96,49 @@ class VaultAccessTokenProvider:
         found = await self._vault.find_by_marketplace_shop(shop_id)
         if found is None:
             raise MarketplaceAuthError(f"Etsy shop {shop_id} is not connected")
+        return await self._token_of(found, shop_id, generation=None)
+
+    async def access_token_for(
+        self, shop_id: uuid.UUID, *, generation: int, etsy_shop_id: int
+    ) -> str:
+        """The token of one connection: the shop's integration with this `generation`, never
+        whichever connection holds the Etsy shop now (Codex review of #49)."""
+        found = await self._vault.load(shop_id)
+        if found is None or not _same(found, generation, etsy_shop_id):
+            raise MarketplaceAuthError(f"Etsy shop {etsy_shop_id} is not connected")
+        return await self._token_of(found, etsy_shop_id, generation=generation)
+
+    async def credentials_rejected(self, shop_id: int, *, reason: str) -> None:
+        """Etsy refused a call's credentials: whichever connection holds the Etsy shop needs
+        reauthorization."""
+        found = await self._vault.find_by_marketplace_shop(shop_id)
+        if found is not None:
+            await self._needs_reauth(found, reason)
+
+    async def connection_rejected(
+        self, shop_id: uuid.UUID, *, generation: int, etsy_shop_id: int, reason: str
+    ) -> None:
+        """Etsy refused a call made for one connection: only that connection is marked."""
+        found = await self._vault.describe(shop_id)
+        if found is not None and _same(found, generation, etsy_shop_id):
+            await self._needs_reauth(found, reason)
+
+    def pinned(self, shop_id: uuid.UUID, *, generation: int) -> PinnedTokens:
+        """An `AccessTokenProvider` bound to one connection, for calls made on its behalf."""
+        return PinnedTokens(self, shop_id, generation=generation)
+
+    async def _token_of(
+        self, found: ShopIntegration, shop_id: int, *, generation: int | None
+    ) -> str:
         tokens = _usable(found, shop_id)
         if self._fresh(tokens):
             return tokens.access_token
         local = self._local.setdefault(found.shop_id, asyncio.Lock())
         async with local, self._lock.hold(found.shop_id):
             current = await self._vault.load(found.shop_id)
-            if current is None:
+            if current is None or (
+                generation is not None and not _same(current, generation, shop_id)
+            ):
                 raise MarketplaceAuthError(f"Etsy shop {shop_id} is not connected")
             tokens = _usable(current, shop_id)
             if self._fresh(tokens):  # refreshed by another caller while we waited
@@ -114,13 +163,22 @@ class VaultAccessTokenProvider:
         now = self._clock()
         try:
             grant = await self._server.refresh(tokens.refresh_token)
-        except OAuthInvalidGrantError:
-            await self._needs_reauth(integration, "invalid_grant")
+        except OAuthInvalidGrantError as error:
+            reason = (
+                "invalid_client" if isinstance(error, OAuthClientRejectedError) else "invalid_grant"
+            )
+            await self._needs_reauth(integration, reason)
             raise MarketplaceAuthError(
                 f"Etsy refused the refresh token of shop {etsy}; reconnect the shop"
             ) from None
         except OAuthUnavailableError:
-            failures = await self._vault.record_refresh_failure(integration.shop_id, at=now)
+            failures = await self._vault.record_refresh_failure(
+                integration.shop_id, at=now, generation=integration.generation
+            )
+            if failures == 0:  # this connection is gone (disconnected or reconnected meanwhile)
+                raise MarketplaceAuthError(
+                    f"Etsy shop {etsy} was disconnected or reconnected"
+                ) from None
             if failures >= MAX_REFRESH_FAILURES:
                 await self._needs_reauth(integration, "refresh_failed")
                 raise MarketplaceAuthError(
@@ -136,13 +194,18 @@ class VaultAccessTokenProvider:
         fresh = grant.tokens(
             now, refresh_expires_at=tokens.refresh_expires_at if same_refresh else None
         )
-        if not await self._vault.update_tokens(integration.shop_id, fresh):
-            raise MarketplaceAuthError(f"Etsy shop {etsy} was disconnected")
+        # Only the connection this refresh started under (Codex review of #49): a disconnect and
+        # reconnect during the OAuth call leave the new connection's tokens alone.
+        if not await self._vault.update_tokens(
+            integration.shop_id, fresh, generation=integration.generation
+        ):
+            raise MarketplaceAuthError(f"Etsy shop {etsy} was disconnected or reconnected")
         return fresh.access_token
 
     async def _needs_reauth(self, integration: ShopIntegration, reason: str) -> None:
         await self._vault.mark_needs_reauth(
             integration.shop_id,
+            generation=integration.generation,
             audit=AuditRecord.new(
                 organization_id=integration.organization_id,
                 actor=_ACTOR,
@@ -152,6 +215,33 @@ class VaultAccessTokenProvider:
                 after={"reason": reason, "provider": integration.provider.value},
             ),
         )
+
+
+class PinnedTokens:
+    """`AccessTokenProvider` for calls made on behalf of one connection (shop and generation):
+    refuses once that connection is disconnected or replaced, even when the same Etsy shop is
+    connected again, possibly by another organization."""
+
+    def __init__(
+        self, provider: VaultAccessTokenProvider, shop_id: uuid.UUID, *, generation: int
+    ) -> None:
+        self._provider = provider
+        self._shop_id = shop_id
+        self._generation = generation
+
+    async def access_token(self, shop_id: int) -> str:
+        return await self._provider.access_token_for(
+            self._shop_id, generation=self._generation, etsy_shop_id=shop_id
+        )
+
+    async def credentials_rejected(self, shop_id: int, *, reason: str) -> None:
+        await self._provider.connection_rejected(
+            self._shop_id, generation=self._generation, etsy_shop_id=shop_id, reason=reason
+        )
+
+
+def _same(integration: ShopIntegration, generation: int, etsy: int) -> bool:
+    return integration.generation == generation and integration.etsy_shop_id == etsy
 
 
 def _usable(integration: ShopIntegration, etsy: int) -> OAuthTokens:

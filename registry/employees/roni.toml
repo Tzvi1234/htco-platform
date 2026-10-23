@@ -7,7 +7,7 @@ version = 1
 autonomy = "L0"
 readiness = "draft"
 activation_phase = 13
-allowed_tools = ["finance.read_ledger", "metrics.query_costs", "pricing.calculate", "activity.query", "models.complete"]
+allowed_tools = ["finance.read_ledger", "metrics.query_costs", "pricing.calculate", "activity.query", "models.complete", "etsy.receipts.read", "etsy.payments.read", "etsy.ledger.read"]
 allowed_automations = ["order-financial-reconciliation"]
 
 [routing]

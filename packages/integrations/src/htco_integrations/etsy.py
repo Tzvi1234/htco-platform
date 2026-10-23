@@ -12,6 +12,15 @@ floor, routine calls are deferred with a warning and a metric; urgent calls stil
 older than `quota_snapshot_ttl` no longer defers, so one routine call can refresh it after Etsy's
 window has moved on.
 
+Read only (the owner's rule: connected shops are live, with real buyers). Every call goes through
+one choke point, `_request`, which refuses any method but GET before a token is fetched unless
+the caller sets the `allow_write` flag for that call; no code path does. As a second, independent
+guard the adapter installs a request hook on its HTTP client that stops any non-GET request to
+Etsy's shop API (`ETSY_BASE_URL`) before it leaves the process, even if some code used the
+client directly. The OAuth token endpoint (`api.etsy.com/v3/public/oauth/token`) is outside that
+API and unaffected. Etsy's `tokenScopes` is a POST, so it is not used: the capability probes
+read the stored scopes.
+
 Retries: only GETs are made here, so 429 (honouring `retry-after`), 5xx and transport failures
 (timeouts, refused connections) are retried with capped exponential backoff. Other 4xx answers
 map to typed errors at once. Write operations, which are not idempotent at Etsy, must not reuse
@@ -20,14 +29,17 @@ this retry loop.
 Nothing here logs or raises with the API key, the shared secret, an access token or a payload.
 """
 
+import hashlib
 import math
+import re
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, NoReturn
 
 import anyio
 import httpx
@@ -36,10 +48,15 @@ from opentelemetry import metrics
 
 from htco_application.marketplace import (
     AccessTokenProvider,
+    CredentialsRejectionSink,
+    InventorySnapshot,
     Listing,
+    ListingDetails,
+    ListingImage,
+    ListingSnapshot,
     ListingState,
-    MarketplaceAuthError,
     MarketplaceConflictError,
+    MarketplaceCredentialsRejectedError,
     MarketplaceError,
     MarketplaceMoney,
     MarketplaceNotFoundError,
@@ -49,15 +66,37 @@ from htco_application.marketplace import (
     MarketplaceResponseError,
     MarketplaceShop,
     MarketplaceUnavailableError,
+    MarketplaceWriteRefusedError,
+    OrderLine,
+    OrderReceipt,
+    OrderRefund,
+    OrderShipment,
     Page,
+    ProductionPartner,
+    ProductStock,
     QuotaDeferredError,
     QuotaSnapshot,
     Receipt,
+    ReceiptAddressCheck,
     ReceiptLine,
+    ReturnPolicy,
+    ShippingAddress,
+    ShippingDestination,
+    ShippingProfile,
+    ShopProfile,
+    ShopReview,
+    ShopSection,
+    display_name,
 )
 
 ETSY_BASE_URL = "https://openapi.etsy.com/v3/application"
 MAX_PAGE_SIZE = 100
+# The only methods sent to Etsy's shop API. Anything else needs an explicit per-call allow flag.
+READ_ONLY_METHODS = frozenset({"GET"})
+# Request extension that lets one request past the hook; set only when `allow_write` is set.
+_WRITE_ALLOWED = "htco.etsy.write_allowed"
+# Fields whose presence on a receipt shows Etsy shares the buyer's shipping address.
+_ADDRESS_FIELDS = ("first_line", "city")
 
 _QUOTA_HEADERS = (
     "x-limit-per-second",
@@ -84,6 +123,21 @@ class EtsyCredentials:
 
     def api_key_header(self) -> str:
         return f"{self.keystring}:{self.shared_secret}"
+
+    @property
+    def fingerprint(self) -> str:
+        """`app_key_fingerprint` of the keystring: which app the stored tokens were issued for."""
+        return app_key_fingerprint(self.keystring)
+
+
+def app_key_fingerprint(keystring: str) -> str:
+    """The first 16 hex characters of the keystring's SHA-256: enough to tell two apps apart,
+    never the key itself. Tokens are issued per app, so a connection whose fingerprint differs
+    from the configured key's cannot work and is treated as `needs_reauth` without calling Etsy.
+    Whitespace around the key is ignored: the same key re-entered with a trailing newline is the
+    same app, and must not mark every healthy connection `needs_reauth`.
+    """
+    return hashlib.sha256(keystring.strip().encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass(frozen=True)
@@ -170,11 +224,16 @@ class EtsyAdapter:
         self._refresh_in_flight = False
         self._sent: deque[float] = deque()
         self._throttle = anyio.Lock()
+        _install_write_guard(client, self._config.base_url)
 
     # --- MarketplacePort ----------------------------------------------------------------------
 
-    async def get_shop(self, shop_id: int, *, urgent: bool = False) -> MarketplaceShop:
-        body = await self._get("get_shop", shop_id, f"/shops/{shop_id}", {}, urgent=urgent)
+    async def get_shop(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> MarketplaceShop:
+        body = await self._request(
+            "GET", "get_shop", shop_id, f"/shops/{shop_id}", {}, urgent=urgent, tokens=tokens
+        )
         return _parse("get_shop", _shop, body)
 
     async def list_receipts(  # noqa: PLR0913 - each keyword is one filter of the same query
@@ -200,12 +259,42 @@ class EtsyAdapter:
         ):
             raise ValueError("min_last_modified must not be after max_last_modified")
         params |= {"limit": limit, "offset": offset}
-        body = await self._get(
-            "list_receipts", shop_id, f"/shops/{shop_id}/receipts", params, urgent=urgent
+        body = await self._request(
+            "GET", "list_receipts", shop_id, f"/shops/{shop_id}/receipts", params, urgent=urgent
         )
         return _parse("list_receipts", lambda data: _page(data, _receipt, offset), body)
 
-    async def list_listings(
+    async def get_receipt(self, shop_id: int, receipt_id: int, *, urgent: bool = False) -> Receipt:
+        """One receipt by ID (`getShopReceipt`, a GET): order facts only, like `list_receipts`."""
+        if receipt_id < 1:
+            raise ValueError("receipt_id must be a positive Etsy receipt ID")
+        body = await self._request(
+            "GET", "get_receipt", shop_id, f"/shops/{shop_id}/receipts/{receipt_id}", {},
+            urgent=urgent,
+        )  # fmt: skip
+        return _parse("get_receipt", _receipt, body)
+
+    async def get_listing(self, shop_id: int, listing_id: int) -> ListingSnapshot:
+        """One listing by ID (`getListing`, a GET), with the shop it belongs to: the webhook
+        re-read (slice 5.3) checks that it is the shop the webhook named."""
+        if listing_id < 1:
+            raise ValueError("listing_id must be a positive Etsy listing ID")
+        body = await self._request(
+            "GET", "get_listing", shop_id, f"/listings/{listing_id}", {}, urgent=False
+        )
+        return _parse("get_listing", _listing_snapshot, body)
+
+    async def get_listing_inventory(self, shop_id: int, listing_id: int) -> InventorySnapshot:
+        """A listing's products and stock (`getListingInventory`, a GET, `listings_r`)."""
+        if listing_id < 1:
+            raise ValueError("listing_id must be a positive Etsy listing ID")
+        body = await self._request(
+            "GET", "get_listing_inventory", shop_id, f"/listings/{listing_id}/inventory", {},
+            urgent=False,
+        )  # fmt: skip
+        return _parse("get_listing_inventory", lambda data: _inventory(listing_id, data), body)
+
+    async def list_listings(  # noqa: PLR0913 - the query and its token source
         self,
         shop_id: int,
         *,
@@ -213,13 +302,24 @@ class EtsyAdapter:
         limit: int = 25,
         offset: int = 0,
         urgent: bool = False,
+        tokens: AccessTokenProvider | None = None,
     ) -> Page[Listing]:
         _check_page(limit, offset)
         params: dict[str, str | int] = {"state": state.value, "limit": limit, "offset": offset}
-        body = await self._get(
-            "list_listings", shop_id, f"/shops/{shop_id}/listings", params, urgent=urgent
+        body = await self._request(
+            "GET",
+            "list_listings",
+            shop_id,
+            f"/shops/{shop_id}/listings",
+            params,
+            urgent=urgent,
+            tokens=tokens,
         )
         return _parse("list_listings", lambda data: _page(data, _listing, offset), body)
+
+    @property
+    def config(self) -> EtsyConfig:
+        return self._config
 
     def last_seen_quota(self) -> QuotaSnapshot | None:
         return self._quota
@@ -231,7 +331,8 @@ class EtsyAdapter:
         owner is waiting for the connection to finish."""
         if user_id <= 0:
             raise ValueError("the Etsy user ID must be positive")
-        body = await self._get(
+        body = await self._request(
+            "GET",
             "shop_of_user",
             user_id,
             f"/users/{user_id}/shops",
@@ -241,10 +342,220 @@ class EtsyAdapter:
         )
         return _parse("shop_of_user", _shop, body)
 
-    # --- One call: floor, throttle, retries ---------------------------------------------------
+    # --- Capability probes (slice 4.5) -------------------------------------------------------
 
-    async def _get(  # noqa: PLR0913 - the call, its budget class and an optional token
+    async def check_receipt_addresses(
+        self, shop_id: int, *, urgent: bool = True, tokens: AccessTokenProvider | None = None
+    ) -> ReceiptAddressCheck:
+        """Read the newest receipt (one, `limit=1`) and report only whether its address fields
+        hold anything. No value is kept, returned or logged."""
+        body = await self._request(
+            "GET",
+            "check_receipt_addresses",
+            shop_id,
+            f"/shops/{shop_id}/receipts",
+            {"limit": 1, "offset": 0},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse("check_receipt_addresses", _address_check, body)
+
+    # --- Dashboard reads (the shop's live data on the dashboard) -----------------------------
+
+    async def get_shop_profile(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> ShopProfile:
+        """getShop with what the shop card shows: counts, reputation and identity."""
+        body = await self._request(
+            "GET",
+            "get_shop_profile",
+            shop_id,
+            f"/shops/{shop_id}",
+            {},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse("get_shop_profile", _shop_profile, body)
+
+    async def list_listing_details(
         self,
+        shop_id: int,
+        *,
+        limit: int = MAX_PAGE_SIZE,
+        offset: int = 0,
+        urgent: bool = False,
+        tokens: AccessTokenProvider | None = None,
+    ) -> Page[ListingDetails]:
+        """getListingsByShop: active listings with their images (`listings_r`)."""
+        _check_page(limit, offset)
+        params: dict[str, str | int] = {
+            "state": ListingState.ACTIVE.value,
+            "includes": "Images",
+            "limit": limit,
+            "offset": offset,
+        }
+        body = await self._request(
+            "GET",
+            "list_listing_details",
+            shop_id,
+            f"/shops/{shop_id}/listings",
+            params,
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse(
+            "list_listing_details", lambda data: _page(data, _listing_details, offset), body
+        )
+
+    async def list_sections(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> tuple[ShopSection, ...]:
+        """getShopSections."""
+        body = await self._request(
+            "GET",
+            "list_sections",
+            shop_id,
+            f"/shops/{shop_id}/sections",
+            {},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse("list_sections", lambda data: _results(data, _section), body)
+
+    async def list_order_receipts(  # noqa: PLR0913 - the window, the page and the token source
+        self,
+        shop_id: int,
+        *,
+        min_created: datetime | None,
+        min_last_modified: datetime | None = None,
+        limit: int = MAX_PAGE_SIZE,
+        offset: int = 0,
+        urgent: bool = False,
+        tokens: AccessTokenProvider | None = None,
+        was_paid: bool | None = None,
+        was_shipped: bool | None = None,
+    ) -> Page[OrderReceipt]:
+        """getShopReceipts created since `min_created` and changed since `min_last_modified`
+        (None: no bound), newest first by creation (`transactions_r`), with no status filter.
+        Buyer data is minimised here: only a display name and the destination country are kept
+        (see `OrderReceipt`)."""
+        _check_page(limit, offset)
+        params: dict[str, str | int] = {}
+        if min_created is not None:
+            params["min_created"] = _epoch(min_created, "min_created")
+        if min_last_modified is not None:
+            params["min_last_modified"] = _epoch(min_last_modified, "min_last_modified")
+        # Reconciliation's open orders (slice 5.5): every paid, unshipped receipt, no period.
+        if was_paid is not None:
+            params["was_paid"] = "true" if was_paid else "false"
+        if was_shipped is not None:
+            params["was_shipped"] = "true" if was_shipped else "false"
+        params |= {
+            "sort_on": "created",
+            "sort_order": "desc",
+            "limit": limit,
+            "offset": offset,
+        }
+        body = await self._request(
+            "GET",
+            "list_order_receipts",
+            shop_id,
+            f"/shops/{shop_id}/receipts",
+            params,
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse("list_order_receipts", lambda data: _page(data, _order_receipt, offset), body)
+
+    async def get_order_receipt(
+        self, shop_id: int, receipt_id: int, *, tokens: AccessTokenProvider | None = None
+    ) -> OrderReceipt:
+        """One receipt for the stored order history (`getShopReceipt`, a GET), parsed like
+        `list_order_receipts`: contact data is never read."""
+        if receipt_id < 1:
+            raise ValueError("receipt_id must be a positive Etsy receipt ID")
+        body = await self._request(
+            "GET", "get_order_receipt", shop_id, f"/shops/{shop_id}/receipts/{receipt_id}", {},
+            urgent=False, tokens=tokens,
+        )  # fmt: skip
+        return _parse("get_order_receipt", _order_receipt, body)
+
+    async def list_reviews(
+        self,
+        shop_id: int,
+        *,
+        limit: int = MAX_PAGE_SIZE,
+        offset: int = 0,
+        urgent: bool = False,
+        tokens: AccessTokenProvider | None = None,
+    ) -> Page[ShopReview]:
+        """getReviewsByShop, newest first."""
+        _check_page(limit, offset)
+        body = await self._request(
+            "GET",
+            "list_reviews",
+            shop_id,
+            f"/shops/{shop_id}/reviews",
+            {"limit": limit, "offset": offset},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse("list_reviews", lambda data: _page(data, _review, offset), body)
+
+    async def list_shipping_profiles(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> tuple[ShippingProfile, ...]:
+        """getShopShippingProfiles (`shops_r`)."""
+        body = await self._request(
+            "GET",
+            "list_shipping_profiles",
+            shop_id,
+            f"/shops/{shop_id}/shipping-profiles",
+            {},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse(
+            "list_shipping_profiles", lambda data: _results(data, _shipping_profile), body
+        )
+
+    async def list_return_policies(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> tuple[ReturnPolicy, ...]:
+        """getShopReturnPolicies."""
+        body = await self._request(
+            "GET",
+            "list_return_policies",
+            shop_id,
+            f"/shops/{shop_id}/policies/return",
+            {},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse("list_return_policies", lambda data: _results(data, _return_policy), body)
+
+    async def list_production_partners(
+        self, shop_id: int, *, urgent: bool = False, tokens: AccessTokenProvider | None = None
+    ) -> tuple[ProductionPartner, ...]:
+        """getShopProductionPartners (`shops_r`)."""
+        body = await self._request(
+            "GET",
+            "list_production_partners",
+            shop_id,
+            f"/shops/{shop_id}/production-partners",
+            {},
+            urgent=urgent,
+            tokens=tokens,
+        )
+        return _parse(
+            "list_production_partners", lambda data: _results(data, _production_partner), body
+        )
+
+    # --- One call: write guard, floor, throttle, retries ------------------------------------
+
+    async def _request(  # noqa: PLR0913 - the call, its budget class, optional token and flag
+        self,
+        method: str,
         operation: str,
         shop_id: int,
         path: str,
@@ -252,32 +563,68 @@ class EtsyAdapter:
         *,
         urgent: bool,
         access_token: str | None = None,
+        tokens: AccessTokenProvider | None = None,
+        allow_write: bool = False,
     ) -> Any:
+        """The only way the adapter calls Etsy. A method other than GET is refused here, before
+        the budget or a token is touched, unless `allow_write` is set for this one call."""
+        verb = method.upper()
+        write = verb not in READ_ONLY_METHODS
+        if write and not allow_write:
+            _refuse_write(verb, path)
         refreshing = self._admit(operation, shop_id, urgent=urgent)
         try:
-            token = access_token or await self._tokens.access_token(shop_id)
-            return await self._send(operation, path, params, token)
+            return await self._send(
+                verb,
+                operation,
+                shop_id,
+                path,
+                params,
+                access_token=access_token,
+                tokens=tokens or self._tokens,
+                write=write,
+            )
         finally:
             if refreshing:
                 self._refresh_in_flight = False
 
-    async def _send(
-        self, operation: str, path: str, params: Mapping[str, str | int], token: str
+    async def _send(  # noqa: PLR0913 - one request's parts
+        self,
+        method: str,
+        operation: str,
+        shop_id: int,
+        path: str,
+        params: Mapping[str, str | int],
+        *,
+        access_token: str | None,
+        tokens: AccessTokenProvider,
+        write: bool,
     ) -> Any:
-        headers = {
-            "x-api-key": self._credentials.api_key_header(),
-            "authorization": f"Bearer {token}",
-            "accept": "application/json",
-        }
         url = self._config.base_url.rstrip("/") + path
+        # Writes are not idempotent at Etsy: one attempt, never the retry loop.
+        max_attempts = 1 if write else self._config.max_attempts
+        extensions = {_WRITE_ALLOWED: True} if write else {}
         attempt = 0
         while True:
             attempt += 1
-            last = attempt >= self._config.max_attempts
+            last = attempt >= max_attempts
             await self._wait_for_slot()
+            # Asked again before every attempt, after any wait: once the shop is disconnected the
+            # provider refuses, so a call backing off never sends its retry (Codex review of #49).
+            token = access_token or await tokens.access_token(shop_id)
+            headers = {
+                "x-api-key": self._credentials.api_key_header(),
+                "authorization": f"Bearer {token}",
+                "accept": "application/json",
+            }
             try:
-                response = await self._client.get(
-                    url, params=params, headers=headers, timeout=self._timeout
+                response = await self._client.request(
+                    method,
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=self._timeout,
+                    extensions=extensions,
                 )
             except httpx.TransportError as error:
                 if last:
@@ -308,7 +655,10 @@ class EtsyAdapter:
                     )
                 await self._retry_after_wait(operation, attempt, status, self._backoff(attempt))
                 continue
-            raise _client_error(operation, status)
+            refused = _client_error(operation, status, _json_or_none(response))
+            if isinstance(refused, MarketplaceCredentialsRejectedError) and access_token is None:
+                await _tell_rejected(tokens, shop_id, refused.reason)
+            raise refused
 
     def _backoff(self, attempt: int) -> float:
         base = self._config.backoff_base_seconds * 2 ** (attempt - 1)
@@ -401,14 +751,82 @@ class EtsyAdapter:
         )
 
 
+# --- The write guard ---------------------------------------------------------------------------
+
+
+def _refuse_write(method: str, path: str) -> NoReturn:
+    # The path names the operation (shop and receipt IDs, no buyer data); never the body.
+    _log.warning("etsy.write_refused", method=method, path=path)
+    raise MarketplaceWriteRefusedError(f"HTCO does not write to Etsy: {method} refused")
+
+
+def _install_write_guard(client: httpx.AsyncClient, base_url: str) -> None:
+    """Add (once per client and base URL) a request hook that refuses non-GET shop API calls."""
+    hooks = client.event_hooks
+    requests = list(hooks.get("request", []))
+    if any(getattr(hook, "etsy_base_url", None) == base_url for hook in requests):
+        return
+    hooks["request"] = [*requests, _WriteGuard(base_url)]
+    client.event_hooks = hooks
+
+
+class _WriteGuard:
+    """httpx request hook: the second guard, below the adapter, on the client itself."""
+
+    def __init__(self, base_url: str) -> None:
+        self.etsy_base_url = base_url
+        self._root = base_url.rstrip("/")
+
+    async def __call__(self, request: httpx.Request) -> None:
+        method = request.method.upper()
+        if method in READ_ONLY_METHODS or request.extensions.get(_WRITE_ALLOWED) is True:
+            return
+        url = str(request.url)
+        if (
+            url == self._root
+            or url.startswith(self._root + "/")
+            or url.startswith(self._root + "?")
+        ):
+            _refuse_write(method, request.url.path)
+
+
 # --- HTTP helpers -----------------------------------------------------------------------------
 
 
-def _client_error(operation: str, status: int) -> MarketplaceError:
+async def _tell_rejected(tokens: AccessTokenProvider, shop_id: int, reason: str) -> None:
+    """Let the token source mark the connection `needs_reauth`; a failure there never hides
+    Etsy's answer."""
+    if not isinstance(tokens, CredentialsRejectionSink):
+        return
+    try:
+        await tokens.credentials_rejected(shop_id, reason=reason)
+    except Exception as failure:
+        _log.warning("etsy.rejection_not_recorded", error=type(failure).__name__)
+
+
+# Etsy's answer for a key it does not accept ("Invalid API key", an `invalid_client`), as
+# opposed to a scope or permission the shop did not grant.
+_API_KEY_REFUSAL = re.compile(
+    r"api[ _-]?key|keystring|invalid_client|shared[ _-]?secret", re.IGNORECASE
+)
+
+
+def _client_error(  # noqa: PLR0911 - one answer per status class
+    operation: str, status: int, body: Mapping[str, Any] | None = None
+) -> MarketplaceError:
+    """Only the body's `error` code and description are looked at, never logged or kept."""
     message = f"Etsy answered {status} to {operation}"
+    said = "" if body is None else f"{body.get('error', '')} {body.get('error_description', '')}"
     match status:
         case httpx.codes.UNAUTHORIZED:
-            return MarketplaceAuthError(message, status=status)
+            # The provider refreshes before expiry, so a 401 means the token is not valid for
+            # this app at all (revoked, or issued to another app's key).
+            reason = "api_key_rejected" if _API_KEY_REFUSAL.search(said) else "invalid_token"
+            return MarketplaceCredentialsRejectedError(message, status=status, reason=reason)
+        case httpx.codes.FORBIDDEN if _API_KEY_REFUSAL.search(said):
+            return MarketplaceCredentialsRejectedError(
+                message, status=status, reason="api_key_rejected"
+            )
         case httpx.codes.FORBIDDEN:
             return MarketplacePermissionError(message, status=status)
         case httpx.codes.NOT_FOUND:
@@ -447,6 +865,14 @@ def _count(value: str | None) -> int | None:
     except ValueError:
         return None
     return number if number >= 0 else None
+
+
+def _json_or_none(response: httpx.Response) -> Mapping[str, Any] | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
 
 
 def _json(operation: str, response: httpx.Response) -> Any:
@@ -559,6 +985,21 @@ def _shop(body: object) -> MarketplaceShop:
     )
 
 
+def _address_check(body: object) -> ReceiptAddressCheck:
+    data = _object(body)
+    results = data["results"]
+    if not isinstance(results, list):
+        raise TypeError("results must be a list")
+    if not results:
+        return ReceiptAddressCheck(receipts_seen=0, address_present=None)
+    receipt = _object(results[0])
+    present = True
+    for name in _ADDRESS_FIELDS:
+        value = receipt.get(name)
+        present = present and isinstance(value, str) and bool(value.strip())
+    return ReceiptAddressCheck(receipts_seen=1, address_present=present)
+
+
 def _receipt_line(value: object) -> ReceiptLine:
     data = _object(value)
     return ReceiptLine(
@@ -587,6 +1028,41 @@ def _receipt(value: object) -> Receipt:
     )
 
 
+def _listing_snapshot(value: object) -> ListingSnapshot:
+    data = _object(value)
+    return ListingSnapshot(
+        listing_id=_int(data, "listing_id"),
+        etsy_shop_id=_int(data, "shop_id"),
+        state=_str(data, "state").lower()[:32],
+        quantity=_int(data, "quantity"),
+        updated_at=_timestamp(data, "updated_timestamp"),
+    )
+
+
+def _inventory(listing_id: int, value: object) -> InventorySnapshot:
+    """Each product's stock: the quantities of its enabled, not deleted offerings."""
+    data = _object(value)
+    products = data.get("products") or []
+    if not isinstance(products, list):
+        raise TypeError("products must be a list")
+    stock = []
+    for raw in products:
+        product = _object(raw)
+        if product.get("is_deleted") is True:
+            continue
+        offerings = product.get("offerings") or []
+        if not isinstance(offerings, list):
+            raise TypeError("offerings must be a list")
+        quantity = sum(
+            _int(_object(o), "quantity")
+            for o in offerings
+            if _object(o).get("is_enabled", True) is not False
+            and _object(o).get("is_deleted") is not True
+        )
+        stock.append(ProductStock(product_id=_int(product, "product_id"), quantity=quantity))
+    return InventorySnapshot(listing_id=listing_id, products=tuple(stock))
+
+
 def _listing(value: object) -> Listing:
     data = _object(value)
     return Listing(
@@ -597,4 +1073,279 @@ def _listing(value: object) -> Listing:
         price=_money(data["price"]),
         url=_optional_str(data, "url"),
         updated_at=_timestamp(data, "updated_timestamp"),
+    )
+
+
+# --- Dashboard payloads ---------------------------------------------------------------------------
+
+
+def _results[ItemT](body: object, item: Callable[[Any], ItemT]) -> tuple[ItemT, ...]:
+    data = _object(body)
+    results = data["results"]
+    if not isinstance(results, list):
+        raise TypeError("results must be a list")
+    return tuple(item(entry) for entry in results)
+
+
+def _list_of(data: Mapping[str, Any], key: str) -> list[Any]:
+    value = data.get(key) or []
+    if not isinstance(value, list):
+        raise TypeError(f"{key} must be a list")
+    return value
+
+
+def _strings(data: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    value = _list_of(data, key)
+    if not all(isinstance(v, str) for v in value):
+        raise TypeError(f"{key} must be a list of strings")
+    return tuple(value)
+
+
+def _optional_bool(data: Mapping[str, Any], key: str) -> bool:
+    return False if data.get(key) is None else _bool(data, key)
+
+
+def _optional_timestamp(data: Mapping[str, Any], key: str) -> datetime | None:
+    return None if data.get(key) is None else _timestamp(data, key)
+
+
+def _decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TypeError("expected a number")
+    return Decimal(str(value))
+
+
+def _text(data: Mapping[str, Any], key: str) -> str | None:
+    """An optional string; blank counts as missing."""
+    value = _optional_str(data, key)
+    return value if value is not None and value.strip() else None
+
+
+def _shop_profile(body: object) -> ShopProfile:
+    data = _object(body)
+    return ShopProfile(
+        shop_id=_int(data, "shop_id"),
+        name=_str(data, "shop_name"),
+        title=_text(data, "title"),
+        url=_text(data, "url"),
+        currency_code=_str(data, "currency_code"),
+        icon_url=_text(data, "icon_url_fullxfull"),
+        banner_url=_text(data, "image_url_760x100"),
+        is_vacation=_bool(data, "is_vacation"),
+        active_listing_count=_int(data, "listing_active_count"),
+        digital_listing_count=_optional_int(data, "digital_listing_count") or 0,
+        sold_transaction_count=_int(data, "transaction_sold_count"),
+        favorer_count=_optional_int(data, "num_favorers") or 0,
+        review_average=_decimal(data.get("review_average")),
+        review_count=_optional_int(data, "review_count"),
+        created_at=_timestamp(data, "created_timestamp"),
+        ships_from_country=_text(data, "shipping_from_country_iso"),
+        location_country=_text(data, "shop_location_country_iso"),
+        languages=_strings(data, "languages"),
+        accepts_custom_requests=_optional_bool(data, "accepts_custom_requests"),
+    )
+
+
+def _first_image(data: Mapping[str, Any]) -> ListingImage | None:
+    images = sorted(
+        (_object(image) for image in _list_of(data, "images")),
+        key=lambda image: _int(image, "rank"),
+    )
+    if not images:
+        return None
+    image = images[0]
+    return ListingImage(
+        thumbnail_url=_str(image, "url_170x135"),
+        url=_str(image, "url_570xN"),
+        alt_text=_text(image, "alt_text"),
+    )
+
+
+def _listing_details(value: object) -> ListingDetails:
+    data = _object(value)
+    return ListingDetails(
+        listing_id=_int(data, "listing_id"),
+        title=_str(data, "title"),
+        state=ListingState(_str(data, "state")),
+        quantity=_int(data, "quantity"),
+        price=_money(data["price"]),
+        url=_text(data, "url"),
+        image=_first_image(data),
+        views=_optional_int(data, "views") or 0,
+        favorer_count=_optional_int(data, "num_favorers") or 0,
+        tags=_strings(data, "tags"),
+        section_id=_optional_int(data, "shop_section_id"),
+        is_digital=_optional_str(data, "listing_type") == "download",
+        is_personalizable=_optional_bool(data, "is_personalizable"),
+        has_variations=_optional_bool(data, "has_variations"),
+        created_at=_timestamp(data, "created_timestamp"),
+        updated_at=_timestamp(data, "updated_timestamp"),
+    )
+
+
+def _section(value: object) -> ShopSection:
+    data = _object(value)
+    return ShopSection(
+        section_id=_int(data, "shop_section_id"),
+        title=_str(data, "title"),
+        rank=_int(data, "rank"),
+        active_listing_count=_int(data, "active_listing_count"),
+    )
+
+
+def _full_name(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return " ".join(value.split()) or None
+
+
+def _shipping_address(data: Mapping[str, Any]) -> ShippingAddress | None:
+    """The address fields Etsy shares with the seller; None when it shares none of them."""
+    address = ShippingAddress(
+        first_line=_text(data, "first_line"),
+        second_line=_text(data, "second_line"),
+        city=_text(data, "city"),
+        state=_text(data, "state"),
+        postal_code=_text(data, "zip"),
+        country_code=_text(data, "country_iso"),
+    )
+    parts = (
+        address.first_line,
+        address.second_line,
+        address.city,
+        address.state,
+        address.postal_code,
+    )
+    return None if all(part is None for part in parts) else address
+
+
+def _order_line(value: object) -> OrderLine:
+    data = _object(value)
+    return OrderLine(
+        transaction_id=_int(data, "transaction_id"),
+        listing_id=_optional_int(data, "listing_id"),
+        title=_optional_str(data, "title") or "",
+        sku=_text(data, "sku"),
+        quantity=_int(data, "quantity"),
+        unit_price=_money(data["price"]),
+        is_digital=_optional_bool(data, "is_digital"),
+        expected_ship_date=_optional_timestamp(data, "expected_ship_date"),
+    )
+
+
+def _shipment(value: object) -> OrderShipment:
+    data = _object(value)
+    return OrderShipment(
+        carrier=_optional_str(data, "carrier_name") or "",
+        tracking_code=_optional_str(data, "tracking_code") or "",
+        notified_at=_timestamp(data, "shipment_notification_timestamp"),
+    )
+
+
+def _refund(value: object) -> OrderRefund:
+    data = _object(value)
+    return OrderRefund(
+        amount=_money(data["amount"]),
+        created_at=_timestamp(data, "created_timestamp"),
+        reason=_text(data, "reason"),
+        status=_text(data, "status"),
+        note_from_issuer=_text(data, "note_from_issuer"),
+    )
+
+
+def _order_receipt(value: object) -> OrderReceipt:
+    """Reads what the Orders screen shows and the order history stores. The buyer's email, phone,
+    messages, gift message and notes are never read; the name and the shipping address are kept
+    out of every repr (see `OrderReceipt`)."""
+    data = _object(value)
+    name = _full_name(data.get("name"))
+    return OrderReceipt(
+        receipt_id=_int(data, "receipt_id"),
+        status=_str(data, "status").lower(),
+        is_paid=_bool(data, "is_paid"),
+        is_shipped=_bool(data, "is_shipped"),
+        created_at=_timestamp(data, "created_timestamp"),
+        updated_at=_timestamp(data, "updated_timestamp"),
+        grand_total=_money(data["grandtotal"]),
+        subtotal=_money(data["subtotal"]),
+        shipping_total=_money(data["total_shipping_cost"]),
+        discount_total=_money(data["discount_amt"]),
+        lines=tuple(_order_line(entry) for entry in _list_of(data, "transactions")),
+        shipments=tuple(_shipment(entry) for entry in _list_of(data, "shipments")),
+        buyer_display_name=display_name(name),
+        country_code=_text(data, "country_iso"),
+        buyer_name=name,
+        shipping_address=_shipping_address(data),
+        refunds=tuple(
+            sorted(
+                (_refund(entry) for entry in _list_of(data, "refunds")),
+                key=lambda refund: refund.created_at,
+            )
+        ),
+    )
+
+
+_STARS = range(1, 6)
+
+
+def _review(value: object) -> ShopReview:
+    data = _object(value)
+    rating = _int(data, "rating")
+    if rating not in _STARS:
+        raise ValueError("rating must be between 1 and 5")
+    return ShopReview(
+        listing_id=_int(data, "listing_id"),
+        rating=rating,
+        language=_text(data, "language"),
+        created_at=_timestamp(data, "created_timestamp"),
+        text=_text(data, "review"),
+    )
+
+
+def _destination(value: object) -> ShippingDestination:
+    data = _object(value)
+    region = _text(data, "destination_region")
+    return ShippingDestination(
+        country_code=_text(data, "destination_country_iso"),
+        region=None if region == "none" else region,
+        first_item_cost=_money(data["primary_cost"]),
+        additional_item_cost=_money(data["secondary_cost"]),
+        min_delivery_days=_optional_int(data, "min_delivery_days"),
+        max_delivery_days=_optional_int(data, "max_delivery_days"),
+        mail_class=_text(data, "mail_class"),
+    )
+
+
+def _shipping_profile(value: object) -> ShippingProfile:
+    data = _object(value)
+    return ShippingProfile(
+        profile_id=_int(data, "shipping_profile_id"),
+        title=_text(data, "title"),
+        origin_country=_str(data, "origin_country_iso"),
+        profile_type=_text(data, "profile_type") or "manual",
+        destinations=tuple(
+            _destination(entry) for entry in _list_of(data, "shipping_profile_destinations")
+        ),
+        upgrade_count=len(_list_of(data, "shipping_profile_upgrades")),
+    )
+
+
+def _return_policy(value: object) -> ReturnPolicy:
+    data = _object(value)
+    return ReturnPolicy(
+        policy_id=_int(data, "return_policy_id"),
+        accepts_returns=_bool(data, "accepts_returns"),
+        accepts_exchanges=_bool(data, "accepts_exchanges"),
+        return_deadline_days=_optional_int(data, "return_deadline"),
+    )
+
+
+def _production_partner(value: object) -> ProductionPartner:
+    data = _object(value)
+    return ProductionPartner(
+        partner_id=_int(data, "production_partner_id"),
+        name=_str(data, "partner_name"),
+        location=_optional_str(data, "location") or "",
     )

@@ -7,7 +7,7 @@
 | **Size** | M |
 | **Depends on** | Phases 2 and 3; Etsy Seller App registered (Phase 0) |
 | **Requirements** | FR-ADM-02, FR-SHOP-01, FR-SHOP-02, FR-SHOP-03, FR-SHOP-04, FR-SHOP-05 |
-| **Status** | In progress |
+| **Status** | Complete except the restore rehearsal (4.7, with the owner) |
 
 ## Progress
 
@@ -15,9 +15,9 @@
 - [x] 4.2 Token vault
 - [x] 4.3 OAuth connect flow ([connect flow](../../features/etsy-integration/connect-flow.md))
 - [x] 4.4 Token refresh (platform; the shop card warning and overview banner are shown by slice 4.6)
-- [ ] 4.5 Capability probes
-- [ ] 4.6 Shops UI
-- [ ] 4.7 Disconnect and data protection baseline
+- [x] 4.5 Capability probes (platform; the shop card shows them in `htco-clients`; [operations](../../features/etsy-integration/operations.md#capability-probes))
+- [x] 4.6 Shops UI (the shop card in `htco-clients`), and the shop's live data on the dashboard: Shops, Home, Orders, Products, Shipping and Customers read Etsy through read-only endpoints ([dashboard data](../../features/etsy-integration/dashboard-data.md))
+- [ ] 4.7 Disconnect and data protection baseline (disconnect done at the platform; the restore rehearsal waits for the owner, see [operations](../../features/etsy-integration/operations.md#rehearsal-record))
 
 ## Goal
 
@@ -38,7 +38,7 @@ Research of 2026-10-15 ([Etsy API capabilities](../../architecture/etsy-api-capa
 - The first test with our own key checks `createReceiptShipment` and the receipt addresses for an Israeli shop, which Etsy restricted for new keys on 2026-07-20. The result decides the Phase 6 tracking path: direct upload, an approved POD or fulfillment partner, or a task for the owner.
 
 - Etsy Seller App keystring and shared secret stored as secrets; redirect URI `https://dash.ht-co.app/integrations/etsy/callback` registered exactly (a web-app route; see ADR-0008).
-- The owner has read Etsy's current API Terms (A-09).
+- The owner has read Etsy's current API Terms (A-21).
 
 ## Slices
 

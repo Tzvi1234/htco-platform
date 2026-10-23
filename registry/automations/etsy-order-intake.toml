@@ -1,4 +1,5 @@
-# Etsy Order Intake. Automation specification (ADR-0013). DRAFT: not production-ready.
+# Etsy Order Intake. Automation specification (ADR-0013). All sections defined (slice 5.11);
+# readiness stays "draft" until the owner approves the activation (ADR-0012 rule 2).
 id = "etsy-order-intake"
 name = "Etsy Order Intake"
 version = 1
@@ -9,6 +10,8 @@ timeout_seconds = 120
 side_effect = "internal"
 approval_required = false
 ai_steps = []
+# The Action Gateway lets it read receipts (slice 5.4); it writes only its own store.
+allowed_actions = ["etsy.receipts.read"]
 readiness = "draft"
 activation_phase = 5
 
@@ -18,73 +21,73 @@ initial_backoff_seconds = 5
 max_backoff_seconds = 900
 
 [specification.identity]
-status = "draft"
-text = "Etsy Order Intake (etsy-order-intake), version 1. Deterministic: no model calls."
+status = "defined"
+text = "Etsy Order Intake (etsy-order-intake), version 1. Deterministic: no model calls, no browser, no Etsy write."
 
 [specification.business_owner]
-status = "draft"
-text = "eitan: accountable for the outcome; Engineering maintains the code."
+status = "defined"
+text = "eitan: accountable for the outcome (the owner until Eitan is active in Phase 9); Engineering maintains the code."
 
 [specification.trigger]
-status = "draft"
-text = "Primary: event. Also callable from: event, schedule, workflow, agent_tool, each through the API and authorization checks."
+status = "defined"
+text = "Primary: event (the order.* webhooks, key etsy:{shop_id}:{receipt_id}:{event_type}). Also schedule (reconciliation twice a day and the open-orders sweep), workflow (the dashboard's stale read and the Owner's manual sync, through etsy.order_sync jobs) and agent_tool, each through the engine's authorization."
 
 [specification.input_schema]
-status = "draft"
-text = "DRAFT: JSON Schema in packages/contracts/automations/etsy-order-intake.json, written in Phase 5."
+status = "defined"
+text = "packages/contracts/automations/etsy-order-intake.input.json: a receipt (receipt_id, event_type) or a mode (history, reconcile, sweep) with its reason. No buyer data."
 
 [specification.preconditions]
-status = "draft"
-text = "DRAFT: shop connected and capability verified where external systems are involved."
+status = "defined"
+text = "The shop is connected (an integration in status connected, in the execution's organization) and the receipts_read capability was verified; otherwise the run completes as skipped: not_connected."
 
 [specification.steps]
-status = "draft"
-text = "Verify the webhook signature; store the event in the inbox; fetch the receipt; upsert order, items and shipments in one transaction when Etsy's updated_timestamp is newer; emit orders.ingested.v1."
+status = "defined"
+text = "A receipt: fetch it through the Action Gateway (etsy.receipts.read, order history form, GET-only) and ingest it in one transaction when Etsy's updated_timestamp is newer: order, items, refunds, buyer row, state transitions, estimated money, orders.* events. The history: the backfill from its checkpoint, then the 30-day re-read, under the shop's lock. Reconcile and sweep: re-read and compare, recording drifts (slice 5.5)."
 
 [specification.output_schema]
-status = "draft"
-text = "DRAFT: defined with the input schema in Phase 5."
+status = "defined"
+text = "packages/contracts/automations/etsy-order-intake.output.json: the receipt's id, whether it was written and its state; or the mode with the receipts read, drifts and counts. IDs and counts only."
 
 [specification.dependencies]
-status = "draft"
-text = "Etsy Open API v3, inbox, job queue"
+status = "defined"
+text = "Etsy Open API v3 through the Action Gateway (API channel, etsy:app rate budget, etsy:api breaker); the order history store (app.etsy_orders and its tables); the job queue, inbox and outbox."
 
 [specification.error_handling]
-status = "draft"
-text = "Typed errors per dependency; a capability blocked by the marketplace is recorded, never retried in a loop."
+status = "defined"
+text = "A gateway deferral (429, the daily budget) is waited out a few times, then raised into a retry; a refused or failed read raises IntakeActionError; another run holding the shop's lock raises ShopBusyError (retried, never lost). Errors are recorded as their type name only."
 
 [specification.retry_policy]
-status = "draft"
-text = "Exponential backoff from the retry table; then dead-letter and an incident."
+status = "defined"
+text = "Five attempts, exponential backoff from 5 s to 15 min with jitter; then dead-lettered with its last error type, recoverable by an audited admin retry (the same execution)."
 
 [specification.idempotency]
-status = "draft"
-text = "Key etsy:{shop_id}:{receipt_id}:{event_type}; unique per automation; a replay returns the existing execution."
+status = "defined"
+text = "The engine's unique (automation_id, idempotency_key): a replay returns the existing execution. The ingest upserts by (shop_id, receipt_id) and changes nothing for an older or identical copy; orders.ingested.v1 has one outbox key per order."
 
 [specification.timeouts_and_sla]
-status = "draft"
-text = "Enqueued within 10 s at p95; reconciliation catches anything missed within minutes"
+status = "defined"
+text = "120 s per attempt. A webhook's order is stored within a minute of the notice at p95; reconciliation catches a lost notice within one interval (twice a day)."
 
 [specification.permissions]
-status = "draft"
-text = "Runs under its own service identity with least-privilege database grants; employees trigger it only when it is in their allowed_automations."
+status = "defined"
+text = "Runs as the htco_worker role inside its job's organization (RLS), with column grants that read no money column except the grand total; its only action is etsy.receipts.read."
 
 [specification.audit]
-status = "draft"
-text = "One activity record per execution and per external side effect, with correlation and causation IDs."
+status = "defined"
+text = "Every state change of the execution is an event with its actor and correlation ID; the gateway writes one action_executions row per read with the correlation and causation IDs; status changes are published (5.18)."
 
 [specification.tests]
-status = "draft"
-text = "DRAFT: replay, failure and recovery tests in Phase 5 (Scenario G pattern)."
+status = "defined"
+text = "tests/application/test_order_intake.py; tests/integration/test_order_intake.py, test_order_reconciliation.py and test_order_scenarios.py (Scenario G: replays, concurrency and order of arrival; Scenario B part 1: a failed write retried, exhausted and recovered)."
 
 [specification.recovery]
-status = "draft"
-text = "DRAFT: compensation or manual recovery runbook written in Phase 5."
+status = "defined"
+text = "Runbook: docs/features/orders-ingest/operations.md (Etsy Order Intake). Replays are safe: reconciliation rebuilds any order from Etsy; a dead-lettered execution is retried from Admin › Health or the automation API."
 
 [specification.approvals]
-status = "draft"
-text = "None for internal effects; external effects go through the outbox."
+status = "defined"
+text = "None: its effects are internal (the order store and events); it never writes to Etsy."
 
 [specification.metrics]
-status = "draft"
-text = "Executions, success rate, retries, dead letters, latency p50/p95, cost per execution."
+status = "defined"
+text = "Admin › Health (slice 5.9): executions, success rate, retries, dead letters and p50/p95 latency over 7 days; webhook intake counts and the shops' sync freshness."

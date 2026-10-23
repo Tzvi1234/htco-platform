@@ -8,29 +8,18 @@ Each employee, automation and advisor is one TOML file; tools are grouped by fam
 
 import argparse
 import sys
-import tomllib
-from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
+from htco_application.execution.contracts import ActionCatalogError
+from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_application.workforce.registry import Registry, RegistryError
 
 REGISTRY_ROOT = Path(__file__).resolve().parents[1] / "registry"
-
-
-def _documents(folder: Path) -> Iterator[dict[str, Any]]:
-    for path in sorted(folder.glob("*.toml")):
-        yield tomllib.loads(path.read_text(encoding="utf-8"))
+ACTION_SCHEMAS = Path(__file__).resolve().parents[1] / "packages" / "contracts" / "actions"
 
 
 def load_registry(root: Path = REGISTRY_ROOT) -> Registry:
-    tools = [tool for family in _documents(root / "tools") for tool in family.get("tools", [])]
-    return Registry.from_documents(
-        employees=list(_documents(root / "employees")),
-        tools=tools,
-        automations=list(_documents(root / "automations")),
-        advisors=list(_documents(root / "advisors")),
-    )
+    return read_registry(root).registry()
 
 
 def main(argv: list[str]) -> int:
@@ -40,14 +29,15 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     try:
         registry = load_registry(args.root)
-    except RegistryError as error:
+        catalog = read_action_catalog(args.root, ACTION_SCHEMAS, registry)
+    except (RegistryError, ActionCatalogError) as error:
         sys.stderr.write(f"{error}\n")
         return 1
     ready = sum(p.is_production_ready() for p in registry.employees.values())
     sys.stdout.write(
         f"{len(registry.employees)} employees ({ready} production-ready), "
         f"{len(registry.automations)} automations, {len(registry.tools)} tools, "
-        f"{len(registry.advisors)} advisor(s)\n"
+        f"{len(registry.advisors)} advisor(s), {len(catalog.actions)} action contract(s)\n"
     )
     return 0
 

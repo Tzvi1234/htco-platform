@@ -1,6 +1,6 @@
 # ADR-0012: The living office: 16 AI employees, automations, tools and engineering as separate concepts
 
-- **Status:** Accepted
+- **Status:** Accepted; amended 2026-10-23 by [ADR-0019](0019-unified-execution-engine-and-action-gateway.md) (one Action Gateway and four execution channels for employees and automations alike; rule 7 gains a `browser-worker` component in Phase 8A)
 - **Date:** 2026-10-14
 - **Deciders:** Owner, engineering
 - **Supersedes:** the 18 logical agent roles of PRD §8 (version 1.0) and the agent list in SOFTWARE_DESIGN §9.1 (version 1.0)
@@ -121,3 +121,4 @@ The foundation is tested now: framework independence (Scenario J), least-privile
 ## Validation log
 
 - 2026-10-14 — Foundation merged with 705 passing tests; `registry/` validated: 16 employees in seven departments, Jev as an advisor, 15 automations, 39 tools (40 after adding the Listing Health write tool), none production-ready.
+- 2026-10-23 — Amended by ADR-0019: employees and automations act through one Action Gateway (API, Browser, Internal and Human channels). Rule 3 is unchanged and is now enforced in the gateway: deterministic automations never call LangGraph or a model. Rule 7: a separate `browser-worker` component is added in Phase 8A, because browser sessions need their own isolation (ADR-0020).

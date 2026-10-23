@@ -3,9 +3,21 @@
 import re
 from pathlib import Path
 
+from htco_application.execution.gateway import ActionOutcome, Channel
+from htco_domain.actions import ActionState
 from htco_domain.actors import ActorKind
+from htco_domain.automation import ExecutionState, TriggerKind
+from htco_domain.browser import EnvironmentStatus, environment_edges
+from htco_domain.guards import BreakerState
 from htco_domain.identity import Role
-from htco_domain.integrations import IntegrationProvider, IntegrationStatus
+from htco_domain.integrations import (
+    CapabilityState,
+    IntegrationProvider,
+    IntegrationStatus,
+    ShopCapability,
+)
+from htco_domain.jobs import JobState
+from htco_domain.workforce import Readiness
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
 
@@ -34,3 +46,65 @@ def test_shop_integrations_provider_check__lists_exactly_the_domain_providers() 
     assert _check_values("shop_integrations_provider_check") == {
         provider.value for provider in IntegrationProvider
     }
+
+
+def test_shop_capabilities_capability_check__lists_exactly_the_domain_capabilities() -> None:
+    assert _check_values("shop_capabilities_capability_check") == {c.value for c in ShopCapability}
+
+
+def test_shop_capabilities_state_check__lists_exactly_the_domain_states() -> None:
+    assert _check_values("shop_capabilities_state_check") == {s.value for s in CapabilityState}
+
+
+def test_automation_executions_state_check__lists_exactly_the_execution_states() -> None:
+    assert _check_values("automation_executions_state_check") == {s.value for s in ExecutionState}
+
+
+def test_automation_executions_trigger_check__lists_exactly_the_trigger_kinds() -> None:
+    assert _check_values("automation_executions_trigger_check") == {k.value for k in TriggerKind}
+
+
+def test_automation_definitions_readiness_check__lists_exactly_the_readiness_values() -> None:
+    assert _check_values("automation_definitions_readiness_check") == {r.value for r in Readiness}
+
+
+def test_jobs_state_check__lists_exactly_the_job_states() -> None:
+    assert _check_values("jobs_state_check") == {s.value for s in JobState}
+
+
+def test_action_executions_state_check__lists_exactly_the_action_states() -> None:
+    assert _check_values("action_executions_state_check") == {s.value for s in ActionState}
+
+
+def test_action_executions_outcome_check__lists_exactly_the_action_outcomes() -> None:
+    assert _check_values("action_executions_outcome_check") == {o.value for o in ActionOutcome}
+
+
+def test_action_executions_channel_check__lists_exactly_the_channels() -> None:
+    assert _check_values("action_executions_channel_check") == {c.value for c in Channel}
+
+
+def test_circuit_breakers_state_check__lists_exactly_the_breaker_states() -> None:
+    assert _check_values("circuit_breakers_state_check") == {s.value for s in BreakerState}
+
+
+def test_shop_browser_environments_status_check__lists_exactly_the_environment_statuses() -> None:
+    assert _check_values("shop_browser_environments_status_check") == {
+        s.value for s in EnvironmentStatus
+    }
+
+
+def test_browser_environment_events_actor_kind_check__lists_exactly_the_actor_kinds() -> None:
+    assert _check_values("browser_environment_events_actor_kind_check") == {
+        k.value for k in ActorKind
+    }
+
+
+def test_browser_environment_edges__the_database_has_exactly_the_domain_table() -> None:
+    """AC-5.16.1: the trigger's edge function lists the same 20 edges as the domain."""
+    sql = (MIGRATIONS / "20261024200000_browser_environments.sql").read_text(encoding="utf-8")
+    body = sql.split("create function private.browser_environment_edge_allowed", 1)[1]
+    body = body.split("$$;", 1)[0]
+    pairs = set(re.findall(r"\('([a-z_]+)', '([a-z_]+)'\)", body))
+
+    assert pairs == {(a.value, b.value) for a, b in environment_edges()}

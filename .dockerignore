@@ -1,10 +1,15 @@
-# The image build context is an allow-list: only what `uv sync` needs to install the API.
+# The image build context is an allow-list: only what `uv sync` needs to install the API (and the
+# worker, a workspace member the lockfile names).
 *
 !pyproject.toml
 !uv.lock
 !.python-version
 !apps/
 !packages/
+!workers/
+# The reviewed registry and the action contracts the worker's Action Gateway loads (slice 5.4).
+!registry/
 packages/contracts/
+!packages/contracts/actions/
 **/__pycache__/
 **/*.pyc

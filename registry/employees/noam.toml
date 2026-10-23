@@ -7,7 +7,7 @@ version = 1
 autonomy = "L1"
 readiness = "draft"
 activation_phase = 11
-allowed_tools = ["catalog.read", "catalog.update_draft_content", "models.complete"]
+allowed_tools = ["catalog.read", "catalog.update_draft_content", "models.complete", "etsy.listings.read", "etsy.listing_details.read", "etsy.listing_translations.manage"]
 allowed_automations = []
 
 [routing]

@@ -62,3 +62,11 @@ Shared vocabulary for code, docs and conversations. When a term here has a code 
 | ESTIMATED / VERIFIED | `estimated`, `verified` | Labels on financial figures: estimated from partial data, or verified against the source of truth. |
 | ADR | — | Architecture Decision Record, stored in `docs/adr/`. |
 | Slice | — | A small vertical increment inside a phase, delivered as one pull request with its own tests. |
+| Action Gateway | `ActionGateway` | The single entry point for every business action of any actor: permissions, approvals, idempotency, limits, routing, verification and audit ([ADR-0019](../adr/0019-unified-execution-engine-and-action-gateway.md)). |
+| Execution channel | `Channel` | How an action runs: API (Etsy's Open API), Browser (a shop's Browser Environment), Internal (our code) or Human (a task for a person). |
+| Browser Environment | `shop_browser_environments` | An optional, honest per-shop browser profile with sealed credentials and TOTP, health and status ([ADR-0020](../adr/0020-per-shop-browser-environment.md)). |
+| Recipe | — | A reviewed, versioned list of deterministic browser steps with its allowed URLs and actions, output schema and Etsy scope row. |
+| Scope row | `B-01` … | One browser action in [etsy-automation-approval.md](../architecture/etsy-automation-approval.md); its flag stays off until the owner records its scope. |
+| Owner-trigger first | `owner_trigger` | The rule that every Etsy write tool is run first by the owner, by hand, on each shop, before automations or employees may request it ([ADR-0022](../adr/0022-etsy-write-tools-and-browser-scope.md)). |
+| Approval policy | `R0`–`R1`, `W1`–`W3` | The approval level of an Etsy tool: reads without or with personal data; writes with approval, with step-up, or Owner-only. |
+| Injection grant | `InjectionGrant` | A single-use permission for a browser worker to receive one secret or TOTP code for one form field of one execution ([ADR-0021](../adr/0021-authenticator-service.md)). |

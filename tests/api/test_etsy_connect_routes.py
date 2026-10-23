@@ -528,7 +528,12 @@ async def test_integrations__owner_sees_status_scopes_and_token_health(world: Wo
         "last_successful_call_at",
         "connected_at",
         "updated_at",
+        # Slices 4.5 and 4.7 (additive): probe results and the disconnect dates.
+        "capabilities",
+        "disconnected_at",
+        "purge_after",
     }
+    assert (item["capabilities"], item["disconnected_at"], item["purge_after"]) == ([], None, None)
 
 
 async def test_integrations__needs_reauth_is_shown(world: World) -> None:

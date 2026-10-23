@@ -13,7 +13,7 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 
 ## Progress
 
-- [ ] 13.1 Quote requests, quotes and mappings; manual AutoVA adapter
+- [ ] 13.1 AutoVA read side and non-AutoVA suppliers on the Phase 7 quote model
 - [ ] 13.2 Supplier Quote Request & Follow-up automation
 - [ ] 13.3 Hard rules in code
 - [ ] 13.4 Tom's evaluation and optional ranking
@@ -22,6 +22,29 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 13.7 P&L views and unit costs
 - [ ] 13.8 Roni's review and narrative
 - [ ] 13.9 Tom and Roni activated
+- [ ] 13.10 Money actions that the API cannot do (Human channel; browser rows B-08 to B-11 only if scoped)
+
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
+
+- **Finance:** Finance Ledger Ingestion reads `etsy.ledger.read` and `etsy.payments.read` through the gateway.
+- **Price and stock:** Inventory & Supplier Price Monitoring proposes `etsy.inventory.update` (W2) through approvals. Each shop starts owner-trigger first.
+- **POD and supplier sites** without an API (tracking, order status) are read by deterministic browser recipes only with their own scope rows (Phase 8A engine), or handed to a person.
+- **Money actions Etsy's API lacks** (refunds, cancellations, coupons and sales, Ads budgets) are Human-channel tasks with the approved values. Browser rows B-08 to B-11 are used only if the owner records their scope and the written confirmation exists (ADR-0022).
+
+## AutoVA flow alignment (2026-10-23)
+
+The owner's real flow is in the [AutoVA integration](../../architecture/autova-integration.md) page.
+
+- **One home for suppliers and quotes.** The supplier, quote and mapping model, the quote mailbox intake, the deterministic parser, the "New product quotes" screen and the owner's choice moved to **Phase 7 (slices 7.13–7.17)**. The Supplier Quote Request & Follow-up automation is activated there. AutoVA requests the quotes itself; HTCO collects them, waits and reminds.
+- **AutoVA recipes.** A-02 (approve the chosen quote in AutoVA) and A-01 with Export first are in **Phase 8A (slice 8A.10)**.
+- **This phase extends the model, not a second one:**
+  - 13.1 becomes the `AutoVaPort` read side over `autova_orders` (from A-01), plus manual supplier entries for non-AutoVA suppliers;
+  - 13.2 adds follow-ups for non-AutoVA suppliers;
+  - 13.4 adds Tom's evaluation and recommendation **on the same quote screen**. The owner still decides each quote (W3).
+- **Payment stays AutoVA's Auto Pay.** HTCO never pays.
+- **Profit per order:** AutoVA's profit field (`autova_orders.autova_profit`, labelled `ESTIMATED`, source `autova`) is shown at once. Finance Ledger Ingestion cross-checks it against the Etsy ledger (fees, refunds) and the supplier cost, and a difference above a threshold opens a finding. The verified figure is the ledger's.
 
 ## Goal
 
@@ -63,15 +86,16 @@ Employees follow the activation rule of [Phase 9](phase-09-router-advisor.md) sl
 
 | Slice | Content | Key acceptance |
 |---|---|---|
-| 13.1 | Quote requests, quotes, mappings; manual AutoVA adapter UI | A mapping is created once per variant; changes open re-sourcing tasks |
-| 13.2 | Supplier Quote Request & Follow-up: request, multi-day wait as a task state (`WAITING_FOR_QUOTES`), follow-ups by schedule, collection | Waits without model calls or open runtime sessions; resumes on quote arrival or timeout; replay sends no second request |
+| 13.1 | Builds on the Phase 7 model (7.13): the `AutoVaPort` read side over `autova_orders` (A-01) and manual entries for non-AutoVA suppliers | No second quote or mapping table (schema inventory test); changes open re-sourcing tasks |
+| 13.2 | Supplier Quote Request & Follow-up (active since Phase 7 for AutoVA quotes) extended to non-AutoVA suppliers: requests, multi-day waits, follow-ups | Waits without model calls or open runtime sessions; replay sends no second request |
 | 13.3 | Hard rules (variant match, stock, price and shipping limits) in code | Invalid quotes never reach Tom or ranking (property tests) |
-| 13.4 | Tom evaluates valid quotes and recommends a mapping; optional ranking through the Decision Advisor after a benchmark of 200+ labelled cases | False-approve rate under threshold, else rules only; money math stays in code |
+| 13.4 | Tom evaluates valid quotes and recommends one on the Phase 7 quote screen; optional ranking through the Decision Advisor after a benchmark of 200+ labelled cases; the owner still decides each quote (W3) | False-approve rate under threshold, else rules only; money math stays in code |
 | 13.5 | Inventory & Supplier Price Monitoring for active mappings | A price, stock or validity change opens one re-sourcing task for Tom |
 | 13.6 | Finance Ledger Ingestion from Etsy payments and ledger entries; refunds; payouts; FX source; AI cost from `model_usage` | Ledger reconciles with Etsy payouts for a full month (through Order & Financial Reconciliation); Decimal only |
 | 13.7 | P&L views with `ESTIMATED`/`VERIFIED` labels; unit costs per employee and department | Every figure links to its source entries |
 | 13.8 | Roni's monthly narrative and anomaly review | No figure in the narrative differs from the ledger; Roni has no tool that records entries |
 | 13.9 | Tom and Roni activated | Sheets defined, evaluations passed, autonomy approved, routing measured |
+| 13.10 | Refunds, cancellations, coupons, sales and Ads budget changes as Human tasks with approved values; the monthly statement download (B-11) as a recipe if scoped | No money action runs without an Owner (W3) approval; a browser money action is refused while its scope row is empty or the written confirmation is missing |
 
 ## Test plan
 

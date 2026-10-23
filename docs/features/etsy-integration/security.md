@@ -24,12 +24,18 @@ Etsy's answers cross a trust boundary: they are parsed field by field into typed
 | Etsy answers | Tampering: malformed or hostile payloads | Strict per-field type checks; unknown shapes raise `MarketplaceResponseError`; no redirects followed (`htco_platform.http`) | `test_get_shop__malformed_payload__is_a_response_error_without_retry` |
 | Etsy API | Denial of service (self-inflicted): exhausting the app's limits for every shop | Throttle at half the per-second limit; daily floor defers routine calls; capped `retry-after`; bounded attempts | `test_throttle__*`, `test_daily_quota_*`, `test_rate_limited__*` |
 | Retries | Tampering: duplicated side effects | Only GETs exist; retries are documented as read-only, writes need their own idempotent path (ADR-0008) | — (no write exists) |
+| Live shop (slices 4.5, 4.7) | Tampering / buyer notification: any HTCO request changing shop data or notifying a buyer | Only GET leaves HTCO: the adapter refuses other methods unless a per-call flag no code sets, and a client hook stops non-GET requests to the shop API | `tests/integrations/test_etsy_read_only.py` (strict mock that fails on any non-GET; source scan for the flag) |
+| Capability probes | Information disclosure: buyer address or name stored or logged by the address check | Presence only (`first_line`, `city` non-blank); values dropped; details are codes (database check `^[a-z0-9_]{1,64}$`) | `test_check_receipt_addresses__fields_present__reports_presence_only`, pgTAP `07_capabilities_disconnect` |
+| Re-check | Denial of service: the button spending the app's Etsy budget | Owner/Admin only, 30 s per shop cooldown (429 with `Retry-After`) | `test_recheck__within_the_cooldown__refused_with_the_wait`, `test_recheck__twice_at_once__429_with_retry_after` |
+| Disconnect | Elevation / repudiation: someone else disconnects, or a disconnected shop is still called | Owner + `aal2` + step-up + CSRF; tokens deleted with the audit record in one transaction; the token provider refuses before any request | `tests/application/test_shop_disconnect.py`, `tests/api/test_capability_disconnect_routes.py`, `tests/integration/test_capabilities_disconnect.py` |
 
 ## Personal data (LINDDUN)
 
 | Data | Class | Who can see it | Retention | Masking |
 |---|---|---|---|---|
-| Receipt buyer name, email, address | DC3 | Not read: the port's `Receipt` does not carry them | — | Not mapped |
+| Receipt buyer email, address, messages | DC3 | Not read: neither `Receipt` nor `OrderReceipt` carries them; the probe's address check keeps only whether the fields hold text | — | Not mapped |
+| Buyer display name (first name, last initial), tracking number | DC3 | Owner, Admin, Operations, Support, live on the Orders screen ([dashboard data](dashboard-data.md#personal-data)) | In API memory at most 1 hour; never stored, logged or audited; answers `no-store` | Name shortened at the adapter; left out for Finance, Developer and Viewer |
+| Review text | DC2 (public on Etsy) | Members who see the shop | In API memory at most 6 hours | Kept out of `repr` and logs |
 | Shop name, listing titles, prices | DC1 (business data) | Shop members (from Phase 5 storage) | Per Etsy API Terms (no data older than 6 h / 24 h shown) | — |
 
 ## ASVS 5.0 requirements covered

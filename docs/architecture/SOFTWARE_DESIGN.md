@@ -74,7 +74,7 @@ flowchart TB
 | `web` | Static site, built by App Platform from `htco-clients` `main` | `htco-clients/apps/web` | Serves the web app; CSP and referrer policy in the page, HTTPS-only through the `.app` HSTS preload, no framing ([client ADR-0006](https://github.com/Tzvi1234/htco-clients/blob/main/docs/adr/0006-static-web-hosting.md)) | Static assets, CDN |
 | `api` | Web service | `htco-platform/apps/api` | HTTP API, BFF session handling for the web, bearer auth for native apps, webhook ingress, health | More instances; dedicated CPU when needed |
 | `agent-worker` | Worker | `htco-platform/workers` | The automation engine (ingest, sync, reconciliation, outbox delivery, schedules) and, from Phase 8, the AI employees through the agent runtime | An `automation-worker` splits out when isolation or measured load requires it (ADR); never one container per employee |
-| `browser-runner` | Isolated worker or job, later | `htco-platform/workers/browser` | Playwright automation only if an approved AutoVA path needs it | Possibly a separate droplet for sandboxing (ADR) |
+| `browser-worker` | Worker, from Phase 8A ([ADR-0020](../adr/0020-per-shop-browser-environment.md)) | `htco-platform/workers/browser` | The Browser channel of the Action Gateway: per-shop persistent Chromium profiles (Playwright or CDP), Browser Use for employees, preflight and challenge handling, structured extraction; its own database role, storage prefix and fixed egress IP; no Etsy OAuth tokens | One instance per few shops; a separate droplet if Chromium memory needs it |
 
 Routing: `dash.ht-co.app/` goes to `web`, `dash.ht-co.app/api` to `api` (same origin, so the web session cookie needs no CORS), and `api.ht-co.app` to `api` for native clients and webhooks. `office.ht-co.app` and `agents.ht-co.app` are **mail domains only** (MX, SPF, DKIM, DMARC) and never get web records.
 
@@ -141,6 +141,9 @@ Arrows point from the dependent module to its dependency. Enforced by `import-li
 3. Adapters never import each other (Etsy code never imports the model gateway); they meet only through ports wired in a composition root.
 4. Only `htco_model_router` may import model provider SDKs; only `htco_agent_runtime` may import LangGraph; only `htco_persistence` may import the database driver.
 5. Nothing imports from `apps` or `workers`.
+6. Only `htco_integrations`, `htco_platform` and the composition roots import the HTTP client (`httpx`); only `htco_api` imports the web framework.
+7. Persistence, integrations and the agent runtime map to dataclasses, never Pydantic; Pydantic stays at the API edge and in settings.
+8. Every `htco_api` module except the `main` and `cli` composition roots reaches adapters only through application ports; a new router is covered automatically.
 
 ### 4.4 Bounded contexts
 
@@ -235,7 +238,7 @@ All external systems sit behind ports owned by the application layer.
 
 ### 8.2 Job queue
 
-A Postgres-native queue with atomic claims (`FOR UPDATE SKIP LOCKED`), visibility timeouts or leases, retries with exponential backoff and jitter, a dead-letter state, per-resource locks (for example one sync per shop at a time), and scheduled jobs. Candidates are a small in-house queue, the `procrastinate` library, or Supabase Queues (pgmq, still public alpha in October 2026, with no built-in dead-letter queue). The choice is made by a spike at the start of Phase 5 ([ADR-0007](../adr/0007-job-queue.md)); the application layer only sees a `JobQueue` port either way.
+A Postgres-native queue with atomic claims (`FOR UPDATE SKIP LOCKED`), visibility timeouts or leases, retries with exponential backoff and jitter, a dead-letter state, per-resource locks (for example one sync per shop at a time), and scheduled jobs. The Phase 5 spike chose a small in-house queue on `jobs.jobs` ([ADR-0007](../adr/0007-job-queue.md), accepted 2026-10-22; design in [`docs/features/job-queue/`](../features/job-queue/design.md)): one running job per lock key enforced by a partial unique index, leases extended by a heartbeat, and the worker's own role reaching one organization per job through RLS. The application layer only sees the `JobQueue` port.
 
 ### 8.3 Inbox and outbox
 
@@ -273,7 +276,7 @@ Recurring work (reconciliation, SLA inspection, token refresh, retention) is enq
 | Concept | Domain (pure) | Application (rules, ports) | Data | Status |
 |---|---|---|---|---|
 | AI employees | `htco_domain.workforce` (identity, versioned profile, 22-section sheet, readiness gate) | `htco_application.workforce.registry`, `htco_application.agents.runtime` (port) | `registry/employees/` | Foundation implemented; runtime adapter PLANNED (Phase 8) |
-| Automations | `htco_domain.automation` (definition, 18-section spec, execution state machine) | `htco_application.automation.engine` | `registry/automations/` | In-memory engine implemented; durable store PLANNED (Phase 5) |
+| Automations | `htco_domain.automation` (definition, 18-section spec, execution state machine) | `htco_application.automation.engine` (`authorize`), `htco_application.automation.durable` | `registry/automations/` | Durable engine implemented (Phase 5); the first in-memory engine is retired |
 | Tools | `htco_domain.tooling` | `htco_application.workforce.tool_access` | `registry/tools/` | Access rules implemented; tool bridge PLANNED (Phase 8) |
 | Routing and decisions | `htco_domain.routing` | `htco_application.routing.router`, `htco_application.decisions.advisor` | per-employee `[routing]` tables; `registry/advisors/` | Implemented with fakes; gateway and providers PLANNED (Phase 9) |
 | Records | `htco_domain.actors`, `htco_domain.activity`, `htco_domain.tasks`, `htco_domain.improvement` | — | — | Domain implemented; stores PLANNED (Phases 2, 7, 10, 18) |
@@ -338,7 +341,9 @@ Each employee has a gold dataset, metrics and thresholds (for example precision 
 
 ### 9.6 Automation engine
 
-`AutomationEngine.trigger` is the single entry for events, schedules, user actions, workflows and employees (through `automation.trigger`). It checks readiness, the deployed handler, the trigger kind and the employee's grants; executions are unique per `(automation_id, idempotency_key)`, so a replay returns the existing execution; failures follow the retry policy into the dead-letter state. From Phase 5 executions live on the Postgres job queue with leases and heartbeats, inbox and outbox ([ADR-0013](../adr/0013-automation-engine.md)).
+From 2026-10-23 every business action of an automation or an employee goes through the **Action Gateway** and the **Execution Router** (API, Browser, Internal and Human channels): [execution-engine.md](execution-engine.md), [ADR-0019](../adr/0019-unified-execution-engine-and-action-gateway.md).
+
+`DurableAutomationEngine.trigger` (the first in-memory `AutomationEngine` was retired in slice 5.11) is the single entry for events, schedules, user actions, workflows and employees (through `automation.trigger`). It checks readiness, the deployed handler, the trigger kind and the employee's grants; executions are unique per `(automation_id, idempotency_key)`, so a replay returns the existing execution; failures follow the retry policy into the dead-letter state. From Phase 5 executions live on the Postgres job queue with leases and heartbeats, inbox and outbox ([ADR-0013](../adr/0013-automation-engine.md)).
 
 ### 9.7 Tool registry and access
 
@@ -455,7 +460,7 @@ Details: `htco-clients/docs/architecture/CLIENT_ARCHITECTURE.md`.
 | [0004](../adr/0004-model-gateway.md) | Own model gateway on official SDKs; catalog as data; budget ledger | Accepted |
 | [0005](../adr/0005-hosting-digitalocean-supabase.md) | DigitalOcean App Platform and Supabase Pro, IPv4 add-on, same region | Proposed until the owner chooses the region |
 | [0006](../adr/0006-web-auth-bff.md) | Web authentication through a backend-for-frontend with session cookies | Accepted |
-| [0007](../adr/0007-job-queue.md) | Postgres-native job queue behind a port; implementation chosen by spike | Proposed, decided in Phase 5 |
+| [0007](../adr/0007-job-queue.md) | Postgres-native job queue behind a port; an in-house table queue | Accepted (Phase 5 spike) |
 | [0008](../adr/0008-etsy-integration.md) | Etsy Seller App, webhooks plus reconciliation polling, read-first tracking | Accepted; validated in Phases 0 and 4 |
 | [0009](../adr/0009-autova-integration.md) | AutoVA behind a port; read tracking from Etsy; manual adapter first | Accepted |
 | [0010](../adr/0010-test-first-development.md) | Test-first development with enforced quality gates | Accepted |
@@ -472,7 +477,7 @@ Details: `htco-clients/docs/architecture/CLIENT_ARCHITECTURE.md`.
 | Whether Etsy webhooks and shipment writes are available to a Seller App in the shop's region | Owner + platform | Phase 0 spike, Phase 4 probe |
 | AutoVA integration options (API, export, partner program) | Owner | Phase 0 inquiry |
 | Region choice (Frankfurt vs US East) | Owner | Phase 0 |
-| Job queue implementation | Platform | Phase 5 spike |
+| Job queue implementation | Platform | Resolved 2026-10-22: ADR-0007 accepted (in-house queue) |
 | Server-sent events through DigitalOcean's request timeout vs Supabase Realtime for live updates | Platform | Phase 15 spike |
 | Point-in-time recovery cost vs recovery objectives | Owner | Before Phase 20 |
 | Catalog model vs Etsy reselling policy | Owner | Before Phase 12 |

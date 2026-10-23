@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/automations/etsy-order-intake.input.json",
+  "title": "Etsy Order Intake input",
+  "description": "A receipt (a webhook or a re-sync) or a mode of the history run; never buyer data.",
+  "type": "object",
+  "properties": {
+    "receipt_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "event_type": {
+      "type": "string",
+      "pattern": "^([a-z][a-z_]{0,40}[.][a-z][a-z_]{0,40}|resync)$"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "history",
+        "reconcile",
+        "sweep"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "stale",
+        "manual",
+        "reconcile",
+        "sweep"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

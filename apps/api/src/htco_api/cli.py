@@ -1,5 +1,6 @@
 """The operator command line: `htco admin bootstrap` (slice 2.5), `htco admin rotate-token-keys`
-(slice 4.2).
+(slice 4.2), `htco admin dead-letters` (slice 5.1), `htco registry sync --automations`
+(slice 5.10).
 
 Usage, once the owner has signed up through Supabase Auth:
 
@@ -19,28 +20,57 @@ It reads `HTCO_DATABASE_URL`, `HTCO_TOKEN_VAULT_KEY` and `HTCO_TOKEN_VAULT_PREVI
 re-wraps every row still on a previous key with the current key while the API keeps serving, and
 prints the count and the rows per key ID; when only the current ID is left, the previous keys can
 be removed.
+
+To see the jobs whose retries are exhausted (the dead-letter state, AC-5.1.3):
+
+    htco admin dead-letters [--organization <ID>] [--limit 50]
+
+It reads `HTCO_DATABASE_URL` and prints one JSON line per dead job, newest first: ID, kind,
+organization, shop, attempts, the last error (an exception type or a message marked safe) and
+when it failed. Never a payload.
+
+To load the reviewed automation definitions of `registry/automations/` into the database
+(AC-5.10.7), from a checkout of the commit to load:
+
+    htco registry sync --automations [--root registry] [--commit SHA] [--apply | --check]
+
+Without `--apply` it only prints the plan: one JSON line per added or changed definition (by
+the SHA-256 of its document) and a summary. `--apply` writes the plan in one transaction with
+the registry commit it came from; running it again changes nothing. `--check` exits 1 when the
+database differs from the files. An automation whose file disappeared blocks the sync (exit 65):
+retire it with `readiness = "retired"` instead. It reads `HTCO_DATABASE_URL`.
 """
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 import uuid
 from collections.abc import Callable, Sequence
-from typing import Protocol, TextIO
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Protocol, TextIO
 
 import anyio
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from htco_api.settings import check_token_vault_keys, token_key_ring
+from htco_application.automation.records import DefinitionRow, SyncPlan, plan_sync
 from htco_application.bootstrap import (
     BootstrapRequest,
     BootstrapStore,
     UserNotFoundError,
     bootstrap_owner,
 )
+from htco_application.jobs import DeadLetter
+from htco_application.workforce.files import read_registry
+from htco_application.workforce.registry import RegistryError
+from htco_persistence.automation import PostgresAutomationCatalog
 from htco_persistence.bootstrap import PostgresBootstrapStore
 from htco_persistence.database import Database
+from htco_persistence.jobs import PostgresJobQueue
 from htco_persistence.shop_integrations import PostgresTokenVault
 from htco_platform.crypto import EnvelopeSealer, KeyRing
 from htco_platform.settings import ConfigurationError, load_settings
@@ -132,7 +162,67 @@ def _postgres_rotator(url: str, ring: KeyRing) -> ManagedRotator:
     return _DatabaseTokenVault(Database(url, min_size=1, max_size=1), ring)
 
 
+class DeadLetterReader(Protocol):
+    async def start(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+    async def dead_letters(
+        self, *, organization_id: uuid.UUID | None, limit: int
+    ) -> list[DeadLetter]: ...
+
+
+class _DatabaseDeadLetters:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+        self._queue = PostgresJobQueue(database)
+
+    async def start(self) -> None:
+        await self._database.start()
+
+    async def stop(self) -> None:
+        await self._database.stop()
+
+    async def dead_letters(
+        self, *, organization_id: uuid.UUID | None, limit: int
+    ) -> list[DeadLetter]:
+        return await anyio.to_thread.run_sync(
+            lambda: self._queue.dead_letters(organization_id=organization_id, limit=limit)
+        )
+
+
+def _postgres_dead_letters(url: str) -> DeadLetterReader:
+    return _DatabaseDeadLetters(Database(url, min_size=1, max_size=1))
+
+
+class DefinitionStore(Protocol):
+    async def start(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+    def current(self) -> list[DefinitionRow]: ...
+
+    def upsert(self, rows: Sequence[Any]) -> None: ...
+
+
+class _DatabaseCatalog(PostgresAutomationCatalog):
+    def __init__(self, database: Database) -> None:
+        super().__init__(database)
+        self._managed = database
+
+    async def start(self) -> None:
+        await self._managed.start()
+
+    async def stop(self) -> None:
+        await self._managed.stop()
+
+
+def _postgres_catalog(url: str) -> DefinitionStore:
+    return _DatabaseCatalog(Database(url, min_size=1, max_size=1))
+
+
 MAX_BATCH_SIZE = 10_000
+MAX_DEAD_LETTERS = 500
 
 
 def _batch_size(value: str) -> int:
@@ -163,20 +253,52 @@ def _parser() -> argparse.ArgumentParser:
     rotate.add_argument(
         "--batch-size", type=_batch_size, default=100, help="Rows per transaction (default 100)."
     )
+    dead = commands.add_parser(
+        "dead-letters", help="List jobs whose retries are exhausted, newest first."
+    )
+    dead.add_argument("--organization", type=uuid.UUID, help="Only this organization's jobs.")
+    dead.add_argument("--limit", type=_limit, default=50, help="At most this many (default 50).")
+    registry = groups.add_parser("registry", help="The office registry in the database.")
+    registry_commands = registry.add_subparsers(dest="command", required=True)
+    sync = registry_commands.add_parser(
+        "sync", help="Load reviewed registry documents into the database (dry run by default)."
+    )
+    sync.add_argument("--automations", action="store_true", required=True)
+    sync.add_argument("--root", type=Path, default=Path("registry"), help="The registry folder.")
+    sync.add_argument("--commit", help="The registry commit (default: GITHUB_SHA or git HEAD).")
+    mode = sync.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="Write the plan.")
+    mode.add_argument("--check", action="store_true", help="Exit 1 when anything differs.")
     return parser
 
 
-def main(
+def _limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a whole number") from None
+    if not 1 <= limit <= MAX_DEAD_LETTERS:
+        raise argparse.ArgumentTypeError(f"must be between 1 and {MAX_DEAD_LETTERS}")
+    return limit
+
+
+def main(  # noqa: PLR0913 - one injectable adapter per command
     argv: Sequence[str] | None = None,
     *,
     new_store: Callable[[str], ManagedStore] = _postgres_store,
     new_rotator: Callable[[str, KeyRing], ManagedRotator] = _postgres_rotator,
+    new_dead_letters: Callable[[str], DeadLetterReader] = _postgres_dead_letters,
+    new_catalog: Callable[[str], DefinitionStore] = _postgres_catalog,
     stdout: TextIO | None = None,
 ) -> int:
     args = _parser().parse_args(argv)
     out = stdout or sys.stdout
     if args.command == "rotate-token-keys":
         return _rotate(args.batch_size, new_rotator, out)
+    if args.command == "dead-letters":
+        return _dead_letters(args.organization, args.limit, new_dead_letters, out)
+    if args.command == "sync":
+        return _sync(args, new_catalog, out)
     try:
         settings = load_settings(AdminSettings)
     except ConfigurationError as error:
@@ -247,6 +369,123 @@ def _rotate(
             + "\n"
         )
         return 0
+
+    return anyio.run(run)
+
+
+def _dead_letters(
+    organization_id: uuid.UUID | None,
+    limit: int,
+    new_reader: Callable[[str], DeadLetterReader],
+    out: TextIO,
+) -> int:
+    try:
+        settings = load_settings(AdminSettings)
+    except ConfigurationError as error:
+        sys.stderr.write(f"htco: invalid configuration\n{error}\n")
+        return EXIT_CONFIGURATION_ERROR
+    reader = new_reader(settings.database_url.get_secret_value())
+
+    async def run() -> int:
+        await reader.start()
+        try:
+            found = await reader.dead_letters(organization_id=organization_id, limit=limit)
+        finally:
+            await reader.stop()
+        out.writelines(json.dumps(_dead_letter_line(dead)) + "\n" for dead in found)
+        return 0
+
+    return anyio.run(run)
+
+
+def _dead_letter_line(dead: DeadLetter) -> dict[str, object]:
+    return {
+        "id": str(dead.id),
+        "kind": dead.kind,
+        "organization_id": None if dead.organization_id is None else str(dead.organization_id),
+        "shop_id": None if dead.shop_id is None else str(dead.shop_id),
+        "attempts": dead.attempts,
+        "last_error": dead.last_error,
+        "failed_at": dead.failed_at.isoformat(),
+    }
+
+
+def _commit(given: str | None) -> str:
+    if given:
+        return given
+    if os.environ.get("GITHUB_SHA"):
+        return os.environ["GITHUB_SHA"]
+    try:
+        found = subprocess.run(
+            ["git", "rev-parse", "HEAD"],  # noqa: S607 - git from PATH, no shell
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+    except OSError, subprocess.SubprocessError:
+        return "local"
+    return found.stdout.strip() or "local"
+
+
+def _print_plan(plan: SyncPlan, out: TextIO, *, applied: bool) -> None:
+    out.writelines(
+        json.dumps(
+            {
+                "change": change.kind.value,
+                "automation_id": change.automation_id,
+                "version": change.version,
+                "hash_before": change.hash_before,
+                "hash_after": change.hash_after,
+            }
+        )
+        + "\n"
+        for change in plan.changes
+    )
+    summary = {
+        "added": sum(c.kind.value == "added" for c in plan.changes),
+        "changed": sum(c.kind.value == "changed" for c in plan.changes),
+        "missing": sum(c.kind.value == "missing" for c in plan.changes),
+        "unchanged": plan.unchanged,
+        "applied": applied,
+    }
+    out.write(json.dumps(summary) + "\n")
+
+
+def _sync(
+    args: argparse.Namespace, new_catalog: Callable[[str], DefinitionStore], out: TextIO
+) -> int:
+    try:
+        settings = load_settings(AdminSettings)
+    except ConfigurationError as error:
+        sys.stderr.write(f"htco: invalid configuration\n{error}\n")
+        return EXIT_CONFIGURATION_ERROR
+    try:
+        documents = read_registry(args.root)
+        documents.registry()  # every document valid, every reference known
+    except (RegistryError, OSError, ValueError) as error:
+        sys.stderr.write(f"htco: the registry is invalid\n{error}\n")
+        return EXIT_DATA_ERROR
+    catalog = new_catalog(settings.database_url.get_secret_value())
+    commit = _commit(args.commit)
+
+    async def run() -> int:
+        await catalog.start()
+        try:
+            current = await anyio.to_thread.run_sync(catalog.current)
+            plan = plan_sync(documents.automations, current, commit=commit, now=datetime.now(UTC))
+            if plan.blocked:
+                _print_plan(plan, out, applied=False)
+                sys.stderr.write(
+                    "htco: an automation left the registry; retire it instead of deleting it\n"
+                )
+                return EXIT_DATA_ERROR
+            if args.apply and not plan.is_empty:
+                await anyio.to_thread.run_sync(lambda: catalog.upsert(plan.rows))
+        finally:
+            await catalog.stop()
+        _print_plan(plan, out, applied=bool(args.apply and not plan.is_empty))
+        return 1 if args.check and not plan.is_empty else 0
 
     return anyio.run(run)
 

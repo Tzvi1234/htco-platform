@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from htco_application.etsy_webhooks import WebhookSecret
 from htco_platform.crypto import KeyRing
 
 
@@ -69,6 +70,19 @@ class ApiSettings(BaseSettings):
     # off and the API still starts.
     token_vault_key: SecretStr | None = None
     token_vault_previous_keys: SecretStr | None = None
+    # Slice 5.10: user triggers and admin retries of automations (`POST /v1/automations/...`).
+    # Off by default, so executions never pile up while no agent-worker runs (ER-OPS-04).
+    automations_enabled: bool = False
+    # Slice 5.3: Etsy webhooks at `POST /webhooks/etsy`. Off by default (the route answers 404);
+    # on, it needs the endpoint's signing secret from the Etsy developer portal (`whsec_...`, the
+    # GitHub secret ETSY_WEBHOOK_SECRET). The rate limit is per API instance.
+    etsy_webhooks_enabled: bool = False
+    etsy_webhook_secret: SecretStr | None = None
+    etsy_webhook_rate_per_second: int = Field(default=50, ge=1, le=1000)
+    # Slice 5.4: the order history sync runs in this process only as a fallback. On (the default
+    # until Etsy Order Intake is activated, slice 5.11): a stale read starts it here as before.
+    # Off: a stale read or the manual sync enqueues `etsy.order_sync` for the worker and returns.
+    order_sync_in_api: bool = True
 
     @property
     def token_key_ring(self) -> KeyRing | None:
@@ -103,6 +117,7 @@ class ApiSettings(BaseSettings):
         "etsy_redirect_uri",
         "token_vault_key",
         "token_vault_previous_keys",
+        "etsy_webhook_secret",
         mode="before",
     )
     @classmethod
@@ -159,6 +174,19 @@ class ApiSettings(BaseSettings):
             raise ValueError(
                 "HTCO_PASSWORD_RESET_REDIRECT_URL must use HTTPS in staging and production"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _etsy_webhooks_need_their_secret(self) -> Self:
+        if self.etsy_webhook_secret is not None:
+            try:
+                WebhookSecret.parse(self.etsy_webhook_secret.get_secret_value())
+            except ValueError:
+                raise ValueError(
+                    "HTCO_ETSY_WEBHOOK_SECRET must be the portal's whsec_ signing secret"
+                ) from None
+        if self.etsy_webhooks_enabled and self.etsy_webhook_secret is None:
+            raise ValueError("HTCO_ETSY_WEBHOOKS_ENABLED needs HTCO_ETSY_WEBHOOK_SECRET")
         return self
 
     @model_validator(mode="after")

@@ -17,4 +17,13 @@ Every feature has its own folder here, created from [`_template/`](_template/) a
 | [platform-skeleton](platform-skeleton/overview.md) | 1 | In progress |
 | [identity-access](identity-access/overview.md) | 2 | In progress |
 | [living-office](living-office/overview.md) | 2 (foundation), 5–19 | Foundation complete |
-| [etsy-integration](etsy-integration/overview.md) | 4 | In progress (4.1 done) |
+| [etsy-integration](etsy-integration/overview.md) | 4 | In progress (4.1 to 4.5 done at the platform; 4.7 disconnect done, restore rehearsal pending) |
+| [job-queue](job-queue/overview.md) | 5 | 5.1 and 5.2 built; worker deployment pending the owner |
+| [automation-engine](automation-engine/overview.md) | 5 | 5.10 built; first automations in 5.11 |
+| [action-gateway](action-gateway/overview.md) | 5 | 5.12 built; channels in 5.13 |
+| [orders-ingest](orders-ingest/overview.md) | 5 | 5.3 webhooks, 5.4 receipt ingest and 5.5 reconciliation built (off behind flags and schedules until 5.11) |
+| [secret-broker](secret-broker/overview.md) | 5, 8B | 5.17 contracts and in-memory implementations built; tables and UI in 8B |
+| [fulfillment-monitoring](fulfillment-monitoring/overview.md) | 6 | 6.1 tracking detection and 6.2 SLA inspector built (draft until 6.7) |
+| [incidents](incidents/overview.md) | 6 | 6.3 incident machine and deduplication built; the incident center API with 6.4 |
+| [notifications](notifications/overview.md) | 6 | 6.4 built; email on the log adapter until the owner's Resend DNS |
+| [browser-environments](browser-environments/overview.md) | 5, 8A | 5.16 contracts, table and state machine built; the browser in 8A |

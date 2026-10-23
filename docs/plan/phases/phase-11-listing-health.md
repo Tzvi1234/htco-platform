@@ -5,7 +5,7 @@
 | **Milestone** | **M3 — MVP** |
 | **Repositories** | both |
 | **Size** | M |
-| **Depends on** | [Phase 10](phase-10-supervision.md); decision D-03 |
+| **Depends on** | [Phase 10](phase-10-supervision.md); decision D-03; optional: [Phase 8A](phase-08a-browser-infrastructure.md) for views and visits per listing from the stats export (B-02) |
 | **Requirements** | FR-AGT-06, FR-AGT-09, FR-CAT-04, FR-QA-01, FR-QA-02, FR-QA-03 |
 | **Status** | Not started |
 
@@ -21,6 +21,19 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; its
 - [ ] 11.6 Noa's sampling review
 - [ ] 11.7 Daniel and Noam activated
 - [ ] 11.8 Listing Health UI
+
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
+
+- **API reads:** listing sync and audits use the API tools (`etsy.listings.read`, `etsy.listing_details.read`, `etsy.inventory.read`, `etsy.taxonomy.read`, `etsy.listing_shipping.read`, `etsy.policies.read`, `etsy.reviews.read`).
+- **Listing changes from webhooks:** `listing.updated` from slice 5.3 triggers a re-audit of the listing it names.
+- **Writes:**
+  - the approved write path of 11.5 is `etsy.listings.update`, `etsy.listing_properties.manage` and `etsy.listing_translations.manage` (W1/W2), through the gateway, verified by re-reading the listing;
+  - the planned `listings.apply_approved_fix` tool stays as the automation-facing wrapper;
+  - each write tool is owner-trigger only on each shop until the owner's first verified run.
+- **AC-11.5.3, amended by ADR-0022:** Daniel and Noam may hold write tools in the registry, but every call becomes an approval and runs outside the session. The write path stays unreachable from inside a session.
+- **Combined processes:** where scoped and flagged, the stats export (B-02, Phase 8A) adds views, visits and conversion per listing to the audit, as a deterministic browser recipe. Without it, the audit uses the API data only and says so.
 
 ## Goal
 

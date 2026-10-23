@@ -42,6 +42,14 @@ class ValidationProblem(Problem):
     errors: list[FieldError]
 
 
+class ShopNotConnectedProblem(Problem):
+    """`shop-not-connected` says why: `needs_reauth` (reconnect the shop: Etsy refused its tokens,
+    or they belong to a replaced app key), `disconnected` or `not_connected`. Other problems on
+    the same status carry no reason."""
+
+    reason: str | None = None
+
+
 @dataclass(frozen=True)
 class ProblemType:
     slug: str
@@ -129,10 +137,18 @@ AUTH_UNAVAILABLE = ProblemType(
 class ProblemError(Exception):
     """Raised by routes and dependencies to answer with one problem type."""
 
-    def __init__(self, kind: ProblemType, *, headers: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        kind: ProblemType,
+        *,
+        headers: Mapping[str, str] | None = None,
+        extra: Mapping[str, str] | None = None,
+    ) -> None:
         super().__init__(kind.slug)
         self.kind = kind
         self.headers = dict(headers or {})
+        # Extension members (RFC 9457 section 3.2), written by the route, never from an exception.
+        self.extra = dict(extra or {})
 
 
 _BY_STATUS = {kind.status: kind for kind in (NOT_FOUND, METHOD_NOT_ALLOWED, INTERNAL_ERROR)}
@@ -195,7 +211,15 @@ def _allowed_methods(request: Request) -> str:
 async def _problem_error(request: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, ProblemError):
         return problem_response(INTERNAL_ERROR.problem(request_id_of(request)))
-    return problem_response(exc.kind.problem(request_id_of(request)), headers=exc.headers)
+    problem = exc.kind.problem(request_id_of(request))
+    if exc.extra:
+        return JSONResponse(
+            {**problem.model_dump(mode="json"), **exc.extra},
+            status_code=problem.status,
+            media_type=PROBLEM_MEDIA_TYPE,
+            headers=exc.headers,
+        )
+    return problem_response(problem, headers=exc.headers)
 
 
 async def _validation_error(request: Request, exc: Exception) -> JSONResponse:

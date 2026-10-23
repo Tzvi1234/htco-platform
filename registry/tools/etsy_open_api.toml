@@ -1,0 +1,461 @@
+# Etsy Open API v3 tools (ADR-0014, ADR-0022). DRAFT: none is production-ready yet.
+# One tool per read area and per write action; the endpoint map is in
+# docs/architecture/etsy-api-capabilities.md. Every write runs only through the Action Gateway
+# (ADR-0019): approval, outbox, re-read verification, audit; and only after the owner's first
+# trigger of that write on that shop. Never called against a live shop from tests.
+
+[[tools]]
+name = "etsy.shop.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read the shop, its owner's shops and featured listings (getShop, getShopByOwnerUserId, getFeaturedListingsByShop). Endpoints: getShop, getShopByOwnerUserId, getFeaturedListingsByShop. Approval policy R0."
+
+[[tools]]
+name = "etsy.shops.search"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "public"
+audit_required = false
+readiness = "draft"
+description = "Search public shops by name (findShops). Research only; never used to copy another shop. Endpoints: findShops. Approval policy R0."
+
+[[tools]]
+name = "etsy.sections.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read shop sections and the listings in them. Endpoints: getShopSections, getShopSection, getListingsByShopSectionId. Approval policy R0."
+
+[[tools]]
+name = "etsy.listings.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read the shop's listings by state, by ID or in batches of 100, with includes (getListingsByShop, getListing, getListingsByListingIds, getListingsByShopReceipt, getListingsByShopReturnPolicy). Endpoints: getListingsByShop, getListing, getListingsByListingIds, getListingsByShopReceipt, getListingsByShopReturnPolicy. Approval policy R0."
+
+[[tools]]
+name = "etsy.listings.search_public"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "public"
+audit_required = false
+readiness = "draft"
+description = "Search active public listings (findAllListingsActive, findAllActiveListingsByShop). Research input for Shon; never copied into a listing and never used to train a model. Endpoints: findAllListingsActive, findAllActiveListingsByShop. Approval policy R0."
+
+[[tools]]
+name = "etsy.listing_media.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read listing images, variation images, videos and digital files. Endpoints: getListingImages, getListingImage, getListingVideos, getListingVideo, getListingVariationImages, getAllListingFiles, getListingFile. Approval policy R0."
+
+[[tools]]
+name = "etsy.listing_details.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read listing properties (attributes), personalization and translations. Endpoints: getListingProperties, getListingProperty, getListingPersonalization, getListingTranslation. Approval policy R0."
+
+[[tools]]
+name = "etsy.inventory.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read inventory: products, offerings, price, quantity and SKU per variation, single or batch. Endpoints: getListingInventory, getListingsInventoryByListingIds, getListingProduct, getListingOffering. Approval policy R0."
+
+[[tools]]
+name = "etsy.listing_shipping.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read the shipping data of a batch of listings (getListingsShippingByListingIds). Endpoints: getListingsShippingByListingIds. Approval policy R0."
+
+[[tools]]
+name = "etsy.receipts.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "confidential"
+audit_required = false
+readiness = "draft"
+description = "Read receipts, their transactions and shipments (buyer name and address masked by role; contact data never read). Endpoints: getShopReceipts, getShopReceipt, getShopReceiptTransactionsByReceipt, getShopReceiptTransactionsByShop, getShopReceiptTransaction, getShopReceiptTransactionsByListing. Approval policy R1."
+
+[[tools]]
+name = "etsy.payments.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "confidential"
+audit_required = false
+readiness = "draft"
+description = "Read payments by shop or receipt: gross, fees, net, adjustments. Endpoints: getPayments, getShopPaymentByReceiptId. Approval policy R1."
+
+[[tools]]
+name = "etsy.ledger.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "confidential"
+audit_required = false
+readiness = "draft"
+description = "Read the payment-account ledger entries and their payments (fees, refunds, disbursements, ads debits). Endpoints: getShopPaymentAccountLedgerEntries, getShopPaymentAccountLedgerEntry, getPaymentAccountLedgerEntryPayments. Approval policy R1."
+
+[[tools]]
+name = "etsy.reviews.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read reviews by shop or listing with date filters. Etsy has no reply endpoint. Endpoints: getReviewsByShop, getReviewsByListing. Approval policy R0."
+
+[[tools]]
+name = "etsy.taxonomy.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "public"
+audit_required = false
+readiness = "draft"
+description = "Read seller and buyer taxonomy nodes and their properties. Endpoints: getSellerTaxonomyNodes, getPropertiesByTaxonomyId, getBuyerTaxonomyNodes, getPropertiesByBuyerTaxonomyId. Approval policy R0."
+
+[[tools]]
+name = "etsy.shipping_carriers.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "public"
+audit_required = false
+readiness = "draft"
+description = "Read Etsy's shipping carriers per origin country. Endpoints: getShippingCarriers. Approval policy R0."
+
+[[tools]]
+name = "etsy.shipping_profiles.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read shipping profiles, destinations and upgrades. Endpoints: getShopShippingProfiles, getShopShippingProfile, getShopShippingProfileDestinationsByShippingProfile, getShopShippingProfileUpgrades. Approval policy R0."
+
+[[tools]]
+name = "etsy.policies.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read return policies, processing profiles (readiness states) and holiday preferences. Endpoints: getHolidayPreferences, getShopReturnPolicies, getShopReturnPolicy, getShopReadinessStateDefinitions, getShopReadinessStateDefinition. Approval policy R0."
+
+[[tools]]
+name = "etsy.production_partners.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Read the shop's production partners. Endpoints: getShopProductionPartners. Approval policy R0."
+
+[[tools]]
+name = "etsy.account.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "personal"
+audit_required = true
+readiness = "draft"
+description = "Read the connected user (getMe), and only with the extra scopes the owner granted, the user's email (getUser, email_r) and addresses (address_r). Audited. Endpoints: getMe, getUser, getUserAddresses, getUserAddress. Approval policy R1."
+
+[[tools]]
+name = "etsy.platform.health"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "internal"
+audit_required = false
+readiness = "draft"
+description = "Ping the API and list the token's scopes (ping, tokenScopes): capability probes and health checks. Endpoints: ping, tokenScopes. Approval policy R0."
+
+[[tools]]
+name = "etsy.shop.update"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "high"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Update the shop: title, announcement, sale messages, vacation mode and message (updateShop). Changes what every buyer sees. Endpoints: updateShop. Approval policy W2."
+
+[[tools]]
+name = "etsy.holiday_preferences.update"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Update the shop's holiday preferences per country (updateHolidayPreferences). Endpoints: updateHolidayPreferences. Approval policy W1."
+
+[[tools]]
+name = "etsy.sections.manage"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Create, rename or delete a shop section (deleting moves its listings out of it). Endpoints: createShopSection, updateShopSection, deleteShopSection. Approval policy W1."
+
+[[tools]]
+name = "etsy.listings.create_draft"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Create a draft listing (createDraftListing). A draft is invisible to buyers and costs nothing. Endpoints: createDraftListing. Approval policy W1."
+
+[[tools]]
+name = "etsy.listings.update"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "high"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Update a listing's content and settings: title, description, tags, materials, section, profiles, ECGT fields (updateListing without a state change). Endpoints: updateListing. Approval policy W2."
+
+[[tools]]
+name = "etsy.listings.change_state"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "financial"
+risk = "critical"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Activate, deactivate or renew a listing (updateListing state). Activation and renewal charge Etsy's listing fee. Endpoints: updateListing. Approval policy W3."
+
+[[tools]]
+name = "etsy.listings.delete"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "critical"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Delete a listing (deleteListing, scope listings_d). Irreversible. Endpoints: deleteListing. Approval policy W3."
+
+[[tools]]
+name = "etsy.inventory.update"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "high"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Replace a listing's inventory: price, quantity, SKU and readiness per product (updateListingInventory). Price and stock are live at once. Endpoints: updateListingInventory. Approval policy W2."
+
+[[tools]]
+name = "etsy.listing_media.manage"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Upload or delete listing images and videos, and set variation images. Endpoints: uploadListingImage, deleteListingImage, uploadListingVideo, deleteListingVideo, updateVariationImages. Approval policy W1."
+
+[[tools]]
+name = "etsy.listing_files.manage"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Upload or delete the digital files of a digital listing. Endpoints: uploadListingFile, deleteListingFile. Approval policy W1."
+
+[[tools]]
+name = "etsy.listing_properties.manage"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Set or delete a listing's attribute values (updateListingProperty, deleteListingProperty). Endpoints: updateListingProperty, deleteListingProperty. Approval policy W1."
+
+[[tools]]
+name = "etsy.listing_personalization.manage"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Set or delete a listing's personalization questions. Endpoints: updateListingPersonalization, deleteListingPersonalization. Approval policy W1."
+
+[[tools]]
+name = "etsy.listing_translations.manage"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Create or update a listing's translation for one language. Endpoints: createListingTranslation, updateListingTranslation. Approval policy W1."
+
+[[tools]]
+name = "etsy.shipping_profiles.manage"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "high"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Create, update or delete shipping profiles, destinations and upgrades. Changes shipping prices for every listing on the profile. Endpoints: createShopShippingProfile, updateShopShippingProfile, deleteShopShippingProfile, createShopShippingProfileDestination, updateShopShippingProfileDestination, deleteShopShippingProfileDestination, createShopShippingProfileUpgrade, updateShopShippingProfileUpgrade, deleteShopShippingProfileUpgrade. Approval policy W2."
+
+[[tools]]
+name = "etsy.return_policies.manage"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "high"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Create, update, delete or consolidate return policies. Endpoints: createShopReturnPolicy, updateShopReturnPolicy, deleteShopReturnPolicy, consolidateShopReturnPolicies. Approval policy W2."
+
+[[tools]]
+name = "etsy.processing_profiles.manage"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "medium"
+data_scope = "internal"
+audit_required = true
+readiness = "draft"
+description = "Create, update or delete processing profiles (readiness state definitions). Endpoints: createShopReadinessStateDefinition, updateShopReadinessStateDefinition, deleteShopReadinessStateDefinition. Approval policy W1."
+
+[[tools]]
+name = "etsy.receipts.update"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "high"
+data_scope = "confidential"
+audit_required = true
+readiness = "draft"
+description = "Mark a receipt as paid or shipped (updateShopReceipt was_paid, was_shipped). Endpoints: updateShopReceipt. Approval policy W2."
+
+[[tools]]
+name = "etsy.shipments.create"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "external"
+risk = "high"
+data_scope = "confidential"
+audit_required = true
+readiness = "draft"
+description = "Add tracking to a receipt and notify the buyer (createReceiptShipment). Restricted for new Israeli keys; gated by the capability probe. Endpoints: createReceiptShipment. Approval policy W2."

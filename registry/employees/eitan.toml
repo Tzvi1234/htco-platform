@@ -7,7 +7,7 @@ version = 1
 autonomy = "L1"
 readiness = "draft"
 activation_phase = 9
-allowed_tools = ["orders.read", "incidents.open", "tasks.create", "activity.query", "automation.trigger", "models.complete"]
+allowed_tools = ["orders.read", "incidents.open", "tasks.create", "activity.query", "automation.trigger", "models.complete", "orders.annotate", "etsy.receipts.read", "etsy.shipping_carriers.read", "etsy.policies.read"]
 allowed_automations = ["etsy-order-intake", "order-dedup-verification", "tracking-sync"]
 
 [routing]
@@ -35,7 +35,7 @@ text = "Every exception investigated within SLA; incidents resolved only on evid
 
 [specification.responsibilities]
 status = "draft"
-text = "Investigates fulfillment exceptions; monitors discrepancies between Etsy, AutoVA and the CRM; reviews tracking failures, delays and incomplete orders; opens incidents and requests corrections; verifies recovery after remediation."
+text = "Investigates fulfillment exceptions; monitors discrepancies between Etsy, AutoVA and the CRM; reviews tracking failures, delays and incomplete orders; opens incidents and requests corrections; verifies recovery after remediation; writes an AI-suggested reason (with evidence and confidence) for cancelled or refunded orders that Etsy gives no reason for, as an internal annotation the owner can edit (AC-9.7.6)."
 
 [specification.non_responsibilities]
 status = "draft"

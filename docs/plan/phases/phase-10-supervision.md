@@ -21,6 +21,18 @@
 
 **Foundation already in code.** `htco_domain.activity` (`ActivityKind.QUALITY_FINDING`, `RECONCILIATION`), `htco_domain.tasks` and `htco_domain.automation` give the records supervision reads; the draft specifications of Noa ([`registry/employees/noa.toml`](../../../registry/employees/noa.toml)), Order & Financial Reconciliation and Quality Review Scheduling are in `registry/`. Monitors, findings, the nightly supervisor and the views are planned in this phase.
 
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
+
+- **Monitors read the execution chain** (slice 5.18): actions, approvals, Human tasks and browser environment statuses, alongside tasks and automation executions.
+- **New monitors:**
+  - unverified writes (a W-policy action without verification evidence);
+  - environments stuck in `LOGIN_REQUIRED` or `DEGRADED`;
+  - challenge spikes;
+  - DLQ growth per channel.
+- **Order & Financial Reconciliation** reads payments and the ledger through `etsy.payments.read` and `etsy.ledger.read` (R1).
+
 ## Goal
 
 Nothing critical happens in HTCO without being observable from the CRM, and nothing stays broken silently. Supervision is layered ([ADR-0012](../../adr/0012-living-office-organization.md) rule 5):

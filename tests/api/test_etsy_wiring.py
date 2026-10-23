@@ -17,6 +17,7 @@ from fastapi import FastAPI
 
 from htco_api.main import main
 from htco_api.settings import ApiSettings
+from htco_application.order_intake import QueuedSyncRequests
 
 VAULT_KEY = base64.b64encode(b"V" * 32).decode()
 SESSION_KEY = base64.b64encode(b"S" * 32).decode()
@@ -126,3 +127,21 @@ async def test_main__etsy_off__connect_still_asks_for_a_session_first(
         response = await http.post("/v1/shops/etsy/connect")
 
     assert response.status_code == 401  # no session: refused before anything else
+
+
+@pytest.mark.usefixtures("restore_logging")
+@pytest.mark.parametrize(("flag", "in_api"), [(None, True), ("true", True), ("false", False)])
+def test_main__order_sync_runs_in_the_api_only_as_the_fallback(
+    environment: pytest.MonkeyPatch, flag: str | None, in_api: bool
+) -> None:
+    """Slice 5.4: `HTCO_ORDER_SYNC_IN_API` off makes stale reads ask the worker's queue."""
+    if flag is not None:
+        environment.setenv("HTCO_ORDER_SYNC_IN_API", flag)
+    server = _Server()
+
+    assert main(serve=server) == 0
+
+    history = server.apps[0].state.dashboard.history
+    assert (history.requests is None) is in_api
+    if not in_api:
+        assert isinstance(history.requests, QueuedSyncRequests)

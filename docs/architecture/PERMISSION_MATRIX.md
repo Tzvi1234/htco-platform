@@ -33,12 +33,29 @@ Owner and Admin have organization-wide access to every shop; all other roles see
 | View the office: employees, automations, tools and costs | ✓ | ✓ | S | S | — | S | — |
 | View agent sessions, routing decisions and traces | ✓ | ✓ | S | — | — | S | — |
 | View audit log | ✓ | ✓ | — | — | — | S | — |
+| View a shop's browser environment status | ✓ | ✓ | — | — | — | — | — |
 
 While the organization has a single owner, high-risk approvals rely on step-up re-authentication; a two-person rule (requester plus a different approver, or two approvers) becomes a policy option once a second Admin exists.
 
+## 1a. Planned human capabilities (2026-10-23, not yet enforced)
+
+These rows come from [ADR-0020](../adr/0020-per-shop-browser-environment.md) to [ADR-0022](../adr/0022-etsy-write-tools-and-browser-scope.md). Each moves into section 1, with its `Capability` and its test, in the phase that builds it (6–7 Etsy writes and approvals, 8A browser environments, 8B authenticator).
+
+| Planned capability | Owner | Admin | Operations | Finance | Support | Developer | Viewer |
+|---|---|---|---|---|---|---|---|
+| Run an Etsy write tool by hand (first run, owner-trigger; ADR-0022) | ✓ MFA RA | — | — | — | — | — | — |
+| Decide Etsy write approvals W1 | ✓ MFA | ✓ MFA | — | — | — | — | — |
+| Decide Etsy write approvals W2 | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| Decide W3 approvals: listing deletion, activation with fee, money actions | ✓ MFA RA | — | — | — | — | — | — |
+| Create, suspend, resume or delete a Browser Environment | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| Sign in through the live view of a Browser Environment | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| Switch a browser scope flag on (only when its scope row is recorded) | ✓ MFA RA | — | — | — | — | — | — |
+| Enrol, rotate or remove a TOTP account | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| View a TOTP code (`view_totp_code`, per shop) | ✓ MFA RA | S MFA RA | — | — | — | — | — |
+
 ## 2. Automations
 
-Automations run under their own service identities with least-privilege database grants ([ADR-0013](../adr/0013-automation-engine.md)). The full list and each one's permissions section are in [`registry/automations/`](../../registry/automations).
+Automations run under their own service identities with least-privilege database grants ([ADR-0013](../adr/0013-automation-engine.md)); executions run in the `agent-worker`'s `htco_worker` role, one organization per job (slice 5.1). A user may start an automation by hand only when its registry definition names a `user_capability` from section 1 and the user's role holds it; listing automations and executions is "View the office"; retrying a dead-lettered execution is an organization-wide "Retry allowlisted sync" (Owner, Admin), audited (slice 5.10). The full list and each one's permissions section are in [`registry/automations/`](../../registry/automations).
 
 | Automation | Allowed | Not allowed |
 |---|---|---|

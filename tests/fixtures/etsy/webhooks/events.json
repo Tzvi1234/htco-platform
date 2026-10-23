@@ -1,0 +1,71 @@
+{
+  "_comment": "Etsy webhook payloads in the documented shape (invented IDs, no personal data).",
+  "events": {
+    "order.paid": {
+      "event_type": "order.paid",
+      "resource_url": "https://openapi.etsy.com/v3/application/shops/10000001/receipts/4000000001",
+      "shop_id": 10000001
+    },
+    "order.canceled": {
+      "event_type": "order.canceled",
+      "resource_url": "https://openapi.etsy.com/v3/application/shops/10000001/receipts/4000000001",
+      "shop_id": 10000001
+    },
+    "order.shipped": {
+      "event_type": "order.shipped",
+      "resource_url": "https://openapi.etsy.com/v3/application/shops/10000001/receipts/4000000001",
+      "shop_id": 10000001
+    },
+    "order.delivered": {
+      "event_type": "order.delivered",
+      "resource_url": "https://openapi.etsy.com/v3/application/shops/10000001/receipts/4000000001",
+      "shop_id": 10000001
+    },
+    "listing.created": {
+      "event_type": "listing.created",
+      "resource_url": "https://openapi.etsy.com/v3/application/listings/1500000001",
+      "shop_id": 10000001,
+      "listing_id": 1500000001
+    },
+    "listing.updated": {
+      "event_type": "listing.updated",
+      "resource_url": "https://openapi.etsy.com/v3/application/listings/1500000001",
+      "shop_id": 10000001,
+      "listing_id": 1500000001
+    },
+    "listing.deleted": {
+      "event_type": "listing.deleted",
+      "resource_url": "https://openapi.etsy.com/v3/application/listings/1500000001",
+      "shop_id": 10000001,
+      "listing_id": 1500000001
+    },
+    "inventory.created": {
+      "event_type": "inventory.created",
+      "resource_url": "https://openapi.etsy.com/v3/application/listings/1500000001/inventory/products/2500000001",
+      "shop_id": 10000001,
+      "listing_id": 1500000001,
+      "product_id": 2500000001
+    },
+    "inventory.updated": {
+      "event_type": "inventory.updated",
+      "resource_url": "https://openapi.etsy.com/v3/application/listings/1500000001/inventory/products/2500000001",
+      "shop_id": 10000001,
+      "listing_id": 1500000001,
+      "product_id": 2500000001
+    },
+    "inventory.deleted": {
+      "event_type": "inventory.deleted",
+      "resource_url": "https://openapi.etsy.com/v3/application/listings/1500000001/inventory/products/2500000001",
+      "shop_id": 10000001,
+      "listing_id": 1500000001,
+      "product_id": 2500000001
+    },
+    "inventory.out_of_stock": {
+      "event_type": "inventory.out_of_stock",
+      "resource_url": "https://openapi.etsy.com/v3/application/listings/1500000001/inventory/products/2500000001",
+      "shop_id": 10000001,
+      "listing_id": 1500000001,
+      "product_id": 2500000001
+    }
+  }
+}

@@ -113,7 +113,9 @@ jobs:
       - name: The monthly cost stays within the budget
         env:
           TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-          BUDGET_USD: "5"
+          # The owner's hard limit (2026-10-23): $20 a month for the whole app. Today the API ($5)
+          # and the agent-worker ($5, slice 5.1). DigitalOcean has no spending cap of its own.
+          BUDGET_USD: "20"
           IMAGE_TAG: ${{ steps.tag.outputs.tag }}
           # The private image must be readable for the proposal to validate.
           GHCR_PULL_CREDENTIALS: tzvi1234:${{ secrets.GHCR_PULL_TOKEN }}
@@ -152,6 +154,7 @@ jobs:
           HTCO_TOKEN_VAULT_PREVIOUS_KEYS: ${{ secrets.HTCO_TOKEN_VAULT_PREVIOUS_KEYS }}
           HTCO_ETSY_KEYSTRING: ${{ secrets.ETSY_KEYSTRING }}
           HTCO_ETSY_SHARED_SECRET: ${{ secrets.ETSY_SHARED_SECRET }}
+          HTCO_ETSY_WEBHOOK_SECRET: ${{ secrets.ETSY_WEBHOOK_SECRET }}
           HTCO_SUPABASE_PUBLISHABLE_KEY: ${{ vars.HTCO_SUPABASE_PUBLISHABLE_KEY }}
           HTCO_WEB_ORIGINS: ${{ vars.HTCO_WEB_ORIGINS }}
         with:
@@ -160,17 +163,20 @@ jobs:
           print_deploy_logs: true
       - name: The deployed API answers its health checks
         env:
-          APP: ${{ steps.deploy.outputs.app }}
+          # Only the URLs: GitHub prints each step's environment, and the app object holds the
+          # account's email, internal IDs and every (encrypted) secret.
+          INGRESS: ${{ fromJSON(steps.deploy.outputs.app).default_ingress }}
+          LIVE_URL: ${{ fromJSON(steps.deploy.outputs.app).live_url }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           # The platform URL works at once; a custom domain may still be getting its certificate.
-          url="$(printf '%s' "$APP" | jq -r '.default_ingress // .live_url')"
+          url="${INGRESS:-$LIVE_URL}"
           curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 6 "$url/healthz"
           curl --fail --silent --show-error "$url/readyz"
           {
             echo "## Deployed \`$TAG\`"
             echo "- URL: $url"
-            echo "- Domain: $(printf '%s' "$APP" | jq -r '.live_url')"
+            echo "- Domain: $LIVE_URL"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: The web app answers on its domain
         # A new domain waits minutes for its certificate, so this reports instead of failing.

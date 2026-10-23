@@ -2,7 +2,8 @@
 
 Each line is one JSON object with `timestamp` (ISO 8601, UTC), `level`, `event`, `logger`,
 `request_id` (null outside a request) and `trace_id` (null outside a trace; `span_id` joins it
-inside one), plus any bound context. Libraries that log through the
+inside one), plus any bound context. An exception's message appears only when HTCO's own code
+wrote it (`htco_platform.scrubbing`). Libraries that log through the
 standard `logging` module (uvicorn, httpx) are rendered the same way.
 """
 
@@ -13,6 +14,7 @@ from typing import TextIO
 import structlog
 from structlog.typing import EventDict, Processor, WrappedLogger
 
+from htco_platform.scrubbing import remember_safe_texts, scrub_rendered_exceptions
 from htco_platform.tracing import current_trace_ids
 
 # Library loggers that install their own handlers; ours replace them.
@@ -61,7 +63,10 @@ def configure_logging(*, level: str, stream: TextIO | None = None) -> None:
         foreign_pre_chain=shared,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            # Exception messages are scrubbed around the rendering (audit P1-5).
+            remember_safe_texts,
             structlog.processors.dict_tracebacks,
+            scrub_rendered_exceptions,
             structlog.processors.JSONRenderer(),
         ],
     )

@@ -58,4 +58,20 @@ def test_dockerignore__allows_only_the_build_inputs() -> None:
 
     assert rules[0] == "*", "the build context must be an allow-list"
     allowed = {rule[1:].rstrip("/") for rule in rules if rule.startswith("!")}
-    assert allowed == {"pyproject.toml", "uv.lock", ".python-version", "apps", "packages"}
+    assert allowed == {
+        "pyproject.toml",
+        "uv.lock",
+        ".python-version",
+        "apps",
+        "packages",
+        "workers",
+        "registry",
+        "packages/contracts/actions",
+    }
+
+
+def test_dockerfile__runtime_has_the_registry_and_action_contracts_for_the_gateway() -> None:
+    final = _final_stage()
+    assert "COPY --from=build /src/registry /app/registry" in final
+    assert "/app/packages/contracts/actions" in final
+    assert re.search(r"^WORKDIR /app$", final, re.MULTILINE)

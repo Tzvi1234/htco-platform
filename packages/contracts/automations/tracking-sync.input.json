@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/automations/tracking-sync.input.json",
+  "title": "Tracking Synchronization input",
+  "description": "A receipt (the order.shipped webhook) or the schedule mode; never buyer data.",
+  "type": "object",
+  "properties": {
+    "receipt_id": {"type": "integer", "minimum": 1},
+    "event_type": {"type": "string", "pattern": "^[a-z][a-z_]{0,40}[.][a-z][a-z_]{0,40}$"},
+    "mode": {"type": "string", "enum": ["schedule"]}
+  },
+  "additionalProperties": false
+}

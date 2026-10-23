@@ -17,17 +17,21 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable --package htco-api
+    uv sync --locked --no-dev --no-editable --package htco-api --package htco-worker
 
 # Runtime: the virtual environment only, owned by root and run by an unprivileged user.
 FROM ${PYTHON_IMAGE} AS runtime
 LABEL org.opencontainers.image.title="htco-api" \
-      org.opencontainers.image.description="HTCO OS HTTP API" \
+      org.opencontainers.image.description="HTCO OS HTTP API and agent-worker (python -m htco_worker)" \
       org.opencontainers.image.source="https://github.com/Tzvi1234/htco-platform"
 RUN groupadd --system --gid 10001 htco \
  && useradd --system --uid 10001 --gid htco --no-create-home --home-dir /nonexistent \
       --shell /usr/sbin/nologin htco
 COPY --from=build /app/.venv /app/.venv
+# The worker's Action Gateway reads the reviewed registry and the action contracts (slice 5.4).
+COPY --from=build /src/registry /app/registry
+COPY --from=build /src/packages/contracts/actions /app/packages/contracts/actions
+WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

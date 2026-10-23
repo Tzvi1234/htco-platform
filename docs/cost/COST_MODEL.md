@@ -23,7 +23,7 @@ This is the only place infrastructure prices are kept; other documents link here
 | Supabase IPv4 add-on | 4 | 4 | Required for direct connections from DigitalOcean |
 | DigitalOcean `api` | 5 | 12 | 0.5 GB → 1 GB shared CPU |
 | DigitalOcean `agent-worker` | 5 | 12 | From Phase 5: automations, then AI employees (no container per employee) |
-| DigitalOcean `web` | 0 | 0 | Static site inside the paid app (client ADR-0006); the deploy refuses a spec over the $5 budget |
+| DigitalOcean `web` | 0 | 0 | Static site inside the paid app (client ADR-0006); the deploy refuses a spec over the owner's $20 hard limit (today the API and the agent-worker, $5 each) |
 | Container registry | 0 | 5 | DigitalOcean Starter or GHCR within GitHub Pro storage |
 | Resend | 0 | 20 | Free until inbound mail (Phase 14) |
 | GitHub Pro | 4 | 4 | Rulesets on private repositories |
@@ -66,3 +66,24 @@ Prices per model live in the model catalog with an as-of date (Phase 9), not in 
 | Month | Infrastructure | AI | Notes |
 |---|---|---|---|
 | — | — | — | Filled from Phase 1 onward |
+
+## 6. Architecture upgrade (2026-10-23): execution, browser, authenticator
+
+Free or OSS options first. Prices are list prices to re-check on the day a service is created.
+
+| Item | Free or OSS option (first choice) | Paid option, if needed | Monthly cost | When |
+|---|---|---|---|---|
+| Action Gateway, router, limiter, breakers, retries, validation | aiolimiter (MIT), PyBreaker (BSD), Tenacity (Apache-2.0), Pydantic (MIT), all in existing processes | — | $0 | Phase 5 |
+| Queues, coordination, locks, idempotency | Postgres (existing Supabase) and advisory locks | Valkey (BSD; self-hosted $0 on an existing droplet, or a managed instance from about $15) only on measured need | $0 (Valkey $0–15 if ever added) | Phase 5; Valkey not planned |
+| `agent-worker` (automations, API and Internal channels) | — | DigitalOcean App Platform worker (PR #54) | $5 (up to $12) | Phase 5 |
+| LangGraph Postgres checkpointer | `langgraph-checkpoint-postgres` (MIT) on the existing database | — | $0 | Phase 8 |
+| `browser-worker` (Chromium, Playwright, Browser Use) | Playwright (Apache-2.0), Chromium, Browser Use (MIT) | App Platform worker with 1–2 GB ($12–24), or a basic droplet of 2 GB ($12) | $12–24 | Phase 8A |
+| Fixed egress IP for browser workers | A droplet's own static IP (included in the droplet price) | App Platform dedicated egress IP (up to $25) | $0–25 | Phase 8A |
+| Profile and export storage | Supabase Storage (within the Pro plan's 100 GB) | — | $0 | Phase 8A |
+| Monitoring: metrics and dashboards | Prometheus (Apache-2.0) and Grafana OSS (AGPL) self-hosted on the browser droplet, or the Grafana Cloud free tier (10k series, 14-day retention) | Grafana Cloud Pro (from about $19 plus usage) | $0 | Phase 5 (exposure), 8A (dashboards) |
+| Logs | structlog to the platform's existing log destinations | Log drain ($60, already listed as optional) | $0 | Existing |
+| Authenticator | PyOTP (MIT) on the existing vault | — | $0 | Phase 8B |
+| Browser Use model calls | Deterministic Playwright recipes first (no model) | Model calls under each employee's budget (Phase 9) | Within the AI budget (D-06) | Phase 8A |
+| **Not used** | — | AdsPower Professional, anti-detect browsers, static ISP or residential proxies per shop, hosted "stealth" browsers, CAPTCHA-solving services | $0 (declined, [ADR-0020](../adr/0020-per-shop-browser-environment.md)) | — |
+
+**Pilot total added by the upgrade:** about $17–29/month (the worker from PR #54 at $5, plus the browser worker at $12–24), with $0–25 more if App Platform's dedicated egress is chosen over a droplet's own IP (D-18).

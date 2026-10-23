@@ -22,6 +22,13 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 
 **Foundation already in code.** `htco_domain.improvement` implements the proposal lifecycle `DETECTED → PROPOSED → EVALUATING → APPROVED / REJECTED → DEVELOPMENT → TESTING → DEPLOYED → MEASURING → VERIFIED / ROLLED_BACK` (`OptimizationProposal`, `ProposalState`; a proposal needs acceptance criteria and a rollback plan before `PROPOSED`), tested in `tests/domain/test_lifecycles.py`. The metrics, store, automation, Omer's workflow and the measurement step are planned in this phase.
 
+## Architecture upgrade (2026-10-23)
+
+Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
+
+- Optimization measures cost per action and channel (API calls, browser minutes, model calls of Browser Use), not only per employee.
+- A typical proposal: replace a Browser Use path with a deterministic Playwright recipe, verified by the same result checks.
+
 ## Goal
 
 The office gets cheaper and better per unit of work, with evidence. Cost, latency, failure and quality are measured per unit of work, per employee and per department. **Omer** (Continuous Optimization Officer) finds waste (AI reasoning that could be a deterministic automation, expensive model choices, excessive tokens, repeated tool calls, duplicated workflows, inefficient handoffs) and writes structured proposals with a baseline, evidence, expected benefit, risk, rollback plan and acceptance criteria. Maya prioritizes; approved work becomes an engineering request implemented through pull requests and CI; after deployment Omer measures and recommends verify or roll back. **Omer proposes; he never implements, deploys, approves his own proposals or changes routing policies.**

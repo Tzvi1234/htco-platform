@@ -7,7 +7,7 @@ version = 1
 autonomy = "L1"
 readiness = "draft"
 activation_phase = 11
-allowed_tools = ["catalog.read", "catalog.create_draft", "pricing.calculate", "suppliers.read_quotes", "automation.trigger", "models.complete"]
+allowed_tools = ["catalog.read", "catalog.create_draft", "pricing.calculate", "suppliers.read_quotes", "automation.trigger", "models.complete", "etsy.listings.read", "etsy.listing_details.read", "etsy.inventory.read", "etsy.listing_shipping.read", "etsy.taxonomy.read", "etsy.shipping_profiles.read", "etsy.policies.read", "etsy.listings.update", "etsy.listing_properties.manage"]
 allowed_automations = ["catalog-draft-publishing"]
 
 [routing]
