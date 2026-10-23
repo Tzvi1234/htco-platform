@@ -85,6 +85,7 @@ class MemoryActionStore:
 class Approvals:
     requested: list[tuple[uuid.UUID, str]] = field(default_factory=list)
     approved: set[tuple[uuid.UUID, str]] = field(default_factory=set)
+    executions: list[tuple[uuid.UUID, uuid.UUID]] = field(default_factory=list)
 
     def request(
         self,
@@ -104,6 +105,9 @@ class Approvals:
 
     def is_approved(self, approval_id: uuid.UUID, *, request_hash: str) -> bool:
         return (approval_id, request_hash) in self.approved
+
+    def executed(self, approval_id: uuid.UUID, *, execution_id: uuid.UUID) -> None:
+        self.executions.append((approval_id, execution_id))
 
 
 @dataclass
