@@ -13,6 +13,10 @@ from opentelemetry.sdk.trace import TracerProvider
 
 from htco_api.access import access_router
 from htco_api.automations import AutomationServices, automations_router
+from htco_api.browser_environments import (
+    BrowserEnvironmentServices,
+    browser_environments_router,
+)
 from htco_api.diagnostics import diagnostics_router
 from htco_api.etsy import etsy_router
 from htco_api.health import health_router
@@ -129,6 +133,8 @@ class AppOptions:
     # Etsy webhooks (slice 5.3): without the ingress, `POST /webhooks/etsy` answers 404.
     etsy_webhooks: EtsyWebhookIngress | None = None
     etsy_webhook_limiter: WindowLimiter | None = None
+    # Browser environment statuses (slice 5.16), read only; without it, that route answers 503.
+    browser_environments: BrowserEnvironmentServices | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -176,6 +182,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.automations = options.automations
     app.state.etsy_webhooks = options.etsy_webhooks
     app.state.etsy_webhook_limiter = options.etsy_webhook_limiter
+    app.state.browser_environments = options.browser_environments
     app.state.clock = options.clock
     app.include_router(
         health_router(
@@ -193,6 +200,9 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
         automations_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES
     )
     app.include_router(webhooks_router(), responses=UNEXPECTED_ERROR_RESPONSES)
+    app.include_router(
+        browser_environments_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES
+    )
     if options.diagnostics:
         app.include_router(diagnostics_router(), responses=UNEXPECTED_ERROR_RESPONSES)
     add_problem_handlers(app)

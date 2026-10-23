@@ -180,8 +180,8 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `shop_browser_environments` | One per shop (optional): status (`NOT_CONFIGURED`, `PROVISIONING`, `READY`, `LOGIN_REQUIRED`, `DEGRADED`, `SUSPENDED`, `FAILED`), profile storage key, profile key ID, last health, last session, challenge count, consent reference, enabled actions | 5 (table and state machine), 8A |
-| `browser_environment_events` | Append-only transitions and health results with actor, reason and correlation ID | 5, 8A |
+| `shop_browser_environments` | One per shop (optional; created in `20261024200000`): status (`NOT_CONFIGURED`, `PROVISIONING`, `READY`, `LOGIN_REQUIRED`, `DEGRADED`, `SUSPENDED`, `FAILED`; created `PROVISIONING`, every change checked against the transition table by a trigger), consent (text version, user, time, address hash; all or none), profile storage key and key ID (8A), last health, last session, challenge count; no proxy or fingerprint columns (ADR-0020). RLS: Owner and Admin read their organization's rows (no consent or profile columns); the worker reads its job's organization's statuses. Enabled actions follow with the scope flags (8A) | 5 (table and state machine), 8A |
+| `browser_environment_events` | Append-only (created in `20261024200000`): `transition` rows (from, to, actor, reason, correlation ID; only the table's edges) and `health` rows (ok, problem codes) | 5, 8A |
 | `browser_sessions` | Each session: environment, execution, purpose, recipe, started and ended, outcome, preflight report, challenge kind | 8A |
 | `browser_artifacts` | Downloaded exports and challenge screenshots (by storage key and hash; screenshots kept 7 days) | 8A |
 | `browser_scope_flags` | Mirror of [etsy-automation-approval.md](etsy-automation-approval.md): action ID, scope version, flag state, changed by | 8A |

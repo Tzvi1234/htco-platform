@@ -409,6 +409,8 @@ Invariants (all tested):
 | `FAILED` | `PROVISIONING` | Owner re-provisions |
 | any | `NOT_CONFIGURED` | Owner deletes the environment: profile, credentials and TOTP destroyed (audited) |
 
+**As built (slice 5.16):** `htco_domain.browser` holds the table; `htco_application.browser_environments.EnvironmentRegistry` implements `ShopEnvironmentRegistry` (with a `correlation_id` on `create`, `transition` and `record_health`, and a compare-and-set on `expected`), and `EnvironmentBrowserGate` is the router's `BrowserGate`. The database repeats the table in `private.browser_environment_edge_allowed`.
+
 Only `READY` accepts browser actions. Every transition is recorded in `browser_environment_events` with actor, reason and correlation ID, and the database refuses any transition outside the table (trigger, as for `automation_executions`).
 
 ### Action execution (`action_executions.state`)

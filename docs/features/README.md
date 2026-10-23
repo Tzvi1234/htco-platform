@@ -22,3 +22,4 @@ Every feature has its own folder here, created from [`_template/`](_template/) a
 | [automation-engine](automation-engine/overview.md) | 5 | 5.10 built; first automations in 5.11 |
 | [action-gateway](action-gateway/overview.md) | 5 | 5.12 built; channels in 5.13 |
 | [orders-ingest](orders-ingest/overview.md) | 5 | 5.3 webhooks built (off behind a flag); 5.4 and 5.5 next |
+| [browser-environments](browser-environments/overview.md) | 5, 8A | 5.16 contracts, table and state machine built; the browser in 8A |
