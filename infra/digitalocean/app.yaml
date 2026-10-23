@@ -153,6 +153,16 @@ services:
       - key: HTCO_ETSY_REDIRECT_URI
         scope: RUN_TIME
         value: https://dash.ht-co.app/integrations/etsy/callback
+      # Etsy webhooks (slice 5.3): `POST /webhooks/etsy`, off until the owner registers the endpoint
+      # in the Etsy developer portal. The signing secret comes from the GitHub secret
+      # ETSY_WEBHOOK_SECRET (docs/features/orders-ingest/operations.md); blank means unset.
+      - key: HTCO_ETSY_WEBHOOKS_ENABLED
+        scope: RUN_TIME
+        value: "false"
+      - key: HTCO_ETSY_WEBHOOK_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_ETSY_WEBHOOK_SECRET}
 # The agent-worker (slice 5.1, ADR-0007): the API's image running the job queue's worker. It
 # connects to the same database and switches to the `htco_worker` role. Its scheduled jobs run only
 # when named in HTCO_WORKER_SCHEDULES. A fixed-size instance, $5 per month, that cannot scale.

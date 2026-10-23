@@ -98,6 +98,36 @@ class Listing:
     updated_at: datetime
 
 
+# Webhook re-reads (slice 5.3): a listing's state and its stock, as Etsy reports them now.
+
+
+@dataclass(frozen=True)
+class ListingSnapshot:
+    """A listing as `getListing` reports it, with the shop it belongs to."""
+
+    listing_id: int
+    etsy_shop_id: int
+    state: str
+    quantity: int
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class ProductStock:
+    product_id: int
+    quantity: int  # enabled offerings, summed
+
+
+@dataclass(frozen=True)
+class InventorySnapshot:
+    listing_id: int
+    products: tuple[ProductStock, ...]
+
+    @property
+    def total_quantity(self) -> int:
+        return sum(p.quantity for p in self.products)
+
+
 @dataclass(frozen=True)
 class ReceiptAddressCheck:
     """Whether the newest receipt carries the buyer's shipping address (slice 4.5).
