@@ -137,7 +137,11 @@ async def test_backfill_through_the_adapter__gets_only_and_every_page() -> None:
     assert [r.method for r in etsy.requests] == ["GET", "GET", "GET"]
     assert [r.url.params["offset"] for r in etsy.requests] == ["0", "2", "0"]
     assert "min_created" not in etsy.requests[0].url.params
-    assert "min_created" in etsy.requests[2].url.params
+    assert "min_last_modified" not in etsy.requests[0].url.params
+    # The incremental sync reads what changed in the last 30 days, whenever it was ordered: a
+    # late refund or cancellation of an older order reaches the store (post-merge review).
+    assert "min_created" not in etsy.requests[2].url.params
+    assert "min_last_modified" in etsy.requests[2].url.params
     assert sorted(receipt_id for _, receipt_id in store.orders) == [1, 2, 3]
     for personal in (FAKE_NAME, "FAKE-LINE-ONE", FAKE_NOTE):
         assert personal not in logs.raw()

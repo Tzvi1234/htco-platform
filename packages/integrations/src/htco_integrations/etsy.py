@@ -131,8 +131,10 @@ def app_key_fingerprint(keystring: str) -> str:
     """The first 16 hex characters of the keystring's SHA-256: enough to tell two apps apart,
     never the key itself. Tokens are issued per app, so a connection whose fingerprint differs
     from the configured key's cannot work and is treated as `needs_reauth` without calling Etsy.
+    Whitespace around the key is ignored: the same key re-entered with a trailing newline is the
+    same app, and must not mark every healthy connection `needs_reauth`.
     """
-    return hashlib.sha256(keystring.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(keystring.strip().encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass(frozen=True)
@@ -388,18 +390,22 @@ class EtsyAdapter:
         shop_id: int,
         *,
         min_created: datetime | None,
+        min_last_modified: datetime | None = None,
         limit: int = MAX_PAGE_SIZE,
         offset: int = 0,
         urgent: bool = False,
         tokens: AccessTokenProvider | None = None,
     ) -> Page[OrderReceipt]:
-        """getShopReceipts created since `min_created` (None: the whole history), newest first
-        (`transactions_r`), with no status filter. Buyer data is minimised here: only a display
-        name and the destination country are kept (see `OrderReceipt`)."""
+        """getShopReceipts created since `min_created` and changed since `min_last_modified`
+        (None: no bound), newest first by creation (`transactions_r`), with no status filter.
+        Buyer data is minimised here: only a display name and the destination country are kept
+        (see `OrderReceipt`)."""
         _check_page(limit, offset)
         params: dict[str, str | int] = {}
         if min_created is not None:
             params["min_created"] = _epoch(min_created, "min_created")
+        if min_last_modified is not None:
+            params["min_last_modified"] = _epoch(min_last_modified, "min_last_modified")
         params |= {
             "sort_on": "created",
             "sort_order": "desc",

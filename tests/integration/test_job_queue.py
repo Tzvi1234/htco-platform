@@ -29,6 +29,7 @@ from htco_domain.integrations import IntegrationStatus, ShopCapability
 from htco_domain.jobs import FailurePlan, JobState, Schedule
 from htco_persistence.database import Database, tenant_scope
 from htco_persistence.etsy_connect import PostgresShopConnector
+from htco_persistence.etsy_orders import PostgresOrderStore
 from htco_persistence.jobs import PostgresJobQueue, PostgresWorkerHeartbeats
 from htco_persistence.maintenance import PostgresPurgeStore, PostgresShopDirectory
 from htco_persistence.shop_integrations import PostgresCapabilityStore, PostgresTokenVault
@@ -36,6 +37,7 @@ from htco_platform.crypto import EnvelopeSealer, KeyRing
 from htco_worker.runner import JobHandler, Worker, WorkerConfig
 from tests.etsy_fakes import Pinning, Probe
 from tests.integration.test_etsy_connection import Tenant, _url, etsy_ids, request_for, scalar
+from tests.integration.test_order_history import TABLES, count, order
 from tests.job_fakes import MemoryHeartbeats
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -603,7 +605,7 @@ async def test_purge__deletes_only_the_disconnected_shops_data_and_only_after_it
         purged = await store.purge(target, now=NOW + timedelta(days=31), audit=audit)
         again = await store.purge(target, now=NOW + timedelta(days=32), audit=audit)
 
-    assert purged == {"shop_capabilities": 2}
+    assert purged == {"shop_capabilities": 2, "etsy_orders": 0, "etsy_order_sync_state": 0}
     assert again is None
     assert count_capabilities(admin, leaving) == 0
     assert count_capabilities(admin, staying) == 2
@@ -616,7 +618,74 @@ async def test_purge__deletes_only_the_disconnected_shops_data_and_only_after_it
         admin,
         "select after from audit.audit_log where id = %s",
         [audit.id],
-    ) == {"deleted": {"shop_capabilities": 2}}
+    ) == {"deleted": {"shop_capabilities": 2, "etsy_orders": 0, "etsy_order_sync_state": 0}}
+
+
+@pytest.mark.ac("AC-5.1.6")
+async def test_purge__deletes_the_shops_stored_order_history_with_its_buyer_rows(
+    worker_db: Database, admin: Database, ring: KeyRing
+) -> None:
+    """Post-merge review (P1): the worker's purge deleted the probe results only, then cleared
+    `purge_after`, so `private.purge_disconnected_etsy_orders` never matched the shop again and
+    the disconnected shop's buyer names and addresses were kept for ever. The purge deletes the
+    stored orders (items, refunds and buyer rows with them) and the sync state too."""
+    tenant = Tenant(admin)
+    leaving = await connected_shop(admin, ring, tenant)
+    staying = await connected_shop(admin, ring, tenant)
+    admin_vault = PostgresTokenVault(admin, EnvelopeSealer(ring))
+    orders = PostgresOrderStore(admin)
+    for shop, receipt_id in ((leaving, 51), (staying, 52)):
+        integration = await admin_vault.describe(shop)
+        assert integration is not None
+        await orders.save_backfill_page(integration, [order(receipt_id)], next_offset=None, now=NOW)
+    await admin_vault.disconnect(leaving, purge_after=NOW + timedelta(days=30))
+    audit = AuditRecord.new(
+        organization_id=tenant.organization_id,
+        actor=SCHEDULER,
+        action="shop.purged",
+        entity_type="shop",
+        entity_id=str(leaving),
+    )
+
+    with tenant_scope(tenant.organization_id):
+        purged = await PostgresPurgeStore(worker_db).purge(
+            TenantShop(tenant.organization_id, leaving),
+            now=NOW + timedelta(days=31),
+            audit=audit,
+        )
+
+    assert purged == {"shop_capabilities": 0, "etsy_orders": 1, "etsy_order_sync_state": 1}
+    assert [count(admin, table, leaving) for table in TABLES] == [0, 0, 0, 0, 0]
+    assert [count(admin, table, staying) for table in TABLES] == [1, 1, 1, 1, 1]
+
+
+async def test_worker_role__never_reads_buyer_rows_or_another_organizations_orders(
+    worker_db: Database, admin: Database, ring: KeyRing
+) -> None:
+    """The purge's grants are the least it needs: the worker reads no buyer row, and it deletes
+    no order of another organization."""
+    tenant, other = Tenant(admin), Tenant(admin)
+    theirs = await connected_shop(admin, ring, other)
+    integration = await PostgresTokenVault(admin, EnvelopeSealer(ring)).describe(theirs)
+    assert integration is not None
+    await PostgresOrderStore(admin).save_backfill_page(
+        integration, [order(53)], next_offset=None, now=NOW
+    )
+
+    with tenant_scope(tenant.organization_id), worker_db.connection() as connection:
+        deleted = connection.execute(
+            "delete from app.etsy_orders where shop_id = %s", [theirs]
+        ).rowcount
+        assert deleted == 0
+        with pytest.raises(errors.InsufficientPrivilege):
+            connection.execute("select buyer_name from app.etsy_order_buyers").fetchall()
+    with (
+        tenant_scope(other.organization_id),
+        worker_db.connection() as connection,
+        pytest.raises(errors.InsufficientPrivilege),
+    ):
+        connection.execute("select buyer_name from app.etsy_order_buyers").fetchall()
+    assert count(admin, "etsy_orders", theirs) == 1
 
 
 async def test_purge__in_another_organizations_scope__finds_nothing_to_purge(

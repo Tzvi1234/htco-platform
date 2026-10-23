@@ -10,8 +10,10 @@ the backfill is complete; until then they keep reading Etsy live and say the his
   one transaction, so a crash or restart resumes from the checkpoint and a replay changes
   nothing. Etsy lists newest first: orders placed during the backfill push older ones to later
   offsets, which only repeats a few (upserted again), never skips one.
-- **Incremental:** the last 30 days read again and upserted, so new orders, status changes,
-  shipments, refunds and cancellations land in the store.
+- **Incremental:** every receipt *changed* in the last 30 days (`min_last_modified`), whenever
+  it was ordered, read again and upserted, so new orders, status changes, shipments, refunds
+  and cancellations land in the store, also a late refund of an older order (post-merge review
+  of 2026-10-23: reading by creation date missed those).
 - **No worker yet** (Phase 5): a read of Orders, Statistics or Overview starts a background task
   in the API process when the backfill is missing or the last sync is older than 10 minutes,
   never blocking the request. A Postgres advisory lock per shop lets one run at a time across
@@ -161,6 +163,7 @@ class ReceiptSource(Protocol):
         shop_id: int,
         *,
         min_created: datetime | None,
+        min_last_modified: datetime | None = None,
         limit: int = PAGE,
         offset: int = 0,
         urgent: bool = False,
@@ -283,7 +286,7 @@ class OrderSync:
     ) -> None:
         next_offset: int | None = offset
         while next_offset is not None:
-            page = await self._read(integration, tokens, since=None, offset=next_offset)
+            page = await self._read(integration, tokens, offset=next_offset)
             next_offset = page.next_offset
             await self.store.save_backfill_page(
                 integration, page.items, next_offset=next_offset, now=self._clock()
@@ -294,7 +297,7 @@ class OrderSync:
         since = started - timedelta(days=INCREMENTAL_DAYS)
         offset: int | None = 0
         while offset is not None:
-            page = await self._read(integration, tokens, since=since, offset=offset)
+            page = await self._read(integration, tokens, changed_since=since, offset=offset)
             offset = page.next_offset
             await self.store.save_incremental_page(
                 integration,
@@ -308,7 +311,7 @@ class OrderSync:
         integration: ShopIntegration,
         tokens: AccessTokenProvider,
         *,
-        since: datetime | None,
+        changed_since: datetime | None = None,
         offset: int,
     ) -> Page[OrderReceipt]:
         """One page, routine (never urgent). A 429 that outlasted the adapter's own waits is
@@ -317,7 +320,8 @@ class OrderSync:
             try:
                 return await self._source.list_order_receipts(
                     integration.etsy_shop_id,
-                    min_created=since,
+                    min_created=None,
+                    min_last_modified=changed_since,
                     limit=PAGE,
                     offset=offset,
                     tokens=tokens,

@@ -16,9 +16,10 @@ from htco_application.maintenance import TenantShop
 from htco_persistence.audit import append_audit
 from htco_persistence.database import Database
 
-# The shop's synced data, table by table. Phase 5 adds orders, items and shipments here, except
-# what legal retention keeps (DATA_MODEL §6).
-_PURGED_TABLES = ("app.shop_capabilities",)
+# The shop's synced data, table by table: the probe results and the stored order history (the
+# order's items, refunds and buyer row cascade from it; post-merge review of 2026-10-23). Legal
+# retention keeps nothing of it yet (DATA_MODEL §6).
+_PURGED_TABLES = ("app.shop_capabilities", "app.etsy_orders", "app.etsy_order_sync_state")
 
 
 class PostgresShopDirectory:
@@ -63,12 +64,11 @@ class PostgresPurgeStore:
                 return None
             deleted: dict[str, int] = {}
             for table in _PURGED_TABLES:
-                rows = connection.execute(
-                    f"delete from {table} where organization_id = %s and shop_id = %s "  # noqa: S608 - constant table names
-                    "returning id",
+                # The row count, not `returning`: the worker reads no column it does not need.
+                deleted[table.removeprefix("app.")] = connection.execute(
+                    f"delete from {table} where organization_id = %s and shop_id = %s",  # noqa: S608 - constant table names
                     [shop.organization_id, shop.shop_id],
-                ).fetchall()
-                deleted[table.removeprefix("app.")] = len(rows)
+                ).rowcount
             # Purged: no date left to wait for (the disconnect date stays, for the record).
             connection.execute(
                 """
