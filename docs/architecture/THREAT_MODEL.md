@@ -116,7 +116,7 @@ Controls are built into the phases where the risk first appears:
 
 | Phase | Controls delivered |
 |---|---|
-| 1 | Secret scanning (gitleaks), dependency and static-analysis scans, SHA-pinned actions, error envelope without internals, structured logs without PII, error monitoring with PII scrubbing |
+| 1 | Secret scanning (gitleaks), dependency and static-analysis scans, SHA-pinned actions, error envelope without internals, structured logs without PII, error monitoring with PII scrubbing; exception messages from libraries (a database error's DETAIL line can quote a buyer row) are replaced by their type and SQLSTATE in logs and Sentry (`htco_platform.scrubbing`, slice 5.9) |
 | 2 | RLS and authorization model, MFA enforcement, audit schema, two-tenant test matrix |
 | 3 | BFF sessions, CSRF, CSP and security headers, step-up re-authentication, password reset and MFA recovery, new-device sign-in records |
 | 4 | Token encryption, OAuth state and PKCE, capability probes |

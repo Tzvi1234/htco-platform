@@ -16,6 +16,8 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol, override, runtime_checkable
 
+from htco_domain.orders import OrderState
+
 _CURRENCY = re.compile(r"^[A-Z]{3}$")
 
 
@@ -308,6 +310,8 @@ class OrderReceipt:
     shipping_address: ShippingAddress | None = field(default=None, repr=False)
     # Refunds with their reason, oldest first (empty when none).
     refunds: tuple[OrderRefund, ...] = ()
+    # The order state machine's state as stored (FR-ORD-03); None for a receipt read live.
+    stored_state: OrderState | None = None
 
 
 @dataclass(frozen=True)

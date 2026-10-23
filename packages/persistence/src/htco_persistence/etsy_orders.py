@@ -26,12 +26,13 @@ from htco_application.marketplace import (
     ShippingAddress,
     display_name,
 )
-from htco_application.order_history import SyncState
+from htco_application.order_history import OrderStatusChange, SyncState
 from htco_application.order_ingest import (
     BACKFILL,
     SYNC,
     IngestContext,
     IngestPlan,
+    IngestSource,
     StoredFacts,
     StoredOrder,
     plan_ingest,
@@ -149,11 +150,20 @@ select o.receipt_id, o.status, o.is_paid, o.is_shipped,
        o.subtotal_amount, o.subtotal_divisor, o.subtotal_currency,
        o.shipping_amount, o.shipping_divisor, o.shipping_currency,
        o.discount_amount, o.discount_divisor, o.discount_currency,
-       o.country_code, o.shipments, o.etsy_created_at, o.etsy_updated_at
+       o.country_code, o.shipments, o.etsy_created_at, o.etsy_updated_at, o.order_state
 from app.etsy_orders o
 where o.shop_id = %s and o.etsy_shop_id = %s
   and (%s::timestamptz is null or o.etsy_created_at >= %s::timestamptz)
+  and (%s::bigint is null or o.receipt_id = %s::bigint)
 order by o.etsy_created_at desc, o.receipt_id desc
+"""
+
+# Oldest first; uuid7 IDs keep the transitions of one ingest in the order they were recorded.
+_TIMELINE = """
+select from_state, to_state, source, observed_at
+from app.order_status_events
+where shop_id = %s and receipt_id = %s
+order by observed_at, id
 """
 
 _ITEMS = """
@@ -164,6 +174,7 @@ from app.etsy_order_items i
 join app.etsy_orders o on o.shop_id = i.shop_id and o.receipt_id = i.receipt_id
 where i.shop_id = %s and o.etsy_shop_id = %s
   and (%s::timestamptz is null or o.etsy_created_at >= %s::timestamptz)
+  and (%s::bigint is null or o.receipt_id = %s::bigint)
 order by i.receipt_id, i.position
 """
 
@@ -174,6 +185,7 @@ from app.etsy_order_refunds r
 join app.etsy_orders o on o.shop_id = r.shop_id and o.receipt_id = r.receipt_id
 where r.shop_id = %s and o.etsy_shop_id = %s
   and (%s::timestamptz is null or o.etsy_created_at >= %s::timestamptz)
+  and (%s::bigint is null or o.receipt_id = %s::bigint)
 order by r.receipt_id, r.position
 """
 
@@ -184,6 +196,7 @@ from app.etsy_order_buyers b
 join app.etsy_orders o on o.shop_id = b.shop_id and o.receipt_id = b.receipt_id
 where b.shop_id = %s and o.etsy_shop_id = %s
   and (%s::timestamptz is null or o.etsy_created_at >= %s::timestamptz)
+  and (%s::bigint is null or o.receipt_id = %s::bigint)
 """
 
 
@@ -642,8 +655,44 @@ class PostgresOrderStore:
         since: datetime | None,
         buyer_data: bool,
     ) -> tuple[OrderReceipt, ...]:
+        return await self._read(shop_id, etsy_shop_id, since=since, receipt_id=None,
+                                buyer_data=buyer_data)  # fmt: skip
+
+    async def load_order(
+        self, shop_id: uuid.UUID, etsy_shop_id: int, receipt_id: int, *, buyer_data: bool
+    ) -> OrderReceipt | None:
+        found = await self._read(
+            shop_id, etsy_shop_id, since=None, receipt_id=receipt_id, buyer_data=buyer_data
+        )
+        return found[0] if found else None
+
+    async def timeline(self, shop_id: uuid.UUID, receipt_id: int) -> tuple[OrderStatusChange, ...]:
+        def run() -> tuple[OrderStatusChange, ...]:
+            with self._database.connection() as connection:
+                rows = connection.execute(_TIMELINE, [shop_id, receipt_id]).fetchall()
+            return tuple(
+                OrderStatusChange(
+                    from_state=None if row[0] is None else OrderState(row[0]),
+                    to_state=OrderState(row[1]),
+                    source=IngestSource(row[2]),
+                    observed_at=row[3],
+                )
+                for row in rows
+            )
+
+        return await anyio.to_thread.run_sync(run)
+
+    async def _read(
+        self,
+        shop_id: uuid.UUID,
+        etsy_shop_id: int,
+        *,
+        since: datetime | None,
+        receipt_id: int | None,
+        buyer_data: bool,
+    ) -> tuple[OrderReceipt, ...]:
         def run() -> tuple[OrderReceipt, ...]:
-            window = [shop_id, etsy_shop_id, since, since]
+            window = [shop_id, etsy_shop_id, since, since, receipt_id, receipt_id]
             with self._database.connection() as connection:
                 orders = connection.execute(_ORDERS, window).fetchall()
                 items = connection.execute(_ITEMS, window).fetchall()
@@ -744,6 +793,7 @@ def _receipts(
                     for s in shipments
                 ),
                 refunds=tuple(refunded.get(receipt_id, ())),
+                stored_state=None if row[20] is None else OrderState(row[20]),
                 buyer_name=None if buyer is None else buyer[1],
                 buyer_display_name=None if buyer is None else display_name(buyer[1]),
                 shipping_address=None
