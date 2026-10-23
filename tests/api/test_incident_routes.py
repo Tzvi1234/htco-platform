@@ -38,9 +38,15 @@ class Reader:
         self.store = store
 
     def list_incidents(
-        self, organization_id: uuid.UUID, *, open_only: bool, limit: int
+        self,
+        organization_id: uuid.UUID,
+        *,
+        open_only: bool,
+        limit: int,
+        shop_ids: frozenset[uuid.UUID] | None = None,
     ) -> Sequence[IncidentRecord]:
         rows = [i for i in self.store.incidents.values() if i.organization_id == organization_id]
+        rows = [i for i in rows if shop_ids is None or i.shop_id in shop_ids]
         return [i for i in rows if i.state.is_open or not open_only][:limit]
 
     def incident_detail(
@@ -219,3 +225,14 @@ async def test_inbox__the_callers_own_notifications_and_unread_count() -> None:
     assert [n["params"]["receipt_id"] for n in body["items"]] == ["7"]
     assert marked.status_code == 204
     assert world.inbox.read == [None]
+
+
+async def test_list__the_shop_scope_applies_before_the_limit() -> None:
+    """Codex review of #87: many newer incidents of other shops never hide the granted shop's."""
+    world = World(Role.OPERATIONS, frozenset({SHOP}))
+    await world.incident(SHOP, 7)
+    for receipt in range(100, 300):
+        await world.incident(OTHER_SHOP, receipt)
+    async with world.client() as http:
+        items = (await http.get("/v1/incidents")).json()["items"]
+    assert [i["receipt_id"] for i in items] == [7]

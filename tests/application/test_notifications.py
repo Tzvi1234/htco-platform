@@ -378,3 +378,36 @@ def test_device_families_and_requests() -> None:
         notification_requested(
             NotificationRequest(ORG, NotificationKind.SHOP_CONNECTED, "k", {"name": FAKE_BUYER})
         )
+
+
+async def test_email_only_preference_writes_no_visible_in_app_notification() -> None:
+    """Codex review of #87: in_app=False hides the row from the bell; the email still goes."""
+    store = members()
+    store.members[0].recipient = Recipient(OWNER, preference=Preference(in_app=False, email=True))
+    service = NotificationService(store, clock=lambda: NOW)
+
+    await IncidentNotifications(service).handle(opened_event())
+
+    owner_row = store.rows[(ORG, OWNER, f"incident_opened:{INCIDENT}")]
+    assert owner_row.in_app is False
+    assert any(m.payload["user_id"] == str(OWNER) for m in store.outbox.values())
+
+
+async def test_a_resolved_incident_notifies_once() -> None:
+    """Codex review of #87: `incidents.resolved.v1` has a subscriber."""
+    store = members()
+    service = NotificationService(store, clock=lambda: NOW)
+    resolved = OutboxMessage(
+        organization_id=ORG, shop_id=SHOP, destination=EVENTS,
+        idempotency_key=f"incidents.resolved.v1:{INCIDENT}",
+        payload={"event_type": "incidents.resolved.v1", "incident_id": str(INCIDENT),
+                 "cause": "tracking_missing", "severity": "medium", "receipt_id": 4000000001},
+    )  # fmt: skip
+    deliverer = EventDeliverer({"incidents.resolved.v1": IncidentNotifications(service)})
+
+    await deliverer.deliver(delivery(resolved))
+    await deliverer.deliver(delivery(resolved))
+
+    kinds = {(n.kind, n.dedup_key) for n in store.rows.values()}
+    assert kinds == {(NotificationKind.INCIDENT_RESOLVED, f"incident_resolved:{INCIDENT}")}
+    assert store.outbox == {}  # resolutions are in-app only by default
