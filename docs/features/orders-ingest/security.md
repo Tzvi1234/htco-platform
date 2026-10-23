@@ -16,4 +16,6 @@
 | Contact data (5.4) | The adapter never reads it; no column can hold it | `test_get_order_receipt__fake_contact_values_are_never_kept`, `test_schema__no_column_can_hold_contact_data` |
 | The worker reading money or buyer values (5.4) | Column-level grants: order state, times, hash, flags and item quantities only; the buyer row is written and replaced, never read | pgTAP `17_order_intake` |
 | A write from an automation (5.4) | The worker's gateway waits for an approval no one can give there; the channel is never called | `test_write__through_the_worker_parts__waits_and_never_reaches_a_channel` |
+| Drift values (5.5) | Statuses, item IDs and quantities, shipment carriers and times only; no money, name, address or tracking number | `test_drift_event__orders_drift_detected_with_no_buyer_data`, pgTAP `18_order_reconciliation` |
+| Reconciliation's Etsy load (5.5) | Every read passes the gateway's app-wide limiter; past the budget a read is deferred and Etsy is not called | `test_budget__the_gateways_limiter_enforces_it` |
 | Cross-tenant ingest (5.4) | RLS on every table in the job's organization | `test_worker__another_organizations_scope_writes_nothing`, pgTAP `17_order_intake` |

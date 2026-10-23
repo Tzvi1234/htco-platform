@@ -20,7 +20,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 - [x] 5.2 Inbox and outbox (PR #55; aligned: migration `20261023130000_inbox_outbox.sql`, pgTAP `11_inbox_outbox`, `action_execution_id` and `correlation_id` on outbox messages)
 - [x] 5.3 Webhook ingress for all 11 Etsy events (behind `HTCO_ETSY_WEBHOOKS_ENABLED`, off; migration `20261024100000_etsy_webhook_intake.sql`, pgTAP `15_etsy_webhook_intake`; the owner registers the endpoint and the `ETSY_WEBHOOK_SECRET`, see [orders-ingest operations](../../features/orders-ingest/operations.md#registering-the-webhook-in-the-etsy-developer-portal))
 - [x] 5.4 Receipt ingest on the order history store (#57) (migration `20261024210000_order_intake.sql`, pgTAP `17_order_intake`; the worker's gateway is real for reads behind `HTCO_WORKER_ACTION_GATEWAY`; the API's sync stays as the fallback behind `HTCO_ORDER_SYNC_IN_API` until 5.11; Etsy fees are not estimated yet: the receipt carries none, they come with the ledger in Phase 13)
-- [ ] 5.5 Reconciliation and backfill on the queue
+- [x] 5.5 Reconciliation and backfill on the queue (migration `20261024220000_order_reconciliation.sql`, pgTAP `18_order_reconciliation`; the owner's decision of 2026-10-24: webhooks first, reconciliation twice a day by `HTCO_RECONCILIATION_SCHEDULE` in `HTCO_RECONCILIATION_TZ`, default 06:00 and 18:00 Asia/Jerusalem, the second run the full sweep with every paid, unshipped order; the hourly tick `orders.reconciliation` is off until named in `HTCO_WORKER_SCHEDULES`; drifts in `sync_drifts`; 8 Etsy calls a day for the pilot shop)
 - [ ] 5.6 Orders API
 - [ ] 5.7 Orders UI
 - [ ] 5.8 Drills
@@ -257,8 +257,9 @@ Etsy Order Intake fetches the receipt through the gateway (`etsy.receipts.read`,
 
 The #57 backfill and 30-day re-read become jobs of Etsy Order Intake:
 
-- a schedule per shop (every 10 minutes, or as the rate budget allows);
-- a nightly 30-day sweep;
+- a schedule per shop, **twice a day** by default (the owner's decision of 2026-10-24: webhooks are the primary path for new orders): `HTCO_RECONCILIATION_SCHEDULE` in `HTCO_RECONCILIATION_TZ` (default 06:00 and 18:00 Asia/Jerusalem, the same local times across DST); each run re-reads the last 30 days by `min_last_modified`;
+- the day's second run is the full sweep: also every paid, unshipped order with no period limit (`was_paid=true`, `was_shipped=false`) and Etsy's receipt count against the store's;
+- Call budget (placeholder `etsy:app` 5,000 a day): calls per run times runs per day. A reconcile reads the 30-day pages (100 receipts a page); the sweep reads them too, plus the open orders' pages and one count read. The pilot (up to 300 receipts changed in 30 days, up to 100 open orders): 3 + (3 + 1 + 1) = 8 calls a day per shop, so the budget covers about 625 such shops before backfills, the dashboard and webhook re-reads.
 - a "stale on open" trigger from the dashboard, which enqueues and never runs in the API process;
 - the Owner's manual sync.
 

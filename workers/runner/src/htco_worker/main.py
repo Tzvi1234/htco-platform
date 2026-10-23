@@ -13,7 +13,7 @@ import signal
 import sys
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta, tzinfo
 
 import anyio
 import httpx
@@ -54,7 +54,6 @@ from htco_application.maintenance import (
     PRUNE_SCHEDULE,
     PURGE_JOB,
     PURGE_SCHEDULE,
-    SCHEDULES,
     ExpiryVault,
     PurgeStore,
     ShopDirectory,
@@ -76,8 +75,11 @@ from htco_application.messaging import (
 )
 from htco_application.order_intake import (
     ORDER_SYNC_JOB,
+    RECONCILIATION_TICK,
     EngineSyncTrigger,
     OrderIntake,
+    due_reconciliations,
+    enqueue_reconciliations,
 )
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.workforce.files import read_action_catalog, read_registry
@@ -113,7 +115,7 @@ from htco_platform.settings import ConfigurationError, load_settings
 from htco_platform.tracing import new_tracer_provider
 from htco_worker.health import serve_health
 from htco_worker.runner import JobHandler, Worker, WorkerConfig
-from htco_worker.settings import WorkerSettings
+from htco_worker.settings import SCHEDULES, WorkerSettings
 
 EXIT_CONFIGURATION_ERROR = 78
 # sysexits.h EX_TEMPFAIL: stopped before the current job finished; its lease brings it back.
@@ -309,6 +311,33 @@ def intake_handlers(database: Database, vault: PostgresTokenVault) -> dict[str, 
     return {ORDER_INTAKE: OrderIntake(store=PostgresOrderStore(database), shops=vault, clock=_now)}
 
 
+def reconciliation_handlers(  # noqa: PLR0913 - the tick and its collaborators
+    enabled: tuple[str, ...],
+    *,
+    queue: JobQueue,
+    directory: ShopDirectory,
+    times: tuple[time, ...],
+    tz: tzinfo,
+    clock: Callable[[], datetime] = _now,
+) -> dict[str, JobHandler]:
+    """The hourly reconciliation tick (slice 5.5), when named: in the hour of a configured time
+    it enqueues one `etsy.order_sync` job per connected shop (the sweep for the day's last time,
+    a reconcile otherwise), which `order_sync_handlers` runs."""
+    if RECONCILIATION_TICK.kind not in enabled:
+        return {}
+
+    def tick() -> int:
+        now = clock()
+        return sum(
+            enqueue_reconciliations(
+                directory, queue, reason=run.reason, slot=run.slot, now=now, run_at=run.at
+            )
+            for run in due_reconciliations(times, now=now, tz=tz)
+        )
+
+    return {RECONCILIATION_TICK.kind: _in_thread(tick, "orders.reconciliations_enqueued")}
+
+
 def order_sync_handlers(engine: DurableAutomationEngine) -> dict[str, JobHandler]:
     """The `etsy.order_sync` job (slice 5.4): a requested history run of the shop's orders."""
     trigger = EngineSyncTrigger(engine, offload=anyio.to_thread.run_sync)
@@ -412,6 +441,13 @@ async def _serve(settings: WorkerSettings) -> None:
     if adapter is not None:  # webhook and sync jobs wait in the queue until Etsy is configured
         handlers |= webhook_handlers(webhook_processor(database, engine, adapter))
         handlers |= order_sync_handlers(engine)
+        handlers |= reconciliation_handlers(
+            settings.schedules,
+            queue=queue,
+            directory=PostgresShopDirectory(database),
+            times=settings.reconciliation_times,
+            tz=settings.reconciliation_zone,
+        )
     worker = Worker(
         queue,
         PostgresWorkerHeartbeats(database),

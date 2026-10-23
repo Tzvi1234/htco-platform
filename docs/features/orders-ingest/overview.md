@@ -33,14 +33,22 @@ Every paid Etsy order must reach HTCO exactly once, quickly, whether or not Etsy
 | AC-5.4.4 | All money uses `Decimal` with currency; a float anywhere in the money path fails a test. |
 | AC-5.4.5 | Every allowed order transition (FR-ORD-03) is tested, each illegal transition is rejected, and every transition records its source and `observed_at`. |
 | AC-5.4.6 | Webhook ingest and the #57 sync write through the same upsert; no second order table exists (schema inventory test). A receipt fixture with fake contact values stores none of them (ADR-0018). |
+| AC-5.5.1 | With webhooks disabled, every receipt in a 200-receipt fixture is ingested by reconciliation alone. |
+| AC-5.5.2 | A receipt whose webhook was lost is ingested within one reconciliation interval. |
+| AC-5.5.3 | The daily Etsy call count for all connected shops (backfill included) stays inside the app's rate-limit budget, computed in a test from the schedule and enforced by the 5.15 limiter. |
+| AC-5.5.4 | A difference between a stored order and Etsy (status, items or shipments) is recorded in `sync_drifts` with both values and emits `orders.drift_detected.v1`; from Phase 6 it opens an incident (FR-ORD-09). |
+| AC-5.5.5 | No order sync runs in the API process any more; a dashboard read on a stale shop enqueues one job, and returns at once with the store's data and its age. |
 
 ## Etsy Order Intake (slice 5.4)
 
 The `etsy-order-intake` automation's handler runs on the worker's durable engine. Its Etsy reads go through the Action Gateway (`etsy.receipts.read`, the API channel's order history form). Its writes go to the #57 store through one ingest path shared with the backfill and the 30-day sync: the order with its items, refunds and buyer row; the order state and every transition (`app.order_status_events`); estimated revenue and refund lines (`app.financial_entries`); and the `orders.*` events. A webhook's receipt and a requested history run (the dashboard's stale read, the Owner's manual sync) are its two kinds of run. The API process keeps its own sync only as the fallback behind `HTCO_ORDER_SYNC_IN_API` (on until 5.11).
 
+## Reconciliation (slice 5.5)
+
+Reconciliation runs **twice a day** once its tick is named (the owner's decision of 2026-10-24: webhooks are the primary path for new orders; until they are registered, the API's on-read sync behind `HTCO_ORDER_SYNC_IN_API` keeps the dashboard fresh). The hourly tick `orders.reconciliation` enqueues, at each time of `HTCO_RECONCILIATION_SCHEDULE` (local times in `HTCO_RECONCILIATION_TZ`, default 06:00 and 18:00 Asia/Jerusalem), one `etsy.order_sync` job per connected shop for Etsy Order Intake. Every run re-reads each receipt changed in the last 30 days (`min_last_modified`), compares it with the store, records each difference in `app.sync_drifts` with both values, publishes `orders.drift_detected.v1` and ingests it. The day's last run is the full sweep: it also reads every paid, unshipped receipt with no period limit (`was_paid=true`, `was_shipped=false`, the Shipping screen's open orders) and compares Etsy's receipt count with the store's. Each run's end is kept in `app.sync_cursors` (the shop's freshness).
+
 ## Out of scope (this slice)
 
-- Reconciliation, the nightly sweep, drifts (5.5).
 - Etsy fees: the receipt carries none; fee lines come with the payment ledger (Phase 13).
 - A listing cache: listing and stock events publish what the re-read shows; Listing Health (Phase 11) and price and stock monitoring (Phase 13) consume them.
 - Activating Etsy Order Intake (5.11, the owner's approval): until then the engine refuses it, the refusal is logged, and the order arrives through reconciliation.

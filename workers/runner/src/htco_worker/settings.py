@@ -2,14 +2,27 @@
 
 import os
 import socket
+from datetime import time
 from pathlib import Path
 from typing import Literal, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from htco_application.maintenance import EXPIRY_SCHEDULE, PROBE_SCHEDULE, SCHEDULES
+from htco_application.maintenance import EXPIRY_SCHEDULE, PROBE_SCHEDULE
+from htco_application.maintenance import SCHEDULES as MAINTENANCE_SCHEDULES
+from htco_application.order_intake import (
+    DEFAULT_RECONCILIATION_TIMES,
+    DEFAULT_RECONCILIATION_TZ,
+    ORDER_SCHEDULES,
+    RECONCILIATION_TICK,
+    parse_reconciliation_times,
+)
 from htco_platform.crypto import KeyRing
+
+# Every schedule a worker may run: maintenance (5.1) and order reconciliation (5.5).
+SCHEDULES = MAINTENANCE_SCHEDULES | ORDER_SCHEDULES
 
 
 class WorkerSettings(BaseSettings):
@@ -46,6 +59,11 @@ class WorkerSettings(BaseSettings):
     # The Action Gateway (slice 5.4): `reads` (default) runs Etsy reads through the real gateway,
     # writes refused until approvals exist (5.14); `off` switches back to refusing every action.
     worker_action_gateway: Literal["reads", "off"] = "reads"
+    # Slice 5.5: when reconciliation runs, local "HH:MM", comma-separated; the day's last run is
+    # the full sweep. Twice a day by default (the owner's decision of 2026-10-24).
+    reconciliation_schedule: str = DEFAULT_RECONCILIATION_TIMES
+    # The IANA time zone of those times (06:00 stays 06:00 across a DST change).
+    reconciliation_tz: str = DEFAULT_RECONCILIATION_TZ
     # The reviewed registry and the action contracts, copied into the image next to the code.
     registry_path: Path = Path("registry")
     action_schemas_path: Path = Path("packages/contracts/actions")
@@ -68,6 +86,14 @@ class WorkerSettings(BaseSettings):
         return tuple(name.strip() for name in self.worker_schedules.split(",") if name.strip())
 
     @property
+    def reconciliation_times(self) -> tuple[time, ...]:
+        return parse_reconciliation_times(self.reconciliation_schedule)
+
+    @property
+    def reconciliation_zone(self) -> ZoneInfo:
+        return ZoneInfo(self.reconciliation_tz)
+
+    @property
     def key_ring(self) -> KeyRing | None:
         if self.token_vault_key is None:
             return None
@@ -76,6 +102,24 @@ class WorkerSettings(BaseSettings):
             self.token_vault_key.get_secret_value(),
             None if previous is None else previous.get_secret_value(),
         )
+
+    @field_validator("reconciliation_schedule")
+    @classmethod
+    def _reconciliation_times_parse(cls, value: str) -> str:
+        try:
+            parse_reconciliation_times(value)
+        except ValueError as error:
+            raise ValueError(f"HTCO_RECONCILIATION_SCHEDULE: {error}") from None
+        return value
+
+    @field_validator("reconciliation_tz")
+    @classmethod
+    def _reconciliation_zone_exists(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ValueError, ZoneInfoNotFoundError:
+            raise ValueError(f"HTCO_RECONCILIATION_TZ: no time zone {value!r}") from None
+        return value
 
     @model_validator(mode="after")
     def _schedules_are_known_and_configured(self) -> Self:
@@ -88,12 +132,17 @@ class WorkerSettings(BaseSettings):
             raise ValueError(
                 "HTCO_TOKEN_VAULT_KEY or HTCO_TOKEN_VAULT_PREVIOUS_KEYS is invalid"
             ) from None
-        etsy_schedules = {PROBE_SCHEDULE.kind, EXPIRY_SCHEDULE.kind} & set(self.schedules)
+        etsy_schedules = {
+            PROBE_SCHEDULE.kind,
+            EXPIRY_SCHEDULE.kind,
+            RECONCILIATION_TICK.kind,
+        } & set(self.schedules)
         if etsy_schedules and ring is None:
             raise ValueError(f"{sorted(etsy_schedules)} need HTCO_TOKEN_VAULT_KEY")
         etsy_app = self.etsy_keystring is not None and self.etsy_shared_secret is not None
-        if PROBE_SCHEDULE.kind in self.schedules and not etsy_app:
-            raise ValueError(
-                f"{PROBE_SCHEDULE.kind} needs HTCO_ETSY_KEYSTRING and HTCO_ETSY_SHARED_SECRET"
-            )
+        for needs_app in (PROBE_SCHEDULE.kind, RECONCILIATION_TICK.kind):
+            if needs_app in self.schedules and not etsy_app:
+                raise ValueError(
+                    f"{needs_app} needs HTCO_ETSY_KEYSTRING and HTCO_ETSY_SHARED_SECRET"
+                )
         return self
