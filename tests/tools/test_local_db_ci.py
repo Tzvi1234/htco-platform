@@ -1,11 +1,13 @@
 """The local runner replays CI's `database` job from `ci.yml`, so local and CI never drift."""
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tools.local_db_ci import (
     Step,
@@ -99,6 +101,58 @@ def test_local_steps__unsupported_action__is_rejected() -> None:
 
     with pytest.raises(ValueError, match="actions/cache"):
         local_steps(load_job(workflow, "db"))
+
+
+def _workflow(job: dict[str, object]) -> str:
+    return yaml.safe_dump({"jobs": {"db": job}})
+
+
+@pytest.mark.parametrize(
+    ("step", "problem"),
+    [
+        ({"run": "echo hi", "if": "github.event_name == 'push'"}, "if"),
+        ({"run": "ls", "working-directory": "apps"}, "working-directory"),
+        ({"run": "echo hi", "shell": "pwsh"}, "shell"),
+        ({"run": "exit 1", "continue-on-error": True}, "continue-on-error"),
+        ({"run": "echo ${{ github.sha }}"}, "${{"),
+        ({"run": "echo", "env": {"SHA": "${{ github.sha }}"}}, "${{"),
+        ({"uses": "astral-sh/setup-uv@" + "a" * 40, "with": {"version": "${{ env.V }}"}}, "${{"),
+    ],
+)
+def test_load_job__step_feature_the_runner_cannot_replay__is_rejected(
+    step: dict[str, object], problem: str
+) -> None:
+    workflow = _workflow({"steps": [{"name": "Step", **step}]})
+
+    with pytest.raises(ValueError, match=re.escape(problem)):
+        load_job(workflow, "db")
+
+
+@pytest.mark.parametrize(
+    ("setting", "problem"),
+    [
+        ({"if": "always()"}, "if"),
+        ({"defaults": {"run": {"shell": "sh"}}}, "defaults"),
+        ({"services": {"pg": {"image": "postgres"}}}, "services"),
+        ({"container": "ubuntu"}, "container"),
+        ({"strategy": {"matrix": {"x": [1]}}}, "strategy"),
+        ({"env": {"A": "${{ secrets.A }}"}}, "${{"),
+    ],
+)
+def test_load_job__job_feature_the_runner_cannot_replay__is_rejected(
+    setting: dict[str, object], problem: str
+) -> None:
+    workflow = _workflow({**setting, "steps": [{"run": "echo hi"}]})
+
+    with pytest.raises(ValueError, match=re.escape(problem)):
+        load_job(workflow, "db")
+
+
+def test_load_job__workflow_env_with_an_expression__is_rejected() -> None:
+    workflow = "env:\n  A: ${{ vars.A }}\n" + _workflow({"steps": [{"run": "echo hi"}]})
+
+    with pytest.raises(ValueError, match=re.escape("${{")):
+        load_job(workflow, "db")
 
 
 def test_local_steps__real_ci_database_job__runs_every_ci_command() -> None:
@@ -236,3 +290,15 @@ def test_wrapper__stack_kept_by_an_earlier_run__is_stopped_before_its_cli_is_rem
     # Then the kept stack was stopped first
     assert result.returncode == 0, result.stdout + result.stderr
     assert calls.read_text(encoding="utf-8").splitlines()[0] == "stop --no-backup"
+
+
+def test_main__job_without_steps__exits_one_like_its_fail_summary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workflow = tmp_path / "ci.yml"
+    workflow.write_text(yaml.safe_dump({"jobs": {"database": {"steps": []}}}), encoding="utf-8")
+
+    code = main(["--workflow", str(workflow), "--root", str(tmp_path)])
+
+    assert code == 1
+    assert "database job: FAIL" in capsys.readouterr().out

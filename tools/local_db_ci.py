@@ -23,6 +23,12 @@ import yaml
 _SKIPPED_ACTIONS = frozenset({"actions/checkout"})
 _SETUP_UV = "astral-sh/setup-uv"
 _MINUTE = 60
+# Keys the runner replays faithfully; anything else (`if`, `shell`, `working-directory`,
+# `continue-on-error`, `defaults`, `services`, `container`, `strategy`…) would be replayed wrong,
+# so it stops the run instead. `${{ }}` expressions are rejected for the same reason.
+_STEP_KEYS = frozenset({"name", "id", "run", "uses", "with", "env", "timeout-minutes"})
+_JOB_KEYS = frozenset({"name", "runs-on", "timeout-minutes", "permissions", "env", "steps"})
+_EXPRESSION = "${{"
 
 
 @dataclass(frozen=True)
@@ -63,27 +69,53 @@ def _strings(mapping: Any) -> dict[str, str]:
     return {str(key): str(value) for key, value in (mapping or {}).items()}
 
 
+def _reject_unsupported(where: str, raw: dict[str, Any], allowed: frozenset[str]) -> None:
+    unsupported = sorted(set(raw) - allowed)
+    if unsupported:
+        raise ValueError(
+            f"{where} uses {', '.join(unsupported)}, which tools/local_db_ci cannot replay;"
+            " teach the runner before adding it to the job"
+        )
+
+
+def _reject_expressions(where: str, *values: str | None) -> None:
+    if any(_EXPRESSION in value for value in values if value is not None):
+        raise ValueError(
+            f"{where} uses a {_EXPRESSION} }}}} expression, which tools/local_db_ci cannot"
+            " evaluate; teach the runner before adding it to the job"
+        )
+
+
 def load_job(workflow_text: str, job_name: str) -> Job:
-    """Parse one job (its env includes the workflow's); raises `KeyError` for a missing job."""
+    """Parse one job (its env includes the workflow's).
+
+    Raises `KeyError` for a missing job and `ValueError` for a feature the runner cannot replay.
+    """
     workflow = yaml.safe_load(workflow_text)
     jobs = workflow.get("jobs", {})
     if job_name not in jobs:
         raise KeyError(f"no job {job_name!r} in the workflow (jobs: {', '.join(jobs)})")
     job = jobs[job_name]
+    _reject_unsupported(f"job {job_name!r}", job, _JOB_KEYS)
+    env = _strings(workflow.get("env")) | _strings(job.get("env"))
+    _reject_expressions(f"the env of job {job_name!r}", *env.values())
     steps = []
     for raw in job.get("steps", []):
         uses = raw.get("uses")
         action = uses.split("@", 1)[0] if uses else None
-        steps.append(
-            WorkflowStep(
-                name=str(raw.get("name") or action or raw.get("run", "").splitlines()[0]),
-                run=raw.get("run"),
-                uses=action,
-                with_=_strings(raw.get("with")),
-                env=_strings(raw.get("env")),
-            )
+        step = WorkflowStep(
+            name=str(raw.get("name") or action or raw.get("run", "").splitlines()[0]),
+            run=raw.get("run"),
+            uses=action,
+            with_=_strings(raw.get("with")),
+            env=_strings(raw.get("env")),
         )
-    return Job(env=_strings(workflow.get("env")) | _strings(job.get("env")), steps=steps)
+        _reject_unsupported(f"step {step.name!r}", raw, _STEP_KEYS)
+        _reject_expressions(
+            f"step {step.name!r}", step.run, *step.env.values(), *step.with_.values()
+        )
+        steps.append(step)
+    return Job(env=env, steps=steps)
 
 
 def local_steps(job: Job) -> list[Step]:
@@ -186,6 +218,11 @@ def _duration(seconds: float) -> str:
     return f"{whole}s" if whole < _MINUTE else f"{whole // _MINUTE}m{whole % _MINUTE:02d}s"
 
 
+def _all_passed(results: list[StepResult]) -> bool:
+    """A job passes when it ran at least one step and every step passed."""
+    return bool(results) and all(result.passed for result in results)
+
+
 def format_summary(
     results: list[StepResult], *, total_seconds: float, job: str = "database"
 ) -> str:
@@ -194,7 +231,7 @@ def format_summary(
         mark = "SKIP" if not result.ran else "PASS" if result.passed else "FAIL"
         timing = f"  ({_duration(result.seconds)})" if result.ran else ""
         lines.append(f"{mark}  {result.name}{timing}")
-    verdict = "PASS" if results and all(result.passed for result in results) else "FAIL"
+    verdict = "PASS" if _all_passed(results) else "FAIL"
     lines.append(f"{job} job: {verdict} in {_duration(total_seconds)}")
     return "\n".join(lines) + "\n"
 
@@ -217,7 +254,7 @@ def main(argv: list[str]) -> int:
     sys.stdout.write(
         format_summary(results, total_seconds=time.monotonic() - started, job=args.job)
     )
-    return 0 if all(result.passed for result in results) else 1
+    return 0 if _all_passed(results) else 1
 
 
 if __name__ == "__main__":

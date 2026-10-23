@@ -17,8 +17,15 @@ apt-get install -y -qq ca-certificates curl git just docker.io > /dev/null
 # Docker starts with the distro: through systemd when /etc/wsl.conf enables it, else at boot.
 if [ "$(ps -o comm= -p 1)" = "systemd" ]; then
     systemctl enable --now docker > /dev/null
-elif ! grep -q 'service docker start' /etc/wsl.conf 2> /dev/null; then
-    printf '\n[boot]\ncommand = service docker start\n' >> /etc/wsl.conf
+else
+    if grep -q '^command *=' /etc/wsl.conf 2> /dev/null; then
+        grep -q 'service docker start' /etc/wsl.conf \
+            || echo "add 'service docker start' to the [boot] command in /etc/wsl.conf" >&2
+    elif grep -q '^\[boot\]' /etc/wsl.conf 2> /dev/null; then
+        sed -i '/^\[boot\]/a command = service docker start' /etc/wsl.conf
+    else
+        printf '\n[boot]\ncommand = service docker start\n' >> /etc/wsl.conf
+    fi
     service docker start
 fi
 
