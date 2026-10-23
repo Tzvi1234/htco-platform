@@ -2,8 +2,10 @@
 day's configured runs (twice a day by default), and the per-shop job starting the right run of
 Etsy Order Intake."""
 
+import base64
 import uuid
 from datetime import UTC, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -23,6 +25,7 @@ from tests.order_intake_fakes import NOW
 
 pytestmark = pytest.mark.anyio
 
+ISRAEL = ZoneInfo("Asia/Jerusalem")
 ORG = uuid.UUID("6e000000-0000-0000-0000-000000000000")
 SHOP = uuid.UUID("6f000000-0000-0000-0000-000000000001")
 
@@ -35,9 +38,19 @@ class Directory:
         return []
 
 
+VAULT_KEY = "k1:" + base64.b64encode(bytes(32)).decode()
+
+
 def _settings(**values: object) -> WorkerSettings:
     return WorkerSettings.model_validate(
-        {"environment": "test", "database_url": "postgresql://htco@db.invalid/htco"} | values
+        {
+            "environment": "test",
+            "database_url": "postgresql://htco@db.invalid/htco",
+            "token_vault_key": VAULT_KEY,
+            "etsy_keystring": "fakekeystring",
+            "etsy_shared_secret": "fake-shared-secret",
+        }
+        | values
     )
 
 
@@ -45,21 +58,38 @@ def test_settings__the_reconciliation_tick_is_known_and_twice_a_day_by_default()
     assert RECONCILIATION_TICK.kind in SCHEDULES
     settings = _settings(worker_schedules=RECONCILIATION_TICK.kind)
     assert settings.schedules == (RECONCILIATION_TICK.kind,)
-    assert settings.reconciliation_times == (time(3, 0), time(15, 0))
+    assert settings.reconciliation_times == (time(6, 0), time(18, 0))
+    assert settings.reconciliation_zone == ZoneInfo("Asia/Jerusalem")
 
 
 def test_settings__a_configured_schedule__and_an_invalid_one_refused() -> None:
     assert _settings(reconciliation_schedule="05:00").reconciliation_times == (time(5, 0),)
     with pytest.raises(ValueError, match="HTCO_RECONCILIATION_SCHEDULE"):
         _settings(reconciliation_schedule="noon")
+    assert _settings(reconciliation_tz="UTC").reconciliation_zone == ZoneInfo("UTC")
+    with pytest.raises(ValueError, match="HTCO_RECONCILIATION_TZ"):
+        _settings(reconciliation_tz="Mars/Olympus")
+
+
+@pytest.mark.parametrize("missing", ["token_vault_key", "etsy_keystring"])
+def test_settings__the_tick_without_the_etsy_app_or_vault__refused(missing: str) -> None:
+    """Codex review of #75: without them the worker installs no handler and would crash."""
+    values: dict[str, object] = {"worker_schedules": RECONCILIATION_TICK.kind, missing: None}
+    if missing == "etsy_keystring":
+        values["etsy_shared_secret"] = None
+    with pytest.raises(ValueError, match=RECONCILIATION_TICK.kind):
+        _settings(**values)
 
 
 def test_handlers__only_when_the_tick_is_named() -> None:
     queue = MemoryJobQueue()
-    times = (time(3, 0), time(15, 0))
-    assert reconciliation_handlers((), queue=queue, directory=Directory(), times=times) == {}
+    times = (time(6, 0), time(18, 0))
+    assert (
+        reconciliation_handlers((), queue=queue, directory=Directory(), times=times, tz=ISRAEL)
+        == {}
+    )
     handlers = reconciliation_handlers(
-        (RECONCILIATION_TICK.kind,), queue=queue, directory=Directory(), times=times
+        (RECONCILIATION_TICK.kind,), queue=queue, directory=Directory(), times=times, tz=ISRAEL
     )
     assert set(handlers) == {RECONCILIATION_TICK.kind}
 
@@ -76,7 +106,7 @@ async def test_tick__enqueues_the_due_run_only(at: datetime, reason: str | None)
     queue = MemoryJobQueue()
     handlers = reconciliation_handlers(
         (RECONCILIATION_TICK.kind,), queue=queue, directory=Directory(),
-        times=(time(3, 0), time(15, 0)), clock=lambda: at,
+        times=(time(6, 0), time(18, 0)), tz=ISRAEL, clock=lambda: at,
     )  # fmt: skip
     job = ClaimedJob(
         id=uuid.uuid7(), kind=RECONCILIATION_TICK.kind, idempotency_key="k", payload={},

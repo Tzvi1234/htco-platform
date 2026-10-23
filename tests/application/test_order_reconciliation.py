@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, override
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -31,10 +32,12 @@ from htco_application.order_ingest import (
 )
 from htco_application.order_intake import (
     DEFAULT_RECONCILIATION_TIMES,
+    DEFAULT_RECONCILIATION_TZ,
     ORDER_SYNC_JOB,
     RECEIPTS_READ,
     RECONCILE,
     SWEEP,
+    ShopBusyError,
     daily_etsy_calls,
     due_reconciliation,
     enqueue_reconciliations,
@@ -239,14 +242,19 @@ async def test_sweep__also_compares_etsys_count_with_the_store() -> None:
     assert intake.store.cursors[-1][1] == SWEEP
 
 
-async def test_reconcile__a_lock_held_by_another_run__skipped() -> None:
+async def test_reconcile__a_lock_held_by_another_run__retried_later_never_lost() -> None:
+    """Codex review of #75: a reconcile or sweep that finds the shop's lock held (a history run,
+    the other scheduled run) fails into the execution's retry instead of completing unread."""
     intake = _intake(_many(1))
     intake.store.held.add(SHOP)
 
-    outcome = await intake.handler(intake.context({"mode": RECONCILE}))
-
-    assert outcome.output == {"mode": RECONCILE, "skipped": "locked"}  # type: ignore[union-attr]
+    with pytest.raises(ShopBusyError):
+        await intake.handler(intake.context({"mode": RECONCILE}))
     assert intake.store.cursors == []
+
+    intake.store.held.clear()  # the retry, once the other run has finished
+    outcome = await intake.handler(intake.context({"mode": RECONCILE}))
+    assert outcome.output["receipts_read"] == 1  # type: ignore[union-attr]
 
 
 async def test_reconcile__a_failure_records_its_type_on_the_cursor() -> None:
@@ -294,9 +302,10 @@ def test_fan_out__one_job_per_shop_and_run_under_the_orders_lock() -> None:
 # --- When it runs (the owner's decision: twice a day) ------------------------------------------
 
 
-def test_times__default_twice_a_day_in_utc() -> None:
-    assert parse_reconciliation_times(DEFAULT_RECONCILIATION_TIMES) == (time(3, 0), time(15, 0))
-    assert parse_reconciliation_times(" 15:00, 03:00 ") == (time(3, 0), time(15, 0))
+def test_times__default_twice_a_day_israel_time() -> None:
+    assert parse_reconciliation_times(DEFAULT_RECONCILIATION_TIMES) == (time(6, 0), time(18, 0))
+    assert parse_reconciliation_times(" 18:00, 06:00 ") == (time(6, 0), time(18, 0))
+    assert str(DEFAULT_RECONCILIATION_TZ) == "Asia/Jerusalem"
 
 
 @pytest.mark.parametrize("text", ["", "3pm", "25:00", "03:00,03:00", "03:61"])
@@ -305,28 +314,45 @@ def test_times__anything_else_is_refused(text: str) -> None:
         parse_reconciliation_times(text)
 
 
+ISRAEL = ZoneInfo("Asia/Jerusalem")
+TWICE = (time(6, 0), time(18, 0))
+
+
 @pytest.mark.parametrize(
     ("at", "due"),
     [
-        (datetime(2026, 10, 24, 3, 0, tzinfo=UTC), (RECONCILE, "2026-10-24T03:00")),
-        (datetime(2026, 10, 24, 3, 59, tzinfo=UTC), (RECONCILE, "2026-10-24T03:00")),
+        # 24 October 2026: summer time, UTC+3.
+        (datetime(2026, 10, 24, 3, 0, tzinfo=UTC), (RECONCILE, "2026-10-24T06:00+03:00")),
+        (datetime(2026, 10, 24, 3, 59, tzinfo=UTC), (RECONCILE, "2026-10-24T06:00+03:00")),
         (datetime(2026, 10, 24, 4, 0, tzinfo=UTC), None),
-        (datetime(2026, 10, 24, 15, 20, tzinfo=UTC), (SWEEP, "2026-10-24T15:00")),
+        (datetime(2026, 10, 24, 15, 20, tzinfo=UTC), (SWEEP, "2026-10-24T18:00+03:00")),
         (datetime(2026, 10, 24, 22, 0, tzinfo=UTC), None),
     ],
 )
 def test_due__the_first_run_reconciles_the_last_sweeps(
     at: datetime, due: tuple[str, str] | None
 ) -> None:
-    times = parse_reconciliation_times(DEFAULT_RECONCILIATION_TIMES)
-    assert due_reconciliation(times, now=at) == due
+    assert due_reconciliation(TWICE, now=at, tz=ISRAEL) == due
+
+
+def test_due__the_local_times_stay_put_across_the_dst_change() -> None:
+    """Israel leaves summer time on 25 October 2026: 06:00 is 03:00 UTC the day before and
+    04:00 UTC from that day on; each day still runs once at 06:00 and once at 18:00."""
+    before = [due_reconciliation(TWICE, now=datetime(2026, 10, 24, h, 5, tzinfo=UTC), tz=ISRAEL)
+              for h in range(24)]  # fmt: skip
+    after = [due_reconciliation(TWICE, now=datetime(2026, 10, 25, h, 5, tzinfo=UTC), tz=ISRAEL)
+             for h in range(24)]  # fmt: skip
+    assert [h for h, d in enumerate(before) if d] == [3, 15]
+    assert [h for h, d in enumerate(after) if d] == [4, 16]
+    assert after[4] == (RECONCILE, "2026-10-25T06:00+02:00")
+    assert after[16] == (SWEEP, "2026-10-25T18:00+02:00")
 
 
 def test_due__a_single_daily_run_is_the_sweep() -> None:
     times = parse_reconciliation_times("04:30")
-    assert due_reconciliation(times, now=datetime(2026, 10, 24, 4, 10, tzinfo=UTC)) == (
+    assert due_reconciliation(times, now=datetime(2026, 10, 24, 4, 10, tzinfo=UTC), tz=UTC) == (
         SWEEP,
-        "2026-10-24T04:30",
+        "2026-10-24T04:30+00:00",
     )
 
 
