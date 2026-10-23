@@ -32,7 +32,7 @@ LONG = SlaPolicy(id=uuid.UUID(int=9), window=30, unit=WindowUnit.CALENDAR_DAYS)
 
 def run(
     now: datetime, *, calendar: BusinessCalendar | None = None, ship_by: datetime | None = SHIP_BY
-):
+) -> tuple[IncidentDetection, MemoryNotificationStore]:
     policy = (
         LONG
         if calendar is None
@@ -102,7 +102,7 @@ async def test_without_the_alert_service_the_inspector_still_runs() -> None:
     )
     outcome = await handler(context())
     assert isinstance(outcome, Completed)
-    assert outcome.output["ship_by_alerts"] == 0
+    assert "ship_by_alerts" not in outcome.output
 
 
 def out_of_stock(listing: int = 777, at: str = "2026-10-25T08:00:00+00:00") -> OutboxMessage:

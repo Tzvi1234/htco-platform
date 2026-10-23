@@ -20,6 +20,7 @@ import anyio
 import httpx
 import structlog
 
+from htco_application.alerts import OUT_OF_STOCK_EVENT, StockAlerts
 from htco_application.approvals import GatewayApprovals, MemoryApprovalService
 from htco_application.automation.durable import (
     EXECUTION_JOB,
@@ -279,6 +280,7 @@ def notification_deliverers(
             {
                 INCIDENT_OPENED: IncidentNotifications(service),
                 INCIDENT_RESOLVED: IncidentNotifications(service),
+                OUT_OF_STOCK_EVENT: StockAlerts(service),
                 NOTIFICATION_REQUESTED: RequestedNotifications(service),
             }
         ),
@@ -403,7 +405,13 @@ def fulfillment_handlers(
     )
     handlers: dict[str, Handler] = {
         INCIDENT_DETECTION: IncidentDetection(
-            PostgresSlaStore(database), incidents, clock=_now, offload=anyio.to_thread.run_sync
+            PostgresSlaStore(database),
+            incidents,
+            clock=_now,
+            offload=anyio.to_thread.run_sync,
+            alerts=NotificationService(
+                PostgresNotificationStore(database), clock=_now, offload=anyio.to_thread.run_sync
+            ),
         )
     }
     if vault is not None:
