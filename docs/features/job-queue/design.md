@@ -100,4 +100,4 @@ One read for the Owner and Admins, `GET /v1/operations/health` (`htco_applicatio
 
 IDs, kinds, states, counts, times and error codes only: no job or outbox payload is read beyond the engine's execution ID, and nothing about a buyer. The retry, `POST /v1/operations/dead-letters/{job_id}/retry`, moves a dead job to `queued` and writes the audit record in one transaction (`409 job-not-dead`, `409 retry-through-execution`, `404` for another organization's job). Capability: `retry_sync` with organization scope (Owner, Admin).
 
-Not in this slice: Prometheus exposition and alert rules (AC-5.9.1's alert and AC-5.9.4). The audit's P2-2 proposal makes Phase 10's monitors the one alert model, so 5.9 exposes state rather than alerting.
+Moved by the owner's decision of 2026-10-23: AC-5.9.1's alert goes through the one alert model (Phase 6.4 notifications now, Phase 10's monitors later), and AC-5.9.4's Prometheus `/metrics` goes with Phase 8A's monitoring slice once a monitoring host is chosen.
