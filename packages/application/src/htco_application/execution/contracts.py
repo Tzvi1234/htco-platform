@@ -46,6 +46,7 @@ class ChannelOutcome:
     output: Mapping[str, JsonValue] = field(default_factory=dict)
     evidence: tuple[Evidence, ...] = ()
     handed_to_human: bool = False
+    handoff_reason: str | None = None  # "security_challenge", "human_channel", ...
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,11 @@ def _parse(
     bindings = tuple(_binding(raw) for raw in document["bindings"])
     if not bindings:
         raise ValueError("an action needs at least one channel binding")
+    for binding in bindings:
+        if not binding.deterministic and binding.channel is not Channel.BROWSER:
+            raise ValueError("only a browser binding may be non-deterministic (Browser Use)")
+        if binding.channel is Channel.BROWSER and binding.browser_scope_id is None:
+            raise ValueError("a browser binding needs its browser_scope_id")
     input_schema = schemas[str(document["input_schema"])]
     output_schema = schemas[str(document["output_schema"])]
     for schema in (input_schema, output_schema):

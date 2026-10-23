@@ -95,6 +95,7 @@ class PostgresActionStore:
             approval_id=row[8],
             retry_at=row[9],
             error_code=row[6],
+            channel=None if row[3] is None else Channel(row[3]),
         )
 
     def record(self, execution_id: uuid.UUID, step: Finish, *, now: datetime) -> None:

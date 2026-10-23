@@ -28,7 +28,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 - [x] 5.10 Durable automation engine (PR #58; aligned: migration `20261023140000_automation_engine.sql`, pgTAP `12_automation_engine`, handlers get a `HandlerContext` with an `ActionGateway` client, `WAITING` state; no automation is ready yet)
 - [ ] 5.11 Order automations activated
 - [x] 5.12 Action Gateway and the generic execution contract (standard-library dataclasses and JSON Schemas, see execution-engine.md §2; production wiring with the channels of 5.13)
-- [ ] 5.13 Execution Router and channel adapters (API real, Browser interface and fake, Internal, Human contract)
+- [x] 5.13 Execution Router and channel adapters (API real for reads, writes refused before sending; Browser interface and fake; Internal; Human contract in memory; wiring into the deployed processes with 5.14 and 5.11)
 - [ ] 5.14 Shared approval contract (in-memory; Postgres in Phase 7)
 - [x] 5.15 Circuit breaker, rate and concurrency control, idempotency for actions (standard-library rules with Postgres state instead of PyBreaker, aiolimiter and Tenacity; see execution-engine.md §8; the real Etsy QPS and QPD figures are an owner question)
 - [ ] 5.16 Shop Environment Registry: data model, statuses, state machine (contracts only)

@@ -13,8 +13,11 @@
    the Owner's own trigger; otherwise an approval is requested and the result is
    `PENDING_APPROVAL`, running nothing (AC-5.12.3). Resubmitted with the approval, every check runs
    again.
-5. **Route** to the first binding whose channel is deployed and whose shop capability is there
-   (the full Execution Router is slice 5.13).
+5. **Route** through the Execution Router (slice 5.13, `router.py`): the first binding, in
+   order, that can run now; a refusal is `DENIED` with `scope_missing`, `environment_not_ready`,
+   `flag_off` or `no_channel`. A channel that hands the action to a person (a security challenge,
+   the Human channel) creates one task and the action is `HANDED_TO_HUMAN`; a resubmission after
+   the task is completed checks the person's result against the output schema.
 6. **Guard** (slice 5.15, `guards.py`): circuit breaker, then rate budget, then the concurrency
    slot; any of them busy is `DEFERRED` with `retry_at`, and a resubmission runs every check again.
 7. **Execute** through the channel adapter, with bounded retries inside the attempt (each call
@@ -31,13 +34,19 @@ import hashlib
 import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import Enum, auto
 from typing import Protocol
 
 from htco_application.access.policy import Outcome, Principal, ShopRef, decide
 from htco_application.audit import AuditRecord
+from htco_application.execution.channels import (
+    HUMAN_CHANNEL,
+    BrowserRecipeError,
+    HumanTasks,
+    HumanTaskState,
+)
 from htco_application.execution.contracts import (
     ActionCatalog,
     ActionDefinition,
@@ -51,9 +60,14 @@ from htco_application.execution.gateway import (
     Channel,
 )
 from htco_application.execution.guards import Guards, InlineRetry
+from htco_application.execution.router import BrowserGate, ExecutionRouter, NoBrowser, NoRoute
 from htco_application.execution.schema import validate
 from htco_application.jobs import JsonValue, describe_error
-from htco_application.marketplace import MarketplaceUnavailableError, QuotaDeferredError
+from htco_application.marketplace import (
+    MarketplaceUnavailableError,
+    MarketplaceWriteRefusedError,
+    QuotaDeferredError,
+)
 from htco_application.messaging import OutboxMessage
 from htco_application.workforce.registry import Registry
 from htco_application.workforce.tool_access import ToolVerdict, decide_tool_access
@@ -91,6 +105,8 @@ class _Failure(Enum):
 def _classify(error: Exception) -> tuple[_Failure, float | None]:
     if isinstance(error, QuotaDeferredError):
         return _Failure.QUOTA, None
+    if isinstance(error, (MarketplaceWriteRefusedError, BrowserRecipeError)):
+        return _Failure.PERMANENT, None  # refused before sending, or a recipe that cannot work
     status = getattr(error, "status", None)
     if status == _TOO_MANY_REQUESTS:
         wait = getattr(error, "retry_after_seconds", None)
@@ -132,6 +148,7 @@ class Claim:
     approval_id: uuid.UUID | None = None
     retry_at: datetime | None = None  # a deferred action runs again from then on
     error_code: str | None = None  # why it was deferred or failed
+    channel: Channel | None = None  # the channel it ran on, if it ran
 
 
 @dataclass(frozen=True)
@@ -201,6 +218,8 @@ class GatewayParts:
     capabilities: ShopCapabilities
     clock: Callable[[], datetime]
     guards: Guards | None = None  # breakers, limits and retries (slice 5.15)
+    browser: BrowserGate = field(default_factory=NoBrowser)  # environments, flags, scopes (5.13)
+    human: HumanTasks | None = None  # hand-offs to a person (slice 5.13; Postgres in Phase 7)
 
 
 class Refusal(Exception):  # noqa: N818 - a refusal is the result, not a failure of the gateway
@@ -220,25 +239,15 @@ class ActionGatewayService:
             if missing:
                 raise ValueError(f"no rate budget for {', '.join(missing)}")
         self._p = parts
+        self._router = ExecutionRouter(parts.adapters, parts.capabilities, parts.browser)
 
     async def submit(self, request: ActionRequest) -> ActionResult:
         now = self._p.clock()
         digest = request_hash(request)
         claim = self._p.store.claim(request, request_hash=digest, now=now)
-        if claim.result is not None:
-            return claim.result
-        if not claim.created and claim.state not in _RESUMABLE:
-            return self._result(claim.execution_id, ActionOutcome.DEFERRED, error="in_progress")
-        if (
-            claim.state is _S.DEFERRED
-            and claim.error_code in _HELD_UNTIL_RETRY_AT
-            and claim.retry_at is not None
-            and now < claim.retry_at
-        ):
-            return replace(  # not yet: nothing is sent before retry_at (a 429, the daily quota)
-                self._result(claim.execution_id, ActionOutcome.DEFERRED, error="not_yet"),
-                retry_at=claim.retry_at,
-            )
+        early = self._answer_from_claim(claim, request, now)
+        if early is not None:
+            return early
         path: list[ActionState] = [claim.state]
         try:
             definition = self._definition(request)
@@ -251,6 +260,28 @@ class ActionGatewayService:
         except Refusal as refusal:
             return self._deny(claim, request, refusal, path, now)
         return await self._run(claim, request, definition, path)
+
+    def _answer_from_claim(
+        self, claim: Claim, request: ActionRequest, now: datetime
+    ) -> ActionResult | None:
+        """What a claim answers without running the checks again, or None to run them."""
+        if claim.result is not None:
+            return claim.result  # finished: the first result (AC-5.12.1)
+        if claim.state is _S.HANDED_TO_HUMAN:
+            return self._resume_from_human(claim, request)
+        if not claim.created and claim.state not in _RESUMABLE:
+            return self._result(claim.execution_id, ActionOutcome.DEFERRED, error="in_progress")
+        if (
+            claim.state is _S.DEFERRED
+            and claim.error_code in _HELD_UNTIL_RETRY_AT
+            and claim.retry_at is not None
+            and now < claim.retry_at
+        ):
+            return replace(  # not yet: nothing is sent before retry_at (a 429, the daily quota)
+                self._result(claim.execution_id, ActionOutcome.DEFERRED, error="not_yet"),
+                retry_at=claim.retry_at,
+            )
+        return None
 
     # --- checks -----------------------------------------------------------------------------
 
@@ -386,16 +417,12 @@ class ActionGatewayService:
         definition: ActionDefinition,
         path: list[ActionState],
     ) -> ActionResult:
-        chosen = self._route(request, definition)
-        if chosen is None:
+        route = self._router.choose(definition, request)
+        if isinstance(route, NoRoute):
             return self._deny(
-                claim,
-                request,
-                Refusal("no_channel", f"no deployed channel can run {definition.name}"),
-                path,
-                self._p.clock(),
+                claim, request, Refusal(route.code, route.reason), path, self._p.clock()
             )
-        binding, adapter = chosen
+        binding, adapter = route.binding, route.adapter
         path.append(_S.ROUTED)
         guards = self._p.guards
         deferral = self._admit(definition, binding)
@@ -571,13 +598,16 @@ class ActionGatewayService:
     ) -> ActionResult:
         now = self._p.clock()
         if outcome.handed_to_human:
+            reason = outcome.handoff_reason or HUMAN_CHANNEL
+            if self._p.human is not None:
+                self._p.human.hand_off(claim.execution_id, request, reason=reason)
             result = replace(
                 self._result(claim.execution_id, ActionOutcome.HANDED_TO_HUMAN,
                              channel=binding.channel),
                 attempts=attempts,
             )  # fmt: skip
             self._record(claim.execution_id, [*path, _S.HANDED_TO_HUMAN], result, request,
-                         definition, reason="handed_to_human", now=now, final=False)  # fmt: skip
+                         definition, reason=reason, now=now, final=False)  # fmt: skip
             return result
         if definition.verify is not VerifyMode.NONE:
             path.append(_S.VERIFYING)
@@ -602,22 +632,33 @@ class ActionGatewayService:
                      now=now)  # fmt: skip
         return result
 
-    def _route(
-        self, request: ActionRequest, definition: ActionDefinition
-    ) -> tuple[ChannelBinding, ChannelAdapter] | None:
-        for binding in definition.bindings:
-            adapter = self._p.adapters.get(binding.channel)
-            if adapter is None:
-                continue
-            if request.actor.kind is ActorKind.AUTOMATION and not binding.deterministic:
-                continue
-            if binding.requires_capability is not None and (
-                request.shop_id is None
-                or not self._p.capabilities.available(request.shop_id, binding.requires_capability)
-            ):
-                continue
-            return binding, adapter
-        return None
+    def _resume_from_human(self, claim: Claim, request: ActionRequest) -> ActionResult:
+        """A handed-off action continues once its task is decided; until then it waits."""
+        task = None if self._p.human is None else self._p.human.task_of(claim.execution_id)
+        definition = self._p.catalog.get(request.action.name, request.action.version)
+        waiting = ActionResult(execution_id=claim.execution_id,
+                               outcome=ActionOutcome.HANDED_TO_HUMAN, attempts=0,
+                               channel=claim.channel)  # fmt: skip
+        if task is None or task.state is HumanTaskState.OPEN or definition is None:
+            return waiting
+        now = self._p.clock()
+        if task.state is HumanTaskState.CANCELLED:
+            result = replace(waiting, outcome=ActionOutcome.FAILED, error_code="cancelled")
+            self._record(claim.execution_id, [_S.HANDED_TO_HUMAN, _S.CANCELLED], result, request,
+                         definition, reason="cancelled by a person", now=now)  # fmt: skip
+            return result
+        output = dict(task.output or {})
+        path = [_S.HANDED_TO_HUMAN, _S.RUNNING, _S.VERIFYING]
+        if validate(output, definition.output_schema):
+            result = replace(waiting, outcome=ActionOutcome.FAILED, error_code="verification")
+            self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
+                         reason="the person's result does not match the output contract",
+                         now=now, final=False)  # fmt: skip
+            return result
+        result = replace(waiting, outcome=ActionOutcome.SUCCEEDED, output=output, verified=True)
+        self._record(claim.execution_id, [*path, _S.SUCCEEDED], result, request, definition,
+                     now=now)  # fmt: skip
+        return result
 
     async def _verify(
         self,
