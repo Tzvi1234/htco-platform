@@ -236,6 +236,42 @@ async def test_the_schedule_reads_only_shipped_orders_without_tracking() -> None
     assert row.observed_via is ObservedVia.SCHEDULE
 
 
+async def test_receipts_without_a_code_do_not_pin_the_schedule_batch() -> None:
+    """Codex review of #79: shipped receipts without a code are read once per Etsy change, so
+    newer orders behind them are reached."""
+    no_code = [
+        replace(shipped(paid_receipt(4100000000 + i), minutes=9), shipments=()) for i in range(3)
+    ]
+    newer = shipped(paid_receipt(RECEIPT), minutes=9)
+    sync = Sync(FakeMarketplace(order_receipts=(*no_code, newer)))
+    sync.tracking.shipped[SHOP] = [r.receipt_id for r in no_code] + [RECEIPT]
+    handler = replace(sync.handler, batch=2)
+
+    outcomes = [await handler(sync.context({"mode": "schedule"})) for _ in range(3)]
+
+    assert [o.output["receipts"] for o in outcomes if isinstance(o, Completed)] == [2, 2, 0]
+    assert len(sync.tracking.rows) == 1  # the newer order's parcel
+    # A later change on Etsy (a second parcel) makes the receipt due again.
+    sync.tracking.changed_on_etsy(SHOP, RECEIPT)
+    again = await handler(sync.context({"mode": "schedule"}))
+    assert isinstance(again, Completed)
+    assert again.output["receipts"] == 1
+
+
+async def test_a_shipment_without_a_carrier_name_is_recorded_as_other() -> None:
+    """Codex review of #79: Etsy may omit the carrier; the row still records."""
+    receipt = replace(
+        shipped(paid_receipt(RECEIPT), minutes=9),
+        shipments=(OrderShipment("", "LX123456789CN", NOW),),
+    )
+    sync = Sync(FakeMarketplace(order_receipts=(receipt,)))
+
+    await sync.handler(sync.context({"receipt_id": RECEIPT}))
+
+    [row] = sync.tracking.rows.values()
+    assert (row.carrier, row.carrier_name) == ("other", "other")
+
+
 async def test_a_disconnected_shop_is_skipped_without_a_read() -> None:
     sync = Sync(vault=_vault(IntegrationStatus.NEEDS_REAUTH))
 
@@ -289,8 +325,21 @@ async def test_order_shipped_starts_tracking_sync_keyed_by_receipt_and_event() -
     [request] = engine.requests
     assert request.automation_id == TRACKING_SYNC
     assert request.trigger is TriggerKind.EVENT
-    assert request.idempotency_key == f"tracking:{SHOP}:{RECEIPT}:order.shipped"
+    assert request.idempotency_key == f"tracking:{SHOP}:{RECEIPT}:order.shipped:c-1"
     assert request.payload == {"receipt_id": RECEIPT, "event_type": "order.shipped"}
+
+
+async def test_a_second_shipped_webhook_for_the_receipt_starts_a_new_run() -> None:
+    """Codex review of #79: a later parcel's webhook must not replay the first execution."""
+    engine = Engine()
+    trigger = EngineTrackingSync(engine)
+    for webhook in ("etsy-webhook:msg_1", "etsy-webhook:msg_2", "etsy-webhook:msg_2"):
+        await trigger.receipt_event(
+            TenantShop(ORG, SHOP), receipt_id=RECEIPT, event_type="order.shipped",
+            correlation_id=webhook, causation_id=None,
+        )  # fmt: skip
+    keys = [r.idempotency_key for r in engine.requests]
+    assert len(set(keys)) == 2
 
 
 async def test_a_draft_tracking_sync_is_refused_and_logged() -> None:

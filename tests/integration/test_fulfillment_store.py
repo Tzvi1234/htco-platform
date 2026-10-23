@@ -5,6 +5,7 @@ opened concurrently, the machine and the evidence rule in the database, events o
 import uuid
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import timedelta
 
 import psycopg
@@ -256,3 +257,27 @@ async def test_worker__the_inspector_opens_one_incident_for_a_late_order(
     late_id = scalar(database, "select receipt_id from app.incidents where shop_id = %s", [shop])
     assert late_id == 84
     assert outbox(database, "fulfillment.sla_breached.v1", shop=shop) == 1
+
+
+async def test_worker__a_checked_receipt_is_due_again_only_after_it_changes_on_etsy(
+    database: Database, worker_db: Database
+) -> None:
+    """Codex review of #79: the schedule reads each shipped receipt once per change."""
+    tenant, integration = await connected(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    sent = replace(order(86), status="completed", is_shipped=True, shipments=())
+    store = PostgresTrackingStore(worker_db)
+    with tenant_scope(org):
+        await PostgresOrderStore(worker_db).ingest_receipts(
+            integration, [sent], context=WEBHOOK, now=NOW
+        )
+        before = store.untracked_shipped(shop, limit=10)
+        store.mark_checked(shop, 86, now=NOW)
+        after = store.untracked_shipped(shop, limit=10)
+        changed = replace(sent, updated_at=sent.updated_at + timedelta(hours=1))
+        await PostgresOrderStore(worker_db).ingest_receipts(
+            integration, [changed], context=WEBHOOK, now=NOW
+        )
+        again = store.untracked_shipped(shop, limit=10)
+
+    assert (before, after, again) == ((86,), (), (86,))

@@ -31,7 +31,7 @@ async def test_order_shipped_starts_intake_and_tracking_sync_once_each() -> None
     started = {r.automation_id: r.idempotency_key for r in run.engine.requests}
     assert started == {
         ORDER_INTAKE: f"etsy:{SHOP}:{RECEIPT}:order.shipped",
-        TRACKING_SYNC: f"tracking:{SHOP}:{RECEIPT}:order.shipped",
+        TRACKING_SYNC: f"tracking:{SHOP}:{RECEIPT}:order.shipped:etsy-webhook:msg_fake0001",
     }
 
 

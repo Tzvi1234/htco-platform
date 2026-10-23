@@ -32,6 +32,8 @@ class MemoryTrackingStore:
     events: Events = field(default_factory=Events)
     rows: dict[tuple[uuid.UUID, int, bytes], TrackingObservation] = field(default_factory=dict)
     shipped: dict[uuid.UUID, list[int]] = field(default_factory=dict)
+    # Receipts read since their last change on Etsy (`tracking_checks`).
+    checked: set[tuple[uuid.UUID, int]] = field(default_factory=set)
 
     def record_tracking(
         self,
@@ -49,8 +51,14 @@ class MemoryTrackingStore:
         return RecordedTracking(observation.id, True, observation.observed_at, observation.source)
 
     def untracked_shipped(self, shop_id: uuid.UUID, *, limit: int) -> tuple[int, ...]:
-        tracked = {r for (s, r, _) in self.rows if s == shop_id}
-        return tuple(r for r in self.shipped.get(shop_id, []) if r not in tracked)[:limit]
+        due = (r for r in self.shipped.get(shop_id, []) if (shop_id, r) not in self.checked)
+        return tuple(due)[:limit]
+
+    def mark_checked(self, shop_id: uuid.UUID, receipt_id: int, *, now: datetime) -> None:  # noqa: ARG002 - the port
+        self.checked.add((shop_id, receipt_id))
+
+    def changed_on_etsy(self, shop_id: uuid.UUID, receipt_id: int) -> None:
+        self.checked.discard((shop_id, receipt_id))
 
 
 @dataclass

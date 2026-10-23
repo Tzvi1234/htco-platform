@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_worker;
-select plan(20);
+select plan(21);
 
 insert into auth.users (id, email) values
   ('91111111-0000-0000-0000-000000000001', 'owner-k@example.test'),
@@ -142,6 +142,13 @@ select lives_ok(
 select throws_ok(
   $$delete from app.incident_events where incident_id = '98000000-0000-0000-0000-000000000001'$$,
   '42501', null, 'incident events are append-only'
+);
+
+select throws_ok(
+  $$insert into app.sla_policies (id, organization_id, shop_id, supplier, window_days, unit)
+    values (gen_random_uuid(), '9a000000-0000-0000-0000-000000000000',
+            '9c000000-0000-0000-0000-000000000001', 'yun', 5, 'business_days')$$,
+  '23514', null, 'no supplier or shipping-method policy until orders carry them (Phase 13)'
 );
 
 -- Members see their own organization's rows ---------------------------------------------------
