@@ -276,7 +276,7 @@ Recurring work (reconciliation, SLA inspection, token refresh, retention) is enq
 | Concept | Domain (pure) | Application (rules, ports) | Data | Status |
 |---|---|---|---|---|
 | AI employees | `htco_domain.workforce` (identity, versioned profile, 22-section sheet, readiness gate) | `htco_application.workforce.registry`, `htco_application.agents.runtime` (port) | `registry/employees/` | Foundation implemented; runtime adapter PLANNED (Phase 8) |
-| Automations | `htco_domain.automation` (definition, 18-section spec, execution state machine) | `htco_application.automation.engine` | `registry/automations/` | In-memory engine implemented; durable store PLANNED (Phase 5) |
+| Automations | `htco_domain.automation` (definition, 18-section spec, execution state machine) | `htco_application.automation.engine` (`authorize`), `htco_application.automation.durable` | `registry/automations/` | Durable engine implemented (Phase 5); the first in-memory engine is retired |
 | Tools | `htco_domain.tooling` | `htco_application.workforce.tool_access` | `registry/tools/` | Access rules implemented; tool bridge PLANNED (Phase 8) |
 | Routing and decisions | `htco_domain.routing` | `htco_application.routing.router`, `htco_application.decisions.advisor` | per-employee `[routing]` tables; `registry/advisors/` | Implemented with fakes; gateway and providers PLANNED (Phase 9) |
 | Records | `htco_domain.actors`, `htco_domain.activity`, `htco_domain.tasks`, `htco_domain.improvement` | — | — | Domain implemented; stores PLANNED (Phases 2, 7, 10, 18) |
