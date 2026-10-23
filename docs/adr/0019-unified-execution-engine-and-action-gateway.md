@@ -1,6 +1,6 @@
 # ADR-0019: One execution engine and one Action Gateway for automations and AI employees
 
-- **Status:** Proposed (owner's architecture upgrade brief, 2026-10-23); accepted when the Phase 5 alignment slice merges
+- **Status:** Accepted 2026-10-23: slice 5.0 is complete, with tests for AC-5.0.1 (CI's `migration-order` job) and AC-5.0.2 (the correlation trace) (proposed with the owner's architecture upgrade brief, 2026-10-23)
 - **Date:** 2026-10-23
 - **Deciders:** Owner, engineering
 - **Amends:** [ADR-0013](0013-automation-engine.md) (the engine gains a gateway and four channels), [ADR-0014](0014-tool-registry.md) (tool calls of every actor pass the gateway), [ADR-0007](0007-job-queue.md) (the queue is the engine's only transport; optional Valkey), [ADR-0003](0003-agent-runtime-langgraph.md) (the LangGraph Postgres checkpointer is named; LangGraph never runs deterministic work)
@@ -94,3 +94,6 @@ Option 3.
   - AC-5.0.2: no test traces one correlation ID from trigger to execution to job to outbox. `tests/application/test_messaging.py:186` checks only the outbox-to-delivery-job hop.
 
   Accept the ADR when every 5.0 criterion is met. Two owner-approved tooling deviations from Decision §2 and §5 are recorded in [execution-engine.md](../architecture/execution-engine.md) §2 and §8: standard-library dataclass contracts instead of Pydantic models, and in-house breaker, limiter and retries instead of PyBreaker, aiolimiter and Tenacity. Those sections take precedence where this ADR names the libraries. The architecture audit of the same day ([review](../reviews/2026-10-23-architecture-audit.md)) lists the Etsy reads that still bypass the gateway.
+- 2026-10-23 — Accepted. Slice 5.0 is complete:
+  - AC-5.0.1: `tools/migration_order.py`, run by CI's `migration-order` job, fails a pull request whose new migration sorts before or with the newest on main, renames a merged migration or reuses a pgTAP prefix (ER-DATA-10). The duplicate pgTAP prefix 14 is gone (`14_worker_order_purge` became `20_worker_order_purge`).
+  - AC-5.0.2: `tests/integration/test_correlation_trace.py` follows one correlation ID through the execution, its job, the action execution, the outbox events and the execution's state changes, against Postgres. The execution job now carries the correlation ID, with the execution as its cause (it carried neither before).
