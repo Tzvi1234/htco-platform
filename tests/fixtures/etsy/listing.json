@@ -1,0 +1,13 @@
+{
+  "listing_id": 1500000001,
+  "shop_id": 10000001,
+  "title": "Fake leather wallet",
+  "state": "active",
+  "quantity": 4,
+  "updated_timestamp": 1792000000,
+  "price": {
+    "amount": 2500,
+    "divisor": 100,
+    "currency_code": "USD"
+  }
+}
