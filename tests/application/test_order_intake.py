@@ -336,3 +336,43 @@ async def test_sync_trigger__needs_its_tenant() -> None:
     job = replace(_sync_job(), organization_id=None, shop_id=None)
     with pytest.raises(JobError):
         await EngineSyncTrigger(Engine()).run(job)
+
+
+# --- Re-sync selected (slice 5.7) -------------------------------------------------------------
+
+
+async def test_resync__one_job_per_receipt_on_the_shops_orders_lock() -> None:
+    queue = MemoryJobQueue()
+    requests = QueuedSyncRequests(queue)
+    integration = _vault().rows[SHOP]
+
+    queued = await requests.enqueue_receipts(
+        integration, (11, 12), now=NOW, correlation_id="req-9"
+    )
+    again = await requests.enqueue_receipts(
+        integration, (11,), now=NOW + timedelta(seconds=10), correlation_id="req-10"
+    )
+
+    jobs = list(queue.jobs.values())
+    assert (queued, again) == (2, 1)
+    assert len(jobs) == 2  # the same receipt within the minute is one job
+    assert sorted(j.spec.payload["receipt_id"] for j in jobs) == [11, 12]
+    assert {j.spec.payload["reason"] for j in jobs} == {"resync"}
+    assert {j.spec.lock_key for j in jobs} == {f"shop:{SHOP}:orders"}
+    assert {j.spec.correlation_id for j in jobs} == {"req-9"}
+
+
+async def test_sync_trigger__a_resync_job__re_reads_its_receipt_through_intake() -> None:
+    engine = Engine()
+    job = replace(
+        _sync_job(),
+        idempotency_key=f"{ORDER_SYNC_JOB}:{SHOP}:resync:77:x",
+        payload={"reason": "resync", "receipt_id": 77},
+    )
+
+    assert await EngineSyncTrigger(engine).run(job)
+
+    [request] = engine.requests
+    assert request.payload == {"receipt_id": 77, "event_type": "resync"}
+    assert request.trigger is TriggerKind.EVENT
+    assert request.idempotency_key.startswith(f"etsy:{SHOP}:77:resync:")
