@@ -9,7 +9,7 @@
 | **Requirements** | FR-AUT-01, FR-AUT-02, FR-AUT-03, FR-AUT-04, FR-AUT-05, FR-FIN-01, FR-ORD-01, FR-ORD-02, FR-ORD-03, FR-ORD-04, FR-ORD-05, FR-ORD-08, FR-ORD-09, FR-SHOP-04, FR-TASK-03 |
 | **Decisions** | [ADR-0007](../../adr/0007-job-queue.md), [ADR-0013](../../adr/0013-automation-engine.md), [ADR-0018](https://github.com/Tzvi1234/htco-platform/pull/53) (order history, in PR #53), [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md), [ADR-0020](../../adr/0020-per-shop-browser-environment.md), [ADR-0021](../../adr/0021-authenticator-service.md), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) |
 | **Design** | [execution-engine.md](../../architecture/execution-engine.md) |
-| **Status** | PARTIAL: 5.1, 5.2 and 5.10 in open PRs #53, #55 and #58 (not merged; aligned first, see below); the order history store merged ahead of the phase (#57) |
+| **Status** | COMPLETE (2026-10-25): every slice is merged, including the follow-ups #97 and htco-clients #60. Three owner items stay open: the activation approval of the three order automations (right after #97), the Etsy webhook registration and the restore rehearsal (see the [exit gate](#exit-gate)) |
 
 The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (owner's architecture upgrade, [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md)). The file name stays the same so links keep working.
 
@@ -22,11 +22,11 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 - [x] 5.4 Receipt ingest on the order history store (#57) (migration `20261024210000_order_intake.sql`, pgTAP `17_order_intake`; the worker's gateway is real for reads behind `HTCO_WORKER_ACTION_GATEWAY`; the API's sync stays as the fallback behind `HTCO_ORDER_SYNC_IN_API` until 5.11; Etsy fees are not estimated yet: the receipt carries none, they come with the ledger in Phase 13)
 - [x] 5.5 Reconciliation and backfill on the queue (migration `20261024220000_order_reconciliation.sql`, pgTAP `18_order_reconciliation`; the owner's decision of 2026-10-24: webhooks first, reconciliation twice a day by `HTCO_RECONCILIATION_SCHEDULE` in `HTCO_RECONCILIATION_TZ`, default 06:00 and 18:00 Asia/Jerusalem, the second run the full sweep with every paid, unshipped order; the hourly tick `orders.reconciliation` is off until named in `HTCO_WORKER_SCHEDULES`; drifts in `sync_drifts`; 8 Etsy calls a day for the pilot shop)
 - [x] 5.6 Orders API onto the stored order (rewritten after the audit: no second endpoint; `GET /v1/shops/{shop_id}/orders/{order_id}` with the status timeline; `last_synced_at` everywhere; no migration)
-- [ ] 5.7 Orders UI onto the stored order (no second screen)
+- [x] 5.7 Orders UI onto the stored order (no second screen): htco-clients #56 (the order timeline from the store, search and sync freshness) and #59 (CSV export and re-sync of the selected orders)
 - [x] 5.8 Drills: the kill-worker drill runs in CI on every pull request (real worker processes, `SIGKILL` mid-job and mid-execution, `SIGTERM`); the restore drill is documented step by step for the Free plan (`pg_dump` of the HTCO schemas, a scratch database from the migrations, row counts and tenant isolation including `etsy_order_buyers`) and left for the owner to run ([orders-ingest operations](../../features/orders-ingest/operations.md#drills-slice-58)); both recorded in its drill log
-- [x] 5.9 Queue, execution and sync health: the admin view (htco-clients Admin › Health) and its API (`GET /v1/operations/health`, the audited `POST /v1/operations/dead-letters/{job_id}/retry`, per-automation metrics), exception messages scrubbed from logs and Sentry (#86). Moved by the owner's decision of 2026-10-23: AC-5.9.1's alert goes through the one alert model (Phase 6.4 notifications now, Phase 10's monitors later), and AC-5.9.4's Prometheus `/metrics` goes with Phase 8A's monitoring slice, once a monitoring host is chosen
+- [x] 5.9 Queue, execution and sync health: the admin view (htco-clients Admin › Health) and its API (`GET /v1/operations/health`, the audited `POST /v1/operations/dead-letters/{job_id}/retry`, per-automation metrics), exception messages scrubbed from logs and Sentry (#86). Moved by the owner's decision of 2026-10-23: AC-5.9.1's alert goes through the one alert model (Phase 6.4 notifications now, Phase 10's monitors later), and AC-5.9.4's Prometheus `/metrics` goes with Phase 8A's monitoring slice, once a monitoring host is chosen. The screen, with every call naming its workspace, is htco-clients #60
 - [x] 5.10 Durable automation engine (PR #58; aligned: migration `20261023140000_automation_engine.sql`, pgTAP `12_automation_engine`, handlers get a `HandlerContext` with an `ActionGateway` client, `WAITING` state; no automation is ready yet)
-- [ ] 5.11 Order automations activated: **built and tested, awaiting the owner's activation approval**. The three specifications have all 18 sections defined; their JSON Schemas are in `packages/contracts/automations/`; Order Deduplication & Verification and Product Sales Counters have handlers, started by Intake's order events (migration `20261025150000_order_automations.sql`, pgTAP `22_order_automations`); Scenario G and Scenario B part 1 run against Postgres; the runbook and the activation checklist are in [orders-ingest operations](../../features/orders-ingest/operations.md#activation-checklist-slice-511-for-the-owner). `readiness` stays `draft` until the owner approves
+- [ ] 5.11 Order automations activated: **built and tested, awaiting the owner's activation approval**. The three specifications have all 18 sections defined; their JSON Schemas are in `packages/contracts/automations/`; Order Deduplication & Verification and Product Sales Counters have handlers, started by Intake's order events (migration `20261025150000_order_automations.sql`, pgTAP `22_order_automations`); Scenario G and Scenario B part 1 run against Postgres; the runbook and the activation checklist are in [orders-ingest operations](../../features/orders-ingest/operations.md#activation-checklist-slice-511-for-the-owner). `readiness` stays `draft` until the owner approves. The owner's decision of 2026-10-23: the activation, with the counter rebuild, follows right after #97 (the counter race fix) merges
 - [x] 5.12 Action Gateway and the generic execution contract (standard-library dataclasses and JSON Schemas, see execution-engine.md §2; production wiring with the channels of 5.13)
 - [x] 5.13 Execution Router and channel adapters (API real for reads, writes refused before sending; Browser interface and fake; Internal; Human contract in memory; wiring into the deployed processes with 5.14 and 5.11)
 - [x] 5.14 Shared approval contract (in-memory; Postgres in Phase 7; `htco_application.approvals`: `ApprovalService`, `MemoryApprovalService`, the gateway's `GatewayApprovals` and the `ApprovalResumer` for waiting automations; no migration)
@@ -167,7 +167,7 @@ An automation is activated only when all of these hold:
 
 ## Owner prerequisites
 
-- Webhook endpoint registered in the Etsy developer portal (webhooks work for personal apps since 2026-02-17), with the signing secret stored in the platform's secrets.
+- Webhook endpoint registered in the Etsy developer portal (webhooks work for personal apps since 2026-02-17), with the signing secret stored in the platform's secrets. The owner's decision of 2026-10-23: registered now, with main's guidance.
 - Owner review of the Phase 5 alignment list above before #53, #55 and #58 merge.
 
 ## Slices
@@ -484,10 +484,10 @@ The `SecretBroker` and `Authenticator` Protocols, `InjectionGrant`, `SecretRef`,
 
 ## Security checklist
 
-- [ ] Webhook verification before any processing (ASVS V4, V2.3); request body size limit.
-- [ ] Workers use their own database role and explicit tenant filters; tested.
-- [ ] Buyer PII masked by role; never logged; no contact data stored (ADR-0018).
-- [ ] The gateway is the only path to Etsy for automations; an architecture test forbids importing the Etsy adapter outside the API channel and the maintenance probes.
+- [x] Webhook verification before any processing (ASVS V4, V2.3); request body size limit. Tested: `test_ingress__nothing_is_stored_before_the_signature_verifies`, `test_webhook__over_64_kib__413_before_the_signature_is_checked`.
+- [x] Workers use their own database role and explicit tenant filters; tested (`tests/integration/test_job_queue.py`, the `test_worker_role__…` cases).
+- [x] Buyer PII masked by role; never logged; no contact data stored (ADR-0018). Tested: `test_rls__buyer_rows_only_for_buyer_data_roles`, `test_worker_role__never_reads_buyer_rows_or_another_organizations_orders`, `test_orders__no_buyer_detail_or_review_text_in_the_logs`, `test_log__an_exception_message_with_buyer_data__never_in_the_line`.
+- [ ] The gateway is the only path to Etsy for automations; an architecture test forbids importing the Etsy adapter outside the API channel and the maintenance probes. Open: the layer contracts in `pyproject.toml` do not name the Etsy adapter yet; the test comes with the audit follow-up "gateway-bypass test" (orion's queue, board #95).
 - [x] No secret or code type reachable by a tool or model (5.17).
 
 ## Documentation
@@ -509,9 +509,9 @@ The `SecretBroker` and `Authenticator` Protocols, `InjectionGrant`, `SecretRef`,
 
 ## Exit gate
 
-- [ ] All AC-5.x pass, including Scenario G and Scenario B part 1 against Postgres; drills recorded; KPIs baselined (orders per day, time to tracking).
-- [ ] PRs #53, #55 and #58 merged only after 5.0.
-- [ ] The three order automations are `ready` with fully defined specifications, and the owner approved their activation.
+- [ ] All AC-5.x pass, including Scenario G and Scenario B part 1 against Postgres; drills recorded; KPIs baselined (orders per day, time to tracking). Done: the AC tests and both scenarios run against Postgres in CI, and the kill-worker drill runs on every pull request. Open: the owner's restore rehearsal, and the KPI baseline, which needs the automations active.
+- [x] PRs #53, #55 and #58 merged only after 5.0 (#55 was replaced by #62).
+- [ ] The three order automations are `ready` with fully defined specifications, and the owner approved their activation. The specifications are fully defined (#90); the owner activates them right after #97 merges.
 
 ## Rollback
 
