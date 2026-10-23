@@ -95,6 +95,11 @@ _HELD_UNTIL_RETRY_AT = frozenset({"rate_limited", "breaker_open"})
 _TRANSPORT_ERRORS = (MarketplaceUnavailableError, ConnectionError, TimeoutError)
 
 
+class _NoTaskStoreError(Exception):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"handed to a person ({reason}) without a task store")
+
+
 class _Failure(Enum):
     RATE_LIMITED = auto()  # 429: wait for Retry-After
     QUOTA = auto()  # the daily budget floor: the next UTC day
@@ -148,6 +153,7 @@ class Claim:
     approval_id: uuid.UUID | None = None
     retry_at: datetime | None = None  # a deferred action runs again from then on
     error_code: str | None = None  # why it was deferred or failed
+    request_hash: str | None = None  # of the request that created it
     channel: Channel | None = None  # the channel it ran on, if it ran
 
 
@@ -238,6 +244,8 @@ class ActionGatewayService:
             )
             if missing:
                 raise ValueError(f"no rate budget for {', '.join(missing)}")
+        if parts.human is None and {Channel.BROWSER, Channel.HUMAN} & set(parts.adapters):
+            raise ValueError("a browser or human channel needs a task store for its hand-offs")
         self._p = parts
         self._router = ExecutionRouter(parts.adapters, parts.capabilities, parts.browser)
 
@@ -245,7 +253,7 @@ class ActionGatewayService:
         now = self._p.clock()
         digest = request_hash(request)
         claim = self._p.store.claim(request, request_hash=digest, now=now)
-        early = self._answer_from_claim(claim, request, now)
+        early = self._answer_from_claim(claim, request, digest, now)
         if early is not None:
             return early
         path: list[ActionState] = [claim.state]
@@ -262,11 +270,17 @@ class ActionGatewayService:
         return await self._run(claim, request, definition, path)
 
     def _answer_from_claim(
-        self, claim: Claim, request: ActionRequest, now: datetime
+        self, claim: Claim, request: ActionRequest, digest: str, now: datetime
     ) -> ActionResult | None:
         """What a claim answers without running the checks again, or None to run them."""
         if claim.result is not None:
             return claim.result  # finished: the first result (AC-5.12.1)
+        if not claim.created and claim.request_hash not in {None, digest}:
+            # The same key for another request (actor, shop, input...): it never continues,
+            # resumes or finishes the first one. Nothing is recorded.
+            return self._result(
+                claim.execution_id, ActionOutcome.DENIED, error="idempotency_conflict"
+            )
         if claim.state is _S.HANDED_TO_HUMAN:
             return self._resume_from_human(claim, request)
         if not claim.created and claim.state not in _RESUMABLE:
@@ -575,10 +589,11 @@ class ActionGatewayService:
         path: list[ActionState],
         error: Exception,
         attempts: int,
+        code: str | None = None,
     ) -> ActionResult:
         result = replace(
             self._result(claim.execution_id, ActionOutcome.FAILED, channel=binding.channel,
-                         error=describe_error(error)[:64]),
+                         error=code or describe_error(error)[:64]),
             attempts=attempts,
         )  # fmt: skip
         self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
@@ -599,8 +614,11 @@ class ActionGatewayService:
         now = self._p.clock()
         if outcome.handed_to_human:
             reason = outcome.handoff_reason or HUMAN_CHANNEL
-            if self._p.human is not None:
-                self._p.human.hand_off(claim.execution_id, request, reason=reason)
+            if self._p.human is None:  # no one could ever pick it up: fail, never strand it
+                return self._fail(claim, request, definition, binding, path,
+                                  _NoTaskStoreError(reason), attempts,
+                                  code="no_task_store")  # fmt: skip
+            self._p.human.hand_off(claim.execution_id, request, reason=reason)
             result = replace(
                 self._result(claim.execution_id, ActionOutcome.HANDED_TO_HUMAN,
                              channel=binding.channel),

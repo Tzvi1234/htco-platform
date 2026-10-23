@@ -26,7 +26,6 @@ from htco_application.jobs import JsonValue
 from htco_application.marketplace import (
     MarketplaceMoney,
     MarketplaceNotFoundError,
-    MarketplaceRequestError,
     MarketplaceShop,
     MarketplaceWriteRefusedError,
     Page,
@@ -55,6 +54,8 @@ class EtsyReads(Protocol):
         offset: int = 0,
         urgent: bool = False,
     ) -> Page[Receipt]: ...
+
+    async def get_receipt(self, shop_id: int, receipt_id: int) -> Receipt: ...
 
 
 class EtsyShopIds(Protocol):
@@ -113,10 +114,10 @@ class EtsyApiChannel:
     async def _receipts(
         self, etsy_shop: int, values: Mapping[str, JsonValue]
     ) -> dict[str, JsonValue]:
-        if "receipt_id" in values:
-            raise MarketplaceRequestError(
-                "one receipt by ID is read from the order store", status=400
-            )
+        receipt_id = values.get("receipt_id")
+        if isinstance(receipt_id, int):  # one receipt, for example from a webhook (5.3, 5.4)
+            one = await self._etsy.get_receipt(etsy_shop, receipt_id)
+            return {"receipts": [_receipt(one)], "count": 1}
         since = values.get("min_last_modified")
         page = await self._etsy.list_receipts(
             etsy_shop,

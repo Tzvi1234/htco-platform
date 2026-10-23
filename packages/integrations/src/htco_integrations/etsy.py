@@ -261,6 +261,16 @@ class EtsyAdapter:
         )
         return _parse("list_receipts", lambda data: _page(data, _receipt, offset), body)
 
+    async def get_receipt(self, shop_id: int, receipt_id: int, *, urgent: bool = False) -> Receipt:
+        """One receipt by ID (`getShopReceipt`, a GET): order facts only, like `list_receipts`."""
+        if receipt_id < 1:
+            raise ValueError("receipt_id must be a positive Etsy receipt ID")
+        body = await self._request(
+            "GET", "get_receipt", shop_id, f"/shops/{shop_id}/receipts/{receipt_id}", {},
+            urgent=urgent,
+        )  # fmt: skip
+        return _parse("get_receipt", _receipt, body)
+
     async def list_listings(  # noqa: PLR0913 - the query and its token source
         self,
         shop_id: int,
