@@ -8,6 +8,7 @@ dependencies = [
   "htco-application",
   "httpx>=0.28,<0.29",
   "opentelemetry-api>=1.45,<2",
+  "pyotp>=2.9,<3",
   "structlog>=26.1,<27",
 ]
 
