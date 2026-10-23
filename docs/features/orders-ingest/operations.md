@@ -67,7 +67,7 @@ Etsy Order Intake is not active until the owner approves it (5.11): the worker l
 ### Product Sales Counters look wrong (slice 5.11)
 1. **Check:** `app.product_sales_counters` for the listing, and `app.product_sales_applications` for the receipts that count it (`counted`: listing → units; empty for unpaid, cancelled or refunded orders).
 2. **Likely cause:** the automation is not active yet (no execution), it dead-lettered (Admin › Health), or an order's stored state is behind Etsy.
-3. **Fix:** retry the dead-lettered execution, or re-run the automation for the receipt (a workflow trigger with `{"receipt_id": …}`). Each run moves the counters by the difference only, so re-running is always safe; to rebuild a listing, re-run every receipt that names it.
+3. **Fix:** retry the dead-lettered execution, or run the **rebuild** for the shop (as in [activation step 2b](#activation-checklist-slice-511-for-the-owner)). Each run moves the counters by the difference only (through `app.product_sales_applications`), so re-running is always safe.
 4. **Verify:** the counters equal the units of the listing's orders that count as sales.
 
 ## Activation checklist (slice 5.11, for the owner)
@@ -76,6 +76,7 @@ The three automations are built, tested and **`readiness = "draft"`**. The engin
 
 1. **Approve.** The owner approves Etsy Order Intake, Order Deduplication & Verification and Product Sales Counters.
 2. **Ready.** In one reviewed pull request, set `readiness = "ready"` in `registry/automations/etsy-order-intake.toml`, `order-dedup-verification.toml` and `product-sales-counters.toml`. Every section is already `defined` (the loader refuses `ready` otherwise). After it merges, the migrate workflow's `htco registry sync --automations --apply` stores them.
+2b. **Count the stored orders.** The history backfill publishes no events, and the events of the draft period were refused, so the counters start empty. For each shop, an owner or admin starts the rebuild once: `POST /v1/automations/product-sales-counters/executions` with an `Idempotency-Key` and the body `{"organization_id": "<org>", "shop_id": "<shop>", "payload": {"rebuild": true}}`. It recounts every stored receipt through the applications ledger, so running it again (or alongside new events) moves nothing. Verify: the execution succeeds with `rebuilt` equal to the shop's stored orders, and a listing's counter equals the units of its orders that count as sales.
 3. **Worker sync.** Set `HTCO_ORDER_SYNC_IN_API` to `"false"` in `infra/digitalocean/app.yaml` (the API service). The API stops syncing; stale reads, the manual sync and "Re-sync selected" go to the worker as `etsy.order_sync` jobs.
 4. **Reconciliation.** Add `orders.reconciliation` to the worker's `HTCO_WORKER_SCHEDULES`. Reconciliation then runs at the times of `HTCO_RECONCILIATION_SCHEDULE` (06:00 and 18:00 Asia/Jerusalem by default; the 18:00 run is the full sweep).
 5. **Webhooks.** Register the endpoint and its secret in the Etsy developer portal ([above](#registering-the-webhook-in-the-etsy-developer-portal)), then set `HTCO_ETSY_WEBHOOKS_ENABLED` to `"true"`.

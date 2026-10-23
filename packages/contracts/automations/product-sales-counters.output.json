@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ht-co.app/contracts/automations/product-sales-counters.output.json",
   "title": "Product Sales Counters output",
-  "description": "Units and orders moved per listing (keys are listing IDs); never buyer data.",
+  "description": "Units and orders moved per listing (keys are listing IDs), or for a rebuild the receipts recounted and how many moved; never buyer data.",
   "type": "object",
   "properties": {
     "receipt_id": {
@@ -20,6 +20,14 @@
       "enum": [
         "not_stored"
       ]
+    },
+    "rebuilt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "moved": {
+      "type": "integer",
+      "minimum": 0
     }
   },
   "additionalProperties": false

@@ -5,7 +5,9 @@ name = "Product Sales Counters"
 version = 1
 business_owner = "roni"
 primary_trigger = "event"
-callable_from = ["event", "workflow"]
+callable_from = ["event", "workflow", "user_action"]
+# The rebuild, by an owner or admin (POST /v1/automations/product-sales-counters/executions).
+user_capability = "request_bulk_resync"
 timeout_seconds = 120
 side_effect = "internal"
 approval_required = false
@@ -28,11 +30,11 @@ text = "roni: accountable for the outcome (the owner until Roni is active in Pha
 
 [specification.trigger]
 status = "defined"
-text = "Primary: event: orders.ingested.v1, orders.updated.v1, orders.cancelled.v1 and orders.refunded.v1 (key counters:{shop_id}:{receipt_id}:{event_type}:{etsy_updated_at}). Also workflow, through the engine's authorization."
+text = "Primary: event: orders.ingested.v1, orders.updated.v1, orders.cancelled.v1 and orders.refunded.v1 (key counters:{shop_id}:{receipt_id}:{event_type}:{etsy_updated_at}). Also workflow, through the engine's authorization; and user_action for the rebuild ({\"rebuild\": true} for a shop), by an owner or admin (request_bulk_resync)."
 
 [specification.input_schema]
 status = "defined"
-text = "packages/contracts/automations/product-sales-counters.input.json: the receipt_id and the event_type. No buyer data."
+text = "packages/contracts/automations/product-sales-counters.input.json: the receipt_id and the event_type, or {\"rebuild\": true} for the shop. No buyer data."
 
 [specification.preconditions]
 status = "defined"
@@ -40,11 +42,11 @@ text = "The order is stored (otherwise the run completes as skipped: not_stored)
 
 [specification.steps]
 status = "defined"
-text = "In one transaction: read the stored order's state and items, and what the receipt counted before; compute what it should count now (its units per listing when the state counts as a sale, nothing when unpaid, cancelled or refunded); move app.product_sales_counters by the difference; keep the new counts in app.product_sales_applications."
+text = "In one transaction: read the stored order's state and items, and what the receipt counted before; compute what it should count now (its units per listing when the state counts as a sale, nothing when unpaid, cancelled or refunded); move app.product_sales_counters by the difference; keep the new counts in app.product_sales_applications. The rebuild does this for every stored receipt of the shop, in pages of 200 by receipt ID, each receipt in its own transaction: the receipts the history backfill stored (it publishes no events) and those whose events came while the automation was not active."
 
 [specification.output_schema]
 status = "defined"
-text = "packages/contracts/automations/product-sales-counters.output.json: the receipt_id and the units and orders moved per listing."
+text = "packages/contracts/automations/product-sales-counters.output.json: the receipt_id and the units and orders moved per listing; for a rebuild, the receipts recounted (rebuilt) and how many moved."
 
 [specification.dependencies]
 status = "defined"
@@ -60,7 +62,7 @@ text = "Five attempts, exponential backoff from 5 s to 15 min with jitter; then 
 
 [specification.idempotency]
 status = "defined"
-text = "The engine's unique key per event and version; and the move is by difference, so a replayed event moves nothing and a cancellation takes the units back once (AC-5.11.5)."
+text = "The engine's unique key per event and version; and the move is by difference, so a replayed event moves nothing and a cancellation takes the units back once (AC-5.11.5). The rebuild goes through the same ledger: running it again, or after the events, moves nothing, and a retry after a timeout resumes safely."
 
 [specification.timeouts_and_sla]
 status = "defined"
@@ -80,7 +82,7 @@ text = "tests/application/test_order_automations.py (property tests over any seq
 
 [specification.recovery]
 status = "defined"
-text = "Runbook: docs/features/orders-ingest/operations.md (Product Sales Counters). Counters can be rebuilt from the stored orders by re-running the automation per receipt."
+text = "Runbook: docs/features/orders-ingest/operations.md (Product Sales Counters). Counters are rebuilt from the stored orders by the rebuild ({\"rebuild\": true} for a shop); activation checklist step 2b."
 
 [specification.approvals]
 status = "defined"

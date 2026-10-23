@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ht-co.app/contracts/automations/product-sales-counters.input.json",
   "title": "Product Sales Counters input",
-  "description": "The receipt to recount and the order event that started it.",
+  "description": "The receipt to recount and the order event that started it, or the rebuild of every stored receipt of the shop ({\"rebuild\": true}).",
   "type": "object",
   "properties": {
     "receipt_id": {
@@ -17,10 +17,14 @@
         "orders.cancelled.v1",
         "orders.refunded.v1"
       ]
+    },
+    "rebuild": {
+      "type": "boolean",
+      "enum": [
+        true
+      ]
     }
   },
-  "required": [
-    "receipt_id"
-  ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "minProperties": 1
 }

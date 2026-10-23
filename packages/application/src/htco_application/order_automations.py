@@ -22,7 +22,10 @@ per receipt, the same grand total and the same item quantities. Each difference 
 **Product Sales Counters** moves the per-listing counters by the difference between what the
 receipt should count now (its items when the stored state counts as a sale, nothing otherwise)
 and what it counted before, in one transaction. A replayed event changes nothing; a cancellation
-takes the units back once.
+takes the units back once. **The rebuild** (`{"rebuild": true}` for a shop) recounts every stored
+receipt the same way: the receipts the history backfill stored (it publishes no events) and those
+whose events arrived while the automation was not active yet. It is idempotent through the same
+ledger, so it can run again at any time.
 
 No model call, no browser and no write to Etsy in either (AC-5.11.7).
 """
@@ -253,6 +256,13 @@ class CountersStore(Protocol):
         counters, and the new counts kept. None: no stored order."""
         ...
 
+    async def stored_receipts(self, shop_id: Any, *, after: int, limit: int) -> list[int]:
+        """The shop's stored receipt IDs above `after`, ascending, at most `limit`."""
+        ...
+
+
+REBUILD_PAGE = 200
+
 
 @dataclass
 class ProductSalesCounters:
@@ -260,8 +270,11 @@ class ProductSalesCounters:
 
     store: CountersStore
     clock: Callable[[], datetime]
+    page_size: int = REBUILD_PAGE
 
     async def __call__(self, ctx: HandlerContext) -> HandlerOutcome:
+        if "rebuild" in ctx.payload:
+            return await self._rebuild(ctx)
         receipt_id = ctx.payload.get("receipt_id")
         if ctx.shop_id is None or not isinstance(receipt_id, int) or isinstance(receipt_id, bool):
             raise JobError("a recount names its shop and receipt")
@@ -278,6 +291,28 @@ class ProductSalesCounters:
                 "orders": {str(k): v for k, v in sorted(delta.orders.items())},
             }
         )
+
+    async def _rebuild(self, ctx: HandlerContext) -> HandlerOutcome:
+        """Every stored receipt of the shop, page by page, each in its own transaction. A
+        retry after a timeout resumes safely: receipts already applied move nothing."""
+        payload = ctx.payload
+        if ctx.shop_id is None or payload.get("rebuild") is not True or "receipt_id" in payload:
+            raise JobError("a rebuild names its shop and nothing else")
+        rebuilt = moved = after = 0
+        while page := await self.store.stored_receipts(
+            ctx.shop_id, after=after, limit=self.page_size
+        ):
+            for receipt_id in page:
+                delta = await self.store.recount(
+                    ctx.organization_id, ctx.shop_id, receipt_id, execution_id=ctx.execution_id,
+                    now=self.clock(),
+                )  # fmt: skip
+                if delta is None:
+                    continue  # purged meanwhile
+                rebuilt += 1
+                moved += 0 if delta.empty else 1
+            after = page[-1]
+        return Completed({"rebuilt": rebuilt, "moved": moved})
 
 
 # --- Starting them from the order events ----------------------------------------------------
@@ -344,6 +379,7 @@ class OrderEventTriggers:
 __all__ = [
     "COUNTED_EVENTS",
     "ORDER_DEDUP",
+    "REBUILD_PAGE",
     "SALES_COUNTERS",
     "VERIFIED_EVENTS",
     "CounterDelta",

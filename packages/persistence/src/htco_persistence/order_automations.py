@@ -25,7 +25,7 @@ from htco_persistence.messaging import add_outbox_in
 
 _SNAPSHOT = """
 select etsy_updated_at,
-       private.order_grand_total_matches(shop_id, receipt_id, %s, %s, %s)
+       app.worker_order_grand_total_matches(shop_id, receipt_id, %s, %s, %s)
 from app.etsy_orders
 where shop_id = %s and receipt_id = %s
 """
@@ -43,6 +43,13 @@ insert into app.sync_drifts (
   detected_at, execution_id, correlation_id
 ) values (%s, %s, %s, %s, %s, %s, %s, %s, 'verification', %s, %s, %s)
 on conflict (shop_id, receipt_id, kind, etsy_updated_at) do nothing
+"""
+
+_STORED_RECEIPTS = """
+select receipt_id from app.etsy_orders
+where shop_id = %s and receipt_id > %s
+order by receipt_id
+limit %s
 """
 
 _ORDER_STATE = """
@@ -129,6 +136,14 @@ class PostgresOrderAutomationStore:
                             now=now,
                         )
             return new
+
+        return await anyio.to_thread.run_sync(run)
+
+    async def stored_receipts(self, shop_id: uuid.UUID, *, after: int, limit: int) -> list[int]:
+        def run() -> list[int]:
+            with self._database.connection() as c:
+                rows = c.execute(_STORED_RECEIPTS, [shop_id, after, limit]).fetchall()
+            return [int(r[0]) for r in rows]
 
         return await anyio.to_thread.run_sync(run)
 

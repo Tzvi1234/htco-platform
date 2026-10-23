@@ -10,8 +10,9 @@
 --
 -- `app.sync_drifts` gains the kind `totals` (the stored grand total differs from Etsy's; the
 -- values say which field, never an amount) and the source `verification`. The worker still reads
--- no money column: `private.order_grand_total_matches` answers only whether the stored total
--- equals the one it is given, for its job's organization.
+-- no money column: `app.worker_order_grand_total_matches` answers only whether the stored total
+-- equals the one it is given, for its job's organization. It lives in `app` because the worker
+-- has no usage on `private` (the notifications precedent); only the worker may execute it.
 --
 -- Safe on the live database: two new tables, two widened check constraints and one function.
 
@@ -45,7 +46,11 @@ create table app.product_sales_applications (
   updated_at timestamptz not null default now(),
   primary key (shop_id, receipt_id),
   constraint product_sales_applications_order_fkey foreign key (shop_id, receipt_id)
-    references app.etsy_orders (shop_id, receipt_id) on delete cascade
+    references app.etsy_orders (shop_id, receipt_id) on delete cascade,
+  -- The tenant binding: `organization_id` (what RLS filters on) is the shop's organization, so
+  -- no row can name one organization and another's order.
+  constraint product_sales_applications_shop_fkey foreign key (shop_id, organization_id)
+    references app.shops (id, organization_id) on delete cascade
 );
 create index product_sales_applications_organization_id_idx
   on app.product_sales_applications (organization_id);
@@ -90,7 +95,7 @@ alter table app.sync_drifts add constraint sync_drifts_source_check check (
 
 -- Whether the stored grand total equals Etsy's, without the worker reading the amount. Null when
 -- the order is not stored in the worker's organization.
-create function private.order_grand_total_matches(
+create function app.worker_order_grand_total_matches(
   p_shop_id uuid, p_receipt_id bigint, p_amount bigint, p_divisor integer, p_currency text
 ) returns boolean
 language sql stable security definer set search_path = '' as $$
@@ -102,7 +107,7 @@ language sql stable security definer set search_path = '' as $$
     and o.receipt_id = p_receipt_id
     and o.organization_id = (select private.worker_organization_id())
 $$;
-revoke all on function private.order_grand_total_matches(uuid, bigint, bigint, integer, text)
+revoke all on function app.worker_order_grand_total_matches(uuid, bigint, bigint, integer, text)
   from public, anon, authenticated, service_role;
-grant execute on function private.order_grand_total_matches(uuid, bigint, bigint, integer, text)
+grant execute on function app.worker_order_grand_total_matches(uuid, bigint, bigint, integer, text)
   to htco_worker;
