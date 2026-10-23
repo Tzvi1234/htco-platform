@@ -521,7 +521,10 @@ async def test_deferred__recorded_resumable_and_rechecked_on_resubmission() -> N
     row = store.only()
     assert row.state is ActionState.DEFERRED
     assert row.steps[-1].reason == "rate_limited"
-    assert row.steps[-1].event is None  # not a result yet: nothing is published
+    # Not a result yet, but a status change: one `actions.deferred.v1`, never `executed` (5.18).
+    deferral = row.steps[-1].event
+    assert deferral is not None
+    assert deferral.payload["event_type"] == "actions.deferred.v1"
     clock.now += timedelta(seconds=90)
     done = await service.submit(ask())
 

@@ -4,7 +4,8 @@
 with `on conflict do nothing` on `(automation_id, idempotency_key)`, so concurrent triggers have
 one winner and every caller gets the same row; `advance` updates only while the row is still in
 the state the engine read (an optimistic check), so two runs can never both move it. Each write
-commits its state change events and the next job in the same transaction.
+commits its state change events, their `automations.execution_state_changed.v1` outbox messages
+and the next job in the same transaction.
 """
 
 import uuid
@@ -19,6 +20,7 @@ from htco_application.audit import AuditRecord
 from htco_application.automation.durable import StateChange, StoredExecution
 from htco_application.automation.records import DefinitionRow, ExecutionPage, ExecutionSummary
 from htco_application.jobs import JobSpec, JsonValue
+from htco_application.status import execution_state_event
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import (
     AutomationDefinition,
@@ -29,6 +31,7 @@ from htco_domain.automation import (
 from htco_persistence.audit import append_audit
 from htco_persistence.database import Database
 from htco_persistence.jobs import enqueue_in
+from htco_persistence.messaging import add_outbox_in
 
 _EXECUTION_COLUMNS = """
 id, automation_id, automation_version, idempotency_key, trigger, actor_kind, actor_id, state,
@@ -76,6 +79,8 @@ def _insert_change(connection: psycopg.Connection[Any], change: StateChange) -> 
             change.at,
         ],
     )
+    # One `automations.execution_state_changed.v1` per recorded change, in its transaction (5.18).
+    add_outbox_in(connection, execution_state_event(change), now=change.at)
 
 
 class PostgresExecutionStore:

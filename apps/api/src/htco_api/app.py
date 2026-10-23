@@ -19,6 +19,7 @@ from htco_api.browser_environments import (
 )
 from htco_api.diagnostics import diagnostics_router
 from htco_api.etsy import etsy_router
+from htco_api.executions import executions_router
 from htco_api.health import health_router
 from htco_api.identity import identity_router
 from htco_api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
@@ -37,6 +38,7 @@ from htco_application.shop_integrations import (
     ShopRemover,
 )
 from htco_application.shops import ShopReader
+from htco_application.status import ChainReader
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter
 from htco_platform.readiness import ReadinessCheck
 
@@ -135,6 +137,8 @@ class AppOptions:
     etsy_webhook_limiter: WindowLimiter | None = None
     # Browser environment statuses (slice 5.16), read only; without it, that route answers 503.
     browser_environments: BrowserEnvironmentServices | None = None
+    # The chain view of one execution (slice 5.18); without it, that route answers 503.
+    execution_chain: ChainReader | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -183,6 +187,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.etsy_webhooks = options.etsy_webhooks
     app.state.etsy_webhook_limiter = options.etsy_webhook_limiter
     app.state.browser_environments = options.browser_environments
+    app.state.execution_chain = options.execution_chain
     app.state.clock = options.clock
     app.include_router(
         health_router(
@@ -203,6 +208,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.include_router(
         browser_environments_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES
     )
+    app.include_router(executions_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     if options.diagnostics:
         app.include_router(diagnostics_router(), responses=UNEXPECTED_ERROR_RESPONSES)
     add_problem_handlers(app)

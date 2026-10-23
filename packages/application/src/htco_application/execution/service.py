@@ -78,6 +78,16 @@ from htco_domain.identity import Role
 
 EVENT_DESTINATION = "events.publish"
 EXECUTED_EVENT = "actions.executed.v1"
+# Every recorded status change publishes exactly one event (slice 5.18, AC-5.18.2): a result is
+# `actions.executed.v1`; a step that waits says what it waits for.
+APPROVAL_REQUIRED_EVENT = "actions.approval_required.v1"
+HANDED_TO_HUMAN_EVENT = "actions.handed_to_human.v1"
+DEFERRED_EVENT = "actions.deferred.v1"
+_WAITING_EVENTS = {
+    ActionState.WAITING_APPROVAL: APPROVAL_REQUIRED_EVENT,
+    ActionState.HANDED_TO_HUMAN: HANDED_TO_HUMAN_EVENT,
+    ActionState.DEFERRED: DEFERRED_EVENT,
+}
 
 _S = ActionState
 # A claimed action that a resubmission continues: every check runs again.
@@ -743,13 +753,19 @@ class ActionGatewayService:
                 correlation_id=request.correlation_id,
             )
         event = None
-        if final or result.outcome is ActionOutcome.FAILED:
+        event_type = (
+            EXECUTED_EVENT
+            if final or result.outcome is ActionOutcome.FAILED
+            else _WAITING_EVENTS.get(path[-1])
+        )
+        if event_type is not None and len(path) > 1:  # a step that changed the status
             event = OutboxMessage(
                 organization_id=request.organization_id,
                 shop_id=request.shop_id,
                 destination=EVENT_DESTINATION,
-                idempotency_key=f"{EXECUTED_EVENT}:{execution_id}:{result.outcome.value}",
-                payload=_event_payload(execution_id, request, result),
+                # One message per recorded step, even two at the same instant.
+                idempotency_key=f"{event_type}:{execution_id}:{uuid.uuid7()}",
+                payload=_event_payload(execution_id, request, result, event_type),
                 action_execution_id=execution_id,
                 correlation_id=request.correlation_id,
             )
@@ -773,11 +789,11 @@ class ActionGatewayService:
 
 
 def _event_payload(
-    execution_id: uuid.UUID, request: ActionRequest, result: ActionResult
+    execution_id: uuid.UUID, request: ActionRequest, result: ActionResult, event_type: str
 ) -> dict[str, JsonValue]:
     """IDs and outcome only (EVENT_CATALOG rule 3): never the input or the output."""
     return {
-        "event_type": EXECUTED_EVENT,
+        "event_type": event_type,
         "action_execution_id": str(execution_id),
         "action": request.action.name,
         "version": request.action.version,

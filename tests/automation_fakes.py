@@ -19,6 +19,8 @@ from htco_application.automation.durable import (
     Waiting,
 )
 from htco_application.jobs import JobSpec, JsonValue
+from htco_application.messaging import OutboxMessage
+from htco_application.status import execution_state_event
 from htco_domain.automation import AutomationExecution
 from tests.application.workforce_fixtures import automation_document
 
@@ -70,6 +72,8 @@ class EffectBook:
 class MemoryExecutionStore:
     rows: dict[uuid.UUID, StoredExecution] = field(default_factory=dict)
     changes: list[StateChange] = field(default_factory=list)
+    # The `automations.execution_state_changed.v1` messages, one per change (slice 5.18).
+    events: list[OutboxMessage] = field(default_factory=list)
     jobs: list[JobSpec] = field(default_factory=list)
     audits: list[AuditRecord] = field(default_factory=list)
     shops: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)
@@ -93,6 +97,7 @@ class MemoryExecutionStore:
                     return found
             self.rows[execution.id] = StoredExecution(execution, dict(payload))
             self.changes.append(change)
+            self.events.append(execution_state_event(change))
             self.jobs.append(job)
             return execution
 
@@ -116,6 +121,7 @@ class MemoryExecutionStore:
                 return False
             self.rows[before.id] = StoredExecution(steps[-1][0], stored.payload)
             self.changes.extend(change for _, change in steps)
+            self.events.extend(execution_state_event(change) for _, change in steps)
             if job is not None:
                 self.jobs.append(job)
             if audit is not None:

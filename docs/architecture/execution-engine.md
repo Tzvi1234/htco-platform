@@ -430,6 +430,15 @@ VERIFYING ─► FAILED (verification) ─► incident
 
 Tasks keep their domain state machine (`BusinessTask`). The engine adds two waiting reasons, recorded on the task rather than as new states: `waiting_for_human` (Human channel) and `waiting_for_approval`. A task completes only through a recorded transition that references its evidence: an execution ID, an approval or a resource (AC-7.1.3).
 
+### Status management (slice 5.18, as built)
+
+- **One vocabulary.** `htco_domain.status` maps every state of `ExecutionState`, `ActionState`, `EnvironmentStatus` and `TaskState` to one `StatusKind` (`active`, `waiting`, `succeeded`, `failed`, `stopped`), and names the two waiting reasons (`waiting_for_human`, `waiting_for_approval`).
+- **One event per status change**, through the outbox in the same transaction:
+  - an automation execution's change is `automations.execution_state_changed.v1`, written by the execution store with the change row;
+  - an action's recorded step is `actions.executed.v1` (a result), `actions.approval_required.v1`, `actions.handed_to_human.v1` or `actions.deferred.v1`; a resubmission that changes nothing publishes nothing;
+  - a browser environment's change is `browser.environment_status_changed.v1` (5.16).
+- **The chain view.** `GET /v1/executions/{id}` lists the trigger (the inbox event when the execution's `causation_id` names it), the state changes, the actions the execution caused (`causation_id` = its ID) or that share its correlation ID, with channel and outcome, their approvals and hand-offs, and the published events, in causal order.
+
 ### Automation execution and job
 
 These are unchanged from ADR-0013 and PR #58 (`ExecutionState`), and from PR #53 (`JobState`).

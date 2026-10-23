@@ -78,6 +78,7 @@ from htco_persistence.shop_integrations import (
     PostgresTokenVault,
 )
 from htco_persistence.shops import PostgresShopReader, PostgresShopRemover
+from htco_persistence.status import PostgresChainReader
 from htco_persistence.web_sessions import PostgresSessionStore
 from htco_platform.crypto import EnvelopeSealer, Sealer
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter, SentryErrorReporter
@@ -190,6 +191,7 @@ def main(
         if wiring.etsy_webhooks is None
         else WindowLimiter(settings.etsy_webhook_rate_per_second),
         browser_environments=wiring.browser_environments,
+        execution_chain=wiring.execution_chain,
         resources=wiring.resources,
     )
     try:
@@ -349,6 +351,7 @@ class _Wiring:
     # Etsy webhooks (slice 5.3): on with HTCO_ETSY_WEBHOOKS_ENABLED and the signing secret.
     etsy_webhooks: EtsyWebhookIngress | None = None
     browser_environments: BrowserEnvironmentServices | None = None
+    execution_chain: PostgresChainReader | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -438,6 +441,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         browser_environments=BrowserEnvironmentServices(
             PostgresEnvironmentReader(database), PostgresEnvironmentStore(database)
         ),
+        execution_chain=PostgresChainReader(database),
         resources=resources,
     )
 
