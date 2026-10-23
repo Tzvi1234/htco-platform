@@ -25,6 +25,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
 from pydantic import BaseModel, Field
 
+from htco_api import notices
 from htco_api.problems import (
     AUTH_UNAVAILABLE,
     NOT_FOUND,
@@ -343,6 +344,9 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
             raise _too_many() from None
         _set_cookie(response, signed_in.cookie_value)
         response.headers["Cache-Control"] = "no-store"
+        await notices.signed_in(
+            request, signed_in.user.user_id, signed_in.session_id, client_info(request).user_agent
+        )
         return SessionView(
             user_id=str(signed_in.user.user_id), assurance=signed_in.user.assurance.value
         )
@@ -594,6 +598,7 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
             raise ProblemError(MFA_CODE_REFUSED) from None
         except TooManyAttemptsError:
             raise _too_many() from None
+        await notices.mfa_enrolled(request, active.user.user_id, body.factor_id)
         return AssuranceView(assurance="aal2")
 
     @router.post(

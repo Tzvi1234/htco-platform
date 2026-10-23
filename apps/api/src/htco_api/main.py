@@ -19,6 +19,7 @@ from htco_api.app import AppOptions, Resource, create_app
 from htco_api.auth import Authenticator, VerifiedTokenReader
 from htco_api.automations import AutomationServices
 from htco_api.browser_environments import BrowserEnvironmentServices
+from htco_api.incidents import IncidentCenter
 from htco_api.problems import AUTH_UNAVAILABLE, ProblemError
 from htco_api.settings import ApiSettings, Environment
 from htco_api.web_auth import WebAuth
@@ -33,8 +34,10 @@ from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_tokens import VaultAccessTokenProvider
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WebhookSecret, WindowLimiter
 from htco_application.execution.gateway import UnavailableGateway
+from htco_application.incidents import IncidentService
 from htco_application.marketplace import MarketplacePort
 from htco_application.mfa import Enrollment, Factor
+from htco_application.notifications import SecurityNotices
 from htco_application.order_history import OrderSync
 from htco_application.order_intake import QueuedSyncRequests
 from htco_application.shop_capabilities import CapabilityChecks
@@ -69,9 +72,14 @@ from htco_persistence.database import Database
 from htco_persistence.etsy_connect import PostgresPendingAuthorizations, PostgresShopConnector
 from htco_persistence.etsy_orders import PostgresOrderStore
 from htco_persistence.etsy_webhooks import PostgresWebhookInbox, PostgresWebhookShops
+from htco_persistence.fulfillment import PostgresIncidentReader, PostgresIncidentStore
 from htco_persistence.idempotency import PostgresIdempotencyStore
 from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.jobs import PostgresJobQueue
+from htco_persistence.notifications import (
+    PostgresNotificationInbox,
+    PostgresSecurityNoticeStore,
+)
 from htco_persistence.readiness import DatabaseCheck
 from htco_persistence.shop_integrations import (
     PostgresCapabilityStore,
@@ -194,6 +202,8 @@ def main(
         else WindowLimiter(settings.etsy_webhook_rate_per_second),
         browser_environments=wiring.browser_environments,
         execution_chain=wiring.execution_chain,
+        incident_center=wiring.incident_center,
+        security_notices=wiring.security_notices,
         resources=wiring.resources,
     )
     try:
@@ -354,6 +364,8 @@ class _Wiring:
     etsy_webhooks: EtsyWebhookIngress | None = None
     browser_environments: BrowserEnvironmentServices | None = None
     execution_chain: PostgresChainReader | None = None
+    incident_center: IncidentCenter | None = None
+    security_notices: SecurityNotices | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -444,6 +456,20 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
             PostgresEnvironmentReader(database), PostgresEnvironmentStore(database)
         ),
         execution_chain=PostgresChainReader(database),
+        incident_center=IncidentCenter(
+            reader=PostgresIncidentReader(database),
+            service=IncidentService(
+                PostgresIncidentStore(database),
+                clock=lambda: datetime.now(UTC),
+                offload=anyio.to_thread.run_sync,
+            ),
+            inbox=PostgresNotificationInbox(database),
+        ),
+        security_notices=SecurityNotices(
+            PostgresSecurityNoticeStore(database),
+            clock=lambda: datetime.now(UTC),
+            offload=anyio.to_thread.run_sync,
+        ),
         resources=resources,
     )
 

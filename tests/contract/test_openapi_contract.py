@@ -104,6 +104,11 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "receive_etsy_webhook",
         "get_browser_environment",
         "get_execution_chain",
+        "get_incidents",
+        "get_incident",
+        "move_incident",
+        "get_notifications",
+        "read_notifications",
     }
 
 

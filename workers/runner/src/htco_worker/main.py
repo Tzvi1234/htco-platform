@@ -54,7 +54,7 @@ from htco_application.fulfillment_schedule import (
     FulfillmentInspection,
     enqueue_fulfillment_inspections,
 )
-from htco_application.incidents import IncidentService
+from htco_application.incidents import INCIDENT_OPENED, INCIDENT_RESOLVED, IncidentService
 from htco_application.jobs import ClaimedJob, JobError, JobQueue
 from htco_application.maintenance import (
     EXPIRY_JOB,
@@ -80,8 +80,18 @@ from htco_application.messaging import (
     OUTBOX_DELIVERY_JOB,
     Deliverer,
     OutboxStore,
-    PendingDelivery,
     deliver_outbox_message,
+)
+from htco_application.notifications import (
+    EMAIL_DESTINATION,
+    NOTIFICATION_REQUESTED,
+    EmailDeliverer,
+    EmailPort,
+    EventDeliverer,
+    IncidentNotifications,
+    NotificationRequest,
+    NotificationService,
+    RequestedNotifications,
 )
 from htco_application.order_intake import (
     ORDER_SYNC_JOB,
@@ -98,6 +108,8 @@ from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.guards import BreakerPolicy
 from htco_domain.integrations import TokenHealth
+from htco_domain.notifications import NotificationKind
+from htco_integrations.email import LogEmailAdapter, ResendEmailAdapter
 from htco_integrations.etsy import (
     EtsyAdapter,
     EtsyConfig,
@@ -119,6 +131,7 @@ from htco_persistence.guards import PostgresBreakers, PostgresRateLimiter, Postg
 from htco_persistence.jobs import PostgresJobQueue, PostgresWorkerHeartbeats
 from htco_persistence.maintenance import PostgresPurgeStore, PostgresShopDirectory
 from htco_persistence.messaging import PostgresOutbox
+from htco_persistence.notifications import PostgresEmailDirectory, PostgresNotificationStore
 from htco_persistence.shop_integrations import (
     PostgresCapabilityStore,
     PostgresRefreshLock,
@@ -160,6 +173,33 @@ def _in_thread(work: Callable[[], int], event: str) -> JobHandler:
     return handle
 
 
+type ExpiryNotice = Callable[[TenantShop, TokenHealth], Awaitable[None]]
+
+
+def expiry_notice(service: NotificationService) -> ExpiryNotice:
+    """The owner's email when a shop needs re-authentication or its refresh token expires soon
+    (AC-6.4.4): once per shop, kind and ISO week."""
+
+    async def notify(shop: TenantShop, health: TokenHealth) -> None:
+        kind = (
+            NotificationKind.INTEGRATION_REAUTH
+            if health is TokenHealth.NEEDS_REAUTH
+            else NotificationKind.REFRESH_TOKEN_EXPIRING
+        )
+        year, week, _ = _now().isocalendar()
+        await service.notify(
+            NotificationRequest(
+                organization_id=shop.organization_id,
+                kind=kind,
+                dedup_key=f"{kind.value}:{shop.shop_id}:{year}w{week}",
+                params={"shop_id": str(shop.shop_id)},
+                shop_id=shop.shop_id,
+            )
+        )
+
+    return notify
+
+
 def maintenance_handlers(  # noqa: PLR0913 - the handlers' collaborators
     enabled: tuple[str, ...],
     *,
@@ -168,6 +208,7 @@ def maintenance_handlers(  # noqa: PLR0913 - the handlers' collaborators
     vault: ExpiryVault | None,
     checks: CapabilityChecks | None,
     purge: PurgeStore,
+    expiry_notice: ExpiryNotice | None = None,
 ) -> dict[str, JobHandler]:
     """The job handlers of the enabled schedules: each schedule's fan-out and its per-shop job."""
     handlers: dict[str, JobHandler] = {}
@@ -196,6 +237,8 @@ def maintenance_handlers(  # noqa: PLR0913 - the handlers' collaborators
                 _log.warning(
                     "etsy.refresh_token_expiring", shop_id=str(shop.shop_id), health=health
                 )
+                if expiry_notice is not None:
+                    await expiry_notice(shop, health)
 
         handlers[EXPIRY_JOB] = expiry
     if PURGE_SCHEDULE.kind in enabled:
@@ -217,16 +260,37 @@ def maintenance_handlers(  # noqa: PLR0913 - the handlers' collaborators
     return handlers
 
 
-class AcceptedEvents:
-    """`events.publish` (slice 5.12): events such as `actions.executed.v1` stay in the outbox as
-    the record; their consumers subscribe from Phase 6, so delivering is accepting them."""
+def email_port(settings: WorkerSettings, http: httpx.AsyncClient) -> EmailPort:
+    """`LogEmailAdapter` unless `HTCO_EMAIL_PROVIDER=resend` (off until the owner's DNS)."""
+    if settings.email_provider == "resend" and settings.resend_api_key is not None:
+        return ResendEmailAdapter(http, api_key=settings.resend_api_key.get_secret_value())
+    return LogEmailAdapter()
 
-    async def deliver(self, delivery: PendingDelivery) -> None:
-        _log.info(
-            "event.accepted",
-            event_type=delivery.message.payload.get("event_type"),
-            outbox_id=str(delivery.id),
-        )
+
+def notification_deliverers(
+    settings: WorkerSettings, database: Database, http: httpx.AsyncClient
+) -> dict[str, Deliverer]:
+    """`events.publish` with the notification subscribers (slice 6.4), and `email.send`."""
+    service = NotificationService(
+        PostgresNotificationStore(database), clock=_now, offload=anyio.to_thread.run_sync
+    )
+    return {
+        EVENT_DESTINATION: EventDeliverer(
+            {
+                INCIDENT_OPENED: IncidentNotifications(service),
+                INCIDENT_RESOLVED: IncidentNotifications(service),
+                NOTIFICATION_REQUESTED: RequestedNotifications(service),
+            }
+        ),
+        EMAIL_DESTINATION: EmailDeliverer(
+            email_port(settings, http),
+            PostgresEmailDirectory(database),
+            clock=_now,
+            reply_to=settings.email_reply_to,
+            office_url=settings.office_url,
+            offload=anyio.to_thread.run_sync,
+        ),
+    }
 
 
 def outbox_handlers(
@@ -526,7 +590,12 @@ async def _serve(settings: WorkerSettings) -> None:
         vault=vault,
         checks=checks,
         purge=PostgresPurgeStore(database),
-    ) | outbox_handlers(PostgresOutbox(database), {EVENT_DESTINATION: AcceptedEvents()})
+        expiry_notice=expiry_notice(
+            NotificationService(
+                PostgresNotificationStore(database), clock=_now, offload=anyio.to_thread.run_sync
+            )
+        ),
+    ) | outbox_handlers(PostgresOutbox(database), notification_deliverers(settings, database, http))
     gateway = worker_gateway(settings, database, etsy.gateway_adapter)
     deployed = {} if vault is None or adapter is None else intake_handlers(database, vault)
     deployed |= fulfillment_handlers(database, None if adapter is None else vault)
