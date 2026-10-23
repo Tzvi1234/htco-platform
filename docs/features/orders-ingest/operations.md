@@ -33,7 +33,7 @@ Admin › Health (slice 5.9) shows the queue, the automations' metrics, the shop
 
 ### Reconciliation (slice 5.5)
 
-Call budget (placeholder `etsy:app` 5,000 a day): calls per run times runs per day. A reconcile reads the 30-day pages (100 receipts a page); the sweep reads them too, plus the open orders' pages and one count read. The pilot (up to 300 receipts changed in 30 days, up to 100 open orders): 3 + (3 + 1 + 1) = 8 calls a day per shop, so the budget covers about 625 such shops before backfills, the dashboard and webhook re-reads. A third run a day costs one more 30-day read per shop (`daily_etsy_calls(..., runs_per_day=3)`).
+Call budget (placeholder `etsy:app` 5,000 a day): calls per run times runs per day. A reconcile reads the 30-day pages (100 receipts a page); the sweep reads them too, plus the open orders' pages and one count read. The pilot (up to 300 receipts changed in 30 days, up to 100 open orders): 3 + (3 + 1 + 1) = 8 calls a day per shop, so the budget covers about 625 such shops before backfills, the dashboard and webhook re-reads. Order Deduplication & Verification (5.11) adds one `etsy.receipts.read` per ingested or updated order from a webhook or a sync, and none for reconciliation's own events (it has just compared those receipts). A third run a day costs one more 30-day read per shop (`daily_etsy_calls(..., runs_per_day=3)`).
 
 | Signal | Where | Meaning |
 |---|---|---|
