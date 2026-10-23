@@ -7,6 +7,7 @@ from htco_application.execution.gateway import ActionOutcome, Channel
 from htco_domain.actions import ActionState
 from htco_domain.actors import ActorKind
 from htco_domain.automation import ExecutionState, TriggerKind
+from htco_domain.browser import EnvironmentStatus, environment_edges
 from htco_domain.guards import BreakerState
 from htco_domain.identity import Role
 from htco_domain.integrations import (
@@ -85,3 +86,25 @@ def test_action_executions_channel_check__lists_exactly_the_channels() -> None:
 
 def test_circuit_breakers_state_check__lists_exactly_the_breaker_states() -> None:
     assert _check_values("circuit_breakers_state_check") == {s.value for s in BreakerState}
+
+
+def test_shop_browser_environments_status_check__lists_exactly_the_environment_statuses() -> None:
+    assert _check_values("shop_browser_environments_status_check") == {
+        s.value for s in EnvironmentStatus
+    }
+
+
+def test_browser_environment_events_actor_kind_check__lists_exactly_the_actor_kinds() -> None:
+    assert _check_values("browser_environment_events_actor_kind_check") == {
+        k.value for k in ActorKind
+    }
+
+
+def test_browser_environment_edges__the_database_has_exactly_the_domain_table() -> None:
+    """AC-5.16.1: the trigger's edge function lists the same 20 edges as the domain."""
+    sql = (MIGRATIONS / "20261024200000_browser_environments.sql").read_text(encoding="utf-8")
+    body = sql.split("create function private.browser_environment_edge_allowed", 1)[1]
+    body = body.split("$$;", 1)[0]
+    pairs = set(re.findall(r"\('([a-z_]+)', '([a-z_]+)'\)", body))
+
+    assert pairs == {(a.value, b.value) for a, b in environment_edges()}
