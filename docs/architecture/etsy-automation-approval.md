@@ -39,6 +39,7 @@ A verbal approval from Etsy employees may not bind Etsy's **Trust & Safety** tea
 | B-08 | Create or end a **coupon or sale** with approved terms | No coupons API | Write (money) | — | — | off | W3 (Owner) | 13 |
 | B-09 | Issue an approved **refund** or **cancel** an order | No refund API | Write (money) | — | — | off | W3 (Owner) | 13 |
 | B-10 | Switch **Etsy Ads** on or off per listing, or change the daily budget, with approved values | No ads API | Write (money) | — | — | off | W3 (Owner) | 13 |
+| B-12 | **Mark an order as shipped** with a tracking number in Shop Manager, only when the API shipment write is blocked for our key (A-04) | `createReceiptShipment` restricted for new Israeli keys | Write (notifies the buyer) | — | — | off | W2: the owner's approval each time (D-16) | 6.10, 8A |
 | B-11 | Download the **monthly statement** or the payment account CSV | Statements are not in the API (the ledger is) | Read (export) | — | — | off | None per run; audited | 13 |
 
 Not candidates, never automated: buying shipping labels, opening new shops or accounts, Shared Access invitations, anything in another person's account, and anything that solves or avoids a security check.
