@@ -2,8 +2,9 @@
 #
 # Deployed only by the owner-started `.github/workflows/deploy.yml`, which fills every ${…} from
 # GitHub secrets and variables at deploy time: no secret value is committed (AC-1.5.4).
-# Cost: one fixed-size instance, $5 per month, that cannot scale (neither automatically nor by
-# hand), so the bill cannot grow by itself; the web app's static site adds nothing. Frankfurt, next to the Supabase project.
+# Cost: two fixed-size instances, $5 per month each (the API and, from slice 5.1, the agent-worker),
+# that cannot scale (neither automatically nor by hand), so the bill cannot grow by itself; the web
+# app's static site adds nothing. Frankfurt, next to the Supabase project.
 name: htco
 region: fra
 # DNS: Cloudflare `api` and `dash` CNAME htco-s4o93.ondigitalocean.app, DNS only (not proxied), so
@@ -152,6 +153,80 @@ services:
       - key: HTCO_ETSY_REDIRECT_URI
         scope: RUN_TIME
         value: https://dash.ht-co.app/integrations/etsy/callback
+# The agent-worker (slice 5.1, ADR-0007): the API's image running the job queue's worker. It
+# connects to the same database and switches to the `htco_worker` role. Its scheduled jobs run only
+# when named in HTCO_WORKER_SCHEDULES. A fixed-size instance, $5 per month, that cannot scale.
+workers:
+  - name: agent-worker
+    image:
+      registry_type: GHCR
+      registry: tzvi1234
+      repository: htco-api
+      tag: ${IMAGE_TAG}
+      registry_credentials: ${GHCR_PULL_CREDENTIALS}
+    run_command: python -m htco_worker
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    instance_count: 1
+    # UNVERIFIED for App Platform workers: the deploy's cost proposal validates the spec first.
+    liveness_health_check:
+      port: 8081
+      http_path: /healthz
+      initial_delay_seconds: 15
+      period_seconds: 30
+      timeout_seconds: 3
+      success_threshold: 1
+      failure_threshold: 4
+    alerts:
+      - rule: CPU_UTILIZATION
+        operator: GREATER_THAN
+        value: 80
+        window: FIVE_MINUTES
+      - rule: MEM_UTILIZATION
+        operator: GREATER_THAN
+        value: 80
+        window: FIVE_MINUTES
+      - rule: RESTART_COUNT
+        operator: GREATER_THAN
+        value: 3
+        window: FIVE_MINUTES
+    envs:
+      - key: HTCO_ENVIRONMENT
+        scope: RUN_TIME
+        value: production
+      - key: HTCO_RELEASE
+        scope: RUN_TIME
+        value: ${IMAGE_TAG}
+      - key: HTCO_DATABASE_URL
+        scope: RUN_TIME
+        value: postgresql://postgres.${SUPABASE_PROJECT_REF}@${SUPABASE_POOLER_HOST}:5432/postgres?sslmode=require
+      - key: PGPASSWORD
+        scope: RUN_TIME
+        type: SECRET
+        value: ${PGPASSWORD}
+      # The daily maintenance (job-queue operations): read-only Etsy probes, refresh-token expiry
+      # checks, the purge of disconnected shops after their date, pruning of finished jobs.
+      - key: HTCO_WORKER_SCHEDULES
+        scope: RUN_TIME
+        value: maintenance.capability_probes,maintenance.refresh_token_expiry,maintenance.purge_disconnected_shops,maintenance.prune_finished_jobs
+      - key: HTCO_WORKER_HEALTH_PORT
+        scope: RUN_TIME
+        value: "8081"
+      - key: HTCO_TOKEN_VAULT_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_TOKEN_VAULT_KEY}
+      - key: HTCO_TOKEN_VAULT_PREVIOUS_KEYS
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_TOKEN_VAULT_PREVIOUS_KEYS}
+      - key: HTCO_ETSY_KEYSTRING
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_ETSY_KEYSTRING}
+      - key: HTCO_ETSY_SHARED_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_ETSY_SHARED_SECRET}
 # The web app (slice 3.8, client ADR-0006): built by App Platform from htco-clients `main` on every
 # push and served as static files; free inside an app that has a paid service (the deploy workflow's
 # budget step checks the proposed cost).

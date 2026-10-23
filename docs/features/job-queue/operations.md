@@ -29,7 +29,13 @@ Nothing breaks without a worker: the API enqueues no job in slice 5.1, and the s
 
 ## Deployment
 
-The `agent-worker` App Platform component (a worker with the API's image and `python -m htco_worker`) costs about **$5–12 per month** and is added in a separate pull request (#54) that changes the app spec and the deploy budget; it is merged and deployed only after the owner approves the cost. Until then nothing runs the jobs. It runs the automation, API and Internal channels; the `browser-worker` is a separate component of Phase 8A with its own cost line, never part of `agent-worker`.
+The `agent-worker` App Platform component (`workers:` in `infra/digitalocean/app.yaml`, approved by the owner on 2026-10-23) runs the API's image with `python -m htco_worker` on one fixed `apps-s-1vcpu-0.5gb` instance: **$5 per month**. It runs the automation, API and Internal channels; the `browser-worker` is a separate component of Phase 8A with its own cost line, never part of `agent-worker`. It uses the API's database URL and password, the token vault keys and the Etsy app credentials, and enables the four maintenance schedules. The health check on port 8081 is not yet confirmed for App Platform workers; the deploy's cost proposal validates the spec before anything changes.
+
+**Cost limit.** The deploy workflow refuses a spec whose monthly cost, as App Platform's proposal states it, is above **$20** (the owner's hard limit of $15–20; today the API and the worker are $5 each, $10 in total). What enforces what:
+
+- *Enforced by us, before a deploy:* the budget step (`/v2/apps/propose`) fails the deploy above $20, so no change to the spec can raise the bill past it unnoticed.
+- *Enforced by the spec:* one fixed-size instance per component, no `autoscaling` block, so App Platform never adds instances by itself.
+- *Not enforced by DigitalOcean:* App Platform has no spending cap that stops or throttles an app. Usage outside the instance price (for example outbound transfer beyond the plan's allowance) is billed as it happens, and an account-level billing alert only notifies. The owner sets that alert in the DigitalOcean control panel (Billing → billing alerts) at $20.
 
 ## Metrics and alerts
 

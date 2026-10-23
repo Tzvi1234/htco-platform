@@ -113,7 +113,9 @@ jobs:
       - name: The monthly cost stays within the budget
         env:
           TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-          BUDGET_USD: "5"
+          # The owner's hard limit (2026-10-23): $20 a month for the whole app. Today the API ($5)
+          # and the agent-worker ($5, slice 5.1). DigitalOcean has no spending cap of its own.
+          BUDGET_USD: "20"
           IMAGE_TAG: ${{ steps.tag.outputs.tag }}
           # The private image must be readable for the proposal to validate.
           GHCR_PULL_CREDENTIALS: tzvi1234:${{ secrets.GHCR_PULL_TOKEN }}

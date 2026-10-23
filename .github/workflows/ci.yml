@@ -192,6 +192,14 @@ jobs:
             echo "::error::Expected exit code 78 (configuration error), got $status"
             exit 1
           fi
+      - name: The agent-worker in the same image refuses to start without its settings
+        run: |
+          status=0
+          docker run --rm htco-api:ci python -m htco_worker || status=$?
+          if [ "$status" -ne 78 ]; then
+            echo "::error::Expected exit code 78 (configuration error) from the worker, got $status"
+            exit 1
+          fi
       - name: Starts with a read-only file system and answers its health checks
         run: |
           docker run --detach --name api --publish 8080:8080 --read-only --cap-drop ALL \
