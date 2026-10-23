@@ -388,13 +388,14 @@ async def test_scenario_h__an_employee_outside_its_grants__denied(
     assert result.outcome is outcome
 
 
-async def test_route__a_missing_shop_capability__no_channel() -> None:
+async def test_route__a_missing_shop_capability__scope_missing() -> None:
     world = World()
     world.capabilities.granted.clear()
 
     result = await world.gateway.submit(ask())
 
-    assert (result.outcome, result.error_code) == (ActionOutcome.DENIED, "no_channel")
+    # execution-engine.md §4 step 5: a missing capability is `DENIED (scope_missing)` (5.13).
+    assert (result.outcome, result.error_code) == (ActionOutcome.DENIED, "scope_missing")
 
 
 async def test_channel_failure__failed_then_a_retry_with_the_same_key_runs_again() -> None:
