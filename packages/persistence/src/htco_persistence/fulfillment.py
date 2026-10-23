@@ -150,7 +150,10 @@ class PostgresSlaStore:
         with self._database.connection() as connection:
             rows = connection.execute(
                 """
-                select o.receipt_id, o.etsy_created_at from app.etsy_orders o
+                select o.receipt_id, o.etsy_created_at,
+                       (select min(i.expected_ship_date) from app.etsy_order_items i
+                        where i.shop_id = o.shop_id and i.receipt_id = o.receipt_id)
+                from app.etsy_orders o
                 where o.shop_id = %s and o.is_paid and not o.is_shipped
                   and o.order_state in ('ingested', 'awaiting_shipment')
                   and not exists (
@@ -161,7 +164,9 @@ class PostgresSlaStore:
                 """,
                 [shop_id],
             ).fetchall()
-        return tuple(AwaitingOrder(receipt_id=int(r[0]), paid_at=r[1]) for r in rows)
+        return tuple(
+            AwaitingOrder(receipt_id=int(r[0]), paid_at=r[1], expected_ship=r[2]) for r in rows
+        )
 
     def closed_orders(
         self, shop_id: uuid.UUID, receipt_ids: tuple[int, ...]

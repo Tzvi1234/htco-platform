@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
 from htco_application.fulfillment_schedule import INCIDENT_DETECTION
@@ -32,8 +33,9 @@ from htco_application.incidents import (
 )
 from htco_application.jobs import JobError, JsonValue
 from htco_application.messaging import OutboxMessage
+from htco_application.notifications import NotificationRequest, NotificationService
 from htco_domain.actors import ActorKind, ActorRef
-from htco_domain.fulfillment import SlaPolicy, select_policy
+from htco_domain.fulfillment import SlaPolicy, select_policy, ship_by_at_risk
 from htco_domain.incidents import (
     Cause,
     Evidence,
@@ -42,8 +44,11 @@ from htco_domain.incidents import (
     ResourceKind,
     should_escalate,
 )
+from htco_domain.notifications import NotificationKind
 
 DETECTOR = ActorRef(ActorKind.AUTOMATION, INCIDENT_DETECTION)
+# Generous until the owner tunes it: one business day before the ship-by date.
+SHIP_BY_WARNING_DAYS = 1
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,8 @@ class AwaitingOrder:
     paid_at: datetime
     supplier: str | None = None
     shipping_method: str | None = None
+    # The earliest ship-by date of its items, as Etsy computes it (slice 6.9).
+    expected_ship: datetime | None = None
 
 
 class SlaStore(Protocol):
@@ -116,6 +123,9 @@ class IncidentDetection:
     incidents: IncidentService
     clock: Callable[[], datetime]
     offload: Offload = _inline
+    # Ship-by alerts (slice 6.9) through the notification path of 6.4; None: none raised.
+    alerts: NotificationService | None = None
+    ship_by_warning_days: int = SHIP_BY_WARNING_DAYS
 
     async def __call__(self, ctx: HandlerContext) -> HandlerOutcome:
         drift = ctx.payload.get("drift")
@@ -172,14 +182,60 @@ class IncidentDetection:
             _, created = await self.incidents.open(detection, actor=DETECTOR)
             opened += created
         closed, escalated = await self._follow_up(ctx, shop_id, now)
-        return Completed(
-            {
-                "checked": len(awaiting),
-                "opened": opened,
-                "resolved": closed,
-                "escalated": escalated,
-            }
-        )
+        output: dict[str, JsonValue] = {
+            "checked": len(awaiting),
+            "opened": opened,
+            "resolved": closed,
+            "escalated": escalated,
+        }
+        if self.alerts is not None:
+            output["ship_by_alerts"] = await self._ship_by(ctx, shop_id, policies, awaiting, now)
+        return Completed(output)
+
+    async def _ship_by(
+        self,
+        ctx: HandlerContext,
+        shop_id: uuid.UUID,
+        policies: tuple[SlaPolicy, ...],
+        awaiting: tuple[AwaitingOrder, ...],
+        now: datetime,
+    ) -> int:
+        """One alert per order once it is inside the warning window before its ship-by date
+        (AC-6.9.1), counted in the shop's business days (the calendar of its SLA policy)."""
+        if self.alerts is None:  # pragma: no cover - checked by the caller
+            return 0
+        raised = 0
+        for order in awaiting:
+            if order.expected_ship is None:
+                continue
+            calendar = select_policy(policies, shop_id=shop_id).calendar
+            if not ship_by_at_risk(
+                order.expected_ship,
+                now=now,
+                warning_business_days=self.ship_by_warning_days,
+                calendar=calendar,
+            ):
+                continue
+            raised += (
+                await self.alerts.notify(
+                    NotificationRequest(
+                        organization_id=ctx.organization_id,
+                        kind=NotificationKind.ALERT_SHIP_BY,
+                        dedup_key=f"ship_by:{shop_id}:{order.receipt_id}",
+                        params={
+                            "receipt_id": order.receipt_id,
+                            # The shop's own day, as the warning window counts it.
+                            "ship_by": order.expected_ship.astimezone(ZoneInfo(calendar.timezone))
+                            .date()
+                            .isoformat(),
+                        },
+                        shop_id=shop_id,
+                        correlation_id=ctx.correlation_id,
+                    )
+                )
+                > 0
+            )
+        return raised
 
     async def _follow_up(
         self, ctx: HandlerContext, shop_id: uuid.UUID, now: datetime

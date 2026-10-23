@@ -36,3 +36,11 @@ Windows start **generous**: ten business days from payment to the first tracking
 ## Out of scope here
 
 The relay that copies tracking from AutoVA into Etsy (6.10), writes to Etsy (6.6, 6.8), the timeline view on the Orders screen (needs 5.7).
+
+## Alerts (slice 6.9)
+
+- **Ship-by:** each inspection warns once per order (`alert_ship_by`, in-app and email) from one business day before the earliest item's `expected_ship_date`, counting the shop's business days. The calendar, holidays included, is the shop's SLA policy calendar until the shop's Etsy holiday preferences are read (`etsy.holiday_preferences`, a later step). AC-6.9.1: `test_ac_6_9_1_inside_the_warning_window_one_alert_once`, `test_ac_6_9_1_before_the_window_no_alert_and_holidays_are_skipped`.
+- **Stock:** `catalog.out_of_stock.v1`, which the webhook job publishes only when the re-read confirms it, raises one in-app alert per listing and Etsy change (`StockAlerts`).
+- **Low reviews (AC-6.9.2):** not built yet. It needs an `etsy.reviews.read` action, and the review's transaction to link the order.
+
+Alerts are notifications. There is one path, the one in 6.4, and no alert table.

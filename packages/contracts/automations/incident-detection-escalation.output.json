@@ -8,6 +8,7 @@
     "opened": {"type": "integer", "minimum": 0},
     "resolved": {"type": "integer", "minimum": 0},
     "escalated": {"type": "integer", "minimum": 0},
+    "ship_by_alerts": {"type": "integer", "minimum": 0},
     "incident_id": {"type": "string", "pattern": "^[0-9a-f-]{36}$"}
   },
   "additionalProperties": false
