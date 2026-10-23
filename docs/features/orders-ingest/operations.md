@@ -66,7 +66,92 @@ Rollback: `HTCO_ORDER_SYNC_IN_API` back to `"true"` (the API syncs again), and t
 
 Set `HTCO_ETSY_WEBHOOKS_ENABLED` back to `"false"` (the route answers 404; Etsy retries, then gives up). Stored inbox rows stay and queued jobs still run. Disabling the endpoint in the portal stops deliveries altogether.
 
-## Drills
+## Drills (slice 5.8)
 
-| Date | Drill | Result | Follow-ups |
-|---|---|---|---|
+### Kill-worker drill (automated, every pull request)
+
+What it proves: a worker killed in the middle of a job leaves the job to its lease, and the next worker completes it exactly once (AC-5.1.1); an automation execution killed while `running` ends in one `succeeded` execution and one business effect (AC-5.10.5); a crash between the business commit and the delivery delivers once (AC-5.2.2).
+
+How it runs: CI's `database` job starts real worker processes (`tests/integration/worker_harness.py`, the production loop and signal handling) against Postgres and sends them `SIGKILL` mid-job (`tests/integration/test_worker_process.py`):
+
+| Test | What is killed | Expected and checked |
+|---|---|---|
+| `test_worker_killed_mid_job__the_job_completes_exactly_once_after_restart` | A worker holding a job's lease | After the lease expires, a second worker completes the job; its effect is recorded once |
+| `test_worker_killed_during_a_running_execution__one_success_and_one_effect` | A worker running an automation execution | One `succeeded` execution, attempts 2, one effect |
+| `test_crash_after_the_business_commit__the_effect_is_delivered_exactly_once` | A worker after the commit, before the outbox delivery | One delivery after restart |
+| `test_sigterm__the_current_job_finishes_before_the_worker_exits` and `…a_job_beyond_the_grace_period__is_left_to_its_lease` | A worker stopped with `SIGTERM` | The job finishes inside the grace period, or is left to its lease |
+
+In the deployed environment the same drill is: from DigitalOcean, restart the `agent-worker` component while Admin › Health shows a running job. The worker disappears from Workers as "Stopped" after two minutes, the new instance appears as "Running", and the job ends `succeeded` (or `retry_scheduled`, then `succeeded`). The owner records the run in the table below.
+
+### Restore drill (documented; the owner runs it)
+
+The Supabase Free plan has no backups and no point-in-time recovery, so the drill is a manual `pg_dump` of the production data, restored into a local scratch database built from the same migrations. The dump holds buyer names and addresses (`app.etsy_order_buyers`), so it is personal data: keep it on the owner's own machine, never commit, upload or share it, and delete it when the drill ends.
+
+What you need: the Supabase CLI and Docker on the owner's machine, the production database password (`SUPABASE_DB_PASSWORD`), and the session pooler connection string (Supabase dashboard → Connect → Session pooler, port 5432).
+
+1. **Dump** the HTCO schemas' data from production (read-only; it takes a consistent snapshot):
+
+   ```sh
+   export PGPASSWORD='<production database password>'
+   pg_dump "postgresql://postgres.<project-ref>@<pooler-host>:5432/postgres?sslmode=require" \
+     --format=custom --data-only --no-owner --no-privileges \
+     --schema=app --schema=jobs --schema=audit --schema=private \
+     --file=htco-restore-drill.dump
+   ```
+
+   The `auth` schema stays out: users are restored by inviting them again, and the restore below runs as the database owner. Note the start and end time.
+
+2. **Build the scratch database** from the repository at the commit production runs: `supabase start`, then `supabase db reset`, which applies every migration and the seed (`supabase/seed.sql`). Empty the seed's rows from the HTCO schemas before restoring, so counts compare one to one.
+
+3. **Restore** the data:
+
+   ```sh
+   pg_restore --data-only --no-owner --disable-triggers \
+     --dbname=postgresql://postgres:postgres@127.0.0.1:54322/postgres htco-restore-drill.dump
+   ```
+
+   `--disable-triggers` lets the restore load the append-only and state-machine tables (audit, execution and order status events) in their recorded order.
+
+4. **Verify the row counts.** In production and in the scratch database, run the same query and compare:
+
+   ```sql
+   select 'etsy_orders' as t, count(*) from app.etsy_orders
+   union all select 'etsy_order_items', count(*) from app.etsy_order_items
+   union all select 'etsy_order_buyers', count(*) from app.etsy_order_buyers
+   union all select 'order_status_events', count(*) from app.order_status_events
+   union all select 'financial_entries', count(*) from app.financial_entries
+   union all select 'automation_executions', count(*) from app.automation_executions
+   union all select 'action_executions', count(*) from app.action_executions
+   union all select 'jobs', count(*) from jobs.jobs
+   union all select 'audit_log', count(*) from audit.audit_log
+   order by 1;
+   ```
+
+   Every count must match; a smaller count names the table to look at.
+
+5. **Verify tenant isolation, buyer data included.** In the scratch database, sign in as a member of each organization through SQL and check that one organization never sees another's rows, and that a role without buyer data sees no buyer row:
+
+   ```sql
+   begin;
+   select set_config('request.jwt.claims',
+     '{"sub":"<a member user id>","role":"authenticated","aal":"aal2"}', true);
+   set local role authenticated;
+   select count(*) from app.etsy_orders;          -- only that member's shops
+   select count(*) from app.etsy_order_buyers;    -- 0 for Finance, Developer and Viewer
+   rollback;
+   ```
+
+   The users come from `app.memberships`; insert matching `auth.users` rows (id and email) in the scratch database first. pgTAP files `08`, `17` and `21` encode the same rules and must pass there too: `supabase test db`.
+
+6. **Clean up:** `supabase stop --no-backup`, delete `htco-restore-drill.dump` and empty the trash, and unset `PGPASSWORD`.
+
+7. **Record** the date, how long each step took, the outcome and any follow-ups in the table below.
+
+Follow-up for when the cost is approved: Supabase Pro adds daily backups and point-in-time recovery (ADR-0005). The drill then restores a backup into a new project instead of a `pg_dump`.
+
+### Drill log
+
+| Date | Drill | Duration | Outcome | Follow-ups |
+|---|---|---|---|---|
+| 2026-10-23 | Kill-worker drill, automated (CI `database` job, the five tests above) | The `database` job takes about 3 minutes, process tests included | Passed on every pull request of slices 5.0 to 5.11 | Run it once in the deployed environment once the worker carries the order automations (the owner) |
+| — | Restore drill (steps above) | — | Not run yet: it needs the production password and the owner's machine | The owner runs it and records it here |
