@@ -40,6 +40,17 @@ DRIFT_DETECTED = "orders.drift_detected.v1"
 _BUYER_FIELDS = ("buyer_name", "shipping_address")
 
 
+def receipt_facts(receipt: OrderReceipt, *, delivered: bool = False) -> OrderFacts:
+    """What the order state machine reads from a receipt. The ingest and the dashboard both
+    classify through it, so a receipt has one state everywhere (audit P0-1)."""
+    return OrderFacts(
+        status=receipt.status,
+        is_paid=receipt.is_paid,
+        is_shipped=receipt.is_shipped,
+        delivered=delivered,
+    )
+
+
 class IngestSource(StrEnum):
     WEBHOOK = "webhook"
     RECONCILIATION = "reconciliation"
@@ -290,12 +301,7 @@ def _plan(
         assert stored is not None  # noqa: S101 - narrowed above
         return IngestPlan(False, False, stored.order_state, (), (), (), digest)
     current = None if stored is None else stored.order_state
-    facts = OrderFacts(
-        status=receipt.status,
-        is_paid=receipt.is_paid,
-        is_shipped=receipt.is_shipped,
-        delivered=receipt.receipt_id in context.delivered,
-    )
+    facts = receipt_facts(receipt, delivered=receipt.receipt_id in context.delivered)
     behind = False
     try:
         path = ingest_path(current, facts)

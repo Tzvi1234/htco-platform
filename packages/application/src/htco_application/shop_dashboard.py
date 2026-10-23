@@ -19,7 +19,7 @@ import asyncio
 import logging
 import uuid
 from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -54,11 +54,14 @@ from htco_application.order_history import (
     SyncState,
     history_sync,
 )
+from htco_application.order_ingest import receipt_facts
 from htco_application.shop_capabilities import ShopNotConnectedError, TokenPinning
 from htco_application.shop_data_cache import CacheKey, CachePolicy, Fetched, ShopDataCache
 from htco_application.shop_integrations import ShopIntegration
 from htco_application.shops import ShopNotFoundError
 from htco_domain.integrations import IntegrationStatus
+from htco_domain.orders import OrderState as StoreOrderState
+from htco_domain.orders import observed_state
 
 _log = logging.getLogger(__name__)
 
@@ -130,9 +133,6 @@ POLICIES = {
     "shipping": CachePolicy(ttl=timedelta(minutes=30), max_stale=timedelta(hours=6)),
 }
 
-# Receipt statuses that are not a sale.
-_NOT_A_SALE = frozenset({"canceled", "fully refunded"})
-
 
 class DataSource(StrEnum):
     """Where a result comes from: Etsy live, or HTCO's stored order history."""
@@ -141,12 +141,29 @@ class DataSource(StrEnum):
     HTCO_STORE = "htco_store"
 
 
-class OrderState(StrEnum):
+class OrderViewState(StrEnum):
+    """The Orders screen's five states: a view of the order store's state machine
+    (`htco_domain.orders.OrderState`, FR-ORD-03), mapped by `ORDER_VIEW_STATES`. The API keeps
+    Etsy's spelling `canceled`."""
+
     UNPAID = "unpaid"
     PAID = "paid"
     SHIPPED = "shipped"
     CANCELED = "canceled"
     REFUNDED = "refunded"
+
+
+_S = StoreOrderState
+ORDER_VIEW_STATES: Mapping[StoreOrderState, OrderViewState] = {
+    _S.UNPAID: OrderViewState.UNPAID,
+    _S.PAID: OrderViewState.PAID,
+    _S.INGESTED: OrderViewState.PAID,
+    _S.AWAITING_SHIPMENT: OrderViewState.PAID,
+    _S.SHIPPED: OrderViewState.SHIPPED,
+    _S.DELIVERED: OrderViewState.SHIPPED,
+    _S.CANCELLED: OrderViewState.CANCELED,
+    _S.REFUNDED: OrderViewState.REFUNDED,
+}
 
 
 class OrderFilter(StrEnum):
@@ -351,7 +368,7 @@ class OrderShipmentView:
 @dataclass(frozen=True)
 class OrderView:
     order_id: int
-    state: OrderState
+    state: OrderViewState
     created_at: datetime
     updated_at: datetime
     # The earliest date Etsy expects an item of the order to ship; None when unknown.
@@ -1011,17 +1028,14 @@ def _money(amount: Decimal, currency: str) -> Money:
     return Money(amount=amount, currency=currency)
 
 
-def order_state(receipt: OrderReceipt) -> OrderState:
-    """How the Orders screen names a receipt's state."""
-    if receipt.status == "canceled":
-        return OrderState.CANCELED
-    if receipt.status == "fully refunded":
-        return OrderState.REFUNDED
-    if not receipt.is_paid:
-        return OrderState.UNPAID
-    if receipt.is_shipped or receipt.status == "completed":
-        return OrderState.SHIPPED
-    return OrderState.PAID
+def order_state(receipt: OrderReceipt) -> OrderViewState:
+    """How the Orders screen names a receipt's state: the store's machine, viewed."""
+    return ORDER_VIEW_STATES[observed_state(receipt_facts(receipt))]
+
+
+def is_sale(receipt: OrderReceipt) -> bool:
+    """Cancelled, fully refunded and unpaid orders are not sales (the store's rule)."""
+    return observed_state(receipt_facts(receipt)).counts_as_sale
 
 
 def _ship_by(receipt: OrderReceipt) -> datetime | None:
@@ -1043,7 +1057,7 @@ def _order_view(receipt: OrderReceipt, now: datetime, *, contact: bool) -> Order
         created_at=receipt.created_at,
         updated_at=receipt.updated_at,
         ship_by=ship_by,
-        overdue=state is OrderState.PAID
+        overdue=state is OrderViewState.PAID
         and _needs_shipping(receipt)
         and ship_by is not None
         and ship_by < now,
@@ -1106,10 +1120,6 @@ def _matches(order: OrderView, wanted: OrderFilter | None) -> bool:
     return order.state.value == wanted.value
 
 
-def _is_sale(receipt: OrderReceipt) -> bool:
-    return receipt.is_paid and receipt.status not in _NOT_A_SALE
-
-
 def _summarise(
     window: _ReceiptWindow, currency: str, now: datetime, utc_offset_minutes: int
 ) -> SalesSummary:
@@ -1123,7 +1133,7 @@ def _summarise(
     top: dict[int, _Tally] = {}
     awaiting = overdue = 0
     for receipt in window.receipts:
-        if not _is_sale(receipt):
+        if not is_sale(receipt):
             continue
         day = (receipt.created_at.astimezone(UTC) + offset).date()
         if day in orders:
@@ -1132,7 +1142,7 @@ def _summarise(
             if receipt.grand_total.currency_code == currency:
                 revenue[day] += receipt.grand_total.as_decimal()
             _count_listings(top, receipt.lines, currency)
-            if order_state(receipt) is OrderState.PAID and _needs_shipping(receipt):
+            if order_state(receipt) is OrderViewState.PAID and _needs_shipping(receipt):
                 awaiting += 1
                 ship_by = _ship_by(receipt)
                 if ship_by is not None and ship_by < now:
@@ -1194,7 +1204,7 @@ def _fact(receipt: OrderReceipt, *, with_buyer: bool = False) -> _SaleFact:
         key = f"{name}|{receipt.country_code or ''}"
     return _SaleFact(
         created_at=receipt.created_at,
-        is_sale=_is_sale(receipt),
+        is_sale=is_sale(receipt),
         total=receipt.grand_total,
         lines=receipt.lines,
         country_code=receipt.country_code,

@@ -57,7 +57,7 @@ from htco_application.shop_dashboard import (
     Money,
     OrderFilter,
     OrderPeriod,
-    OrderState,
+    OrderViewState,
     ShopDashboard,
     ShopDataScopeMissingError,
     ShopDataUnavailableError,
@@ -220,7 +220,7 @@ class RefundView(BaseModel):
 
 class OrderView(BaseModel):
     order_id: int
-    state: OrderState
+    state: OrderViewState
     created_at: datetime
     updated_at: datetime
     ship_by: datetime | None
