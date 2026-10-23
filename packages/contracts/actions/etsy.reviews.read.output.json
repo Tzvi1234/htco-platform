@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.reviews.read.output.json",
+  "title": "etsy.reviews.read output",
+  "description": "Identifiers, stars and time only: never the review's text (the buyer's words).",
+  "type": "object",
+  "required": [
+    "reviews",
+    "count"
+  ],
+  "properties": {
+    "reviews": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": [
+          "listing_id",
+          "rating",
+          "created_at"
+        ],
+        "properties": {
+          "transaction_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "listing_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "rating": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "created_at": {
+            "type": "string",
+            "maxLength": 40
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

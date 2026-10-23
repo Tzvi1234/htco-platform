@@ -281,3 +281,27 @@ async def test_worker__a_checked_receipt_is_due_again_only_after_it_changes_on_e
         again = store.untracked_shipped(shop, limit=10)
 
     assert (before, after, again) == ((86,), (), (86,))
+
+
+@pytest.mark.ac("AC-6.9.2")
+async def test_worker__a_reviews_transaction_finds_its_order_in_its_own_shop_only(
+    database: Database, worker_db: Database
+) -> None:
+    """Slice 6.9: the low-review alert links the order through the stored order items."""
+    tenant, integration = await connected(database)
+    other_tenant, other = await connected(database)
+    with tenant_scope(tenant.organization_id):
+        await PostgresOrderStore(worker_db).ingest_receipts(
+            integration, [order(91), order(92)], context=WEBHOOK, now=NOW
+        )
+    with tenant_scope(other_tenant.organization_id):
+        await PostgresOrderStore(worker_db).ingest_receipts(
+            other, [order(93)], context=WEBHOOK, now=NOW
+        )
+    store = PostgresSlaStore(worker_db)
+
+    with tenant_scope(tenant.organization_id):
+        found = store.receipts_for_transactions(integration.shop_id, (910, 920, 930, 999))
+
+    assert found == {910: 91, 920: 92}  # 930 is the other shop's, 999 is not stored
+    assert store.receipts_for_transactions(integration.shop_id, ()) == {}

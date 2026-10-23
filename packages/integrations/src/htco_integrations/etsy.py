@@ -480,7 +480,7 @@ class EtsyAdapter:
         )  # fmt: skip
         return _parse("get_order_receipt", _order_receipt, body)
 
-    async def list_reviews(
+    async def list_reviews(  # noqa: PLR0913 - the port's filters
         self,
         shop_id: int,
         *,
@@ -488,15 +488,19 @@ class EtsyAdapter:
         offset: int = 0,
         urgent: bool = False,
         tokens: AccessTokenProvider | None = None,
+        min_created: datetime | None = None,
     ) -> Page[ShopReview]:
-        """getReviewsByShop, newest first."""
+        """getReviewsByShop, newest first; `min_created` keeps the reviews written since then."""
         _check_page(limit, offset)
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if min_created is not None:
+            params["min_created"] = _epoch(min_created, "min_created")
         body = await self._request(
             "GET",
             "list_reviews",
             shop_id,
             f"/shops/{shop_id}/reviews",
-            {"limit": limit, "offset": offset},
+            params,
             urgent=urgent,
             tokens=tokens,
         )
@@ -1301,6 +1305,7 @@ def _review(value: object) -> ShopReview:
         language=_text(data, "language"),
         created_at=_timestamp(data, "created_timestamp"),
         text=_text(data, "review"),
+        transaction_id=_optional_int(data, "transaction_id"),
     )
 
 

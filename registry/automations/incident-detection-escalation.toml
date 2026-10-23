@@ -9,6 +9,9 @@ timeout_seconds = 120
 side_effect = "internal"
 approval_required = false
 ai_steps = []
+# Low-review alerts (slice 6.9): it reads the shop's newest reviews through the Action Gateway
+# (R0, GET only); it never writes to Etsy.
+allowed_actions = ["etsy.reviews.read"]
 readiness = "draft"
 activation_phase = 6
 

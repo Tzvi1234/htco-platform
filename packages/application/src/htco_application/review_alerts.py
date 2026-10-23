@@ -1,0 +1,136 @@
+"""Low-review alerts (slice 6.9, AC-6.9.2): Incident Detection & Escalation's `reviews` mode.
+
+Every hour per shop, it reads the reviews written in the last `REVIEW_LOOKBACK` through the Action
+Gateway (`etsy.reviews.read`, R0, the GET-only API channel) and raises one alert per review of
+`LOW_REVIEW_STARS` or fewer (the owner's decision of 2026-10-23) on the one notification path of
+6.4 (audit P2-2). The alert names the stars, the listing and, through the stored order items, the
+order. The key is the review's transaction, so a review read again in the next hour alerts once.
+The review's text (the buyer's words) never reaches HTCO's tables: the channel leaves it out.
+"""
+
+import uuid
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime, timedelta
+from typing import Any, Protocol
+
+from htco_application.automation.durable import HandlerContext
+from htco_application.execution.gateway import ActionOutcome, ActionRef, ActionRequest
+from htco_application.jobs import JobError, JsonValue
+from htco_application.marketplace import MarketplaceRateLimitedError
+from htco_application.notifications import NotificationRequest, NotificationService
+from htco_domain.actors import ActorKind, ActorRef
+from htco_domain.notifications import NotificationKind
+
+REVIEWS_READ = ActionRef("etsy.reviews.read", 1)
+LOW_REVIEW_STARS = 3
+# Twice the hourly period and more: a missed run or a slow Etsy still sees each review.
+REVIEW_LOOKBACK = timedelta(hours=48)
+PAGE = 100
+MAX_PAGES = 5
+
+type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
+
+
+class ReviewOrders(Protocol):
+    def receipts_for_transactions(
+        self, shop_id: uuid.UUID, transaction_ids: tuple[int, ...]
+    ) -> Mapping[int, int]:
+        """The stored order of each transaction, in this shop only; unknown ones are left out."""
+        ...
+
+
+async def low_review_alerts(  # noqa: PLR0913 - the execution and its collaborators
+    ctx: HandlerContext,
+    shop_id: uuid.UUID,
+    *,
+    orders: ReviewOrders,
+    alerts: NotificationService,
+    offload: Offload,
+    clock: Callable[[], datetime],
+) -> dict[str, JsonValue]:
+    since = int((clock() - REVIEW_LOOKBACK).timestamp())
+    reviews: list[Mapping[str, JsonValue]] = []
+    for page in range(MAX_PAGES):
+        output = await _read(ctx, shop_id, since=since, offset=page * PAGE, clock=clock)
+        found = output.get("reviews")
+        items = [r for r in found if isinstance(r, dict)] if isinstance(found, list) else []
+        reviews += items
+        count = output.get("count")
+        if len(items) < PAGE or not isinstance(count, int) or count <= (page + 1) * PAGE:
+            break
+    low = [r for r in reviews if _low(r)]
+    transactions = tuple(t for r in low if isinstance(t := r.get("transaction_id"), int))
+    linked: Mapping[int, int] = (
+        await offload(lambda: orders.receipts_for_transactions(shop_id, transactions))
+        if transactions
+        else {}
+    )
+    raised = 0
+    for review in low:
+        transaction = review.get("transaction_id")
+        params: dict[str, object] = {"rating": review["rating"], "listing_id": review["listing_id"]}
+        if isinstance(transaction, int) and transaction in linked:
+            params["receipt_id"] = linked[transaction]
+        written = str(review.get("created_at") or "")[:19]
+        key = (
+            f"low_review:{shop_id}:{transaction}"
+            if isinstance(transaction, int)
+            else f"low_review:{shop_id}:{review['listing_id']}:{written}"
+        )
+        raised += (
+            await alerts.notify(
+                NotificationRequest(
+                    organization_id=ctx.organization_id,
+                    kind=NotificationKind.ALERT_LOW_REVIEW,
+                    dedup_key=key[:120],
+                    params=params,
+                    shop_id=shop_id,
+                    correlation_id=ctx.correlation_id,
+                )
+            )
+            > 0
+        )
+    return {"mode": "reviews", "reviews_read": len(reviews), "low_review_alerts": raised}
+
+
+def _low(review: Mapping[str, JsonValue]) -> bool:
+    """A readable review of `LOW_REVIEW_STARS` or fewer; anything else is skipped."""
+    rating, listing = review.get("rating"), review.get("listing_id")
+    if not isinstance(rating, int) or isinstance(rating, bool) or not 1 <= rating <= 5:  # noqa: PLR2004 - stars
+        return False
+    if not isinstance(listing, int) or isinstance(listing, bool) or listing < 1:
+        return False
+    return rating <= LOW_REVIEW_STARS
+
+
+async def _read(
+    ctx: HandlerContext,
+    shop_id: uuid.UUID,
+    *,
+    since: int,
+    offset: int,
+    clock: Callable[[], datetime],
+) -> Mapping[str, JsonValue]:
+    key = f"{ctx.execution_id}:{ctx.attempt}:reviews:{offset}"
+    result = await ctx.gateway.submit(
+        ActionRequest(
+            action=REVIEWS_READ,
+            actor=ActorRef(ActorKind.AUTOMATION, ctx.automation_id),
+            organization_id=ctx.organization_id,
+            shop_id=shop_id,
+            idempotency_key=key[:200],
+            correlation_id=ctx.correlation_id,
+            causation_id=f"execution:{ctx.execution_id}",
+            input={"min_created": since, "limit": PAGE, "offset": offset},
+        )
+    )
+    if result.outcome is ActionOutcome.SUCCEEDED and result.output is not None:
+        return result.output
+    if result.outcome is ActionOutcome.DEFERRED:
+        wait = None
+        if result.retry_at is not None:
+            wait = max(1.0, (result.retry_at - clock()).total_seconds())
+        raise MarketplaceRateLimitedError(
+            f"etsy.reviews.read deferred ({result.error_code})", retry_after_seconds=wait
+        )
+    raise JobError(f"etsy.reviews.read {result.outcome.value}: {result.error_code or 'no output'}")
