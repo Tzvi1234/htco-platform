@@ -8,8 +8,12 @@ from typing import Literal, Self
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from htco_application.fulfillment_schedule import FULFILLMENT_SCHEDULE
 from htco_application.maintenance import EXPIRY_SCHEDULE, PROBE_SCHEDULE, SCHEDULES
 from htco_platform.crypto import KeyRing
+
+# Every schedule a worker may run: maintenance (5.1) and the fulfillment inspection (6.1, 6.2).
+WORKER_SCHEDULES = SCHEDULES | {FULFILLMENT_SCHEDULE.kind: FULFILLMENT_SCHEDULE}
 
 
 class WorkerSettings(BaseSettings):
@@ -79,7 +83,7 @@ class WorkerSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _schedules_are_known_and_configured(self) -> Self:
-        unknown = sorted(set(self.schedules) - SCHEDULES.keys())
+        unknown = sorted(set(self.schedules) - WORKER_SCHEDULES.keys())
         if unknown:
             raise ValueError(f"HTCO_WORKER_SCHEDULES names unknown schedules: {unknown}")
         try:

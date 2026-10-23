@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/automations/incident-detection-escalation.input.json",
+  "title": "Incident Detection & Escalation input",
+  "description": "The inspect mode (schedule) or a drift recorded by reconciliation; identifiers only.",
+  "type": "object",
+  "properties": {
+    "mode": {"type": "string", "enum": ["inspect"]},
+    "drift": {
+      "type": "object",
+      "properties": {
+        "shop_id": {"type": "string", "pattern": "^[0-9a-f-]{36}$"},
+        "receipt_id": {"type": "integer", "minimum": 1},
+        "kind": {"type": "string", "enum": ["missing", "status", "items", "shipments"]},
+        "detected_at": {"type": "string", "maxLength": 40},
+        "drift_id": {"type": "string", "pattern": "^[0-9a-f-]{36}$"}
+      },
+      "required": ["shop_id", "receipt_id", "kind", "detected_at", "drift_id"],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

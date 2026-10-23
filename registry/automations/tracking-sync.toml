@@ -9,6 +9,8 @@ timeout_seconds = 120
 side_effect = "internal"
 approval_required = false
 ai_steps = []
+# The Action Gateway lets it read receipts (slice 6.1); it writes only its own tables.
+allowed_actions = ["etsy.receipts.read"]
 readiness = "draft"
 activation_phase = 6
 

@@ -7,13 +7,13 @@
 | **Size** | M |
 | **Depends on** | Phase 5 |
 | **Requirements** | FR-AUT-05, FR-EML-01, FR-INC-01, FR-INC-02, FR-INC-03, FR-INC-04 (allowlist only), FR-INC-05, FR-INC-06, FR-NTF-01, FR-ORD-03, FR-ORD-05, FR-ORD-06, FR-ORD-07 |
-| **Status** | Not started |
+| **Status** | In progress (started 2026-10-25, in parallel with the end of Phase 5) |
 
 ## Progress
 
-- [ ] 6.1 Tracking detection
-- [ ] 6.2 SLA policies and inspector
-- [ ] 6.3 Incidents
+- [x] 6.1 Tracking detection (migration `20261025100000_fulfillment_incidents.sql`, pgTAP `19_fulfillment_incidents`; [feature docs](../../features/fulfillment-monitoring/overview.md); inactive until 6.7)
+- [x] 6.2 SLA policies and inspector (default window 10 business days until the owner agrees the windows; schedule `fulfillment.inspect`, off by flag)
+- [x] 6.3 Incidents ([feature docs](../../features/incidents/overview.md); AC-6.3.4's trigger from `sync_drifts` is wired after 5.5 merges)
 - [ ] 6.4 Notifications and email
 - [ ] 6.5 Incident center UI
 - [ ] 6.6 Guarded shipment write

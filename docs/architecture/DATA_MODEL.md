@@ -214,7 +214,8 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `incidents`, `incident_events`, `remediations` | Incident lifecycle and fixes | 6 |
+| `incidents`, `incident_events`, `remediations` | Incident lifecycle and fixes. `incidents` and `incident_events` **created** (slice 6.3, `20261025100000_fulfillment_incidents.sql`); `remediations` later | 6 |
+| `tracking_events`, `sla_policies` | First sighting of each parcel per order (fingerprint and last four only); SLA windows per organization, shop, supplier and shipping method. **Created** (slices 6.1, 6.2, `20261025100000_fulfillment_incidents.sql`) | 6 |
 | `debug_reports` | Amir's diagnoses | 19 |
 | `audit.audit_log` | Append-only audit of sensitive actions | 2 |
 | `system_alerts`, `notifications`, `notification_preferences` | Alerts and user notifications | 6–7 |

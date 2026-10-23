@@ -23,4 +23,6 @@ Every feature has its own folder here, created from [`_template/`](_template/) a
 | [action-gateway](action-gateway/overview.md) | 5 | 5.12 built; channels in 5.13 |
 | [orders-ingest](orders-ingest/overview.md) | 5 | 5.3 webhooks and 5.4 receipt ingest built (off behind flags until 5.11); 5.5 next |
 | [secret-broker](secret-broker/overview.md) | 5, 8B | 5.17 contracts and in-memory implementations built; tables and UI in 8B |
+| [fulfillment-monitoring](fulfillment-monitoring/overview.md) | 6 | 6.1 tracking detection and 6.2 SLA inspector built (draft until 6.7) |
+| [incidents](incidents/overview.md) | 6 | 6.3 incident machine and deduplication built |
 | [browser-environments](browser-environments/overview.md) | 5, 8A | 5.16 contracts, table and state machine built; the browser in 8A |

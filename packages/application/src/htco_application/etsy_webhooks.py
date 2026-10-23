@@ -53,6 +53,7 @@ from htco_domain.automation import AutomationExecution, TriggerKind
 WEBHOOK_SOURCE = "etsy"
 WEBHOOK_JOB = "etsy.webhook_event"
 ORDER_INTAKE = "etsy-order-intake"
+ORDER_SHIPPED = "order.shipped"
 EVENTS_DESTINATION = "events.publish"
 # Standard Webhooks' replay window.
 TOLERANCE = timedelta(minutes=5)
@@ -511,6 +512,8 @@ class WebhookProcessor:
     marks: ProcessedMarks
     clock: Callable[[], datetime]
     offload: Offload = _inline
+    # Tracking Synchronization (slice 6.1): also started by `order.shipped`, beside the intake.
+    tracking: OrderIntakeTrigger | None = None
 
     async def process(self, job: ClaimedJob) -> str:
         """The outcome: "ingest_triggered", "ingest_refused", "published", "skipped"."""
@@ -534,6 +537,14 @@ class WebhookProcessor:
                 causation_id=f"job:{job.id}",
             )
             outcome = "ingest_triggered" if started else "ingest_refused"
+            if event_type == ORDER_SHIPPED and self.tracking is not None:
+                await self.tracking.receipt_event(
+                    shop,
+                    receipt_id=receipt_id,
+                    event_type=event_type,
+                    correlation_id=correlation,
+                    causation_id=f"job:{job.id}",
+                )
         else:
             outcome = await self._catalog(job, shop, event_type, route, correlation)
         now = self.clock()
