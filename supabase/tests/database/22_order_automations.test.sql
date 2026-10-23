@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_worker;
-select plan(21);
+select plan(20);
 
 insert into auth.users (id, email) values
   ('22e00000-0000-0000-0000-000000000001', 'owner-m@example.test'),
