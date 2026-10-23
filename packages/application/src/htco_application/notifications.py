@@ -328,11 +328,11 @@ _TEMPLATES: Mapping[tuple[NotificationKind, Locale], tuple[str, str]] = {
     ),
     (NotificationKind.ALERT_LOW_REVIEW, Locale.EN): (
         "A {rating}-star review",
-        "A new review of {rating} stars arrived for order {receipt_id}.",
+        "A new review of {rating} stars arrived for listing {listing_id}, order {receipt_id}.",
     ),
     (NotificationKind.ALERT_LOW_REVIEW, Locale.HE): (
         "ביקורת של {rating} כוכבים",
-        "התקבלה ביקורת חדשה של {rating} כוכבים להזמנה {receipt_id}.",
+        "התקבלה ביקורת חדשה של {rating} כוכבים למוצר {listing_id}, הזמנה {receipt_id}.",
     ),
     (NotificationKind.ALERT_OUT_OF_STOCK, Locale.EN): (
         "Listing {listing_id} is out of stock",

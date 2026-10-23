@@ -4,6 +4,7 @@
     {
       "shop_id": 10000001,
       "listing_id": 7000000001,
+      "transaction_id": 8000000001,
       "rating": 5,
       "review": "Fake review text: lovely test mug.",
       "language": "en",
@@ -16,6 +17,7 @@
     {
       "shop_id": 10000001,
       "listing_id": 7000000002,
+      "transaction_id": null,
       "rating": 4,
       "review": null,
       "language": "en",
@@ -28,6 +30,7 @@
     {
       "shop_id": 10000001,
       "listing_id": 7000000001,
+      "transaction_id": 8000000003,
       "rating": 2,
       "review": "Fake review text: arrived late.",
       "language": "en",
