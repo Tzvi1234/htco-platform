@@ -18,9 +18,9 @@ The record is honest by design: no fingerprint, user-agent or proxy fields.
 
 | ID | Criterion | Status |
 |---|---|---|
-| AC-5.16.1 | Every allowed transition succeeds, and every other one is refused by the domain and by the database. | Pass (domain, in memory; database in CI: pgTAP `15`, integration) |
+| AC-5.16.1 | Every allowed transition succeeds, and every other one is refused by the domain and by the database. | Pass (domain, in memory; database in CI: pgTAP `16`, integration) |
 | AC-5.16.2 | Every transition records actor, reason and correlation ID; the history is append-only. | Pass (in memory; Postgres and pgTAP in CI) |
-| AC-5.16.3 | A shop of organization A cannot read or change B's environment (pgTAP). | Pass (pgTAP `15` in CI; the use case and route answer 404) |
+| AC-5.16.3 | A shop of organization A cannot read or change B's environment (pgTAP). | Pass (pgTAP `16` in CI; the use case and route answer 404) |
 | AC-5.16.4 | Adding a shop still needs OAuth only; a shop without an environment is `NOT_CONFIGURED`, and every API-channel action works unchanged. | Pass |
 
 ## Scope
