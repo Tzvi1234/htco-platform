@@ -197,3 +197,42 @@ source_modules = [
 forbidden_modules = ["psycopg", "psycopg_pool"]
 # Composition roots reach the driver through persistence adapters; only direct imports are banned.
 allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+id = "http-client-only-in-adapters"
+name = "Only integrations, platform and the composition roots import the HTTP client"
+type = "forbidden"
+source_modules = ["htco_domain", "htco_application", "htco_persistence", "htco_agent_runtime"]
+forbidden_modules = ["httpx"]
+
+[[tool.importlinter.contracts]]
+id = "web-framework-only-in-api"
+name = "Only the API imports the web framework"
+type = "forbidden"
+source_modules = [
+  "htco_domain", "htco_application", "htco_persistence", "htco_integrations",
+  "htco_agent_runtime", "htco_worker",
+]
+forbidden_modules = ["fastapi", "starlette", "uvicorn"]
+
+[[tool.importlinter.contracts]]
+id = "no-pydantic-in-adapters"
+name = "Persistence, integrations and the agent runtime map to dataclasses, not pydantic"
+type = "forbidden"
+source_modules = ["htco_persistence", "htco_integrations", "htco_agent_runtime"]
+forbidden_modules = ["pydantic", "pydantic_settings"]
+
+[[tool.importlinter.contracts]]
+id = "api-routers-use-application-only"
+name = "API modules reach adapters only through the main and cli composition roots"
+type = "forbidden"
+# The whole package, so a new router is covered without being listed; only the two
+# composition roots may wire adapters.
+source_modules = ["htco_api"]
+forbidden_modules = ["htco_persistence", "htco_integrations", "psycopg", "httpx"]
+ignore_imports = [
+  "htco_api.main -> htco_persistence.**", "htco_api.main -> htco_integrations.**",
+  "htco_api.main -> httpx", "htco_api.cli -> htco_persistence.**",
+]
+# Unmatched ignores fail the run, so widen this list only when cli.py or main.py needs it.
+allow_indirect_imports = true

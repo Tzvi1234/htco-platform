@@ -13,8 +13,8 @@
 | 1 | **This plan PR reviewed by the owner** (ADRs 0019–0022, Phase 5 change list) | — | The owner approves, or lists changes | S |
 | 2 | **Align #53**: renumber the migration after `20261022120000` and pgTAP `08` → `09`; add `correlation_id` and `causation_id` to jobs; rebase on the plan | 1 | AC-5.0.1, AC-5.0.2 (jobs part); AC-5.1.x unchanged and green | S |
 | 3 | Merge #53 (slice 5.1) | 2 | CI green, Codex review handled | — |
-| 4 | **Align #55**: renumber (migration and pgTAP `09` → `10`); add `action_execution_id` and `correlation_id` to the outbox; rebase | 3 | AC-5.0.2 (outbox part); AC-5.2.x green | S |
-| 5 | Merge #55 (slice 5.2) | 4 | CI green | — |
+| 4 | **Align the outbox** (done in #62, which replaced #55): renumber (migration and pgTAP `09` → `10`); add `action_execution_id` and `correlation_id` to the outbox; rebase | 3 | AC-5.0.2 (outbox part); AC-5.2.x green | S |
+| 5 | Merge #62 (slice 5.2; #55 was closed) | 4 | CI green | — |
 | 6 | **Align #58**: renumber (migration and pgTAP `10` → `11`); `HandlerContext`; `ExecutionState.WAITING` with its transitions; rebase | 5 | AC-5.0.3, AC-5.0.4; AC-5.10.x green | M |
 | 7 | Merge #58 (slice 5.10) | 6 | CI green | — |
 | 8 | Owner decision on #54 (`agent-worker`, +$5) and merge | 3, D-22 | AC-5.1 deployment notes; budget check passes | S |
@@ -53,11 +53,11 @@
 | Decision | Blocks rank | Options (recommended first) |
 |---|---|---|
 | Owner review of this plan | 2–22 | Approve; or approve with changes |
-| D-22 `agent-worker` cost | 8, 21 | Approve +$5/month; or defer (automations cannot run in production) |
+| D-22 `agent-worker` cost | 8, 21 | Decided 2026-10-23: approved (ASSUMPTIONS D-22) |
 | D-19 order store naming | 13 | Keep `etsy_orders`; or rename now |
 | D-16 Etsy written confirmation | 26 (writes: 31) | Get it signed before write rows; verbal for B-02 and B-03 only; or no browser on Etsy |
 | D-17 one egress IP disclosed to Etsy | 26 | Ask in the confirmation; or do not ask |
-| D-18 egress option | 26 | Droplet with its own IP; App Platform dedicated egress; the same egress as the API |
+| D-18 egress option | 26 | Decided 2026-10-23: the same egress as the API for now (ASSUMPTIONS D-18) |
 | D-23 quote mailbox | 24a | Forwarding rule to `quotes@office.ht-co.app` (Resend inbound); or read-only Gmail OAuth filtered to AutoVA's sender |
 | A-08 AutoVA's terms for browser use | 26 (A-01, A-02) | The owner checks the terms; until then, the Human-task path of 6.10 and 7.17 |
 | D-21 order of the first writes | 23, 24 | Shipments in Phase 6 (6.8), then shop writes (7.12); or reversible shop writes moved into Phase 6 when A-04 blocks shipments |

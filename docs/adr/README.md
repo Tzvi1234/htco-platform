@@ -17,7 +17,7 @@ Accepted ADRs are not rewritten. Two things may be added later: a status change,
 |---|---|---|
 | [0001](0001-two-repositories.md) | Two repositories: platform and clients | Accepted |
 | [0002](0002-modular-monolith-hexagonal.md) | Modular monolith with hexagonal boundaries | Accepted |
-| [0003](0003-agent-runtime-langgraph.md) | LangGraph agent runtime behind a port | Accepted (validated by the Phase 8 gates); scope narrowed by 0012 and 0013; amended by 0019 |
+| [0003](0003-agent-runtime-langgraph.md) | LangGraph agent runtime behind a port | Accepted (to be validated by the Phase 8 gates); scope narrowed by 0012 and 0013; amended by 0019 |
 | [0004](0004-model-gateway.md) | Own model gateway on official SDKs | Accepted; amended by 0015 |
 | [0005](0005-hosting-digitalocean-supabase.md) | DigitalOcean App Platform and Supabase Pro | Accepted (Frankfurt, GHCR) |
 | [0006](0006-web-auth-bff.md) | Web authentication through a backend-for-frontend | Accepted |
@@ -33,7 +33,7 @@ Accepted ADRs are not rewritten. Two things may be added later: a status change,
 | [0016](0016-web-first.md) | Web first: every feature works on the web before any native app | Accepted |
 | [0017](0017-engineering-on-claude-code-subscription.md) | The Engineering department runs on Claude Code with the owner's subscription | Accepted |
 | [0018](0018-order-history-and-buyer-data.md) | Order history is stored with the buyer's name and shipping address, never contact data | Accepted |
-| [0019](0019-unified-execution-engine-and-action-gateway.md) | One execution engine and one Action Gateway for automations and AI employees | Proposed; amends 0003, 0007, 0012, 0013, 0014 |
+| [0019](0019-unified-execution-engine-and-action-gateway.md) | One execution engine and one Action Gateway for automations and AI employees | Proposed (accepted when slice 5.0 completes; the tests for AC-5.0.1 and AC-5.0.2 are missing); amends 0003, 0007, 0012, 0013, 0014 |
 | [0020](0020-per-shop-browser-environment.md) | An optional, honest per-shop Browser Environment (no anti-detect browser, no proxy per shop) | Accepted (owner, 2026-10-23) |
 | [0021](0021-authenticator-service.md) | An internal Authenticator service: PyOTP on the existing vault | Proposed (Phase 8B) |
 | [0022](0022-etsy-write-tools-and-browser-scope.md) | Every Etsy API endpoint as a tool, writes under approvals; browser actions only inside the recorded Etsy scope | Accepted (browser actions off until scoped); amends 0008 |

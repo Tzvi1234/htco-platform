@@ -19,8 +19,8 @@ seller's refund note.
 import hashlib
 import json
 import uuid
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from enum import StrEnum
 from itertools import pairwise
 
@@ -36,6 +36,7 @@ INGESTED = "orders.ingested.v1"
 UPDATED = "orders.updated.v1"
 CANCELLED = "orders.cancelled.v1"
 REFUNDED = "orders.refunded.v1"
+DRIFT_DETECTED = "orders.drift_detected.v1"
 _BUYER_FIELDS = ("buyer_name", "shipping_address")
 
 
@@ -55,6 +56,10 @@ class IngestContext:
     delivered: frozenset[int] = frozenset()
     # The backfill writes years of history: its orders publish no events.
     publish: bool = True
+    # Reconciliation (slice 5.5): compare what is stored with Etsy and record each difference.
+    detect_drift: bool = False
+    # A receipt this young may simply not have arrived yet: missing only when older.
+    drift_grace: timedelta = timedelta(minutes=20)
 
 
 SYNC = IngestContext(IngestSource.SYNC)
@@ -62,10 +67,83 @@ BACKFILL = IngestContext(IngestSource.BACKFILL, publish=False)
 
 
 @dataclass(frozen=True)
+class StoredFacts:
+    """What reconciliation compares (slice 5.5): no money, no buyer data."""
+
+    status: str
+    is_shipped: bool
+    items: tuple[tuple[int, int], ...]  # (transaction_id, quantity), in order
+    shipments: tuple[tuple[str, str], ...]  # (carrier, notified_at ISO)
+
+
+@dataclass(frozen=True)
 class StoredOrder:
     etsy_updated_at: datetime
     order_state: OrderState | None
     receipt_sha256: bytes | None
+    facts: StoredFacts | None = None  # read only when reconciliation compares
+
+
+class DriftKind(StrEnum):
+    MISSING = "missing"  # Etsy has it, HTCO did not
+    STATUS = "status"
+    ITEMS = "items"
+    SHIPMENTS = "shipments"
+
+
+@dataclass(frozen=True)
+class Drift:
+    kind: DriftKind
+    stored: JsonValue
+    observed: JsonValue
+
+
+def observed_facts(receipt: OrderReceipt) -> StoredFacts:
+    return StoredFacts(
+        status=receipt.status,
+        is_shipped=receipt.is_shipped,
+        items=tuple((line.transaction_id, line.quantity) for line in receipt.lines),
+        shipments=tuple((s.carrier, s.notified_at.isoformat()) for s in receipt.shipments),
+    )
+
+
+def _items(items: tuple[tuple[int, int], ...]) -> JsonValue:
+    return [[transaction, quantity] for transaction, quantity in items]
+
+
+def _shipments(shipments: tuple[tuple[str, str], ...]) -> JsonValue:
+    return [[carrier, at] for carrier, at in shipments]
+
+
+def detect_drifts(
+    stored: StoredOrder | None, receipt: OrderReceipt, *, now: datetime, grace: timedelta
+) -> tuple[Drift, ...]:
+    """Each difference between the stored order and Etsy's copy (AC-5.5.4), with both values.
+    A receipt HTCO never stored is missing once it is older than `grace`."""
+    seen = observed_facts(receipt)
+    if stored is None:
+        if receipt.updated_at > now - grace:
+            return ()
+        return (Drift(DriftKind.MISSING, None, {"status": seen.status}),)
+    facts = stored.facts
+    if facts is None or stored.etsy_updated_at > receipt.updated_at:
+        return ()  # nothing stored to compare, or HTCO is already ahead of this copy
+    drifts = []
+    if (facts.status, facts.is_shipped) != (seen.status, seen.is_shipped):
+        drifts.append(
+            Drift(
+                DriftKind.STATUS,
+                {"status": facts.status, "is_shipped": facts.is_shipped},
+                {"status": seen.status, "is_shipped": seen.is_shipped},
+            )
+        )
+    if facts.items != seen.items:
+        drifts.append(Drift(DriftKind.ITEMS, _items(facts.items), _items(seen.items)))
+    if facts.shipments != seen.shipments:
+        drifts.append(
+            Drift(DriftKind.SHIPMENTS, _shipments(facts.shipments), _shipments(seen.shipments))
+        )
+    return tuple(drifts)
 
 
 @dataclass(frozen=True)
@@ -93,6 +171,8 @@ class IngestPlan:
     receipt_sha256: bytes
     # The facts moved behind the stored state (a drift for reconciliation, never a transition).
     behind: bool = False
+    # Differences reconciliation found (slice 5.5), recorded in `sync_drifts`.
+    drifts: tuple[Drift, ...] = ()
 
 
 def facts_hash(receipt: OrderReceipt) -> bytes:
@@ -133,7 +213,55 @@ def financial_entries(receipt: OrderReceipt) -> tuple[FinancialEntry, ...]:
     return tuple(entries)
 
 
-def plan_ingest(
+def plan_ingest(  # noqa: PLR0913 - the receipt, what is stored, where and when
+    receipt: OrderReceipt,
+    stored: StoredOrder | None,
+    context: IngestContext,
+    *,
+    organization_id: uuid.UUID,
+    shop_id: uuid.UUID,
+    now: datetime | None = None,
+) -> IngestPlan:
+    plan = _plan(receipt, stored, context, organization_id=organization_id, shop_id=shop_id)
+    if not context.detect_drift or now is None:
+        return plan
+    drifts = detect_drifts(stored, receipt, now=now, grace=context.drift_grace)
+    if not drifts:
+        return plan
+    events = tuple(_drift_event(receipt, d, organization_id, shop_id, context) for d in drifts)
+    return replace(plan, drifts=drifts, events=plan.events + events)
+
+
+def _drift_event(
+    receipt: OrderReceipt,
+    drift: Drift,
+    organization_id: uuid.UUID,
+    shop_id: uuid.UUID,
+    context: IngestContext,
+) -> OutboxMessage:
+    """`orders.drift_detected.v1`: what differed and both values (no money, no buyer data)."""
+    return OutboxMessage(
+        organization_id=organization_id,
+        shop_id=shop_id,
+        destination=EVENTS_DESTINATION,
+        idempotency_key=(
+            f"{DRIFT_DETECTED}:{shop_id}:{receipt.receipt_id}:{drift.kind.value}:"
+            f"{int(receipt.updated_at.timestamp())}"
+        )[:200],
+        payload={
+            "event_type": DRIFT_DETECTED,
+            "shop_id": str(shop_id),
+            "receipt_id": receipt.receipt_id,
+            "kind": drift.kind.value,
+            "stored": drift.stored,
+            "observed": drift.observed,
+            "etsy_updated_at": receipt.updated_at.isoformat(),
+        },
+        correlation_id=None if context.correlation_id is None else context.correlation_id[:200],
+    )
+
+
+def _plan(
     receipt: OrderReceipt,
     stored: StoredOrder | None,
     context: IngestContext,

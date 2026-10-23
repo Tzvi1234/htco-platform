@@ -78,3 +78,23 @@ async def test_get_order_receipt__an_invalid_id_is_refused_before_any_call(
     async with harness.client:
         with pytest.raises(ValueError, match="receipt_id"):
             await harness.adapter.get_order_receipt(SHOP_ID, 0)
+
+
+async def test_list_order_receipts__open_orders_filter_is_one_get(
+    make: Callable[..., Harness],
+) -> None:
+    """Reconciliation's paid, unshipped orders (slice 5.5): Etsy's own filters, no period."""
+    etsy = StrictEtsy(ok(fixture("receipts_page.json")))
+    harness = make(etsy)
+
+    async with harness.client:
+        await harness.adapter.list_order_receipts(
+            SHOP_ID, min_created=None, was_paid=True, was_shipped=False
+        )
+
+    [request] = etsy.requests
+    assert request.method == "GET"
+    assert request.url.params["was_paid"] == "true"
+    assert request.url.params["was_shipped"] == "false"
+    assert "min_created" not in request.url.params
+    assert "min_last_modified" not in request.url.params

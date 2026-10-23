@@ -70,6 +70,8 @@ class EtsyReads(Protocol):
         limit: int = 100,
         offset: int = 0,
         urgent: bool = False,
+        was_paid: bool | None = None,
+        was_shipped: bool | None = None,
     ) -> Page[OrderReceipt]: ...
 
     async def get_order_receipt(self, shop_id: int, receipt_id: int) -> OrderReceipt: ...
@@ -153,6 +155,8 @@ class EtsyApiChannel:
             else datetime.fromtimestamp(since, UTC),
             limit=int(str(values.get("limit", 100))),
             offset=int(str(values.get("offset", 0))),
+            was_paid=_flag(values.get("was_paid")),
+            was_shipped=_flag(values.get("was_shipped")),
         )
         return {"receipts": [receipt_to_json(r) for r in page.items], "count": page.total_count}
 
@@ -176,6 +180,10 @@ class EtsyApiChannel:
 
     async def verify(self, request: ActionRequest, outcome: ChannelOutcome) -> bool:  # noqa: ARG002
         return False  # no write runs through this channel yet, so nothing is re-read
+
+
+def _flag(value: JsonValue) -> bool | None:
+    return value if isinstance(value, bool) else None
 
 
 # --- Internal -----------------------------------------------------------------------------------

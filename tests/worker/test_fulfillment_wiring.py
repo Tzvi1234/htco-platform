@@ -10,7 +10,7 @@ from htco_application.fulfillment_schedule import (
 )
 from htco_platform.settings import load_settings
 from htco_worker.main import fulfillment_handlers, fulfillment_schedule_handlers, worker_engine
-from htco_worker.settings import WORKER_SCHEDULES, WorkerSettings
+from htco_worker.settings import SCHEDULES, WorkerSettings
 from tests.job_fakes import MemoryJobQueue
 from tests.worker.test_main import Directory, environment  # noqa: F401 - the fixture
 
@@ -45,4 +45,4 @@ def test_settings_accept_the_fulfillment_schedule(environment: pytest.MonkeyPatc
     environment.setenv("HTCO_WORKER_SCHEDULES", FULFILLMENT_SCHEDULE.kind)
     settings = load_settings(WorkerSettings)
     assert settings.schedules == (FULFILLMENT_SCHEDULE.kind,)
-    assert WORKER_SCHEDULES[FULFILLMENT_SCHEDULE.kind] == FULFILLMENT_SCHEDULE
+    assert SCHEDULES[FULFILLMENT_SCHEDULE.kind] == FULFILLMENT_SCHEDULE

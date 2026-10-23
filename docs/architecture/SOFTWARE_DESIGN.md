@@ -141,6 +141,9 @@ Arrows point from the dependent module to its dependency. Enforced by `import-li
 3. Adapters never import each other (Etsy code never imports the model gateway); they meet only through ports wired in a composition root.
 4. Only `htco_model_router` may import model provider SDKs; only `htco_agent_runtime` may import LangGraph; only `htco_persistence` may import the database driver.
 5. Nothing imports from `apps` or `workers`.
+6. Only `htco_integrations`, `htco_platform` and the composition roots import the HTTP client (`httpx`); only `htco_api` imports the web framework.
+7. Persistence, integrations and the agent runtime map to dataclasses, never Pydantic; Pydantic stays at the API edge and in settings.
+8. Every `htco_api` module except the `main` and `cli` composition roots reaches adapters only through application ports; a new router is covered automatically.
 
 ### 4.4 Bounded contexts
 
