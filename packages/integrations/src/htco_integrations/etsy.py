@@ -428,6 +428,8 @@ class EtsyAdapter:
         offset: int = 0,
         urgent: bool = False,
         tokens: AccessTokenProvider | None = None,
+        was_paid: bool | None = None,
+        was_shipped: bool | None = None,
     ) -> Page[OrderReceipt]:
         """getShopReceipts created since `min_created` and changed since `min_last_modified`
         (None: no bound), newest first by creation (`transactions_r`), with no status filter.
@@ -439,6 +441,11 @@ class EtsyAdapter:
             params["min_created"] = _epoch(min_created, "min_created")
         if min_last_modified is not None:
             params["min_last_modified"] = _epoch(min_last_modified, "min_last_modified")
+        # Reconciliation's open orders (slice 5.5): every paid, unshipped receipt, no period.
+        if was_paid is not None:
+            params["was_paid"] = "true" if was_paid else "false"
+        if was_shipped is not None:
+            params["was_shipped"] = "true" if was_shipped else "false"
         params |= {
             "sort_on": "created",
             "sort_order": "desc",

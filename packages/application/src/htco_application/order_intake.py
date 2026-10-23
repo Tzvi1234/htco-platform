@@ -31,13 +31,21 @@ from htco_application.automation.engine import AutomationRefused, TriggerRequest
 from htco_application.etsy_webhooks import ORDER_INTAKE, TriggersAutomations
 from htco_application.execution.gateway import ActionOutcome, ActionRef, ActionRequest
 from htco_application.jobs import ClaimedJob, JobError, JobQueue, JobSpec, JsonValue
+from htco_application.maintenance import TenantShop
 from htco_application.marketplace import (
     AccessTokenProvider,
     MarketplaceRateLimitedError,
     OrderReceipt,
     Page,
 )
-from htco_application.order_history import PAGE, OrderStore, OrderSync
+from htco_application.order_history import (
+    INCREMENTAL_DAYS,
+    MAX_RATE_LIMIT_WAIT,
+    PAGE,
+    RATE_LIMIT_RETRIES,
+    OrderStore,
+    OrderSync,
+)
 from htco_application.order_ingest import (
     BACKFILL,
     IngestContext,
@@ -59,11 +67,29 @@ DELIVERED = "order.delivered"
 SYNC_PERIOD = Schedule(ORDER_SYNC_JOB, timedelta(minutes=10))
 MANUAL_PERIOD = Schedule(ORDER_SYNC_JOB, timedelta(minutes=1))
 SYNC_REQUESTER = ActorRef(ActorKind.SYSTEM, "order-sync-request")
+RECONCILE = "reconcile"
+SWEEP = "sweep"
+RECONCILE_WINDOW = timedelta(days=INCREMENTAL_DAYS)
+# Reconciliation (slice 5.5): every 10 minutes and a nightly sweep, each a fan-out to one
+# `etsy.order_sync` job per connected shop. Off unless named in HTCO_WORKER_SCHEDULES.
+RECONCILE_SCHEDULE = Schedule("orders.reconcile_shops", timedelta(minutes=10))
+SWEEP_SCHEDULE = Schedule("orders.sweep_shops", timedelta(days=1))
+ORDER_SCHEDULES = {s.kind: s for s in (RECONCILE_SCHEDULE, SWEEP_SCHEDULE)}
+_MODES = {"stale": "history", "manual": "history", RECONCILE: RECONCILE, SWEEP: SWEEP}
 
 _log = logging.getLogger(__name__)
 
 
 class IntakeStore(OrderStore, Protocol):
+    async def record_cursor(
+        self,
+        integration: ShopIntegration,
+        kind: str,
+        *,
+        started_at: datetime,
+        error: str | None,
+    ) -> None: ...
+
     async def ingest_receipts(
         self,
         integration: ShopIntegration,
@@ -115,9 +141,13 @@ class GatewayReceipts:
         offset: int = 0,
         urgent: bool = False,  # noqa: ARG002 - intake reads are routine
         tokens: AccessTokenProvider | None = None,  # noqa: ARG002 - see _NoPinning
+        open_orders: bool = False,
     ) -> Page[OrderReceipt]:
         values: dict[str, JsonValue] = {"order_history": True, "limit": limit, "offset": offset}
         window = "all"
+        if open_orders:  # every paid, unshipped receipt, whenever it was ordered (5.5)
+            values |= {"was_paid": True, "was_shipped": False}
+            window = "open"
         if min_last_modified is not None:
             since = int(min_last_modified.timestamp())
             values["min_last_modified"] = since
@@ -205,9 +235,104 @@ class OrderIntake:
         receipt_id = ctx.payload.get("receipt_id")
         if isinstance(receipt_id, int) and not isinstance(receipt_id, bool):
             return await self._receipt(ctx, integration, receipts, receipt_id)
-        if ctx.payload.get("mode") == "history":
+        mode = ctx.payload.get("mode")
+        if mode == "history":
             return await self._history(ctx, integration, receipts)
+        if mode in {RECONCILE, SWEEP}:
+            return await self._reconcile(ctx, integration, receipts, sweep=mode == SWEEP)
         raise JobError("an order intake names a receipt or a mode")
+
+    async def _reconcile(
+        self,
+        ctx: HandlerContext,
+        integration: ShopIntegration,
+        receipts: GatewayReceipts,
+        *,
+        sweep: bool,
+    ) -> HandlerOutcome:
+        """Reconciliation (slice 5.5): every receipt changed in the last 30 days and every paid,
+        unshipped receipt, compared with the store (drifts recorded) and ingested; the nightly
+        sweep also compares Etsy's receipt count with the store's."""
+        kind = SWEEP if sweep else RECONCILE
+        async with self.store.lock(integration.shop_id) as held:
+            if not held:
+                return Completed({"mode": kind, "skipped": "locked"})
+            started = self.clock()
+            context = IngestContext(
+                IngestSource.RECONCILIATION,
+                correlation_id=ctx.correlation_id,
+                execution_id=ctx.execution_id,
+                detect_drift=True,
+            )
+            try:
+                seen, drifts = await self._pages(
+                    integration, receipts, context, since=started - RECONCILE_WINDOW
+                )
+                more, more_drifts = await self._pages(
+                    integration, receipts, context, open_orders=True
+                )
+                count = await self._count(integration, receipts) if sweep else None
+            except Exception as error:
+                await self.store.record_cursor(
+                    integration, kind, started_at=started, error=type(error).__name__
+                )
+                raise
+            await self.store.record_cursor(integration, kind, started_at=started, error=None)
+        output: dict[str, JsonValue] = {
+            "mode": kind,
+            "receipts_read": seen + more,
+            "drifts": drifts + more_drifts,
+        }
+        if count is not None:
+            output |= count
+        return Completed(output)
+
+    async def _pages(
+        self,
+        integration: ShopIntegration,
+        receipts: GatewayReceipts,
+        context: IngestContext,
+        *,
+        since: datetime | None = None,
+        open_orders: bool = False,
+    ) -> tuple[int, int]:
+        seen = drifts = 0
+        offset: int | None = 0
+        while offset is not None:
+            page = await self._page(receipts, since=since, offset=offset, open_orders=open_orders)
+            plans = await self.store.ingest_receipts(
+                integration, page.items, context=context, now=self.clock()
+            )
+            seen += len(page.items)
+            drifts += sum(len(plan.drifts) for plan in plans)
+            offset = page.next_offset
+        return seen, drifts
+
+    async def _page(
+        self, receipts: GatewayReceipts, *, since: datetime | None, offset: int, open_orders: bool
+    ) -> Page[OrderReceipt]:
+        """One page; a deferral (429, the daily budget) is waited out a few times."""
+        for attempt in range(RATE_LIMIT_RETRIES + 1):
+            try:
+                return await receipts.list_order_receipts(
+                    0, min_created=None, min_last_modified=since, offset=offset,
+                    open_orders=open_orders,
+                )  # fmt: skip
+            except MarketplaceRateLimitedError as error:
+                if attempt == RATE_LIMIT_RETRIES:
+                    raise
+                wait = error.retry_after_seconds or float(2**attempt)
+                await self.sleep(min(MAX_RATE_LIMIT_WAIT, max(1.0, wait)))
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def _count(
+        self, integration: ShopIntegration, receipts: GatewayReceipts
+    ) -> dict[str, JsonValue]:
+        """Etsy's receipt count against the store's (the nightly sweep): a gap is reported."""
+        page = await receipts.list_order_receipts(0, min_created=None, limit=1, offset=0)
+        state = await self.store.state(integration.shop_id)
+        stored = 0 if state is None else state.orders_stored
+        return {"etsy_receipts": page.total_count, "orders_stored": stored}
 
     async def _receipt(
         self,
@@ -283,6 +408,7 @@ class QueuedSyncRequests:
             payload={"reason": reason},
             organization_id=integration.organization_id,
             shop_id=integration.shop_id,
+            lock_key=f"shop:{integration.shop_id}:orders",
             correlation_id=f"order-sync:{integration.shop_id}"[:200],
         )
         await self.offload(lambda: self.queue.enqueue(spec, now=now))
@@ -299,13 +425,16 @@ class EngineSyncTrigger:
     async def run(self, job: ClaimedJob) -> bool:
         if job.organization_id is None or job.shop_id is None:
             raise JobError("an order sync job names its shop and organization")
-        reason = job.payload.get("reason")
+        raw = job.payload.get("reason")
+        reason = raw if isinstance(raw, str) and raw in _MODES else "stale"
+        mode = _MODES[reason]
+        scheduled = mode in {RECONCILE, SWEEP}
         request = TriggerRequest(
             automation_id=ORDER_INTAKE,
-            trigger=TriggerKind.EVENT,
+            trigger=TriggerKind.SCHEDULE if scheduled else TriggerKind.EVENT,
             actor=SYNC_REQUESTER,
-            idempotency_key=f"etsy:{job.shop_id}:history:{job.idempotency_key[-40:]}",
-            payload={"mode": "history", "reason": reason if isinstance(reason, str) else "stale"},
+            idempotency_key=f"etsy:{job.shop_id}:{mode}:{job.idempotency_key[-40:]}",
+            payload={"mode": mode, "reason": reason},
             correlation_id=job.correlation_id or f"job:{job.id}",
             organization_id=job.organization_id,
             shop_id=job.shop_id,
@@ -317,3 +446,40 @@ class EngineSyncTrigger:
             _log.warning("etsy.order_sync_not_started: shop=%s", job.shop_id)
             return False
         return True
+
+
+class ConnectedShops(Protocol):
+    def connected_shops(self) -> list[TenantShop]: ...
+
+
+def enqueue_reconciliations(
+    shops: ConnectedShops, queue: JobQueue, schedule: Schedule, *, now: datetime
+) -> int:
+    """The schedule's fan-out: one `etsy.order_sync` job per connected shop and period, under
+    the shop's orders lock (`shop:{shop_id}:orders`)."""
+    reason = SWEEP if schedule is SWEEP_SCHEDULE else RECONCILE
+    period = schedule.key_for(now).rsplit("@", 1)[-1]
+    connected = shops.connected_shops()
+    for shop in connected:
+        queue.enqueue(
+            JobSpec(
+                kind=ORDER_SYNC_JOB,
+                idempotency_key=f"{ORDER_SYNC_JOB}:{shop.shop_id}:{reason}:{period}",
+                payload={"reason": reason},
+                organization_id=shop.organization_id,
+                shop_id=shop.shop_id,
+                lock_key=f"shop:{shop.shop_id}:orders",
+                correlation_id=f"order-{reason}:{shop.shop_id}:{period}"[:200],
+            ),
+            now=now,
+        )
+    return len(connected)
+
+
+def daily_etsy_calls(*, shops: int, pages_30_days: int, open_pages: int) -> int:
+    """Etsy calls a day that reconciliation makes (AC-5.5.3): every 10 minutes the 30-day pages
+    and the open orders' pages per shop, and the nightly sweep's extra count read."""
+    runs = int(timedelta(days=1) / RECONCILE_SCHEDULE.every)
+    per_run = pages_30_days + open_pages
+    sweep = per_run + 1
+    return shops * (runs * per_run + sweep)

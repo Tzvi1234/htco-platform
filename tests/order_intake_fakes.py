@@ -21,10 +21,12 @@ from htco_application.messaging import OutboxMessage
 from htco_application.order_ingest import (
     BACKFILL,
     SYNC,
+    Drift,
     IngestContext,
     IngestPlan,
     StoredOrder,
     Transition,
+    observed_facts,
     plan_ingest,
 )
 from htco_application.shop_integrations import ShopIntegration
@@ -97,6 +99,9 @@ class MemoryIntakeStore(MemoryOrderStore):
     transitions: list[tuple[int, Transition, str]] = field(default_factory=list)
     events: dict[str, OutboxMessage] = field(default_factory=dict)
     plans: list[IngestPlan] = field(default_factory=list)
+    cursors: list[tuple[uuid.UUID, str, datetime, str | None]] = field(default_factory=list)
+    drifts: list[tuple[int, Drift]] = field(default_factory=list)
+    now: datetime = NOW
 
     def _ingest(
         self, integration: ShopIntegration, receipts: Sequence[OrderReceipt], context: IngestContext
@@ -110,18 +115,35 @@ class MemoryIntakeStore(MemoryOrderStore):
                 context,
                 organization_id=integration.organization_id,
                 shop_id=integration.shop_id,
+                now=self.now,
             )
             written.append(plan)
             self.plans.append(plan)
+            self.drifts.extend((receipt.receipt_id, d) for d in plan.drifts)
+            for event in plan.events:
+                self.events.setdefault(event.idempotency_key, event)
             if not plan.write:
                 continue
             self.orders[key] = replace(receipt, buyer_display_name=None)
-            self.stored[key] = StoredOrder(receipt.updated_at, plan.state, plan.receipt_sha256)
+            self.stored[key] = StoredOrder(
+                receipt.updated_at, plan.state, plan.receipt_sha256, observed_facts(receipt)
+            )
             for transition in plan.transitions:
                 self.transitions.append((receipt.receipt_id, transition, context.source.value))
-            for event in plan.events:
-                self.events.setdefault(event.idempotency_key, event)
         return written
+
+    async def order_count(self, shop_id: uuid.UUID, etsy_shop_id: int) -> int:
+        return sum(1 for shop, _ in self.orders if shop == shop_id)
+
+    async def record_cursor(
+        self,
+        integration: ShopIntegration,
+        kind: str,
+        *,
+        started_at: datetime,
+        error: str | None,
+    ) -> None:
+        self.cursors.append((integration.shop_id, kind, started_at, error))
 
     @override
     def _upsert(self, integration: ShopIntegration, receipts: Sequence[OrderReceipt]) -> None:

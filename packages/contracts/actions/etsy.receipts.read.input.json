@@ -23,6 +23,12 @@
     },
     "order_history": {
       "type": "boolean"
+    },
+    "was_paid": {
+      "type": "boolean"
+    },
+    "was_shipped": {
+      "type": "boolean"
     }
   },
   "additionalProperties": false

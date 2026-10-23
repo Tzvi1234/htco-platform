@@ -32,6 +32,7 @@ from htco_application.order_ingest import (
     SYNC,
     IngestContext,
     IngestPlan,
+    StoredFacts,
     StoredOrder,
     plan_ingest,
 )
@@ -65,7 +66,8 @@ on conflict (shop_id) do update set
 """
 
 _STORED_ORDER = """
-select etsy_updated_at, order_state, receipt_sha256 from app.etsy_orders
+select etsy_updated_at, order_state, receipt_sha256, status, is_shipped, shipments
+from app.etsy_orders
 where shop_id = %s and receipt_id = %s
 for update
 """
@@ -101,6 +103,15 @@ insert into app.order_status_events (
   id, organization_id, shop_id, receipt_id, from_state, to_state, source, observed_at,
   etsy_updated_at, receipt_sha256, execution_id, correlation_id
 ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+# Unique per receipt, kind and Etsy update time: a repeated reconciliation records a drift once.
+_INSERT_DRIFT = """
+insert into app.sync_drifts (
+  id, organization_id, shop_id, receipt_id, kind, stored, observed, etsy_updated_at, source,
+  detected_at, execution_id, correlation_id
+) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+on conflict (shop_id, receipt_id, kind, etsy_updated_at) do nothing
 """
 
 _INSERT_ENTRY = """
@@ -191,7 +202,7 @@ def _shipments(receipt: OrderReceipt, *, tracking: bool) -> Jsonb:
 
 
 def _stored(
-    connection: psycopg.Connection[Any], shop: uuid.UUID, receipt_id: int
+    connection: psycopg.Connection[Any], shop: uuid.UUID, receipt_id: int, *, facts: bool
 ) -> StoredOrder | None:
     row = connection.execute(_STORED_ORDER, [shop, receipt_id]).fetchone()
     if row is None:
@@ -200,6 +211,27 @@ def _stored(
         etsy_updated_at=row[0],
         order_state=None if row[1] is None else OrderState(row[1]),
         receipt_sha256=None if row[2] is None else bytes(row[2]),
+        facts=_stored_facts(connection, shop, receipt_id, row) if facts else None,
+    )
+
+
+def _stored_facts(
+    connection: psycopg.Connection[Any], shop: uuid.UUID, receipt_id: int, row: tuple[Any, ...]
+) -> StoredFacts:
+    """What reconciliation compares: status, shipped flag, item quantities, shipment carriers
+    and times (no money, no buyer data, no tracking number)."""
+    items = connection.execute(
+        """
+        select transaction_id, quantity from app.etsy_order_items
+        where shop_id = %s and receipt_id = %s order by position
+        """,
+        [shop, receipt_id],
+    ).fetchall()
+    return StoredFacts(
+        status=row[3],
+        is_shipped=row[4],
+        items=tuple((int(i[0]), int(i[1])) for i in items),
+        shipments=tuple((str(s["carrier"]), str(s["notified_at"])) for s in row[5] or []),
     )
 
 
@@ -230,14 +262,18 @@ def _plan(
     integration: ShopIntegration,
     receipt: OrderReceipt,
     context: IngestContext,
+    now: datetime,
 ) -> tuple[StoredOrder | None, IngestPlan]:
-    stored = _stored(connection, integration.shop_id, receipt.receipt_id)
+    stored = _stored(
+        connection, integration.shop_id, receipt.receipt_id, facts=context.detect_drift
+    )
     return stored, plan_ingest(
         receipt,
         stored,
         context,
         organization_id=integration.organization_id,
         shop_id=integration.shop_id,
+        now=now,
     )
 
 
@@ -249,7 +285,7 @@ def _write_order(
     now: datetime,
 ) -> IngestPlan:
     shop = integration.shop_id
-    stored, plan = _plan(connection, integration, r, context)
+    stored, plan = _plan(connection, integration, r, context, now)
     if not plan.write:
         return plan
     if stored is None:
@@ -260,7 +296,7 @@ def _write_order(
         if inserted is not None:
             return plan
         # Another writer stored it first: plan again against the row that won.
-        stored, plan = _plan(connection, integration, r, context)
+        stored, plan = _plan(connection, integration, r, context, now)
         if not plan.write:
             return plan
     connection.execute(
@@ -283,7 +319,10 @@ def _ingest(
     for r in receipts:
         plan = _write_order(connection, integration, r, context, now)
         plans.append(plan)
+        _record_drifts(connection, integration, r, plan, context, now)
         if not plan.write:
+            for event in plan.events:  # drift events of an unchanged order
+                add_outbox_in(connection, event, now=now)
             continue
         _replace_children(connection, integration, r, plan)
         for transition in plan.transitions:
@@ -307,6 +346,34 @@ def _ingest(
         for event in plan.events:
             add_outbox_in(connection, event, now=now)
     return plans
+
+
+def _record_drifts(  # noqa: PLR0913, PLR0917 - the order, what differed and the run
+    connection: psycopg.Connection[Any],
+    integration: ShopIntegration,
+    r: OrderReceipt,
+    plan: IngestPlan,
+    context: IngestContext,
+    now: datetime,
+) -> None:
+    for drift in plan.drifts:
+        connection.execute(
+            _INSERT_DRIFT,
+            [
+                uuid.uuid7(),
+                integration.organization_id,
+                integration.shop_id,
+                r.receipt_id,
+                drift.kind.value,
+                Jsonb(drift.stored),
+                Jsonb(drift.observed),
+                r.updated_at,
+                context.source.value,
+                now,
+                context.execution_id,
+                context.correlation_id,
+            ],
+        )
 
 
 _CHILD_TABLES = ("etsy_order_items", "etsy_order_refunds", "etsy_order_buyers", "financial_entries")
@@ -504,6 +571,42 @@ class PostgresOrderStore:
                 return tuple(_ingest(connection, integration, receipts, now, context))
 
         return await anyio.to_thread.run_sync(run)
+
+    async def record_cursor(
+        self,
+        integration: ShopIntegration,
+        kind: str,
+        *,
+        started_at: datetime,
+        error: str | None,
+    ) -> None:
+        """A reconciliation run's end (slice 5.5): when it last succeeded, or the error type."""
+
+        def run() -> None:
+            with self._database.connection() as connection, connection.transaction():
+                connection.execute(
+                    """
+                    insert into app.sync_cursors
+                      (organization_id, shop_id, resource, kind, last_started_at,
+                       last_succeeded_at, last_error)
+                    values (%s, %s, 'orders', %s, %s, %s, %s)
+                    on conflict (shop_id, resource, kind) do update set
+                      last_started_at = excluded.last_started_at,
+                      last_succeeded_at = coalesce(excluded.last_succeeded_at,
+                                                   app.sync_cursors.last_succeeded_at),
+                      last_error = excluded.last_error
+                    """,
+                    [
+                        integration.organization_id,
+                        integration.shop_id,
+                        kind,
+                        started_at,
+                        started_at if error is None else None,
+                        None if error is None else error[:64],
+                    ],
+                )
+
+        await anyio.to_thread.run_sync(run)
 
     async def record_failure(self, shop_id: uuid.UUID, *, error: str, now: datetime) -> None:
         def run() -> None:

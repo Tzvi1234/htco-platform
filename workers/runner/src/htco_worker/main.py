@@ -54,7 +54,6 @@ from htco_application.maintenance import (
     PRUNE_SCHEDULE,
     PURGE_JOB,
     PURGE_SCHEDULE,
-    SCHEDULES,
     ExpiryVault,
     PurgeStore,
     ShopDirectory,
@@ -76,14 +75,18 @@ from htco_application.messaging import (
 )
 from htco_application.order_intake import (
     ORDER_SYNC_JOB,
+    RECONCILE_SCHEDULE,
+    SWEEP_SCHEDULE,
     EngineSyncTrigger,
     OrderIntake,
+    enqueue_reconciliations,
 )
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.guards import BreakerPolicy
 from htco_domain.integrations import TokenHealth
+from htco_domain.jobs import Schedule
 from htco_integrations.etsy import (
     EtsyAdapter,
     EtsyConfig,
@@ -113,7 +116,7 @@ from htco_platform.settings import ConfigurationError, load_settings
 from htco_platform.tracing import new_tracer_provider
 from htco_worker.health import serve_health
 from htco_worker.runner import JobHandler, Worker, WorkerConfig
-from htco_worker.settings import WorkerSettings
+from htco_worker.settings import SCHEDULES, WorkerSettings
 
 EXIT_CONFIGURATION_ERROR = 78
 # sysexits.h EX_TEMPFAIL: stopped before the current job finished; its lease brings it back.
@@ -309,6 +312,25 @@ def intake_handlers(database: Database, vault: PostgresTokenVault) -> dict[str, 
     return {ORDER_INTAKE: OrderIntake(store=PostgresOrderStore(database), shops=vault, clock=_now)}
 
 
+def reconciliation_handlers(
+    enabled: tuple[str, ...], *, queue: JobQueue, directory: ShopDirectory
+) -> dict[str, JobHandler]:
+    """The enabled reconciliation schedules' fan-outs (slice 5.5): one `etsy.order_sync` job per
+    connected shop, which `order_sync_handlers` runs."""
+
+    def fan_out(schedule: Schedule) -> JobHandler:
+        return _in_thread(
+            lambda: enqueue_reconciliations(directory, queue, schedule, now=_now()),
+            "orders.reconciliations_enqueued",
+        )
+
+    return {
+        schedule.kind: fan_out(schedule)
+        for schedule in (RECONCILE_SCHEDULE, SWEEP_SCHEDULE)
+        if schedule.kind in enabled
+    }
+
+
 def order_sync_handlers(engine: DurableAutomationEngine) -> dict[str, JobHandler]:
     """The `etsy.order_sync` job (slice 5.4): a requested history run of the shop's orders."""
     trigger = EngineSyncTrigger(engine, offload=anyio.to_thread.run_sync)
@@ -412,6 +434,9 @@ async def _serve(settings: WorkerSettings) -> None:
     if adapter is not None:  # webhook and sync jobs wait in the queue until Etsy is configured
         handlers |= webhook_handlers(webhook_processor(database, engine, adapter))
         handlers |= order_sync_handlers(engine)
+        handlers |= reconciliation_handlers(
+            settings.schedules, queue=queue, directory=PostgresShopDirectory(database)
+        )
     worker = Worker(
         queue,
         PostgresWorkerHeartbeats(database),
