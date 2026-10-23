@@ -1,12 +1,13 @@
-"""Reconciliation on the queue (slice 5.5): every 10 minutes and nightly, Etsy Order Intake
-re-reads the last 30 days and every paid, unshipped order, records drifts and keeps the store
-complete without webhooks. Real gateway and API channel with in-memory stores; invented values."""
+"""Reconciliation on the queue (slice 5.5, the owner's decision: twice a day, webhooks first):
+Etsy Order Intake re-reads the last 30 days, and in the day's second run, the full sweep, also
+every paid, unshipped order; it records drifts and keeps the store complete without webhooks.
+Real gateway and API channel with in-memory stores; invented values."""
 
 import json
 import tomllib
 import uuid
 from dataclasses import dataclass, field, replace
-from datetime import timedelta
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, override
 
@@ -29,14 +30,15 @@ from htco_application.order_ingest import (
     plan_ingest,
 )
 from htco_application.order_intake import (
+    DEFAULT_RECONCILIATION_TIMES,
     ORDER_SYNC_JOB,
     RECEIPTS_READ,
     RECONCILE,
-    RECONCILE_SCHEDULE,
     SWEEP,
-    SWEEP_SCHEDULE,
     daily_etsy_calls,
+    due_reconciliation,
     enqueue_reconciliations,
+    parse_reconciliation_times,
 )
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.orders import OrderState
@@ -167,21 +169,22 @@ async def test_reconcile__200_receipts_ingested_by_reconciliation_alone() -> Non
     assert len(intake.store.orders) == 200
     reads = [c for c in intake.marketplace.calls if c[0] == "list_order_receipts"]
     assert [c[2]["offset"] for c in reads if c[2].get("was_paid") is None] == [0, 100]
-    assert outcome.output["receipts_read"] == 400  # type: ignore[union-attr]  # 30 days and open
+    assert outcome.output["receipts_read"] == 200  # type: ignore[union-attr]  # 30 days only
+    assert not [c for c in reads if c[2].get("was_paid") is True]  # open orders: the sweep's
     assert {source for _, _, source in intake.store.transitions} == {"reconciliation"}
     [(shop, kind, started, error)] = intake.store.cursors
     assert (shop, kind, started, error) == (SHOP, RECONCILE, NOW, None)
 
 
 @pytest.mark.ac("AC-5.5.2")
-async def test_reconcile__a_receipt_whose_webhook_was_lost__in_the_next_interval() -> None:
+async def test_reconcile__a_receipt_whose_webhook_was_lost__in_the_next_run() -> None:
     known = _many(3)
     intake = _intake(known)
     await intake.handler(intake.context({"mode": RECONCILE}))
-    lost = replace(paid_receipt(RECEIPT + 99), updated_at=NOW - timedelta(minutes=9))
+    lost = replace(paid_receipt(RECEIPT + 99), updated_at=NOW - timedelta(hours=9))
     intake.marketplace.order_receipts = (*known, lost)
 
-    # The next run: at most one reconciliation interval later.
+    # The next run is at most one reconciliation interval (12 hours by default) later.
     queue = MemoryJobQueue()
 
     @dataclass
@@ -189,19 +192,18 @@ async def test_reconcile__a_receipt_whose_webhook_was_lost__in_the_next_interval
         def connected_shops(self) -> list[TenantShop]:
             return [TenantShop(ORG, SHOP)]
 
-    assert enqueue_reconciliations(Directory(), queue, RECONCILE_SCHEDULE, now=NOW) == 1
-    await intake.handler(intake.context({"mode": RECONCILE}))
+    assert enqueue_reconciliations(Directory(), queue, reason=SWEEP, slot="s", now=NOW) == 1
+    await intake.handler(intake.context({"mode": SWEEP}))
 
     assert (SHOP, RECEIPT + 99) in intake.store.orders
-    assert RECONCILE_SCHEDULE.every == timedelta(minutes=10)
 
 
-async def test_reconcile__paid_unshipped_orders_of_any_age_are_read() -> None:
+async def test_sweep__paid_unshipped_orders_of_any_age_are_read() -> None:
     old_open = replace(paid_receipt(RECEIPT), created_at=NOW - timedelta(days=200),
                        updated_at=NOW - timedelta(days=199))  # fmt: skip
     intake = _intake((old_open,))
 
-    await intake.handler(intake.context({"mode": RECONCILE}))
+    await intake.handler(intake.context({"mode": SWEEP}))
 
     assert (SHOP, RECEIPT) in intake.store.orders
     opened = [c for c in intake.marketplace.calls if c[2].get("was_paid") is True]
@@ -262,7 +264,7 @@ async def test_reconcile__a_failure_records_its_type_on_the_cursor() -> None:
 # --- The schedule and the budget (AC-5.5.3) -----------------------------------------------------
 
 
-def test_fan_out__one_job_per_shop_and_period_under_the_orders_lock() -> None:
+def test_fan_out__one_job_per_shop_and_run_under_the_orders_lock() -> None:
     queue = MemoryJobQueue()
 
     @dataclass
@@ -275,17 +277,57 @@ def test_fan_out__one_job_per_shop_and_period_under_the_orders_lock() -> None:
             return self.shops
 
     directory = Directory()
-    for worker in range(2):  # two workers in one period
+    for worker in range(2):  # two workers in one run
         enqueue_reconciliations(
-            directory, queue, RECONCILE_SCHEDULE, now=NOW + timedelta(seconds=worker)
-        )
-    enqueue_reconciliations(directory, queue, SWEEP_SCHEDULE, now=NOW)
+            directory, queue, reason=RECONCILE, slot="2026-10-24T03:00",
+            now=NOW + timedelta(seconds=worker),
+        )  # fmt: skip
+    enqueue_reconciliations(directory, queue, reason=SWEEP, slot="2026-10-24T15:00", now=NOW)
 
     jobs = list(queue.jobs.values())
     assert len(jobs) == 4
     assert {j.spec.kind for j in jobs} == {ORDER_SYNC_JOB}
     assert {j.spec.payload["reason"] for j in jobs} == {RECONCILE, SWEEP}
     assert all(j.spec.lock_key == f"shop:{j.spec.shop_id}:orders" for j in jobs)
+
+
+# --- When it runs (the owner's decision: twice a day) ------------------------------------------
+
+
+def test_times__default_twice_a_day_in_utc() -> None:
+    assert parse_reconciliation_times(DEFAULT_RECONCILIATION_TIMES) == (time(3, 0), time(15, 0))
+    assert parse_reconciliation_times(" 15:00, 03:00 ") == (time(3, 0), time(15, 0))
+
+
+@pytest.mark.parametrize("text", ["", "3pm", "25:00", "03:00,03:00", "03:61"])
+def test_times__anything_else_is_refused(text: str) -> None:
+    with pytest.raises(ValueError, match="reconciliation"):
+        parse_reconciliation_times(text)
+
+
+@pytest.mark.parametrize(
+    ("at", "due"),
+    [
+        (datetime(2026, 10, 24, 3, 0, tzinfo=UTC), (RECONCILE, "2026-10-24T03:00")),
+        (datetime(2026, 10, 24, 3, 59, tzinfo=UTC), (RECONCILE, "2026-10-24T03:00")),
+        (datetime(2026, 10, 24, 4, 0, tzinfo=UTC), None),
+        (datetime(2026, 10, 24, 15, 20, tzinfo=UTC), (SWEEP, "2026-10-24T15:00")),
+        (datetime(2026, 10, 24, 22, 0, tzinfo=UTC), None),
+    ],
+)
+def test_due__the_first_run_reconciles_the_last_sweeps(
+    at: datetime, due: tuple[str, str] | None
+) -> None:
+    times = parse_reconciliation_times(DEFAULT_RECONCILIATION_TIMES)
+    assert due_reconciliation(times, now=at) == due
+
+
+def test_due__a_single_daily_run_is_the_sweep() -> None:
+    times = parse_reconciliation_times("04:30")
+    assert due_reconciliation(times, now=datetime(2026, 10, 24, 4, 10, tzinfo=UTC)) == (
+        SWEEP,
+        "2026-10-24T04:30",
+    )
 
 
 def _etsy_budget() -> tuple[int, int]:
@@ -296,16 +338,18 @@ def _etsy_budget() -> tuple[int, int]:
 
 @pytest.mark.ac("AC-5.5.3")
 def test_budget__the_pilots_daily_calls_stay_inside_the_app_budget() -> None:
-    """From the schedule: the pilot shop with up to 300 orders changed in 30 days (3 pages) and
-    up to 100 open orders (1 page) stays inside the placeholder 5,000 calls a day, with room for
-    the dashboard, the probes and webhooks' re-reads."""
+    """Calls per run times runs per day: the pilot shop with up to 300 orders changed in 30 days
+    (3 pages) and up to 100 open orders (1 page) runs one reconcile (3 calls) and one sweep
+    (3 + 1 + the count read) a day: 8 calls, against the placeholder 5,000."""
     _, per_day = _etsy_budget()
     calls = daily_etsy_calls(shops=1, pages_30_days=3, open_pages=1)
-    assert calls == 144 * 4 + 5
-    assert calls <= per_day // 2
-    # The budget shows where it ends: shops of that size the app can reconcile.
-    assert daily_etsy_calls(shops=8, pages_30_days=3, open_pages=1) <= per_day
-    assert daily_etsy_calls(shops=9, pages_30_days=3, open_pages=1) > per_day
+    assert calls == 3 + (3 + 1 + 1)
+    assert calls <= per_day // 100
+    # Where the budget ends for shops of that size (backfills and the dashboard come on top).
+    assert daily_etsy_calls(shops=625, pages_30_days=3, open_pages=1) <= per_day
+    assert daily_etsy_calls(shops=626, pages_30_days=3, open_pages=1) > per_day
+    # More runs a day cost what they read.
+    assert daily_etsy_calls(shops=1, pages_30_days=3, open_pages=1, runs_per_day=4) == 3 * 3 + 5
 
 
 @pytest.mark.ac("AC-5.5.3")
