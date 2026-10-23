@@ -3,14 +3,14 @@ id = "supplier-quote-followup"
 name = "Supplier Quote Request & Follow-up"
 version = 1
 business_owner = "tom"
-primary_trigger = "agent_tool"
-callable_from = ["agent_tool", "schedule", "user_action"]
+primary_trigger = "event"
+callable_from = ["event", "agent_tool", "schedule", "user_action"]
 timeout_seconds = 120
 side_effect = "external"
 approval_required = true
 ai_steps = []
 readiness = "draft"
-activation_phase = 13
+activation_phase = 7
 
 [retry]
 max_attempts = 5
@@ -27,7 +27,7 @@ text = "tom: accountable for the outcome; Engineering maintains the code."
 
 [specification.trigger]
 status = "draft"
-text = "Primary: agent_tool. Also callable from: agent_tool, schedule, user_action, each through the API and authorization checks."
+text = "Primary: event (an AutoVA quote email in the inbox, slice 7.14). Also callable from: agent_tool (Tom, Phase 13), schedule (reminders), user_action (the owner's choice of a quote), each through the Action Gateway and authorization checks. Moved from Phase 13 to Phase 7 on 2026-10-23."
 
 [specification.input_schema]
 status = "draft"

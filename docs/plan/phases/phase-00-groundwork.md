@@ -40,9 +40,9 @@ Every later phase depends on decisions made here (region, access tiers, catalog 
 | O-3 | Choose the region (D-02) | Latency and data location |
 | O-4 | Buy or confirm `ht-co.app`; choose DNS provider (A-01, D-11) | Domains for app, API and mail |
 | O-5 | Create the Supabase organization and DigitalOcean team with 2FA and billing alerts (DigitalOcean has no hard spending cap: a monthly spend alert plus fixed-size resources without autoscaling) | No resources yet; ready for Phase 1–2 |
-| O-6 | Register an Etsy Seller App for the pilot shop; note rate limits and whether a webhook portal appears (A-02, A-03, A-08) | Phase 4–5 design |
+| O-6 | Register an Etsy Seller App for the pilot shop; note rate limits and whether a webhook portal appears (A-02, A-03, A-20) | Phase 4–5 design |
 | O-7 | Ask AutoVA about an API, export or partner integration; confirm whether automatic ordering is active and whether tracking reaches Etsy for every order (A-05, A-06, A-07) | Phases 6 and 13 |
-| O-8 | Read Etsy's current API Terms and Seller Policy (reselling, production partners, AI disclosure, photos) (A-09, D-04) | Product Studio and data retention |
+| O-8 | Read Etsy's current API Terms and Seller Policy (reselling, production partners, AI disclosure, photos) (A-21, D-04) | Product Studio and data retention |
 
 ## Slices
 

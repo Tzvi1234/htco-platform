@@ -23,6 +23,11 @@
 - [ ] 7.10 Agent Task Scheduling & Recovery automation
 - [ ] 7.11 Approvals and the Human channel on Postgres (the Phase 5 contract)
 - [ ] 7.12 Owner's first Etsy writes: shop, sections, holiday tools
+- [ ] 7.13 Supplier and quote model (moved from 13.1)
+- [ ] 7.14 Quote mailbox intake
+- [ ] 7.15 Deterministic AutoVA quote parser
+- [ ] 7.16 "New product quotes" screen and notification
+- [ ] 7.17 The owner's choice of a quote, and the hand-off to AutoVA
 
 **Foundation already in code.** `htco_domain.tasks` (`BusinessTask`, `TaskState`), `htco_domain.activity` (`ActivityRecord`, `ActivityKind`, `ActivityOutcome`), `htco_domain.actors` (`ActorRef`) and policy engine v0 (`htco_application.access.policy`, tested in `tests/application/test_access_policy.py`). This phase adds their tables, APIs and screens, and extends the policy engine to employee and automation actors.
 
@@ -50,6 +55,7 @@ The human-in-the-loop core: a task model that every actor uses, a policy engine 
 |---|---|---|---|
 | Scheduled Reporting & Notifications | [`scheduled-reporting.toml`](../../../registry/automations/scheduled-reporting.toml) | 7.9 | Lia (the owner is accountable until Lia is active in Phase 15) |
 | Agent Task Scheduling & Recovery | [`agent-task-scheduling-recovery.toml`](../../../registry/automations/agent-task-scheduling-recovery.toml) | 7.10 | Maya (the owner is accountable until Maya is active in Phase 15) |
+| Supplier Quote Request & Follow-up (moved from Phase 13, 2026-10-23) | [`supplier-quote-followup.toml`](../../../registry/automations/supplier-quote-followup.toml) | 7.14–7.17 | Tom (the owner is accountable until Tom is active in Phase 13) |
 
 The activation rule of [Phase 5](phase-05-orders-ingest.md) applies: all 18 specification sections defined, schemas, replay, failure and recovery tests, a runbook, and the owner's approval.
 
@@ -181,6 +187,88 @@ The Owner re-consents to `shops_w`. Each tool runs through the gateway with appr
 |---|---|
 | AC-7.12.1 | Turning vacation mode on and off from HTCO changes the shop and is verified by re-reading it; both runs are audited. |
 | AC-7.12.2 | A write that Etsy refuses shows Etsy's error, records it, and leaves the tool owner-trigger only. |
+
+### 7.13 — Supplier and quote model
+
+Moved from slice 13.1 on 2026-10-23, so that suppliers, quotes and mappings have **one home** from the start ([AutoVA integration](../../architecture/autova-integration.md)). Phase 13 extends this model; it does not create another.
+
+The model:
+
+- `suppliers`;
+- `quote_requests`: one per new product (or variant) awaiting a supplier, in state `WAITING_FOR_QUOTES` → `QUOTES_RECEIVED` → `CHOSEN` → `CONFIRMED_IN_AUTOVA` → `MAPPED`, or `CANCELLED`;
+- `supplier_quotes`: supplier, unit price, currency, shipping cost, shipping method, processing and shipping times, validity, source email reference;
+- `supplier_mappings`: product or variant → supplier, active from the confirmation, with the quote it came from.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-7.13.1 | A product has at most one active supplier mapping; activating a new one closes the old one with a reason (state-machine and database tests). |
+| AC-7.13.2 | All money is `Decimal` with currency; a quote without a currency is rejected. |
+
+### 7.14 — Quote mailbox intake
+
+The owner chooses the mailbox (D-23):
+
+- **(a) recommended:** a forwarding rule that sends only AutoVA mail to `quotes@office.ht-co.app` (Resend inbound, a signed webhook into the inbox of slice 5.2);
+- **(b):** read-only Gmail OAuth filtered to AutoVA's sender.
+
+Either way, each mail is stored once in the inbox (`source = "autova_quotes"`, `event_id` = the message ID). Raw content is DC2 and quarantined: no model ever reads it. Only the confirmed AutoVA sender is accepted (A-09); anything else is quarantined and counted.
+
+This brings forward the part of Phase 14's slice 14.1 (inbound pipeline) that quotes need: one address, no attachments beyond the quote, and the same verification. Phase 14 generalizes it for `support@` and `info@`.
+
+Owner prerequisites:
+
+- MX records for `office.ht-co.app` and Resend inbound (option a), or Google OAuth consent (option b);
+- the forwarding rule;
+- AutoVA's quote sender address (A-09);
+- three sample quote emails for the parser fixtures.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-7.14.1 | The same quote mail delivered twice (or forwarded twice) produces one inbox row and one parse job. |
+| AC-7.14.2 | Mail from any sender other than the confirmed AutoVA address is quarantined and creates no quote. |
+| AC-7.14.3 | Option (a): an unsigned or wrongly signed inbound webhook is rejected. Option (b): the token's scope is `gmail.readonly` only, and the query is limited to the AutoVA sender. |
+
+### 7.15 — Deterministic AutoVA quote parser
+
+The parser is code, with **no model**. It maps the mail's known layout (from the owner's sample mails) to `supplier_quotes`:
+
+- product (by AutoVA product reference, Etsy listing ID or SKU), supplier, price, shipping cost, shipping terms and times, validity;
+- every field validated by a Pydantic model;
+- the quote linked to its `quote_request` (one is created if it is the product's first quote).
+
+A mail that does not parse exactly opens a Human task "check this quote" with the mail shown in a sandboxed view. It is never guessed.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-7.15.1 | Each sample mail parses to the expected quote (golden-file tests); a changed layout fails parsing and opens one Human task, never a wrong quote. |
+| AC-7.15.2 | An architecture test proves the parser imports nothing from the model gateway or the agent runtime. |
+| AC-7.15.3 | A quote for a product that already has an active mapping is stored as an alternative and raises no "new product" alert. |
+
+### 7.16 — "New product quotes" screen and notification
+
+- **The screen:** one card per product waiting for a supplier, with its quotes side by side (supplier, unit price, shipping cost, total landed cost, processing and shipping times, validity), sorted by total cost. Columns use LTR numbers in the Hebrew UI.
+- **Notifications:** a new quote raises an in-app notification at once, plus an email, or the owner's morning summary if he prefers (slice 7.6 preferences).
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-7.16.1 | A parsed quote appears under the right product within one minute of the mail's arrival. |
+| AC-7.16.2 | Totals are computed in code (Decimal) and match a property test; a quote past its validity is greyed out and cannot be chosen. |
+
+### 7.17 — The owner's choice of a quote, and the hand-off to AutoVA
+
+- **Choosing a quote** creates an **Owner-only approval** (policy W3, step-up) that names that quote and the price and terms shown. It is required every time.
+- **On approval**, the Supplier Quote Request & Follow-up automation submits the action `autova.quotes.approve_and_confirm`:
+  - until Phase 8A it routes to the **Human channel**: a task "approve this quote in AutoVA and confirm the order", with the quote and a link;
+  - from Phase 8A it uses recipe **A-02** (slice 8A.10).
+- **The mapping** becomes active only after AutoVA shows the order as confirmed: re-read through A-01, or the owner's confirmation in the task.
+- **Payment is AutoVA's Auto Pay.** HTCO never pays.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-7.17.1 | No quote is approved in AutoVA, and no mapping is activated, without a decided Owner approval whose hash matches the quote. |
+| AC-7.17.2 | Approving twice confirms once (idempotency per quote). |
+| AC-7.17.3 | No action, task or recipe in this flow includes a payment step; a test walks every action of the flow and finds none. |
+| AC-7.17.4 | A quote request with no quote after N days (default 3) reminds the owner once, without any model call. |
 
 ## Test plan
 

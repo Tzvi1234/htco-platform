@@ -39,8 +39,9 @@
 |---|---|---|---|---|
 | 23 | Phase 6 (tracking, incidents, ship-by and low-review alerts, owner-triggered shipment writes 6.8) | 22 | AC-6.x, AC-6.8.x, AC-6.9.x | — |
 | 24 | Phase 7 (tasks, approvals on Postgres 7.11, activity, the owner's first writes 7.12) | 23 | AC-7.x, M2 gate | — |
+| 24a | **AutoVA quotes (Phase 7, slices 7.13–7.17):** supplier and quote model, quote mailbox intake, deterministic parser, "New product quotes" screen, the owner's choice, and the hand-off to AutoVA as a Human task until A-02 exists | 7.11 (approvals), D-23 (mailbox), A-09 (sender and sample mails) | AC-7.13.x to AC-7.17.x | 24 |
 | 25 | Phase 8 (registry tables, LangGraph checkpointer, tool bridge on the gateway 8.10) | 24 | AC-8.x | 26, 27 |
-| 26 | Phase 8A slices 8A.1–8A.5, 8A.7–8A.9 (browser worker, controller, preflight, challenges, recipes B-02 and B-03, guards, monitoring) | 24, owner fills B-01–B-03 (D-16) | AC-8A.x except 8A.6 | 25, 27 |
+| 26 | Phase 8A slices 8A.1–8A.5, 8A.7–8A.10: browser worker, controller, preflight, challenges, then **AutoVA recipes first** (A-01 with Export first; then A-02 approving the chosen quote), then B-02 and B-03, guards, monitoring | 24, 24a (for A-02), A-08 (AutoVA's terms), owner fills B-01–B-03 (D-16) | AC-8A.x except 8A.6; AC-8A.10.x | 25, 27 |
 | 27 | Phase 8B (authenticator) | 24 | AC-8B.x | 25, 26 |
 | 28 | Phase 9 (router, budgets, Jev, simple vs complex routing 9.9; Eitan) | 25 | AC-9.x | — |
 | 29 | Phase 8A slice 8A.6 (Browser Use for employees) | 26, 28 | AC-8A.6.x | 30 |
@@ -57,4 +58,6 @@
 | D-16 Etsy written confirmation | 26 (writes: 31) | Get it signed before write rows; verbal for B-02 and B-03 only; or no browser on Etsy |
 | D-17 one egress IP disclosed to Etsy | 26 | Ask in the confirmation; or do not ask |
 | D-18 egress option | 26 | Droplet with its own IP; App Platform dedicated egress; the same egress as the API |
+| D-23 quote mailbox | 24a | Forwarding rule to `quotes@office.ht-co.app` (Resend inbound); or read-only Gmail OAuth filtered to AutoVA's sender |
+| A-08 AutoVA's terms for browser use | 26 (A-01, A-02) | The owner checks the terms; until then, the Human-task path of 6.10 and 7.17 |
 | D-21 order of the first writes | 23, 24 | Shipments in Phase 6 (6.8), then shop writes (7.12); or reversible shop writes moved into Phase 6 when A-04 blocks shipments |

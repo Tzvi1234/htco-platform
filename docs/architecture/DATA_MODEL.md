@@ -110,7 +110,8 @@ The phase column says when a table first appears.
 | `listing_audits`, `listing_findings` | Listing Health results and evidence | 11 |
 | `product_candidates` | Shon's candidates with APPROVED / REVIEW / REJECTED, reasons, sources and confidence | 12 |
 | `product_sources`, `product_assets`, `asset_provenance` | Sources and media lineage | 12 |
-| `quote_requests`, `supplier_quotes`, `supplier_mappings` | Supplier onboarding and active mappings | 13 |
+| `suppliers`, `quote_requests`, `supplier_quotes`, `supplier_mappings` | Supplier onboarding and active mappings; quotes parsed from AutoVA's emails; one active mapping per product or variant ([AutoVA integration](autova-integration.md)) | 7 (moved from 13) |
+| `autova_orders` | Snapshots of AutoVA orders from recipe A-01 (export or screen): AutoVA ID, receipt, supplier, status, paid, mode, carrier, tracking, profit, `source`, `observed_at` | 8A |
 
 ### Finance
 

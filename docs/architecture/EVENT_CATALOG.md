@@ -63,7 +63,9 @@ Events are published through the outbox (`jobs.outbox`, slice 5.2); the first pr
 | `catalog.listing_audited.v1` | Listing Health (Daniel) | Approvals, metrics | 11 |
 | `catalog.listing_updated.v1` | Listing update automation | Listing Health (verify), audit | 11 |
 | `catalog.draft_created.v1`, `catalog.listing_published.v1` | Catalog Draft Creation & Publishing | Supplier onboarding, metrics | 12 |
-| `sourcing.quotes_received.v1`, `sourcing.mapping_activated.v1` | Supplier Quote Request & Follow-up | Tom, finance | 13 |
+| `sourcing.quotes_received.v1`, `sourcing.mapping_activated.v1` | Supplier Quote Request & Follow-up | The quote screen and notifications (7), Tom (13), finance | 7 (moved from 13) |
+| `sourcing.quote_chosen.v1` | The owner's approval of a quote (7.17) | AutoVA hand-off (Human task, then A-02) | 7 |
+| `autova.order_status_changed.v1` | Recipe A-01 | Tracking relay (6.10), Unpaid alert, Eitan (9) | 8A |
 | `support.ticket_opened.v1`, `support.reply_drafted.v1` | Support | Dana, approvals | 14 |
 | `email.received.v1` | Email Intake & Routing | Quarantined extractor, support | 14 |
 | `optimization.proposal_state_changed.v1` | Optimization | Maya, Engineering, office | 18 |
