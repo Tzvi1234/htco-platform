@@ -6,9 +6,9 @@ sales of today, the last 7 and 30 days (in the caller's time zone, `utc_offset_m
 days by default, 90 days, 12 months or all time).
 `GET /v1/shops/{shop_id}/orders/{order_id}`: one order with its status timeline from the stored
 history (slice 5.6); an order not stored yet comes from the live 30-day read, with no timeline.
-`POST /v1/shops/{shop_id}/orders/export`: the filtered (or selected) orders as CSV, audited;
+`POST /v1/shops/{shop_id}/order-exports`: the filtered (or selected) orders as CSV, audited;
 buyer columns only for buyer-data roles (slice 5.7).
-`POST /v1/shops/{shop_id}/orders/resync`: one queued Etsy Order Intake re-read per selected
+`POST /v1/shops/{shop_id}/order-resyncs`: one queued Etsy Order Intake re-read per selected
 receipt (GET-only, through the engine and the gateway), rate-limited and audited (slice 5.7).
 `GET /v1/shops/{shop_id}/listings`: the Products screen, active listings with images.
 `GET /v1/shops/{shop_id}/reviews`: the newest reviews and the spread of stars.
@@ -1109,7 +1109,7 @@ def _add_bulk_routes(router: APIRouter, *, clock: Callable[[], datetime]) -> Non
     """The Orders screen's bulk actions (slice 5.7)."""
 
     @router.post(
-        "/orders/export",
+        "/order-exports",
         summary="The filtered or selected orders as CSV (audited)",
         response_class=Response,
         responses={
@@ -1148,7 +1148,7 @@ def _add_bulk_routes(router: APIRouter, *, clock: Callable[[], datetime]) -> Non
         )
 
     @router.post(
-        "/orders/resync",
+        "/order-resyncs",
         status_code=202,
         summary="Re-read the selected orders from Etsy (queued, audited)",
         responses=problem_responses(

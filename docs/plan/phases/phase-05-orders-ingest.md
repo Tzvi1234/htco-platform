@@ -297,8 +297,8 @@ The existing Orders screen in htco-clients, moved onto 5.6. No second screen.
 - **Freshness:** a sync indicator in the header: the history's age (`last_synced_at`), "syncing" while the backfill runs, and a stale banner past the window.
 - **Order detail:** the existing detail adds the status timeline with sources, and a slot for the Phase 6 order-to-incident link (filled by 6.3).
 - **Bulk actions** (the owner's decision of 2026-10-23, both in 5.7):
-  - **Export to CSV** of the filtered or selected orders (`POST /v1/shops/{shop_id}/orders/export`). The file is made on the server and streamed `no-store`. Buyer name, address and tracking columns go only to the buyer-data roles (Owner, Admin, Operations, Support); for other roles they are left out. Formula injection is escaped. Each export is audited with its counts and filter.
-  - **Re-sync selected** (`POST /v1/shops/{shop_id}/orders/resync`): one Etsy Order Intake re-read per receipt, queued as an `etsy.order_sync` job (GET-only, through the engine and the gateway). At most 50 receipts a request and five requests a minute per shop; audited with the receipt IDs. Until the owner activates Etsy Order Intake (5.11), the engine refuses the re-read and logs it.
+  - **Export to CSV** of the filtered or selected orders (`POST /v1/shops/{shop_id}/order-exports`). The file is made on the server and streamed `no-store`. Buyer name, address and tracking columns go only to the buyer-data roles (Owner, Admin, Operations, Support); for other roles they are left out. Formula injection is escaped. Each export is audited with its counts and filter.
+  - **Re-sync selected** (`POST /v1/shops/{shop_id}/order-resyncs`): one Etsy Order Intake re-read per receipt, queued as an `etsy.order_sync` job (GET-only, through the engine and the gateway). At most 50 receipts a request and five requests a minute per shop; audited with the receipt IDs. Until the owner activates Etsy Order Intake (5.11), the engine refuses the re-read and logs it.
   - The Owner's existing manual sync of the whole shop stays.
 
 | ID | Acceptance criterion |

@@ -3831,7 +3831,7 @@ paths:
               schema:
                 type: string
                 format: uuid
-  /v1/shops/{shop_id}/orders/export:
+  /v1/shops/{shop_id}/order-exports:
     post:
       tags:
       - shop data
@@ -3964,7 +3964,7 @@ paths:
               schema:
                 type: string
                 format: uuid
-  /v1/shops/{shop_id}/orders/resync:
+  /v1/shops/{shop_id}/order-resyncs:
     post:
       tags:
       - shop data

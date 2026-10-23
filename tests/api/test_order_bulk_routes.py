@@ -1,4 +1,4 @@
-"""`POST /v1/shops/{shop_id}/orders/export|resync` (slice 5.7): the CSV is made on the server,
+"""`POST /v1/shops/{shop_id}/order-exports|order-resyncs` (slice 5.7): the CSV is made on the server,
 streamed `no-store` and audited; the re-sync queues one intake re-read per receipt, is
 rate-limited and audited (invented data)."""
 
@@ -36,7 +36,7 @@ class Bulk:
 
     async def post(self, action: str, body: dict[str, object]) -> httpx.Response:
         world = self.wired.world
-        return await world.http.post(f"/v1/shops/{world.shop_id}/orders/{action}", json=body,
+        return await world.http.post(f"/v1/shops/{world.shop_id}/{action}", json=body,
                                      headers=CSRF)  # fmt: skip
 
 
@@ -54,7 +54,7 @@ def table(text: str) -> list[dict[str, str]]:
 
 
 async def test_export__a_csv_file_streamed_no_store_and_audited(bulk: Bulk) -> None:
-    response = await bulk.post("export", {"period": "all"})
+    response = await bulk.post("order-exports", {"period": "all"})
 
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("text/csv")
@@ -71,7 +71,7 @@ async def test_export__a_csv_file_streamed_no_store_and_audited(bulk: Bulk) -> N
 async def test_export__a_viewer__no_buyer_columns(bulk: Bulk) -> None:
     bulk.wired.world.memberships.role = Role.VIEWER
 
-    response = await bulk.post("export", {"period": "all"})
+    response = await bulk.post("order-exports", {"period": "all"})
 
     assert response.status_code == 200
     assert "buyer_name" not in table(response.text)[0]
@@ -81,13 +81,13 @@ async def test_export__a_viewer__no_buyer_columns(bulk: Bulk) -> None:
 async def test_export__the_selection_only(bulk: Bulk) -> None:
     first = min(receipt for (_, receipt) in bulk.wired.store.orders)
 
-    response = await bulk.post("export", {"period": "all", "order_ids": [first]})
+    response = await bulk.post("order-exports", {"period": "all", "order_ids": [first]})
 
     assert [r["order"] for r in table(response.text)] == [str(first)]
 
 
 async def test_resync__queued_and_audited(bulk: Bulk) -> None:
-    response = await bulk.post("resync", {"order_ids": [9001, 9002]})
+    response = await bulk.post("order-resyncs", {"order_ids": [9001, 9002]})
 
     assert response.status_code == 202, response.text
     assert response.json() == {"queued": 2}
@@ -97,9 +97,9 @@ async def test_resync__queued_and_audited(bulk: Bulk) -> None:
 
 async def test_resync__over_the_rate__429_with_retry_after(bulk: Bulk) -> None:
     for _ in range(2):
-        await bulk.post("resync", {"order_ids": [9001]})
+        await bulk.post("order-resyncs", {"order_ids": [9001]})
 
-    response = await bulk.post("resync", {"order_ids": [9001]})
+    response = await bulk.post("order-resyncs", {"order_ids": [9001]})
 
     problem(response, "resync-rate-limited", 429)
     assert int(response.headers["retry-after"]) > 0
@@ -108,13 +108,13 @@ async def test_resync__over_the_rate__429_with_retry_after(bulk: Bulk) -> None:
 async def test_resync__a_viewer__403(bulk: Bulk) -> None:
     bulk.wired.world.memberships.role = Role.VIEWER
 
-    response = await bulk.post("resync", {"order_ids": [9001]})
+    response = await bulk.post("order-resyncs", {"order_ids": [9001]})
 
     problem(response, "orders-action-forbidden", 403)
     assert bulk.queue.asked == []
 
 
 async def test_resync__too_many__422(bulk: Bulk) -> None:
-    response = await bulk.post("resync", {"order_ids": list(range(1, 60))})
+    response = await bulk.post("order-resyncs", {"order_ids": list(range(1, 60))})
 
     assert response.status_code == 422
