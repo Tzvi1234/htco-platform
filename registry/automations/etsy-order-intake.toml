@@ -9,6 +9,8 @@ timeout_seconds = 120
 side_effect = "internal"
 approval_required = false
 ai_steps = []
+# The Action Gateway lets it read receipts (slice 5.4); it writes only its own store.
+allowed_actions = ["etsy.receipts.read"]
 readiness = "draft"
 activation_phase = 5
 
@@ -39,7 +41,7 @@ text = "DRAFT: shop connected and capability verified where external systems are
 
 [specification.steps]
 status = "draft"
-text = "Verify the webhook signature; store the event in the inbox; fetch the receipt; upsert order, items and shipments in one transaction when Etsy's updated_timestamp is newer; emit orders.ingested.v1."
+text = "A receipt (webhook): fetch it through the gateway (etsy.receipts.read, order history form); ingest it in one transaction when Etsy's updated_timestamp is newer: order, items, refunds, buyer row, state transitions, estimated money, orders.* events. The history (mode history): the #57 backfill from its checkpoint, then the 30-day re-read, under the shop's advisory lock."
 
 [specification.output_schema]
 status = "draft"

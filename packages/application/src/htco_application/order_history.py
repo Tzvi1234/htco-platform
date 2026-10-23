@@ -44,6 +44,7 @@ from htco_application.marketplace import (
     OrderReceipt,
     Page,
 )
+from htco_application.order_ingest import BACKFILL, SYNC, IngestContext
 from htco_application.shop_capabilities import ShopNotConnectedError, TokenPinning
 from htco_application.shop_integrations import ShopIntegration
 from htco_application.shops import ShopAccessDeniedError, ShopNotFoundError
@@ -120,6 +121,7 @@ class OrderStore(Protocol):
         *,
         next_offset: int | None,
         now: datetime,
+        context: IngestContext = BACKFILL,
     ) -> None:
         """Upsert the page and move the checkpoint in one transaction; `next_offset` None
         completes the backfill. A new Etsy shop behind the HTCO shop starts the state over."""
@@ -132,6 +134,7 @@ class OrderStore(Protocol):
         *,
         finished_at: datetime | None,
         now: datetime,
+        context: IngestContext = SYNC,
     ) -> None:
         """Upsert the page; `finished_at` set: the sync that started then is complete."""
         ...
@@ -171,6 +174,14 @@ class ReceiptSource(Protocol):
     ) -> Page[OrderReceipt]: ...
 
 
+class SyncRequests(Protocol):
+    """Asks the worker for a run of the shop's order history sync (slice 5.4)."""
+
+    async def request(self, integration: ShopIntegration, *, now: datetime, force: bool) -> bool:
+        """Enqueue the run (once per period; a forced one once per minute). True: asked."""
+        ...
+
+
 class AuditAppender(Protocol):
     async def append(self, record: AuditRecord) -> None: ...
 
@@ -195,8 +206,15 @@ class OrderSync:
         clock: Callable[[], datetime],
         audit: AuditAppender | None = None,
         sleep: Callable[[float], Awaitable[None]] = _sleep,
+        requests: SyncRequests | None = None,
+        backfill_context: IngestContext = BACKFILL,
+        sync_context: IngestContext = SYNC,
     ) -> None:
         self.store = store
+        # Set: the runs belong to the worker (slice 5.4); this process only asks for them.
+        self.requests = requests
+        self.backfill_context = backfill_context
+        self.sync_context = sync_context
         self._source = source
         self._tokens = tokens
         self._clock = clock
@@ -231,8 +249,16 @@ class OrderSync:
         """The shop's state; starts a background run when one is due. Never waits for it."""
         state = await self.store.state(integration.shop_id)
         if force or _due(state, integration, now):
-            self.kick(integration, now=now, force=force)
+            await self.start_or_request(integration, now=now, force=force)
         return state
+
+    async def start_or_request(
+        self, integration: ShopIntegration, *, now: datetime, force: bool = False
+    ) -> bool:
+        """Run here (the fallback), or ask the worker's queue for the run (slice 5.4)."""
+        if self.requests is not None:
+            return await self.requests.request(integration, now=now, force=force)
+        return self.kick(integration, now=now, force=force)
 
     def kick(self, integration: ShopIntegration, *, now: datetime, force: bool = False) -> bool:
         shop_id = integration.shop_id
@@ -289,7 +315,11 @@ class OrderSync:
             page = await self._read(integration, tokens, offset=next_offset)
             next_offset = page.next_offset
             await self.store.save_backfill_page(
-                integration, page.items, next_offset=next_offset, now=self._clock()
+                integration,
+                page.items,
+                next_offset=next_offset,
+                now=self._clock(),
+                context=self.backfill_context,
             )
 
     async def _incremental(self, integration: ShopIntegration, tokens: AccessTokenProvider) -> None:
@@ -304,6 +334,7 @@ class OrderSync:
                 page.items,
                 finished_at=started if offset is None else None,
                 now=self._clock(),
+                context=self.sync_context,
             )
 
     async def _read(
@@ -387,7 +418,7 @@ async def request_order_sync(  # noqa: PLR0913 - the sync, the caller, the shop 
     if integration.status is not IntegrationStatus.CONNECTED:
         raise ShopNotConnectedError.of(integration)
     state = await sync.store.state(shop_id)
-    started = sync.kick(integration, now=now, force=True)
+    started = await sync.start_or_request(integration, now=now, force=True)
     if sync.audit is not None:
         await sync.audit.append(
             AuditRecord.new(

@@ -14,6 +14,7 @@ from datetime import datetime
 
 from htco_application.marketplace import OrderReceipt, display_name
 from htco_application.order_history import SyncState
+from htco_application.order_ingest import BACKFILL, SYNC, IngestContext
 from htco_application.shop_integrations import ShopIntegration
 
 
@@ -36,6 +37,8 @@ class MemoryOrderStore:
     # Fail the save after this many pages (simulates a crash mid-backfill).
     crash_after_pages: int | None = None
     pages_saved: int = 0
+    # Every save's ingest context (who wrote the page, slice 5.4).
+    contexts: list[IngestContext] = field(default_factory=list)
 
     async def state(self, shop_id: uuid.UUID) -> SyncState | None:
         found = self.states.get(shop_id)
@@ -77,7 +80,9 @@ class MemoryOrderStore:
         *,
         next_offset: int | None,
         now: datetime,
+        context: IngestContext = BACKFILL,
     ) -> None:
+        self.contexts.append(context)
         state = self._ensure(integration)
         self._upsert(integration, receipts)
         if next_offset is None:
@@ -92,7 +97,9 @@ class MemoryOrderStore:
         *,
         finished_at: datetime | None,
         now: datetime,
+        context: IngestContext = SYNC,
     ) -> None:
+        self.contexts.append(context)
         state = self._ensure(integration)
         self._upsert(integration, receipts)
         if finished_at is not None:

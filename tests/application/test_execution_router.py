@@ -35,9 +35,11 @@ from htco_application.execution.service import (
 from htco_application.jobs import JsonValue
 from htco_application.marketplace import (
     MarketplaceMoney,
+    MarketplaceNotFoundError,
     MarketplacePermissionError,
     MarketplaceShop,
     MarketplaceWriteRefusedError,
+    OrderReceipt,
     Page,
     Receipt,
     ReceiptLine,
@@ -92,6 +94,7 @@ class FakeMarketplace:
 
     calls: list[tuple[str, int, dict[str, Any]]] = field(default_factory=list)
     receipts: tuple[Receipt, ...] = ()
+    order_receipts: tuple[OrderReceipt, ...] = ()
     fail: Exception | None = None
 
     async def get_shop(self, shop_id: int, *, urgent: bool = False) -> MarketplaceShop:
@@ -115,6 +118,22 @@ class FakeMarketplace:
         if self.fail is not None:
             raise self.fail
         return receipt(receipt_id)
+
+    # The order history form (slice 5.4): whole receipts, buyer data included.
+    async def list_order_receipts(self, shop_id: int, **filters: Any) -> Page[OrderReceipt]:
+        self.calls.append(("list_order_receipts", shop_id, filters))
+        if self.fail is not None:
+            raise self.fail
+        return Page(items=self.order_receipts, total_count=len(self.order_receipts), offset=0)
+
+    async def get_order_receipt(self, shop_id: int, receipt_id: int) -> OrderReceipt:
+        self.calls.append(("get_order_receipt", shop_id, {"receipt_id": receipt_id}))
+        if self.fail is not None:
+            raise self.fail
+        found = next((r for r in self.order_receipts if r.receipt_id == receipt_id), None)
+        if found is None:
+            raise MarketplaceNotFoundError("no such receipt", status=404)
+        return found
 
 
 @dataclass
