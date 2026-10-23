@@ -47,5 +47,5 @@ Background work (maintenance today; receipt ingest, outbox delivery and automati
 - One job at a time per worker process; more throughput means more processes.
 - Workers poll every second (no `LISTEN/NOTIFY`); enqueue-to-start latency is up to one poll interval.
 - A schedule enqueues only the current period: periods missed while no worker ran are skipped, not caught up.
-- The purge deletes the synced data that exists today (probe results). The orders, items and shipments of slices 5.4 and 5.5 join the purge list in those slices, minus what legal retention keeps.
+- The purge deletes the shop's synced data: the probe results and the stored order history (orders, with their items, refunds and buyer rows, and the sync state; post-merge review of 2026-10-23). Later synced tables join the purge list in their slices, minus what legal retention keeps.
 - The Etsy rate-limit budget is still per process (slice 4.1); the worker and the API each see their own view until a shared budget is needed.

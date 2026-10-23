@@ -187,6 +187,9 @@ def execution_job(
         shop_id=execution.shop_id,
         run_at=run_at,
         retry=execution_job_retry(definition),
+        # One run of an execution at a time: a job replayed after a crash and the retry job its
+        # run had enqueued never run the handler side by side (post-merge review of 2026-10-23).
+        lock_key=f"automation_execution:{execution.id}",
     )
 
 
