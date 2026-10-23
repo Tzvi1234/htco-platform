@@ -99,7 +99,7 @@ async def test_two_workers_four_shops__never_above_the_qps(workers: list[Databas
 
 @pytest.mark.ac("AC-5.15.1")
 async def test_two_workers_four_shops__never_above_the_qpd(workers: list[Database]) -> None:
-    budget = RateBudget(f"etsy:test:{uuid.uuid4()}", per_second=50, per_day=7)
+    budget = RateBudget(f"etsy:test:{uuid.uuid4()}", per_second=7, per_day=7)
     limiters = [PostgresRateLimiter(pool) for pool in workers]
     refused: list[datetime | None] = []
     granted: list[datetime] = []
