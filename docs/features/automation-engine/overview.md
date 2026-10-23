@@ -42,4 +42,4 @@ Every automation of the office runs through one entry point, `trigger`, whatever
 - The engine reads definitions from the database on every trigger and run (cheap at pilot volume; cache when measured).
 - Employees are not loaded into the engine's registry until Phase 8, so an employee's trigger is refused as unknown.
 - A handler's timeout is not enforced beyond the job's lease; long handlers must stay below it.
-- The in-memory `AutomationEngine` stays for tests and in-process use; production uses the durable one.
+- The first in-memory `AutomationEngine` was retired in slice 5.11 (audit P2-5): every test and deployed automation uses the durable engine, with `MemoryExecutionStore` in tests.

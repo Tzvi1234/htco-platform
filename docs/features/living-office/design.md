@@ -14,7 +14,7 @@
 | `htco_domain.improvement` | `ProposalState` and `OptimizationProposal` |
 | `htco_application.workforce.registry` | Parses registry documents into domain objects and validates cross-references, reporting every problem at once |
 | `htco_application.workforce.tool_access` | `decide_tool_access` → allow, require approval, deny |
-| `htco_application.automation.engine` | `AutomationEngine` with the `ExecutionStore` port |
+| `htco_application.automation.engine` | `TriggerRequest`, `AutomationRefused` and `authorize`; the engine is `automation.durable.DurableAutomationEngine` (the in-memory `AutomationEngine` was retired in slice 5.11) |
 | `htco_application.routing.router` | `route` over `ModelOffer` catalog entries |
 | `htco_application.decisions.advisor` | `DecisionAdvisor` port, `RulesAdvisor`, `advise` |
 | `htco_application.agents.runtime` | `AgentRuntime` port and `AgentSession` |

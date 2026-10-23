@@ -19,7 +19,7 @@ This page holds the contracts that Phase 5 defines and later phases implement: P
  Triggers
    event (inbox: Etsy webhook, email)  ┐
    schedule (job queue)                │
-   user action (API, Idempotency-Key)  ├──► AutomationEngine.trigger ──► AutomationExecution
+   user action (API, Idempotency-Key)  ├──► DurableAutomationEngine.trigger ──► AutomationExecution
    agent tool (tool bridge, Phase 8)   │        (deterministic, no model)        │ each business step
    another automation                  ┘                                         ▼
                                                       ┌──────────────── ACTION GATEWAY ────────────────┐

@@ -5,7 +5,7 @@
 | Layer | Module | Responsibility |
 |---|---|---|
 | Domain | `htco_domain.automation` | `AutomationDefinition` (now with optional `user_capability`), `AutomationExecution` (tenant, causation, last error), the `ExecutionState` machine (admin retry: `DEAD_LETTERED → RETRY_SCHEDULED`), `RetryPolicy.jittered_backoff` |
-| Application | `htco_application.automation.engine` | `authorize`: the one gate (readiness, deployed handler, trigger kind, employee grants); the in-memory `AutomationEngine` |
+| Application | `htco_application.automation.engine` | `authorize`: the one gate (readiness, deployed handler, trigger kind, employee grants), and `TriggerRequest`; the first in-memory `AutomationEngine` was retired in slice 5.11 (audit P2-5) |
 | Application | `htco_application.automation.durable` | `DurableAutomationEngine` (`trigger`, `execute`, `retry_dead_lettered`, `resume`, `cancel_waiting`), the `DurableExecutionStore` port, `StateChange`, `HandlerContext`, `Completed` and `Waiting` |
 | Application | `htco_application.execution.gateway` | The `ActionGateway` port with its request and result values (ADR-0019); `UnavailableGateway` refuses every action until the gateway exists (5.12) |
 | Application | `htco_application.automation.records` | Definition rows, document hashes, the sync plan, `registry_from_rows`, execution summaries |
@@ -48,7 +48,7 @@ sequenceDiagram
 
 ## Handlers
 
-A handler is `async def handler(context: HandlerContext) -> Completed | Waiting`. The context holds the execution and automation IDs, the triggering actor, the organization and shop, the correlation and causation IDs, the attempt, the payload and an `ActionGateway` client. Business effects go through `context.gateway.submit(ActionRequest(...))`, never straight to use cases or the outbox (ADR-0019). An action that returns `pending_approval` or `handed_to_human` makes the handler return `Waiting(reason)`: the execution moves to `WAITING` and its job ends, so no lease is held while a person decides. `resume` (an approval decided, a task done; wired to `approvals.decided.v1` in 5.14 and Phase 7) moves it to `RETRY_SCHEDULED` with a new job, without using a retry attempt; `cancel_waiting` (rejected, expired) ends it `CANCELLED`. The in-memory `AutomationEngine` keeps its payload handlers.
+A handler is `async def handler(context: HandlerContext) -> Completed | Waiting`. The context holds the execution and automation IDs, the triggering actor, the organization and shop, the correlation and causation IDs, the attempt, the payload and an `ActionGateway` client. Business effects go through `context.gateway.submit(ActionRequest(...))`, never straight to use cases or the outbox (ADR-0019). An action that returns `pending_approval` or `handed_to_human` makes the handler return `Waiting(reason)`: the execution moves to `WAITING` and its job ends, so no lease is held while a person decides. `resume` (an approval decided, a task done; wired to `approvals.decided.v1` in 5.14 and Phase 7) moves it to `RETRY_SCHEDULED` with a new job, without using a retry attempt; `cancel_waiting` (rejected, expired) ends it `CANCELLED`.
 
 ## State machine
 

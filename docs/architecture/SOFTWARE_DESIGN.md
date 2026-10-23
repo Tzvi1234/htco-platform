@@ -343,7 +343,7 @@ Each employee has a gold dataset, metrics and thresholds (for example precision 
 
 From 2026-10-23 every business action of an automation or an employee goes through the **Action Gateway** and the **Execution Router** (API, Browser, Internal and Human channels): [execution-engine.md](execution-engine.md), [ADR-0019](../adr/0019-unified-execution-engine-and-action-gateway.md).
 
-`AutomationEngine.trigger` is the single entry for events, schedules, user actions, workflows and employees (through `automation.trigger`). It checks readiness, the deployed handler, the trigger kind and the employee's grants; executions are unique per `(automation_id, idempotency_key)`, so a replay returns the existing execution; failures follow the retry policy into the dead-letter state. From Phase 5 executions live on the Postgres job queue with leases and heartbeats, inbox and outbox ([ADR-0013](../adr/0013-automation-engine.md)).
+`DurableAutomationEngine.trigger` (the first in-memory `AutomationEngine` was retired in slice 5.11) is the single entry for events, schedules, user actions, workflows and employees (through `automation.trigger`). It checks readiness, the deployed handler, the trigger kind and the employee's grants; executions are unique per `(automation_id, idempotency_key)`, so a replay returns the existing execution; failures follow the retry policy into the dead-letter state. From Phase 5 executions live on the Postgres job queue with leases and heartbeats, inbox and outbox ([ADR-0013](../adr/0013-automation-engine.md)).
 
 ### 9.7 Tool registry and access
 
