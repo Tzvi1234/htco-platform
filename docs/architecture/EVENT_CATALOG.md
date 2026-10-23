@@ -37,7 +37,7 @@ Events are published through the outbox (`jobs.outbox`, slice 5.2); the first pr
 | `catalog.listing_changed.v1` | Webhook ingress (`listing.created`, `listing.updated`, `listing.deleted`) | Listing Health re-audit (11), Product Studio verification (12) | 5 |
 | `catalog.inventory_changed.v1` | Webhook ingress (`inventory.created`, `inventory.updated`, `inventory.deleted`) | Price and stock monitoring (13) | 5 |
 | `catalog.out_of_stock.v1` | Webhook ingress (`inventory.out_of_stock`) | Notifications (6), Daniel (11) | 5 |
-| `browser.environment_status_changed.v1` | Shop Environment Registry | Notifications, monitors, the office | 5 (contract), 8A |
+| `browser.environment_status_changed.v1` | Shop Environment Registry (slice 5.16: one per recorded change, in its transaction; environment, shop, from and to status, actor, time) | Notifications, monitors, the office | 5 (contract), 8A |
 | `browser.challenge_detected.v1` | Browser Controller | Human task, notifications, monitors | 8A |
 | `browser.export_ingested.v1` | Browser recipes (B-02, B-03, B-11) | Listing Health, finance, reports | 8A |
 | `authenticator.code_viewed.v1`, `authenticator.code_injected.v1` | Authenticator (never the code) | Audit, security monitors | 8B |

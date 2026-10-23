@@ -44,7 +44,7 @@ Every business action of an automation or an AI employee goes through one gatewa
 
 ## Known limits
 
-- Until the environment registry (5.16) exists, the deployed default `NoBrowser` skips every browser binding.
+- The environment registry (5.16) provides `EnvironmentBrowserGate`; until Phase 8A turns a browser flag on, it skips every browser binding, as `NoBrowser` does.
 - Human tasks are in memory (`MemoryHumanTasks`) until Phase 7's task store; a process restart loses an open hand-off (nothing is deployed yet).
 - The W3 rule (Owner-only decisions), MFA for every decision and step-up for W2 and W3 are enforced by the approval service (5.14); the deployed processes have no approval store until Phase 7.
 - An R1 read's output (buyer data) is returned once and never stored, so a replay returns the outcome without the output.

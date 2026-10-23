@@ -31,7 +31,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 - [x] 5.13 Execution Router and channel adapters (API real for reads, writes refused before sending; Browser interface and fake; Internal; Human contract in memory; wiring into the deployed processes with 5.14 and 5.11)
 - [x] 5.14 Shared approval contract (in-memory; Postgres in Phase 7; `htco_application.approvals`: `ApprovalService`, `MemoryApprovalService`, the gateway's `GatewayApprovals` and the `ApprovalResumer` for waiting automations; no migration)
 - [x] 5.15 Circuit breaker, rate and concurrency control, idempotency for actions (standard-library rules with Postgres state instead of PyBreaker, aiolimiter and Tenacity; see execution-engine.md §8; the real Etsy QPS and QPD figures are an owner question)
-- [ ] 5.16 Shop Environment Registry: data model, statuses, state machine (contracts only)
+- [x] 5.16 Shop Environment Registry: data model, statuses, state machine (contracts only; migration `20261024200000_browser_environments.sql`, pgTAP `15_browser_environments`, `GET /v1/shops/{shop_id}/browser-environment` for the Owner and Admins; creation stays off until 8A)
 - [ ] 5.17 Secret Broker and Authenticator contracts
 - [ ] 5.18 Status management for tasks, executions and environments
 

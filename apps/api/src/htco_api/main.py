@@ -18,6 +18,7 @@ from htco_api.access import InvitationFailedError
 from htco_api.app import AppOptions, Resource, create_app
 from htco_api.auth import Authenticator, VerifiedTokenReader
 from htco_api.automations import AutomationServices
+from htco_api.browser_environments import BrowserEnvironmentServices
 from htco_api.problems import AUTH_UNAVAILABLE, ProblemError
 from htco_api.settings import ApiSettings, Environment
 from htco_api.web_auth import WebAuth
@@ -58,6 +59,10 @@ from htco_persistence.automation import (
     PostgresAutomationCatalog,
     PostgresExecutionReader,
     PostgresExecutionStore,
+)
+from htco_persistence.browser_environments import (
+    PostgresEnvironmentReader,
+    PostgresEnvironmentStore,
 )
 from htco_persistence.database import Database
 from htco_persistence.etsy_connect import PostgresPendingAuthorizations, PostgresShopConnector
@@ -184,6 +189,7 @@ def main(
         etsy_webhook_limiter=None
         if wiring.etsy_webhooks is None
         else WindowLimiter(settings.etsy_webhook_rate_per_second),
+        browser_environments=wiring.browser_environments,
         resources=wiring.resources,
     )
     try:
@@ -342,6 +348,7 @@ class _Wiring:
     automations: AutomationServices | None = None
     # Etsy webhooks (slice 5.3): on with HTCO_ETSY_WEBHOOKS_ENABLED and the signing secret.
     etsy_webhooks: EtsyWebhookIngress | None = None
+    browser_environments: BrowserEnvironmentServices | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -428,6 +435,9 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         inviter=inviter,
         automations=automation_services(database, enabled=settings.automations_enabled),
         etsy_webhooks=etsy_webhook_ingress(settings, database),
+        browser_environments=BrowserEnvironmentServices(
+            PostgresEnvironmentReader(database), PostgresEnvironmentStore(database)
+        ),
         resources=resources,
     )
 

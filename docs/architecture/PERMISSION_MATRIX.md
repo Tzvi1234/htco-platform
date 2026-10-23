@@ -33,6 +33,7 @@ Owner and Admin have organization-wide access to every shop; all other roles see
 | View the office: employees, automations, tools and costs | ✓ | ✓ | S | S | — | S | — |
 | View agent sessions, routing decisions and traces | ✓ | ✓ | S | — | — | S | — |
 | View audit log | ✓ | ✓ | — | — | — | S | — |
+| View a shop's browser environment status | ✓ | ✓ | — | — | — | — | — |
 
 While the organization has a single owner, high-risk approvals rely on step-up re-authentication; a two-person rule (requester plus a different approver, or two approvers) becomes a policy option once a second Admin exists.
 

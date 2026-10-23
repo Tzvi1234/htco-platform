@@ -42,6 +42,7 @@ class Capability(StrEnum):
     VIEW_AGENT_DIRECTORY = "view_agent_directory"
     VIEW_AGENT_RUNS = "view_agent_runs"
     VIEW_AUDIT_LOG = "view_audit_log"
+    VIEW_BROWSER_ENVIRONMENT = "view_browser_environment"
 
 
 class Scope(Enum):
@@ -179,6 +180,7 @@ _MATRIX: dict[Capability, dict[Role, Grant]] = {
     Capability.VIEW_AGENT_DIRECTORY: {_O: _ORG, _AD: _ORG, _OP: _SHOPS, _FI: _SHOPS, _DE: _SHOPS},
     Capability.VIEW_AGENT_RUNS: {_O: _ORG, _AD: _ORG, _OP: _SHOPS, _DE: _SHOPS},
     Capability.VIEW_AUDIT_LOG: {_O: _ORG, _AD: _ORG, _DE: _SHOPS},
+    Capability.VIEW_BROWSER_ENVIRONMENT: {_O: _ORG, _AD: _ORG},
 }
 
 # Read-only view: the matrix changes only through a reviewed change to this file and the doc.
