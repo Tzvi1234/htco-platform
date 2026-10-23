@@ -1,11 +1,11 @@
 """One status vocabulary across the CRM (slice 5.18, `execution-engine.md` §7).
 
 Every lifecycle keeps its own state machine: automation executions (`ExecutionState`), action
-executions (`ActionState`), browser environments (`EnvironmentStatus`) and business tasks
-(`TaskState`). For the office, each state also has one `StatusKind`, so a screen or a monitor can
-say "running", "waiting", "done", "failed" or "stopped" the same way for all of them. A task or
-an execution that waits says why with a `WaitingReason`; the engine records these on the task
-rather than as new task states.
+executions (`ActionState`), browser environments (`EnvironmentStatus`), business tasks
+(`TaskState`) and incidents (`IncidentState`, Phase 6). For the office, each state also has one
+`StatusKind`, so a screen or a monitor can say "running", "waiting", "done", "failed" or
+"stopped" the same way for all of them. A task or an execution that waits says why with a
+`WaitingReason`; the engine records these on the task rather than as new task states.
 """
 
 from collections.abc import Mapping
@@ -14,6 +14,7 @@ from enum import Enum, StrEnum
 from htco_domain.actions import ActionState
 from htco_domain.automation import ExecutionState
 from htco_domain.browser import EnvironmentStatus
+from htco_domain.incidents import IncidentState
 from htco_domain.tasks import TaskState
 
 
@@ -35,6 +36,7 @@ _X = ExecutionState
 _A = ActionState
 _V = EnvironmentStatus
 _T = TaskState
+_I = IncidentState
 
 _KINDS: Mapping[type[Enum], Mapping[Enum, StatusKind]] = {
     ExecutionState: {
@@ -61,6 +63,14 @@ _KINDS: Mapping[type[Enum], Mapping[Enum, StatusKind]] = {
         _T.BLOCKED: _K.WAITING, _T.COMPLETED: _K.SUCCEEDED, _T.FAILED: _K.FAILED,
         _T.ESCALATED: _K.WAITING, _T.CANCELLED: _K.STOPPED,
     },
+    # Incidents (slice 6.3): open work is active; waiting on an approval, a developer or the
+    # evidence is waiting; resolved on evidence is done.
+    IncidentState: {
+        _I.DETECTED: _K.ACTIVE, _I.TRIAGED: _K.ACTIVE, _I.INVESTIGATING: _K.ACTIVE,
+        _I.REMEDIATION_PROPOSED: _K.ACTIVE, _I.AUTO_REMEDIATING: _K.ACTIVE,
+        _I.APPROVAL_REQUIRED: _K.WAITING, _I.DEVELOPER_REQUIRED: _K.WAITING,
+        _I.VERIFYING: _K.WAITING, _I.ESCALATED: _K.ACTIVE, _I.RESOLVED: _K.SUCCEEDED,
+    },
 }  # fmt: skip
 
 _WAITING_REASONS: Mapping[Enum, WaitingReason] = {
@@ -71,12 +81,14 @@ _WAITING_REASONS: Mapping[Enum, WaitingReason] = {
 }
 
 
-def status_kind(state: ExecutionState | ActionState | EnvironmentStatus | TaskState) -> StatusKind:
+def status_kind(
+    state: ExecutionState | ActionState | EnvironmentStatus | TaskState | IncidentState,
+) -> StatusKind:
     return _KINDS[type(state)][state]
 
 
 def waiting_reason(
-    state: ExecutionState | ActionState | EnvironmentStatus | TaskState,
+    state: ExecutionState | ActionState | EnvironmentStatus | TaskState | IncidentState,
 ) -> WaitingReason | None:
     """Why a waiting state waits, when the state itself says it."""
     return _WAITING_REASONS.get(state)

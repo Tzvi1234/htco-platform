@@ -7,13 +7,13 @@
 | **Size** | M |
 | **Depends on** | Phase 5 |
 | **Requirements** | FR-AUT-05, FR-EML-01, FR-INC-01, FR-INC-02, FR-INC-03, FR-INC-04 (allowlist only), FR-INC-05, FR-INC-06, FR-NTF-01, FR-ORD-03, FR-ORD-05, FR-ORD-06, FR-ORD-07 |
-| **Status** | Not started |
+| **Status** | In progress (started 2026-10-25, in parallel with the end of Phase 5) |
 
 ## Progress
 
-- [ ] 6.1 Tracking detection
-- [ ] 6.2 SLA policies and inspector
-- [ ] 6.3 Incidents
+- [x] 6.1 Tracking detection (migration `20261025100000_fulfillment_incidents.sql`, pgTAP `19_fulfillment_incidents`; [feature docs](../../features/fulfillment-monitoring/overview.md); inactive until 6.7)
+- [x] 6.2 SLA policies and inspector (default window 10 business days until the owner agrees the windows; schedule `fulfillment.inspect`, off by flag)
+- [x] 6.3 Incidents ([feature docs](../../features/incidents/overview.md); AC-6.3.4's trigger from `sync_drifts` is wired after 5.5 merges)
 - [ ] 6.4 Notifications and email
 - [ ] 6.5 Incident center UI
 - [ ] 6.6 Guarded shipment write
@@ -32,6 +32,13 @@ Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gatew
 - Slice 6.6 (guarded shipment write) becomes the `etsy.shipments.create` and `etsy.receipts.update` tools, policy W2. On each shop they start **owner-trigger only**: the owner runs the first write himself (slice 6.8). Only after a verified success may Tracking Synchronization request them, and each request is an approval.
 - Webhooks `order.shipped`, `order.delivered` and `inventory.out_of_stock` from slice 5.3 feed this phase's automations.
 - Where tracking upload is blocked for an Israeli key (A-04), the order moves to a Human task, or to a POD partner's tracking (Phase 13, browser row only if scoped). Phase 6 never uses a browser.
+
+## Architecture audit follow-ups (2026-10-23 review)
+
+- **One alert model, one path (P2-2).** Incidents (6.3), alerts (6.9) and security notices all reach people through the one notification path of 6.4: a `NotificationRequest` (in the worker) or a `notifications.requested.v1` / `incidents.opened.v1` event through the outbox, then `notifications` rows and `email.send` messages. 6.9 adds no alert table of its own. Phase 10's monitors later emit into the same path. The incident's `incident_events` is that aggregate's own state history (like `automation_execution_events`), not a second activity trail; the audit and `order_status_events` stay as they are.
+- **Status vocabulary (P2-2).** `IncidentState` maps to `htco_domain.status.StatusKind`, covered by the status tests.
+- **Gateway bypass (P1-1).** Before any write tool lands (6.6, 6.8), an architecture test asserts that every Etsy write goes through the Action Gateway, with a documented allow-list of the existing read bypasses. Phase 6's own Etsy reads (Tracking Synchronization) already go through `etsy.receipts.read`.
+- **Phase 6 → 7 direction (P1-4).** Phase 6 does not depend on Phase 7. The 6.10 relay keeps its own minimal relay item (owned by Phase 6); Phase 7's task store later **extends** it (a relay item becomes a kind of task), not the other way round. AC-6.7.5's "task for a person" is the relay item / Human-channel contract of 5.13 until then.
 
 ## Goal
 

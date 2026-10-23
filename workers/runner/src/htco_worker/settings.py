@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from htco_application.fulfillment_schedule import FULFILLMENT_SCHEDULE
 from htco_application.maintenance import EXPIRY_SCHEDULE, PROBE_SCHEDULE
 from htco_application.maintenance import SCHEDULES as MAINTENANCE_SCHEDULES
 from htco_application.order_intake import (
@@ -21,8 +22,11 @@ from htco_application.order_intake import (
 )
 from htco_platform.crypto import KeyRing
 
-# Every schedule a worker may run: maintenance (5.1) and order reconciliation (5.5).
-SCHEDULES = MAINTENANCE_SCHEDULES | ORDER_SCHEDULES
+# Every schedule a worker may run: maintenance (5.1), order reconciliation (5.5) and the
+# fulfillment inspection (6.1, 6.2).
+SCHEDULES = (
+    MAINTENANCE_SCHEDULES | ORDER_SCHEDULES | {FULFILLMENT_SCHEDULE.kind: FULFILLMENT_SCHEDULE}
+)
 
 
 class WorkerSettings(BaseSettings):

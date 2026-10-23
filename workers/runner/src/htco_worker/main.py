@@ -46,6 +46,15 @@ from htco_application.execution.service import (
     ActionGatewayService,
     GatewayParts,
 )
+from htco_application.fulfillment_schedule import (
+    FULFILLMENT_SCHEDULE,
+    FULFILLMENT_SHOP_JOB,
+    INCIDENT_DETECTION,
+    TRACKING_SYNC,
+    FulfillmentInspection,
+    enqueue_fulfillment_inspections,
+)
+from htco_application.incidents import IncidentService
 from htco_application.jobs import ClaimedJob, JobError, JobQueue
 from htco_application.maintenance import (
     EXPIRY_JOB,
@@ -83,6 +92,8 @@ from htco_application.order_intake import (
     enqueue_reconciliations,
 )
 from htco_application.shop_capabilities import CapabilityChecks
+from htco_application.sla_inspector import IncidentDetection
+from htco_application.tracking_sync import EngineTrackingSync, TrackingRecorder, TrackingSync
 from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.guards import BreakerPolicy
@@ -99,6 +110,11 @@ from htco_persistence.automation import PostgresAutomationCatalog, PostgresExecu
 from htco_persistence.database import Database, tenant_scope
 from htco_persistence.etsy_orders import PostgresOrderStore
 from htco_persistence.etsy_webhooks import PostgresWebhookInbox, PostgresWorkerShops
+from htco_persistence.fulfillment import (
+    PostgresIncidentStore,
+    PostgresSlaStore,
+    PostgresTrackingStore,
+)
 from htco_persistence.guards import PostgresBreakers, PostgresRateLimiter, PostgresSlots
 from htco_persistence.jobs import PostgresJobQueue, PostgresWorkerHeartbeats
 from htco_persistence.maintenance import PostgresPurgeStore, PostgresShopDirectory
@@ -312,6 +328,57 @@ def intake_handlers(database: Database, vault: PostgresTokenVault) -> dict[str, 
     return {ORDER_INTAKE: OrderIntake(store=PostgresOrderStore(database), shops=vault, clock=_now)}
 
 
+def fulfillment_handlers(
+    database: Database, vault: PostgresTokenVault | None
+) -> dict[str, Handler]:
+    """Tracking Synchronization (slice 6.1; it reads receipts, so it needs the Etsy shop vault)
+    and Incident Detection & Escalation (slices 6.2, 6.3; no Etsy call). Both run only once the
+    owner activates them (slice 6.7)."""
+    incidents = IncidentService(
+        PostgresIncidentStore(database), clock=_now, offload=anyio.to_thread.run_sync
+    )
+    handlers: dict[str, Handler] = {
+        INCIDENT_DETECTION: IncidentDetection(
+            PostgresSlaStore(database), incidents, clock=_now, offload=anyio.to_thread.run_sync
+        )
+    }
+    if vault is not None:
+        tracking = PostgresTrackingStore(database)
+        recorder = TrackingRecorder(
+            tracking, incidents, clock=_now, offload=anyio.to_thread.run_sync
+        )
+        handlers[TRACKING_SYNC] = TrackingSync(
+            recorder, tracking, vault, clock=_now, offload=anyio.to_thread.run_sync
+        )
+    return handlers
+
+
+def fulfillment_schedule_handlers(
+    enabled: tuple[str, ...],
+    *,
+    engine: DurableAutomationEngine,
+    queue: JobQueue,
+    directory: ShopDirectory,
+) -> dict[str, JobHandler]:
+    """The 15-minute fulfillment inspection (slices 6.1, 6.2), only when named in
+    `HTCO_WORKER_SCHEDULES`: off by default, the rollback flag of Phase 6."""
+    if FULFILLMENT_SCHEDULE.kind not in enabled:
+        return {}
+    inspection = FulfillmentInspection(engine)
+
+    async def per_shop(job: ClaimedJob) -> None:
+        started = await anyio.to_thread.run_sync(lambda: inspection.run(job))
+        _log.info("fulfillment.inspection", started=started, job_id=str(job.id))
+
+    return {
+        FULFILLMENT_SCHEDULE.kind: _in_thread(
+            lambda: enqueue_fulfillment_inspections(directory, queue, now=_now()),
+            "fulfillment.inspections_enqueued",
+        ),
+        FULFILLMENT_SHOP_JOB: per_shop,
+    }
+
+
 def reconciliation_handlers(  # noqa: PLR0913 - the tick and its collaborators
     enabled: tuple[str, ...],
     *,
@@ -366,6 +433,7 @@ def webhook_processor(
     inbox = PostgresWebhookInbox(database)
     return WebhookProcessor(
         orders=EngineOrderIntake(engine, offload=anyio.to_thread.run_sync),
+        tracking=EngineTrackingSync(engine, offload=anyio.to_thread.run_sync),
         catalog=adapter,
         shops=PostgresWorkerShops(database),
         outbox=PostgresOutbox(database),
@@ -461,8 +529,12 @@ async def _serve(settings: WorkerSettings) -> None:
     ) | outbox_handlers(PostgresOutbox(database), {EVENT_DESTINATION: AcceptedEvents()})
     gateway = worker_gateway(settings, database, etsy.gateway_adapter)
     deployed = {} if vault is None or adapter is None else intake_handlers(database, vault)
+    deployed |= fulfillment_handlers(database, None if adapter is None else vault)
     engine = worker_engine(database, gateway=gateway, handlers=deployed)
     handlers |= automation_handlers(engine, settings.worker_id)
+    handlers |= fulfillment_schedule_handlers(
+        settings.schedules, engine=engine, queue=queue, directory=PostgresShopDirectory(database)
+    )
     if adapter is not None:  # webhook and sync jobs wait in the queue until Etsy is configured
         handlers |= webhook_handlers(webhook_processor(database, engine, adapter))
         handlers |= order_sync_handlers(engine)

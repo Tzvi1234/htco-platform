@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/automations/tracking-sync.output.json",
+  "title": "Tracking Synchronization output",
+  "type": "object",
+  "properties": {
+    "receipts": {"type": "integer", "minimum": 0},
+    "recorded": {"type": "integer", "minimum": 0},
+    "via": {"type": "string", "enum": ["webhook", "schedule"]},
+    "skipped": {"type": "string", "enum": ["not_connected"]}
+  },
+  "additionalProperties": false
+}

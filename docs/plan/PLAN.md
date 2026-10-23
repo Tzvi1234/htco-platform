@@ -152,7 +152,8 @@ Status words: **COMPLETE** (merged, verified), **PARTIAL** (some slices or parts
 | 3 | COMPLETE | 2026-10-14 | 2026-10-22 | Design system, web shell, sign-in with MFA and password reset, Design 1C on every screen (clients PRs #1–#34). Open note: email verification through Resend |
 | 4 | COMPLETE | 2026-10-15 | 2026-10-22 | Adapter, token vault, OAuth connect, refresh, capability probes, disconnect, the shop card and the shop's live data on the dashboard ([dashboard data](../features/etsy-integration/dashboard-data.md)). Open note: the restore rehearsal (AC-4.7.2, with the owner) |
 | 5 | PARTIAL | 2026-10-22 | | Order history store merged ahead of the phase (PR #57). Open, not merged, to be aligned first ([5.0](phases/phase-05-orders-ingest.md#alignment-of-the-open-pull-requests)): 5.1 job queue and worker (#53), deployment (#54, needs the owner's cost approval), 5.2 inbox and outbox (#55), 5.10 durable engine (#58). New slices 5.12–5.18 planned. Update 2026-10-23: #53, #62 (5.2) and #58 merged; #54 ready; 5.12 Action Gateway in review. Update 2026-10-24: 5.3 Etsy webhooks merged (#69, off behind a flag); 5.14 merged (#70); 5.4 receipt ingest on the engine (#72) and 5.5 reconciliation in review |
-| 6–21, 8A, 8B | PLANNED | | | Foundations for 7, 8, 9, 10 and 18 exist as tested domain code (ADR-0012 validation log) |
+| 6 | PARTIAL | 2026-10-25 | | Run in parallel with the end of Phase 5 (the owner's request). 6.1 tracking detection, 6.2 SLA policies and inspector, 6.3 incidents in review; both automations stay `draft` until 6.7 |
+| 7–21, 8A, 8B | PLANNED | | | Foundations for 7, 8, 9, 10 and 18 exist as tested domain code (ADR-0012 validation log) |
 
 Update this table in the pull request that completes each phase.
 
