@@ -15,7 +15,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 
 ## Progress
 
-- [ ] 5.0 Alignment of PRs #53, #55, #58 with the contracts (blocking their merge)
+- [x] 5.0 Alignment of PRs #53, #62 (which replaced #55) and #58 with the contracts; AC-5.0.1's migration-order check is CI's `migration-order` job (`tools/migration_order.py`, ER-DATA-10)
 - [x] 5.1 Job queue and worker (PR #53; aligned: migration `20261023120000_job_queue.sql` because a shop fix took `20261023090000`, pgTAP `10_job_queue`, `correlation_id` and `causation_id` on jobs; deployment in #54)
 - [x] 5.2 Inbox and outbox (PR #55; aligned: migration `20261023130000_inbox_outbox.sql`, pgTAP `11_inbox_outbox`, `action_execution_id` and `correlation_id` on outbox messages)
 - [x] 5.3 Webhook ingress for all 11 Etsy events (behind `HTCO_ETSY_WEBHOOKS_ENABLED`, off; migration `20261024100000_etsy_webhook_intake.sql`, pgTAP `15_etsy_webhook_intake`; the owner registers the endpoint and the `ETSY_WEBHOOK_SECRET`, see [orders-ingest operations](../../features/orders-ingest/operations.md#registering-the-webhook-in-the-etsy-developer-portal))
