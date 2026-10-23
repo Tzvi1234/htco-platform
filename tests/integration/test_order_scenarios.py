@@ -16,13 +16,23 @@ from typing import Any
 import anyio
 import pytest
 
-from htco_application.automation.durable import DurableAutomationEngine, Handler
+from htco_application.automation.durable import (
+    Completed,
+    DurableAutomationEngine,
+    Handler,
+    HandlerContext,
+)
 from htco_application.automation.engine import TriggerRequest
 from htco_application.automation.records import registry_from_rows
 from htco_application.execution.gateway import Channel
 from htco_application.execution.service import ActionGatewayService, GatewayParts
 from htco_application.marketplace import OrderReceipt
-from htco_application.order_automations import StoredSnapshot, verify
+from htco_application.order_automations import (
+    SALES_COUNTERS,
+    ProductSalesCounters,
+    StoredSnapshot,
+    verify,
+)
 from htco_application.order_ingest import INGESTED, IngestContext, IngestPlan, IngestSource
 from htco_application.order_intake import OrderIntake
 from htco_application.order_receipts import receipt_to_json
@@ -428,3 +438,42 @@ async def test_counters__a_cancellation_replayed__takes_the_units_back_once(
             [shop],
         ).fetchone()
     assert row == (0, 0)
+
+
+@pytest.mark.ac("AC-5.11.5")
+async def test_counters__orders_stored_by_the_history_backfill__counted_by_the_rebuild_once(
+    admin: Database, worker_db: Database
+) -> None:
+    """The backfill publishes no events (Codex P1 on #90): the rebuild counts its orders, and
+    running it again, or recounting one of them from an event, moves nothing."""
+    tenant, integration = await connected(admin)
+    shop = integration.shop_id
+    backfilled = [order(53_101), order(53_102), order(53_103, status="canceled")]
+    await PostgresOrderStore(admin).save_backfill_page(
+        integration, backfilled, next_offset=3, now=NOW
+    )
+    store = PostgresOrderAutomationStore(worker_db)
+    handler = ProductSalesCounters(store, clock=lambda: NOW, page_size=2)
+
+    def ctx() -> HandlerContext:
+        return HandlerContext(
+            execution_id=uuid.uuid7(), automation_id=SALES_COUNTERS, actor=ADMIN,
+            organization_id=tenant.organization_id, shop_id=shop, correlation_id="c",
+            causation_id=None, attempt=1, payload={"rebuild": True},
+            gateway=None,  # type: ignore[arg-type]
+        )  # fmt: skip
+
+    with tenant_scope(tenant.organization_id):
+        first = await handler(ctx())
+        await store.recount(tenant.organization_id, shop, 53_101, execution_id=uuid.uuid4(),
+                            now=NOW)  # fmt: skip
+        again = await handler(ctx())
+
+    assert first == Completed({"rebuilt": 3, "moved": 2})
+    assert again == Completed({"rebuilt": 3, "moved": 0})
+    with admin.connection() as c:
+        row = c.execute(
+            "select units, orders from app.product_sales_counters where shop_id = %s and listing_id = 777",  # noqa: E501
+            [shop],
+        ).fetchone()
+    assert row == (4, 2)  # two paid orders of two units; the cancelled one counts nothing

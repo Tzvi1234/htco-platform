@@ -58,6 +58,8 @@ def test_every_order_automation__has_both_contracts(automation: str, part: str) 
             {"receipt_id": 7, "units": {"11": -2}, "orders": {"11": -1}},
         ),
         ("product-sales-counters.output.json", {"receipt_id": 7, "skipped": "not_stored"}),
+        ("product-sales-counters.input.json", {"rebuild": True}),
+        ("product-sales-counters.output.json", {"rebuilt": 3, "moved": 2}),
     ],
 )
 def test_contracts__accept_what_the_triggers_and_handlers_use(

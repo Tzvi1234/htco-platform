@@ -10,18 +10,23 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from htco_application.automation.durable import Completed, HandlerContext
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
+from htco_application.jobs import JobError
 from htco_application.messaging import OutboxMessage, PendingDelivery
 from htco_application.order_automations import (
     ORDER_DEDUP,
     SALES_COUNTERS,
+    CounterDelta,
     OrderEventTriggers,
+    ProductSalesCounters,
     StoredSnapshot,
     counter_delta,
     desired_counts,
     verify,
 )
 from htco_application.order_ingest import CANCELLED, INGESTED, REFUNDED, UPDATED
+from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import AutomationExecution, ExecutionState, TriggerKind
 from htco_domain.orders import OrderState
 from tests.shop_data_fakes import NOW, line, receipt
@@ -147,6 +152,101 @@ def test_counters__a_replayed_cancellation__takes_the_units_back_once() -> None:
 
     assert counters.units[11] == 0
     assert counters.orders[11] == 0
+
+
+# --- the rebuild: receipts stored without an event (the history backfill, the draft period) --
+
+
+@dataclass
+class LedgerStore:
+    """A `CountersStore` over invented stored orders, with the applications ledger."""
+
+    orders: dict[int, tuple[OrderState, tuple[tuple[int, int], ...]]]
+    counters: Counters = field(default_factory=Counters)
+    applied: dict[int, dict[int, int]] = field(default_factory=dict)
+    pages: list[tuple[int, int]] = field(default_factory=list)
+
+    async def recount(
+        self, organization_id: object, shop_id: object, receipt_id: int, *,  # noqa: ARG002
+        execution_id: object, now: object,  # noqa: ARG002 - the CountersStore protocol
+    ) -> CounterDelta | None:  # fmt: skip
+        if receipt_id not in self.orders:
+            return None
+        state, items = self.orders[receipt_id]
+        desired = desired_counts(state, items)
+        delta = counter_delta(self.applied.get(receipt_id, {}), desired)
+        self.counters.units.update(delta.units)
+        self.counters.orders.update(delta.orders)
+        self.applied[receipt_id] = desired
+        return delta
+
+    async def stored_receipts(
+        self,
+        shop_id: object,  # noqa: ARG002 - the protocol
+        *,
+        after: int,
+        limit: int,
+    ) -> list[int]:
+        self.pages.append((after, limit))
+        return sorted(r for r in self.orders if r > after)[:limit]
+
+
+def rebuild_context(payload: dict[str, object]) -> HandlerContext:
+    return HandlerContext(
+        execution_id=uuid.uuid7(), automation_id=SALES_COUNTERS,
+        actor=ActorRef(ActorKind.USER, "05110000-0000-7000-8000-000000000009"),
+        organization_id=ORG, shop_id=SHOP, correlation_id="corr-rebuild", causation_id=None,
+        attempt=1, payload=payload, gateway=None,  # type: ignore[arg-type]
+    )  # fmt: skip
+
+
+BACKFILLED = {
+    101: (OrderState.AWAITING_SHIPMENT, ((7, 2),)),
+    102: (OrderState.DELIVERED, ((7, 1), (8, 3))),
+    103: (OrderState.CANCELLED, ((8, 5),)),
+}
+
+
+@pytest.mark.ac("AC-5.11.5")
+async def test_rebuild__receipts_stored_by_the_backfill__counted_once_however_often_run() -> None:
+    """The history backfill publishes no events, so its receipts are counted only by the
+    rebuild; running it again (or after the events) moves nothing."""
+    store = LedgerStore(dict(BACKFILLED))
+    handler = ProductSalesCounters(store, clock=lambda: NOW, page_size=2)
+
+    first = await handler(rebuild_context({"rebuild": True}))
+    again = await handler(rebuild_context({"rebuild": True}))
+
+    assert isinstance(first, Completed)
+    assert first.output == {"rebuilt": 3, "moved": 2}
+    assert isinstance(again, Completed)
+    assert again.output == {"rebuilt": 3, "moved": 0}
+    assert dict(store.counters.units) == {7: 3, 8: 3}
+    assert dict(store.counters.orders) == {7: 2, 8: 1}
+    assert store.pages[:3] == [(0, 2), (102, 2), (103, 2)]  # keyset pages, never one huge read
+
+
+@pytest.mark.ac("AC-5.11.5")
+async def test_rebuild__after_the_events_counted_a_receipt__moves_only_the_rest() -> None:
+    store = LedgerStore(dict(BACKFILLED))
+    handler = ProductSalesCounters(store, clock=lambda: NOW)
+    await handler(rebuild_context({"receipt_id": 101, "event_type": INGESTED}))
+
+    result = await handler(rebuild_context({"rebuild": True}))
+
+    assert isinstance(result, Completed)
+    assert result.output == {"rebuilt": 3, "moved": 1}
+    assert dict(store.counters.units) == {7: 3, 8: 3}
+
+
+@pytest.mark.parametrize(
+    "payload", [{}, {"rebuild": False}, {"rebuild": True, "receipt_id": 101}, {"rebuild": "yes"}]
+)
+async def test_rebuild__a_malformed_request__refused(payload: dict[str, object]) -> None:
+    handler = ProductSalesCounters(LedgerStore(dict(BACKFILLED)), clock=lambda: NOW)
+
+    with pytest.raises(JobError):
+        await handler(rebuild_context(payload))
 
 
 # --- the events that start them -------------------------------------------------------------

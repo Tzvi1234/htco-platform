@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_worker;
-select plan(18);
+select plan(21);
 
 insert into auth.users (id, email) values
   ('22e00000-0000-0000-0000-000000000001', 'owner-m@example.test'),
@@ -30,6 +30,9 @@ values
    now(), now(), now(), 'awaiting_shipment'),
   ('22b00000-0000-0000-0000-000000000000', '22c00000-0000-0000-0000-000000000002', 2202, 22002,
    'paid', true, false, 100, 100, 'USD', 100, 100, 'USD', 0, 100, 'USD', 0, 100, 'USD',
+   now(), now(), now(), 'awaiting_shipment'),
+  ('22a00000-0000-0000-0000-000000000000', '22c00000-0000-0000-0000-000000000001', 2201, 22003,
+   'paid', true, false, 100, 100, 'USD', 100, 100, 'USD', 0, 100, 'USD', 0, 100, 'USD',
    now(), now(), now(), 'awaiting_shipment');
 insert into app.product_sales_counters (organization_id, shop_id, listing_id, units, orders) values
   ('22a00000-0000-0000-0000-000000000000', '22c00000-0000-0000-0000-000000000001', 7, 2, 1),
@@ -54,6 +57,10 @@ select throws_ok(
   $$ insert into app.product_sales_applications (organization_id, shop_id, receipt_id, applied_at)
      values ('22a00000-0000-0000-0000-000000000000', '22c00000-0000-0000-0000-000000000001', 99999, now()) $$,
   '23503', null, 'an application belongs to a stored order');
+select throws_ok(
+  $$ insert into app.product_sales_applications (organization_id, shop_id, receipt_id, applied_at)
+     values ('22b00000-0000-0000-0000-000000000000', '22c00000-0000-0000-0000-000000000001', 22003, now()) $$,
+  '23503', null, 'an application belongs to its order''s organization');
 select lives_ok(
   $$ insert into app.sync_drifts (id, organization_id, shop_id, receipt_id, kind, stored, observed,
        etsy_updated_at, source, detected_at)
@@ -71,11 +78,13 @@ select throws_ok(
 select ok(not has_column_privilege('htco_worker', 'app.etsy_orders', 'grand_total_amount', 'select'),
   'the worker still reads no money column');
 select ok(has_function_privilege('htco_worker',
-  'private.order_grand_total_matches(uuid, bigint, bigint, integer, text)', 'execute'),
+  'app.worker_order_grand_total_matches(uuid, bigint, bigint, integer, text)', 'execute'),
   'the worker asks whether the stored total matches');
 select ok(not has_function_privilege('authenticated',
-  'private.order_grand_total_matches(uuid, bigint, bigint, integer, text)', 'execute'),
+  'app.worker_order_grand_total_matches(uuid, bigint, bigint, integer, text)', 'execute'),
   'users cannot ask it');
+select ok(not has_schema_privilege('htco_worker', 'private', 'usage'),
+  'the worker still has no usage on schema private');
 select ok(not has_table_privilege('authenticated', 'app.product_sales_counters', 'insert, update, delete'),
   'users only read the counters');
 
@@ -95,9 +104,13 @@ select results_eq($$ select units::int from app.product_sales_counters $$, $$ va
   'the worker sees its job''s organization''s counters only');
 select is_empty($$ select receipt_id from app.product_sales_applications $$,
   'and none of another organization''s applications');
-select is(private.order_grand_total_matches('22c00000-0000-0000-0000-000000000002', 22002, 100, 100, 'USD'),
+select throws_ok(
+  $$ insert into app.product_sales_applications (organization_id, shop_id, receipt_id, applied_at)
+     values ('22b00000-0000-0000-0000-000000000000', '22c00000-0000-0000-0000-000000000001', 22003, now()) $$,
+  '23503', null, 'the worker cannot bind its organization to another organization''s order');
+select is(app.worker_order_grand_total_matches('22c00000-0000-0000-0000-000000000002', 22002, 100, 100, 'USD'),
   true, 'the stored total matches the same total');
-select is(private.order_grand_total_matches('22c00000-0000-0000-0000-000000000001', 22001, 100, 100, 'USD'),
+select is(app.worker_order_grand_total_matches('22c00000-0000-0000-0000-000000000001', 22001, 100, 100, 'USD'),
   null, 'another organization''s order answers nothing');
 reset role;
 
