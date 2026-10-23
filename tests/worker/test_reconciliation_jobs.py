@@ -118,6 +118,8 @@ async def test_tick__enqueues_the_due_run_only(at: datetime, reason: str | None)
 
     reasons = [j.spec.payload["reason"] for j in queue.jobs.values()]
     assert reasons == ([] if reason is None else [reason])
+    # Each job waits for its slot: 06:00 or 18:00 Israel time, not the tick's minute.
+    assert all(j.run_at.minute == 0 for j in queue.jobs.values())
     assert all(j.spec.kind == ORDER_SYNC_JOB for j in queue.jobs.values())
 
 

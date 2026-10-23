@@ -39,7 +39,7 @@ from htco_application.order_intake import (
     SWEEP,
     ShopBusyError,
     daily_etsy_calls,
-    due_reconciliation,
+    due_reconciliations,
     enqueue_reconciliations,
     parse_reconciliation_times,
 )
@@ -195,7 +195,10 @@ async def test_reconcile__a_receipt_whose_webhook_was_lost__in_the_next_run() ->
         def connected_shops(self) -> list[TenantShop]:
             return [TenantShop(ORG, SHOP)]
 
-    assert enqueue_reconciliations(Directory(), queue, reason=SWEEP, slot="s", now=NOW) == 1
+    assert (
+        enqueue_reconciliations(Directory(), queue, reason=SWEEP, slot="s", now=NOW, run_at=NOW)
+        == 1
+    )
     await intake.handler(intake.context({"mode": SWEEP}))
 
     assert (SHOP, RECEIPT + 99) in intake.store.orders
@@ -288,9 +291,11 @@ def test_fan_out__one_job_per_shop_and_run_under_the_orders_lock() -> None:
     for worker in range(2):  # two workers in one run
         enqueue_reconciliations(
             directory, queue, reason=RECONCILE, slot="2026-10-24T03:00",
-            now=NOW + timedelta(seconds=worker),
+            now=NOW + timedelta(seconds=worker), run_at=NOW,
         )  # fmt: skip
-    enqueue_reconciliations(directory, queue, reason=SWEEP, slot="2026-10-24T15:00", now=NOW)
+    enqueue_reconciliations(
+        directory, queue, reason=SWEEP, slot="2026-10-24T15:00", now=NOW, run_at=NOW
+    )
 
     jobs = list(queue.jobs.values())
     assert len(jobs) == 4
@@ -332,28 +337,65 @@ TWICE = (time(6, 0), time(18, 0))
 def test_due__the_first_run_reconciles_the_last_sweeps(
     at: datetime, due: tuple[str, str] | None
 ) -> None:
-    assert due_reconciliation(TWICE, now=at, tz=ISRAEL) == due
+    runs = [(run.reason, run.slot) for run in due_reconciliations(TWICE, now=at, tz=ISRAEL)]
+    assert runs == ([] if due is None else [due])
 
 
 def test_due__the_local_times_stay_put_across_the_dst_change() -> None:
     """Israel leaves summer time on 25 October 2026: 06:00 is 03:00 UTC the day before and
     04:00 UTC from that day on; each day still runs once at 06:00 and once at 18:00."""
-    before = [due_reconciliation(TWICE, now=datetime(2026, 10, 24, h, 5, tzinfo=UTC), tz=ISRAEL)
+    before = [[(r.reason, r.slot) for r in due_reconciliations(
+                  TWICE, now=datetime(2026, 10, 24, h, 5, tzinfo=UTC), tz=ISRAEL)]
               for h in range(24)]  # fmt: skip
-    after = [due_reconciliation(TWICE, now=datetime(2026, 10, 25, h, 5, tzinfo=UTC), tz=ISRAEL)
+    after = [[(r.reason, r.slot) for r in due_reconciliations(
+                 TWICE, now=datetime(2026, 10, 25, h, 5, tzinfo=UTC), tz=ISRAEL)]
              for h in range(24)]  # fmt: skip
     assert [h for h, d in enumerate(before) if d] == [3, 15]
     assert [h for h, d in enumerate(after) if d] == [4, 16]
-    assert after[4] == (RECONCILE, "2026-10-25T06:00+02:00")
-    assert after[16] == (SWEEP, "2026-10-25T18:00+02:00")
+    assert after[4] == [(RECONCILE, "2026-10-25T06:00+02:00")]
+    assert after[16] == [(SWEEP, "2026-10-25T18:00+02:00")]
 
 
 def test_due__a_single_daily_run_is_the_sweep() -> None:
     times = parse_reconciliation_times("04:30")
-    assert due_reconciliation(times, now=datetime(2026, 10, 24, 4, 10, tzinfo=UTC), tz=UTC) == (
-        SWEEP,
-        "2026-10-24T04:30+00:00",
-    )
+    [run] = due_reconciliations(times, now=datetime(2026, 10, 24, 4, 10, tzinfo=UTC), tz=UTC)
+    assert (run.reason, run.slot) == (SWEEP, "2026-10-24T04:30+00:00")
+    assert run.at == datetime(2026, 10, 24, 4, 30, tzinfo=UTC)  # it runs at 04:30, not 04:10
+
+
+def test_due__every_time_of_the_hour_is_due_the_last_one_the_sweep() -> None:
+    """Codex review of #75: two times in one tick's hour are both enqueued, each at its time."""
+    times = parse_reconciliation_times("06:00,06:30")
+    runs = due_reconciliations(times, now=datetime(2026, 10, 24, 3, 2, tzinfo=UTC), tz=ISRAEL)
+    assert [(r.reason, r.at.astimezone(ISRAEL).strftime("%H:%M")) for r in runs] == [
+        (RECONCILE, "06:00"),
+        (SWEEP, "06:30"),
+    ]
+
+
+def test_fan_out__the_jobs_wait_for_their_slot() -> None:
+    queue = MemoryJobQueue()
+
+    @dataclass
+    class Directory:
+        def connected_shops(self) -> list[TenantShop]:
+            return [TenantShop(ORG, SHOP)]
+
+    later = NOW + timedelta(minutes=30)
+    enqueue_reconciliations(Directory(), queue, reason=SWEEP, slot="x", now=NOW, run_at=later)
+
+    [job] = queue.jobs.values()
+    assert job.run_at == later
+
+
+@pytest.mark.ac("AC-5.5.4")
+def test_drifts__never_against_a_copy_older_than_the_stored_one() -> None:
+    """Codex review of #75: a webhook stored a newer copy while reconciliation's page was in
+    flight; the stale page shows no drift."""
+    newer = shipped(paid_receipt(RECEIPT), minutes=60)
+    stored = StoredOrder(newer.updated_at, _O.SHIPPED, None, observed_facts(newer))
+    stale = paid_receipt(RECEIPT)
+    assert detect_drifts(stored, stale, now=NOW, grace=GRACE) == ()
 
 
 def _etsy_budget() -> tuple[int, int]:
