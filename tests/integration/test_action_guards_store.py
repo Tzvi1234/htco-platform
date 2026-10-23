@@ -223,7 +223,8 @@ async def test_deferred__stored_with_its_retry_at(admin: Database) -> None:
         )
     )
 
-    result = await service.submit(ask(tenant))
+    request = ask(tenant)
+    result = await service.submit(request)
 
     assert result.outcome is ActionOutcome.DEFERRED
     assert result.retry_at == now + timedelta(seconds=600)
@@ -236,3 +237,6 @@ async def test_deferred__stored_with_its_retry_at(admin: Database) -> None:
     assert scalar(
         admin, "select retry_at from app.action_executions where id = %s", [result.execution_id]
     ) == now + timedelta(seconds=600)
+    again = await service.submit(ask(tenant, key=request.idempotency_key))
+    assert (again.outcome, again.retry_at) == (ActionOutcome.DEFERRED, result.retry_at)
+    assert len(channel.calls) == 1  # nothing sent before retry_at

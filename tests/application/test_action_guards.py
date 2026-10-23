@@ -118,18 +118,22 @@ def guards(clock: Clock, **changes: Any) -> Guards:
     return Guards(**values)
 
 
-def gateway(
+def gateway(  # noqa: PLR0913 - a test world with optional parts
     channel: Scripted,
     clock: Clock,
     shared: Guards,
     *,
     budget: RateBudget | None = None,
     store: MemoryActionStore | None = None,
+    timeout: timedelta | None = None,
 ) -> ActionGatewayService:
     registry = office()
     # A generous budget unless the test is about the budget.
     budget = budget or RateBudget("etsy:app", per_second=1000, per_day=100_000)
     catalog = replace(real_catalog(registry), rate_budgets={budget.key: budget})
+    if timeout is not None:
+        actions = {n: replace(d, timeout=timeout) for n, d in catalog.actions.items()}
+        catalog = replace(catalog, actions=actions)
     world = World()
     return ActionGatewayService(
         GatewayParts(
@@ -534,11 +538,81 @@ async def test_deferred__a_resubmission_by_an_actor_who_lost_the_permission__den
     service = gateway(channel, clock, guards(clock), store=store)
     await service.submit(ask())
     request = ask(actor=ActorRef(ActorKind.AUTOMATION, "no-such-automation"))
+    clock.now += timedelta(seconds=90)
 
     # The same key from another actor: the claim finds the deferred row and every check runs.
     result = await service.submit(request)
 
     assert result.outcome is ActionOutcome.DENIED
+
+
+@pytest.mark.ac("AC-5.15.3")
+async def test_deferred__resubmitted_before_retry_at__deferred_again_without_a_call() -> None:
+    clock = Clock()
+    channel = Scripted(clock, script=[MarketplaceRateLimitedError("429", retry_after_seconds=300)])
+    service = gateway(channel, clock, guards(clock))
+
+    first = await service.submit(ask())
+    clock.now += timedelta(seconds=299)
+    early = await service.submit(ask())
+    clock.now += timedelta(seconds=1)
+    due = await service.submit(ask())
+
+    assert early.outcome is ActionOutcome.DEFERRED
+    assert early.retry_at == first.retry_at == START + timedelta(seconds=300)
+    assert due.outcome is ActionOutcome.SUCCEEDED
+    assert len(channel.calls) == 2  # the 429 and the call after Retry-After, nothing between
+
+
+@pytest.mark.ac("AC-5.15.4")
+async def test_a_write_past_its_timeout__failed_and_its_slot_freed() -> None:
+    """The execution is bounded by the action's timeout, so the slot's lease (timeout plus a
+    margin) always outlives the call: no other write can take it over while this one runs."""
+    clock = Clock()
+    stuck = Scripted(clock, rest={"listing_id": 1}, hold=anyio.Event())
+    shared = guards(clock)
+    store = MemoryActionStore()
+    service = gateway(stuck, clock, shared, store=store, timeout=timedelta(milliseconds=50))
+
+    timed_out = await service.submit(write("inventory:1"))
+    stuck.hold = None
+    after = await service.submit(write("inventory:2"))
+
+    assert (timed_out.outcome, timed_out.error_code) == (ActionOutcome.FAILED, "TimeoutError")
+    assert after.outcome is ActionOutcome.SUCCEEDED
+
+
+async def test_an_unexpected_local_error__failed_once_and_not_a_breaker_failure() -> None:
+    clock = Clock()
+    channel = Scripted(clock, script=[KeyError("bug")] * 6)
+    service = gateway(channel, clock, guards(clock))
+
+    for n in range(6):
+        result = await service.submit(ask(key=f"receipts:{n}"))
+        assert (result.outcome, result.attempts) == (ActionOutcome.FAILED, 1)
+    healthy = await service.submit(ask(key="receipts:ok"))
+
+    assert clock.slept == []
+    assert healthy.outcome is ActionOutcome.SUCCEEDED  # a bug does not open the breaker
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        MarketplaceUnavailableError("no answer"),
+        ConnectionError("reset"),
+        TimeoutError(),
+        MarketplaceUnavailableError("bad gateway", status=502),
+    ],
+)
+async def test_transport_failures_and_5xx__retried_for_reads(error: Exception) -> None:
+    clock = Clock()
+    channel = Scripted(clock, script=[error])
+    service = gateway(channel, clock, guards(clock))
+
+    result = await service.submit(ask())
+
+    assert (result.outcome, result.attempts) == (ActionOutcome.SUCCEEDED, 2)
 
 
 def test_gateway__refuses_guards_without_a_budget_for_an_action() -> None:
