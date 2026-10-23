@@ -21,6 +21,7 @@ from htco_application.marketplace import (
     ShippingAddress,
 )
 from htco_application.shop_integrations import ShopIntegration
+from htco_domain.orders import OrderState
 from htco_persistence.database import Database
 from htco_persistence.etsy_connect import PostgresShopConnector
 from htco_persistence.etsy_orders import PostgresOrderStore
@@ -163,7 +164,8 @@ async def test_load__round_trip_with_and_without_buyer_data(database: Database) 
         integration.shop_id, integration.etsy_shop_id, since=None, buyer_data=False
     )
 
-    assert full == original
+    # The store adds what its state machine recorded (slice 5.6); everything else round-trips.
+    assert full == replace(original, stored_state=OrderState.AWAITING_SHIPMENT)
     assert bare.buyer_name is None
     assert bare.buyer_display_name is None
     assert bare.shipping_address is None
