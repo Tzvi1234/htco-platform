@@ -357,11 +357,11 @@ async def test_ac_6_4_4_mfa_changes_and_shop_connections_notify_the_owners() -> 
 async def test_a_failing_notice_never_blocks_the_action() -> None:
     class Broken(NoticeStore):
         @override
-        def add(self, message: OutboxMessage, *, now: datetime) -> uuid.UUID:  # noqa: ARG002
+        def add(self, message: OutboxMessage, *, now: datetime) -> uuid.UUID:
             raise ConnectionError("down")
 
         @override
-        def earlier_agents(self, user_id: uuid.UUID, *, before: uuid.UUID) -> frozenset[str | None]:  # noqa: ARG002
+        def earlier_agents(self, user_id: uuid.UUID, *, before: uuid.UUID) -> frozenset[str | None]:
             raise ConnectionError("down")
 
     notices = SecurityNotices(Broken(frozenset({"x"})), clock=lambda: NOW)
