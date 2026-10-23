@@ -142,9 +142,21 @@ def plan_ingest(
     shop_id: uuid.UUID,
 ) -> IngestPlan:
     digest = facts_hash(receipt)
-    unchanged = stored is not None and (
-        stored.etsy_updated_at > receipt.updated_at
-        or (stored.etsy_updated_at == receipt.updated_at and stored.receipt_sha256 == digest)
+    # A delivery is announced by the event, not the receipt (Etsy's copy can be identical to
+    # the stored one): it still moves a shipped order on (Codex review of #72).
+    newly_delivered = (
+        stored is not None
+        and receipt.receipt_id in context.delivered
+        and stored.order_state is OrderState.SHIPPED
+        and stored.etsy_updated_at <= receipt.updated_at
+    )
+    unchanged = (
+        stored is not None
+        and not newly_delivered
+        and (
+            stored.etsy_updated_at > receipt.updated_at
+            or (stored.etsy_updated_at == receipt.updated_at and stored.receipt_sha256 == digest)
+        )
     )
     if unchanged:
         assert stored is not None  # noqa: S101 - narrowed above
