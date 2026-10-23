@@ -55,6 +55,11 @@ Recorded payloads: `tests/fixtures/etsy/webhooks/events.json` (Etsy's documented
 | AC-5.5.3 | `test_budget__the_pilots_daily_calls_stay_inside_the_app_budget`; `test_budget__the_gateways_limiter_enforces_it` |
 | AC-5.5.4 | `test_drifts__status_items_and_shipments_with_both_values`; `test_drifts__a_matching_order_has_none`; `test_drifts__missing_only_once_older_than_the_grace`; `test_drift_event__orders_drift_detected_with_no_buyer_data`; `test_reconcile__a_drift_is_recorded_once_with_its_event`; `test_a_missing_order__one_drift_and_one_event_however_often_reconciled` and `test_a_status_difference__recorded_with_both_values` (Postgres) |
 | AC-5.5.5 | `test_a_stale_read__asks_the_queue_and_runs_nothing_here`; `test_the_manual_sync__asks_the_queue_forced_and_is_audited`; `test_main__order_sync_runs_in_the_api_only_as_the_fallback` (in effect once `HTCO_ORDER_SYNC_IN_API` is off at activation) |
+| AC-5.6.1 | `test_order__another_organizations_shop__not_found`; `test_order__a_shop_not_granted__not_found`; `test_one_order__unknown__404`; `test_one_order__a_shop_not_granted__404`; `test_one_order__another_shop_id__404`; the list's `test_operations_without_a_grant__404` and `test_every_view__unknown_shop__404` |
+| AC-5.6.2 | `test_order__viewer__no_buyer_name_or_tracking`; `test_one_order__viewer__no_buyer_name_tracking_or_note`; the list's `test_orders__roles_without_buyer_contact__no_name_or_tracking` |
+| AC-5.6.3 | `test_every_answer__says_when_the_history_last_synced`; `test_every_answer__has_last_synced_at` (orders, overview, stats); `test_one_order__with_its_timeline_and_sources` |
+| AC-5.6.4 | `test_orders__the_stored_order_state_wins_over_the_receipts_flags`; `test_orders__a_stored_refund__never_counted_as_a_sale_on_home`; `test_overview__complete_store__sales_from_the_store_with_no_receipt_call`; `test_overview__from_the_store__says_so_and_reads_no_receipts`; `test_one_order__its_stored_state_and_its_transitions_oldest_first` and `test_the_window__every_stored_order_carries_its_state` (Postgres); one vocabulary: `tests/application/test_order_vocabulary.py` |
+| AC-5.6.5 | `test_order__from_the_store_with_its_timeline_in_causal_order`; `test_one_order__with_its_timeline_and_sources`; `test_one_order__its_stored_state_and_its_transitions_oldest_first` (Postgres) |
 
 ## Verification
 

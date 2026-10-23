@@ -4,6 +4,8 @@
 sales of today, the last 7 and 30 days (in the caller's time zone, `utc_offset_minutes`).
 `GET /v1/shops/{shop_id}/orders`: the Orders screen, newest first, for a period (`period`: 30
 days by default, 90 days, 12 months or all time).
+`GET /v1/shops/{shop_id}/orders/{order_id}`: one order with its status timeline from the stored
+history (slice 5.6); an order not stored yet comes from the live 30-day read, with no timeline.
 `GET /v1/shops/{shop_id}/listings`: the Products screen, active listings with images.
 `GET /v1/shops/{shop_id}/reviews`: the newest reviews and the spread of stars.
 `GET /v1/shops/{shop_id}/shipping`: shipping profiles, return policies, production partners.
@@ -26,7 +28,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from pydantic import BaseModel, WithJsonSchema
 
 from htco_api.auth import CurrentAuth
@@ -50,12 +52,15 @@ from htco_application.marketplace import (
     ShopReview,
 )
 from htco_application.order_history import HistoryState, HistorySync, request_order_sync
+from htco_application.order_ingest import IngestSource
 from htco_application.shop_capabilities import ShopNotConnectedError
 from htco_application.shop_dashboard import (
+    ORDER_VIEW_STATES,
     DataSource,
     Freshness,
     Money,
     OrderFilter,
+    OrderNotFoundError,
     OrderPeriod,
     OrderViewState,
     ShopDashboard,
@@ -63,6 +68,7 @@ from htco_application.shop_dashboard import (
     ShopDataUnavailableError,
 )
 from htco_application.shops import ShopAccessDeniedError, ShopNotFoundError
+from htco_domain.orders import OrderState as StoreOrderState
 
 SHOP_DATA_OFF = ProblemType(
     "shop-data-unavailable",
@@ -191,6 +197,12 @@ class ShopOverviewView(FreshnessView):
     profile: ShopProfileView
     # Null when the orders could not be read (the profile still shows).
     sales: SalesView | None
+    # Where the sales come from: `htco_store` once the stored history is complete.
+    sales_source: _Source | None = None
+    # The stored order history; null when it is not set up on this server.
+    sync: SyncView | None = None
+    # When the stored history last synced; null while it is not set up or has not synced.
+    last_synced_at: datetime | None = None
 
 
 class OrderItemView(BaseModel):
@@ -264,6 +276,30 @@ class OrdersView(FreshnessView):
     cap: int
     # The stored order history; null when it is not set up on this server.
     sync: SyncView | None = None
+    # When the stored history last synced; null while it is not set up or has not synced.
+    last_synced_at: datetime | None = None
+
+
+class OrderStatusChangeView(BaseModel):
+    # The order store's states (FR-ORD-03): unpaid, paid, ingested, awaiting_shipment, shipped,
+    # delivered, cancelled, refunded; `from_state` null for the first one.
+    from_state: StoreOrderState | None
+    to_state: StoreOrderState
+    # The Orders screen's state for `to_state`.
+    state: OrderViewState
+    # What recorded it: webhook, reconciliation, backfill or sync.
+    source: IngestSource
+    observed_at: datetime
+
+
+class OrderDetailView(FreshnessView):
+    shop_id: uuid.UUID
+    order: OrderView
+    # Oldest first; empty for an order read live (not stored yet).
+    timeline: list[OrderStatusChangeView]
+    buyer_details: bool
+    sync: SyncView | None = None
+    last_synced_at: datetime | None = None
 
 
 class ListingView(BaseModel):
@@ -421,6 +457,8 @@ class ShopStatsView(FreshnessView):
     sales: AllTimeSalesView | None
     # The stored order history; null when it is not set up on this server.
     sync: SyncView | None = None
+    # When the stored history last synced; null while it is not set up or has not synced.
+    last_synced_at: datetime | None = None
 
 
 # --- Mapping -----------------------------------------------------------------------------------
@@ -446,6 +484,10 @@ def _sync(sync: HistorySync | None) -> SyncView | None:
     )
 
 
+def _synced_at(sync: HistorySync | None) -> datetime | None:
+    return None if sync is None else sync.last_synced_at
+
+
 def _marketplace_money(money: MarketplaceMoney) -> MoneyView:
     return MoneyView(amount=money.as_decimal(), currency=money.currency_code)
 
@@ -457,6 +499,9 @@ def _overview(found: dashboards.ShopOverview) -> ShopOverviewView:
         shop_id=found.shop_id,
         profile=_profile(found.profile),
         sales=None if sales is None else _sales(sales),
+        sales_source=found.sales_source,
+        sync=_sync(found.sync),
+        last_synced_at=_synced_at(found.sync),
     )
 
 
@@ -537,6 +582,7 @@ def _stats(found: dashboards.ShopStats) -> ShopStatsView:
         profile=_profile(found.profile),
         sales=None if found.sales is None else _all_time(found.sales),
         sync=_sync(found.sync),
+        last_synced_at=_synced_at(found.sync),
     )
 
 
@@ -628,6 +674,28 @@ def _orders(page: dashboards.OrdersPage) -> OrdersView:
         partial=page.partial,
         cap=page.cap,
         sync=_sync(page.sync),
+        last_synced_at=_synced_at(page.sync),
+    )
+
+
+def _detail(found: dashboards.OrderDetail) -> OrderDetailView:
+    return OrderDetailView(
+        **_fresh(found.freshness),
+        shop_id=found.shop_id,
+        order=_order(found.order),
+        timeline=[
+            OrderStatusChangeView(
+                from_state=c.from_state,
+                to_state=c.to_state,
+                state=ORDER_VIEW_STATES[c.to_state],
+                source=c.source,
+                observed_at=c.observed_at,
+            )
+            for c in found.timeline
+        ],
+        buyer_details=found.buyer_details,
+        sync=_sync(found.sync),
+        last_synced_at=_synced_at(found.sync),
     )
 
 
@@ -774,7 +842,7 @@ def shop_data_router(*, clock: Callable[[], datetime]) -> APIRouter:
 
     @router.get(
         "/overview",
-        summary="The shop's profile and sales, live from the marketplace",
+        summary="The shop's profile and sales: the stored orders once synced, live until then",
         responses=problem_responses(_SHOP_ERRORS),
     )
     async def get_shop_overview(
@@ -797,7 +865,7 @@ def shop_data_router(*, clock: Callable[[], datetime]) -> APIRouter:
 
     @router.get(
         "/orders",
-        summary="The shop's orders of a period, live from the marketplace",
+        summary="The shop's orders of a period: the stored orders once synced, live until then",
         responses=problem_responses(_SHOP_ERRORS),
     )
     async def list_shop_orders(  # noqa: PLR0913, PLR0917 - FastAPI passes one parameter per query filter
@@ -880,7 +948,7 @@ def shop_data_router(*, clock: Callable[[], datetime]) -> APIRouter:
 
     @router.get(
         "/stats",
-        summary="The shop's statistics since it opened, live from the marketplace",
+        summary="The shop's statistics since it opened: stored orders once synced, else live",
         responses=problem_responses(_SHOP_ERRORS),
     )
     async def get_shop_stats(
@@ -903,8 +971,37 @@ def shop_data_router(*, clock: Callable[[], datetime]) -> APIRouter:
         response.headers["Cache-Control"] = _PRIVATE
         return _stats(found)
 
+    _add_order_route(router, clock=clock)
     _add_sync_route(router, clock=clock)
     return router
+
+
+def _add_order_route(router: APIRouter, *, clock: Callable[[], datetime]) -> None:
+    """One order with its status timeline (slice 5.6)."""
+
+    @router.get(
+        "/orders/{order_id}",
+        summary="One order of the shop with its status timeline",
+        responses=problem_responses(_SHOP_ERRORS),
+    )
+    async def get_shop_order(
+        shop_id: uuid.UUID,
+        order_id: Annotated[int, Path(ge=1)],
+        response: Response,
+        auth: CurrentAuth,
+        dashboard: _Dashboard,
+    ) -> OrderDetailView:
+        """The order as on the Orders screen, plus every recorded state change with its source,
+        oldest first. From the stored history; an order not stored yet comes from the live
+        30-day read with an empty timeline. Buyer details as on the list; never cached."""
+        try:
+            found = await dashboards.shop_order(dashboard, auth, shop_id, order_id, now=clock())
+        except OrderNotFoundError:
+            raise ProblemError(NOT_FOUND) from None
+        except _KNOWN as error:
+            raise _problem_of(error) from None
+        response.headers["Cache-Control"] = "no-store"
+        return _detail(found)
 
 
 def _add_sync_route(router: APIRouter, *, clock: Callable[[], datetime]) -> None:

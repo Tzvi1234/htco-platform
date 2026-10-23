@@ -38,6 +38,11 @@ Every paid Etsy order must reach HTCO exactly once, quickly, whether or not Etsy
 | AC-5.5.3 | The daily Etsy call count for all connected shops (backfill included) stays inside the app's rate-limit budget, computed in a test from the schedule and enforced by the 5.15 limiter. |
 | AC-5.5.4 | A difference between a stored order and Etsy (status, items or shipments) is recorded in `sync_drifts` with both values and emits `orders.drift_detected.v1`; from Phase 6 it opens an incident (FR-ORD-09). |
 | AC-5.5.5 | No order sync runs in the API process any more; a dashboard read on a stale shop enqueues one job, and returns at once with the store's data and its age. |
+| AC-5.6.1 | Cross-tenant and non-granted shop requests return 404, for the list and the order. |
+| AC-5.6.2 | Viewer responses contain no buyer contact fields. |
+| AC-5.6.3 | Every response includes `last_synced_at` for the shop. |
+| AC-5.6.4 | Orders, Home and Statistics read the store once it is complete, with no Etsy receipt call; the screen's state is the stored `order_state`. |
+| AC-5.6.5 | The order's timeline lists its stored transitions in causal order, each with its source. |
 
 ## Etsy Order Intake (slice 5.4)
 
@@ -46,6 +51,10 @@ The `etsy-order-intake` automation's handler runs on the worker's durable engine
 ## Reconciliation (slice 5.5)
 
 Reconciliation runs **twice a day** once its tick is named (the owner's decision of 2026-10-24: webhooks are the primary path for new orders; until they are registered, the API's on-read sync behind `HTCO_ORDER_SYNC_IN_API` keeps the dashboard fresh). The hourly tick `orders.reconciliation` enqueues, at each time of `HTCO_RECONCILIATION_SCHEDULE` (local times in `HTCO_RECONCILIATION_TZ`, default 06:00 and 18:00 Asia/Jerusalem), one `etsy.order_sync` job per connected shop for Etsy Order Intake. Every run re-reads each receipt changed in the last 30 days (`min_last_modified`), compares it with the store, records each difference in `app.sync_drifts` with both values, publishes `orders.drift_detected.v1` and ingests it. The day's last run is the full sweep: it also reads every paid, unshipped receipt with no period limit (`was_paid=true`, `was_shipped=false`, the Shipping screen's open orders) and compares Etsy's receipt count with the store's. Each run's end is kept in `app.sync_cursors` (the shop's freshness).
+
+## Orders API on the stored order (slice 5.6)
+
+The existing endpoints moved onto the store; no second endpoint was built (architecture audit P0-1). Once the shop's backfill is complete, `GET /v1/shops/{shop_id}/orders`, `overview`, `stats` and the Shipping screen (which reads the orders) answer from `app.etsy_orders`, with the stored `order_state` as the screen's state. One order, `GET /v1/shops/{shop_id}/orders/{order_id}`, adds its status timeline from `app.order_status_events`. Every answer has `last_synced_at`. The live read stays as the fallback. See [dashboard data](../etsy-integration/dashboard-data.md).
 
 ## Out of scope (this slice)
 

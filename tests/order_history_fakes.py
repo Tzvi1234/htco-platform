@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from htco_application.marketplace import OrderReceipt, display_name
-from htco_application.order_history import SyncState
+from htco_application.order_history import OrderStatusChange, SyncState
 from htco_application.order_ingest import BACKFILL, SYNC, IngestContext
 from htco_application.shop_integrations import ShopIntegration
 
@@ -39,6 +39,8 @@ class MemoryOrderStore:
     pages_saved: int = 0
     # Every save's ingest context (who wrote the page, slice 5.4).
     contexts: list[IngestContext] = field(default_factory=list)
+    # Recorded transitions per order (slice 5.6), in the order they were recorded.
+    timelines: dict[tuple[uuid.UUID, int], list[OrderStatusChange]] = field(default_factory=dict)
 
     async def state(self, shop_id: uuid.UUID) -> SyncState | None:
         found = self.states.get(shop_id)
@@ -136,6 +138,16 @@ class MemoryOrderStore:
             )
             for r in found
         )
+
+    async def load_order(
+        self, shop_id: uuid.UUID, etsy_shop_id: int, receipt_id: int, *, buyer_data: bool
+    ) -> OrderReceipt | None:
+        every = await self.load(shop_id, etsy_shop_id, since=None, buyer_data=buyer_data)
+        return next((r for r in every if r.receipt_id == receipt_id), None)
+
+    async def timeline(self, shop_id: uuid.UUID, receipt_id: int) -> tuple[OrderStatusChange, ...]:
+        found = self.timelines.get((shop_id, receipt_id), [])
+        return tuple(sorted(found, key=lambda c: c.observed_at))
 
     @asynccontextmanager
     async def lock(self, shop_id: uuid.UUID) -> AsyncIterator[bool]:
