@@ -126,8 +126,8 @@ def detect_drifts(
             return ()
         return (Drift(DriftKind.MISSING, None, {"status": seen.status}),)
     facts = stored.facts
-    if facts is None:
-        return ()
+    if facts is None or stored.etsy_updated_at > receipt.updated_at:
+        return ()  # nothing stored to compare, or HTCO is already ahead of this copy
     drifts = []
     if (facts.status, facts.is_shipped) != (seen.status, seen.is_shipped):
         drifts.append(

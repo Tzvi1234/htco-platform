@@ -78,7 +78,7 @@ from htco_application.order_intake import (
     RECONCILIATION_TICK,
     EngineSyncTrigger,
     OrderIntake,
-    due_reconciliation,
+    due_reconciliations,
     enqueue_reconciliations,
 )
 from htco_application.shop_capabilities import CapabilityChecks
@@ -328,11 +328,12 @@ def reconciliation_handlers(  # noqa: PLR0913 - the tick and its collaborators
 
     def tick() -> int:
         now = clock()
-        due = due_reconciliation(times, now=now, tz=tz)
-        if due is None:
-            return 0
-        reason, slot = due
-        return enqueue_reconciliations(directory, queue, reason=reason, slot=slot, now=now)
+        return sum(
+            enqueue_reconciliations(
+                directory, queue, reason=run.reason, slot=run.slot, now=now, run_at=run.at
+            )
+            for run in due_reconciliations(times, now=now, tz=tz)
+        )
 
     return {RECONCILIATION_TICK.kind: _in_thread(tick, "orders.reconciliations_enqueued")}
 

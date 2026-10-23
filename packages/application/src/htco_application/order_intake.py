@@ -483,26 +483,42 @@ def parse_reconciliation_times(text: str) -> tuple[time, ...]:
     return tuple(sorted(times))
 
 
-def due_reconciliation(
+@dataclass(frozen=True)
+class DueRun:
+    reason: str  # RECONCILE or SWEEP
+    slot: str  # the local slot, for example "2026-10-24T06:00+03:00": one run per shop and slot
+    at: datetime  # when it runs (UTC)
+
+
+def due_reconciliations(
     times: tuple[time, ...], *, now: datetime, tz: tzinfo
-) -> tuple[str, str] | None:
-    """The run whose local time (in `tz`, so 06:00 stays 06:00 across a DST change) falls in
-    the tick's hour, and its slot key: the day's last time is the full sweep, any earlier one a
-    reconcile. None when no run is due in this hour."""
+) -> tuple[DueRun, ...]:
+    """Every run whose local time (in `tz`, so 06:00 stays 06:00 across a DST change) falls in
+    the tick's hour, in order: the day's last time is the full sweep, any earlier one a
+    reconcile. Each runs at its own time, not the tick's (Codex review of #75)."""
     hour = now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
     end = hour + RECONCILIATION_TICK.every
     days = {hour.astimezone(tz).date(), (end - timedelta(microseconds=1)).astimezone(tz).date()}
+    due = []
     for day in sorted(days):
         for at in times:
             moment = datetime.combine(day, at, tzinfo=tz)
             if hour <= moment.astimezone(UTC) < end:
                 reason = SWEEP if at == times[-1] else RECONCILE
-                return reason, moment.isoformat(timespec="minutes")
-    return None
+                due.append(
+                    DueRun(reason, moment.isoformat(timespec="minutes"), moment.astimezone(UTC))
+                )
+    return tuple(due)
 
 
-def enqueue_reconciliations(
-    shops: ConnectedShops, queue: JobQueue, *, reason: str, slot: str, now: datetime
+def enqueue_reconciliations(  # noqa: PLR0913 - the shops, the queue and the run
+    shops: ConnectedShops,
+    queue: JobQueue,
+    *,
+    reason: str,
+    slot: str,
+    now: datetime,
+    run_at: datetime,
 ) -> int:
     """One run's fan-out: one `etsy.order_sync` job per connected shop and slot, under the
     shop's orders lock (`shop:{shop_id}:orders`)."""
@@ -516,6 +532,7 @@ def enqueue_reconciliations(
                 organization_id=shop.organization_id,
                 shop_id=shop.shop_id,
                 lock_key=f"shop:{shop.shop_id}:orders",
+                run_at=run_at,
                 correlation_id=f"order-{reason}:{shop.shop_id}:{slot}"[:200],
             ),
             now=now,
