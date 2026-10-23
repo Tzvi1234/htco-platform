@@ -210,9 +210,9 @@ class SlaPolicy:
         )
 
 
-# Generous until the owner agrees the windows from real data (the Phase 6 owner prerequisite):
-# ten business days from payment to the first tracking.
-DEFAULT_WINDOW_DAYS = 10
+# The owner's default (decision of 2026-10-23, replacing the first generous ten): seven business
+# days from payment to the first tracking, until a policy row names another window.
+DEFAULT_WINDOW_DAYS = 7
 
 
 def default_policy() -> SlaPolicy:
