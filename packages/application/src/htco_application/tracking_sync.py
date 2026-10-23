@@ -26,6 +26,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from functools import partial
 from typing import Any, Protocol
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
@@ -104,7 +105,13 @@ class TrackingStore(Protocol):
         ...
 
     def untracked_shipped(self, shop_id: uuid.UUID, *, limit: int) -> tuple[int, ...]:
-        """Receipts Etsy marks shipped that have no tracking event yet, oldest first."""
+        """Receipts Etsy marks shipped that were not read since their last change on Etsy,
+        oldest change first: a receipt without a code, or already recorded, is not read again
+        until Etsy changes it (a second parcel), so it never pins the batch."""
+        ...
+
+    def mark_checked(self, shop_id: uuid.UUID, receipt_id: int, *, now: datetime) -> None:
+        """The receipt was read at its stored Etsy version."""
         ...
 
 
@@ -176,7 +183,8 @@ class TrackingRecorder:
             shop_id=shop_id,
             receipt_id=receipt_id,
             carrier=carrier_of(carrier_name).value,
-            carrier_name=carrier_name[:64],
+            # Etsy may omit the carrier (Codex review of #79).
+            carrier_name=carrier_name.strip()[:64] or "other",
             fingerprint=tracking_fingerprint(shop_id, normalized),
             last4=normalized[-4:],
             source=source,
@@ -245,6 +253,7 @@ class TrackingSync:
         for receipt in receipts:
             observed = await reader.get_order_receipt(receipt)
             recorded += await self._shipments(ctx, shop_id, observed, via)
+            await self.offload(partial(self.store.mark_checked, shop_id, receipt, now=self.clock()))
         return Completed({"receipts": len(receipts), "recorded": recorded, "via": via.value})
 
     async def _shipments(
@@ -292,7 +301,11 @@ class EngineTrackingSync:
             automation_id=TRACKING_SYNC,
             trigger=TriggerKind.EVENT,
             actor=WEBHOOK_ACTOR,
-            idempotency_key=f"tracking:{shop.shop_id}:{receipt_id}:{event_type}",
+            # One run per webhook delivery: a later parcel announced for the same receipt is a
+            # new observation (Codex review of #79); a replayed delivery is not.
+            idempotency_key=f"tracking:{shop.shop_id}:{receipt_id}:{event_type}:{correlation_id}"[
+                :200
+            ],
             payload={"receipt_id": receipt_id, "event_type": event_type},
             correlation_id=correlation_id,
             organization_id=shop.organization_id,

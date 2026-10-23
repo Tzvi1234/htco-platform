@@ -16,11 +16,12 @@
 Migration `20261025100000_fulfillment_incidents.sql`:
 
 - `app.tracking_events`: `(shop_id, receipt_id, fingerprint)` unique. The fingerprint is SHA-256 of `htco-tracking:v1:{shop_id}:{normalised code}`; the row keeps the carrier (ours and Etsy's name), the last four characters, `source` (`etsy`, `autova_manual`, `autova_browser`, `autova_email`), `observed_via` (`webhook`, `schedule`, `relay`), `first_observed_at` and Etsy's `notified_at`. The full code is not here: it is buyer data, kept by the order history in `etsy_order_buyers.shipments` (ADR-0018).
-- `app.sla_policies`: one per organization, shop, supplier and shipping method (`unique nulls not distinct`), `window_days` 1–90, `unit` (`calendar_days`, `business_days`), the calendar's time zone, weekend days and holidays. No row: the built-in default (10 business days, Saturday and Sunday off, UTC).
+- `app.tracking_checks`: the schedule's cursor, one row per receipt with the Etsy version last read. A receipt is due again only when Etsy changes it, so receipts without a code never pin the batch and a second parcel is read (Codex review of #79).
+- `app.sla_policies`: one per organization, shop, supplier and shipping method (`unique nulls not distinct`), `window_days` 1–90, `unit` (`calendar_days`, `business_days`), the calendar's time zone, weekend days and holidays. No row: the built-in default (10 business days, Saturday and Sunday off, UTC). Supplier and shipping-method scopes are refused by a check constraint until orders carry those values (Phase 13); the domain already selects by them.
 
 ## Flows
 
-**Webhook.** `order.shipped` → the webhook job starts Etsy Order Intake *and* Tracking Synchronization (`tracking:{shop}:{receipt}:order.shipped`) → the handler reads the receipt through the gateway → each shipment with a code → `record_tracking` (insert or the existing row) → on a new row, `fulfillment.tracking_detected.v1` in the same transaction → the order's `tracking_missing` incident resolves on that evidence.
+**Webhook.** `order.shipped` → the webhook job starts Etsy Order Intake *and* Tracking Synchronization (`tracking:{shop}:{receipt}:order.shipped:{webhook id}`: one run per delivery) → the handler reads the receipt through the gateway → each shipment with a code → `record_tracking` (insert or the existing row) → on a new row, `fulfillment.tracking_detected.v1` in the same transaction → the order's `tracking_missing` incident resolves on that evidence.
 
 **Schedule.** `fulfillment.inspect` (every 15 minutes) → one `fulfillment.inspect_shop` job per connected shop and period → it triggers `tracking-sync` (`mode = schedule`: up to 25 stored orders Etsy marks shipped without a tracking event) and `incident-detection-escalation` (`mode = inspect`), each keyed `{automation}:{shop}:{period}`.
 

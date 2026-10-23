@@ -49,6 +49,20 @@ create table app.tracking_events (
 );
 create index tracking_events_organization_id_idx on app.tracking_events (organization_id);
 
+-- The schedule's cursor: each shipped receipt is read once per Etsy version, so receipts without
+-- a code never pin the batch and a later parcel (a newer version) is read again.
+create table app.tracking_checks (
+  organization_id uuid not null,
+  shop_id uuid not null,
+  receipt_id bigint not null,
+  etsy_updated_at timestamptz not null,
+  checked_at timestamptz not null,
+  primary key (shop_id, receipt_id),
+  constraint tracking_checks_order_fkey foreign key (shop_id, receipt_id)
+    references app.etsy_orders (shop_id, receipt_id) on delete cascade
+);
+create index tracking_checks_organization_id_idx on app.tracking_checks (organization_id);
+
 create table app.sla_policies (
   id uuid primary key,
   organization_id uuid not null references app.organizations (id) on delete cascade,
@@ -71,6 +85,9 @@ create table app.sla_policies (
   updated_at timestamptz not null default now(),
   constraint sla_policies_shop_fkey foreign key (shop_id, organization_id)
     references app.shops (id, organization_id) on delete cascade,
+  -- Orders carry no supplier or shipping method yet (Phase 13): a policy scoped to them would be
+  -- ignored silently (Codex review of #79), so none is accepted until they do.
+  constraint sla_policies_unscoped_check check (supplier is null and shipping_method is null),
   constraint sla_policies_scope_key unique nulls not distinct
     (organization_id, shop_id, supplier, shipping_method)
 );
@@ -135,8 +152,9 @@ language sql immutable set search_path = '' as $$
 $$;
 revoke all on function private.incident_edge_allowed(text, text) from public;
 
+-- Security definer: the worker has no access to the private schema's helpers.
 create function private.check_incident_state() returns trigger
-language plpgsql set search_path = '' as $$
+language plpgsql security definer set search_path = '' as $$
 begin
   if new.state = old.state then
     return new;
@@ -199,7 +217,7 @@ create index incident_events_incident_idx on app.incident_events (incident_id, o
 create index incident_events_organization_id_idx on app.incident_events (organization_id);
 
 create function private.check_incident_event() returns trigger
-language plpgsql set search_path = '' as $$
+language plpgsql security definer set search_path = '' as $$
 begin
   if new.from_state is null then
     if new.to_state <> 'detected' then
@@ -229,6 +247,12 @@ create trigger incident_events_append_only before update or delete on app.incide
   execute function private.reject_incident_event_change();
 
 alter table app.tracking_events enable row level security;
+alter table app.tracking_checks enable row level security;
+revoke all on app.tracking_checks from public, anon, authenticated, service_role;
+grant select, insert, update on app.tracking_checks to htco_worker;
+create policy tracking_checks_worker on app.tracking_checks for all to htco_worker
+  using (organization_id = (select private.worker_organization_id()))
+  with check (organization_id = (select private.worker_organization_id()));
 alter table app.sla_policies enable row level security;
 alter table app.incidents enable row level security;
 alter table app.incident_events enable row level security;

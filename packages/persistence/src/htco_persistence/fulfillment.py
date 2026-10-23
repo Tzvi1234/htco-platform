@@ -80,8 +80,9 @@ class PostgresTrackingStore:
                 where o.shop_id = %s and o.is_shipped
                   and o.order_state in ('shipped', 'delivered')
                   and not exists (
-                    select 1 from app.tracking_events t
-                    where t.shop_id = o.shop_id and t.receipt_id = o.receipt_id
+                    select 1 from app.tracking_checks c
+                    where c.shop_id = o.shop_id and c.receipt_id = o.receipt_id
+                      and c.etsy_updated_at >= o.etsy_updated_at
                   )
                 order by o.etsy_updated_at, o.receipt_id
                 limit %s
@@ -89,6 +90,20 @@ class PostgresTrackingStore:
                 [shop_id, limit],
             ).fetchall()
         return tuple(int(r[0]) for r in rows)
+
+    def mark_checked(self, shop_id: uuid.UUID, receipt_id: int, *, now: datetime) -> None:
+        with self._database.connection() as connection, connection.transaction():
+            connection.execute(
+                """
+                insert into app.tracking_checks
+                  (organization_id, shop_id, receipt_id, etsy_updated_at, checked_at)
+                select o.organization_id, o.shop_id, o.receipt_id, o.etsy_updated_at, %s
+                from app.etsy_orders o where o.shop_id = %s and o.receipt_id = %s
+                on conflict (shop_id, receipt_id) do update
+                  set etsy_updated_at = excluded.etsy_updated_at, checked_at = excluded.checked_at
+                """,
+                [now, shop_id, receipt_id],
+            )
 
 
 def _policy(row: tuple[Any, ...]) -> SlaPolicy:

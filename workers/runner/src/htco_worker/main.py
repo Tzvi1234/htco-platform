@@ -131,10 +131,7 @@ from htco_platform.settings import ConfigurationError, load_settings
 from htco_platform.tracing import new_tracer_provider
 from htco_worker.health import serve_health
 from htco_worker.runner import JobHandler, Worker, WorkerConfig
-<<<<<<< HEAD
-=======
 from htco_worker.settings import SCHEDULES, WorkerSettings
->>>>>>> origin/main
 
 EXIT_CONFIGURATION_ERROR = 78
 # sysexits.h EX_TEMPFAIL: stopped before the current job finished; its lease brings it back.
@@ -330,7 +327,6 @@ def intake_handlers(database: Database, vault: PostgresTokenVault) -> dict[str, 
     return {ORDER_INTAKE: OrderIntake(store=PostgresOrderStore(database), shops=vault, clock=_now)}
 
 
-<<<<<<< HEAD
 def fulfillment_handlers(
     database: Database, vault: PostgresTokenVault | None
 ) -> dict[str, Handler]:
@@ -380,7 +376,8 @@ def fulfillment_schedule_handlers(
         ),
         FULFILLMENT_SHOP_JOB: per_shop,
     }
-=======
+
+
 def reconciliation_handlers(  # noqa: PLR0913 - the tick and its collaborators
     enabled: tuple[str, ...],
     *,
@@ -406,7 +403,6 @@ def reconciliation_handlers(  # noqa: PLR0913 - the tick and its collaborators
         )
 
     return {RECONCILIATION_TICK.kind: _in_thread(tick, "orders.reconciliations_enqueued")}
->>>>>>> origin/main
 
 
 def order_sync_handlers(engine: DurableAutomationEngine) -> dict[str, JobHandler]:

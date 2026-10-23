@@ -33,6 +33,13 @@ Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gatew
 - Webhooks `order.shipped`, `order.delivered` and `inventory.out_of_stock` from slice 5.3 feed this phase's automations.
 - Where tracking upload is blocked for an Israeli key (A-04), the order moves to a Human task, or to a POD partner's tracking (Phase 13, browser row only if scoped). Phase 6 never uses a browser.
 
+## Architecture audit follow-ups (2026-10-23 review)
+
+- **One alert model, one path (P2-2).** Incidents (6.3), alerts (6.9) and security notices all reach people through the one notification path of 6.4: a `NotificationRequest` (in the worker) or a `notifications.requested.v1` / `incidents.opened.v1` event through the outbox, then `notifications` rows and `email.send` messages. 6.9 adds no alert table of its own. Phase 10's monitors later emit into the same path. The incident's `incident_events` is that aggregate's own state history (like `automation_execution_events`), not a second activity trail; the audit and `order_status_events` stay as they are.
+- **Status vocabulary (P2-2).** `IncidentState` maps to `htco_domain.status.StatusKind`, covered by the status tests.
+- **Gateway bypass (P1-1).** Before any write tool lands (6.6, 6.8), an architecture test asserts that every Etsy write goes through the Action Gateway, with a documented allow-list of the existing read bypasses. Phase 6's own Etsy reads (Tracking Synchronization) already go through `etsy.receipts.read`.
+- **Phase 6 → 7 direction (P1-4).** Phase 6 does not depend on Phase 7. The 6.10 relay keeps its own minimal relay item (owned by Phase 6); Phase 7's task store later **extends** it (a relay item becomes a kind of task), not the other way round. AC-6.7.5's "task for a person" is the relay item / Human-channel contract of 5.13 until then.
+
 ## Goal
 
 HTCO notices fulfillment problems before buyers do: when an order has no tracking after its realistic window, exactly one incident opens and the owner gets exactly one email; when tracking appears in Etsy, the incident closes itself on that evidence. All deterministic code, no AI: routine fulfillment processing is done by automations, not by an employee. Eitan, the Fulfillment Inspector, joins in [Phase 9](phase-09-router-advisor.md) to investigate the exceptions these automations raise.
