@@ -90,6 +90,4 @@ def test_receipt_facts__what_the_ingest_and_the_dashboard_both_read(
 
     facts = receipt_facts(found, delivered=delivered)
 
-    assert facts == OrderFacts(
-        status=status, is_paid=paid, is_shipped=shipped, delivered=delivered
-    )
+    assert facts == OrderFacts(status=status, is_paid=paid, is_shipped=shipped, delivered=delivered)

@@ -3,6 +3,8 @@ own retries and defers, and the Etsy adapter behind the API channel fails fast. 
 adapter's four attempts ran inside each of the gateway's three, up to 12 HTTP calls per read,
 and its 60 s wait on a 429 overrode the gateway's 5 s defer rule."""
 
+import base64
+import os
 import uuid
 from typing import Any
 
@@ -26,7 +28,7 @@ from tests.integrations.test_etsy_adapter import FakeTime, FakeTokens, Scripted,
 pytestmark = pytest.mark.anyio
 
 DATABASE = "postgresql://htco@db.invalid/htco"
-VAULT_KEY = "a" * 64
+VAULT_KEY = "k1:" + base64.b64encode(os.urandom(32)).decode()
 
 
 def _api_channel(transport: Scripted, time: FakeTime) -> EtsyApiChannel:
@@ -34,7 +36,7 @@ def _api_channel(transport: Scripted, time: FakeTime) -> EtsyApiChannel:
         new_async_http_client(
             tracer_provider=TracerProvider(), transport=httpx.MockTransport(transport)
         ),
-        credentials=EtsyCredentials(keystring="fakekeystring", shared_secret="fake-secret"),
+        credentials=EtsyCredentials(keystring="fakekeystring", shared_secret="fake-secret"),  # noqa: S106 - fake,
         access_tokens=FakeTokens(),
         config=gateway_etsy_config(daily_quota_floor=0),
         timekeeping=Timekeeping(now=time.now, monotonic=time.monotonic, sleep=time.sleep),
