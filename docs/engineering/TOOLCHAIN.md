@@ -32,7 +32,7 @@
 | HTTP client | httpx | Locked 0.28.1 | Created only through `htco_platform.http.new_async_http_client`: 10-second timeout, no redirects, trace propagation. Its INFO request lines are silenced because URLs can carry credentials. |
 | Logging | structlog | Locked 26.1.0 | JSON to stdout, one object per line, standard-library loggers rendered the same way; trace IDs join in slice 1.7 |
 | Tracing | OpenTelemetry API and SDK, `opentelemetry-instrumentation-httpx` transport wrappers | Locked 1.45.1 / 0.66b1 | No FastAPI instrumentation: our request middleware starts the server span itself, so incoming trace headers are never trusted. No exporter yet. |
-| Errors | sentry-sdk | Locked 2.71.0 | Isolated `sentry_sdk.Client` used through an isolation scope; no default or auto-enabled integrations; no local variables; `before_send` scrubbing |
+| Errors | sentry-sdk | Locked 2.71.0 | Isolated `sentry_sdk.Client` used through an isolation scope; no default or auto-enabled integrations; no local variables; `before_send` scrubbing, including every exception message not written by HTCO's own code (`htco_platform.scrubbing`, audit P1-5) |
 | Agent runtime | langgraph, langgraph-checkpoint, langgraph-checkpoint-postgres | Locked langgraph 1.2.14, langgraph-checkpoint 4.2.0 (langchain-core 1.6.7) | Only in `htco_agent_runtime`. Checkpoint 4.3.0 (store namespace validation) is inside the release-age window today and is taken before Phase 8 adds agent code. Strict msgpack, encrypted serializer; checkpoint tables created by a migration. |
 | Model providers | `anthropic`, `openai` official SDKs | | Only inside `htco_model_router` |
 | Email | `resend` | 2.49.x | Only inside `htco_integrations.email` |

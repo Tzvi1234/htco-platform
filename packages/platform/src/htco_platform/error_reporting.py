@@ -13,6 +13,8 @@ import sentry_sdk
 from sentry_sdk.transport import Transport
 from sentry_sdk.types import Event, Hint
 
+from htco_platform.scrubbing import safe_texts
+
 
 class ErrorReporter(Protocol):
     def report(
@@ -39,11 +41,24 @@ _SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _SCRUBBED_FIELDS = ("request", "user", "breadcrumbs")
 
 
-def scrub_event(event: Event, _hint: Hint) -> Event:
-    """Drop every event field that could carry personal data or secrets."""
+def scrub_event(event: Event, hint: Hint) -> Event:
+    """Drop every event field that could carry personal data or secrets, and replace each
+    exception's message by what it may say (`safe_exception_text`, audit P1-5)."""
     scrubbed = cast(dict[str, Any], dict(event))
     for name in _SCRUBBED_FIELDS:
         scrubbed.pop(name, None)
+    exc_info = hint.get("exc_info")
+    error = exc_info[1] if isinstance(exc_info, tuple) and len(exc_info) == 3 else None  # noqa: PLR2004
+    texts = safe_texts(error) if isinstance(error, BaseException) else {}
+    exceptions = scrubbed.get("exception")
+    if isinstance(exceptions, dict):
+        values = []
+        for value in exceptions.get("values") or []:
+            entry = dict(value)
+            if "value" in entry:
+                entry["value"] = texts.get(str(entry["value"]), str(entry.get("type") or "error"))
+            values.append(entry)
+        scrubbed["exception"] = {**exceptions, "values": values}
     return cast(Event, scrubbed)
 
 
