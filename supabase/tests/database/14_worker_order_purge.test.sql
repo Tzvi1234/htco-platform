@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_worker;
-select plan(9);
+select plan(10);
 
 insert into app.organizations (id, name) values
   ('9a000000-0000-0000-0000-000000000000', 'Organization P'),
@@ -49,20 +49,21 @@ select throws_ok(
   $$select buyer_name from app.etsy_order_buyers$$,
   '42501', null, 'the worker cannot read buyer names'
 );
-select is(
-  (with gone as (
-     delete from app.etsy_orders where shop_id = '9d000000-0000-0000-0000-000000000001' returning 1
-   ) select count(*)::integer from gone),
-  0, 'another organization''s orders are not the worker''s to delete'
+select lives_ok(
+  $$delete from app.etsy_orders where shop_id = '9d000000-0000-0000-0000-000000000001'$$,
+  'a delete naming another organization''s shop runs (and finds nothing to delete)'
 );
-select is(
-  (with gone as (
-     delete from app.etsy_orders where shop_id = '9c000000-0000-0000-0000-000000000001' returning 1
-   ) select count(*)::integer from gone),
-  1, 'the job''s organization''s orders are deleted'
+select lives_ok(
+  $$delete from app.etsy_orders where shop_id = '9c000000-0000-0000-0000-000000000001'$$,
+  'the worker deletes its job''s organization''s orders'
 );
 
 reset role;
+select is(
+  (select count(*)::integer from app.etsy_orders
+   where shop_id = '9c000000-0000-0000-0000-000000000001'),
+  0, 'the job''s organization''s order is deleted'
+);
 select is(
   (select count(*)::integer from app.etsy_order_buyers
    where shop_id = '9c000000-0000-0000-0000-000000000001'),
