@@ -98,7 +98,7 @@ def pgtap_findings(names: Iterable[str]) -> list[Finding]:
         match = _PGTAP.match(name)
         if match:
             by_prefix.setdefault(match.group("prefix"), []).append(name)
-    findings = []
+    findings: list[Finding] = []
     for prefix, files in sorted(by_prefix.items()):
         findings.extend(
             Finding(
