@@ -13,7 +13,7 @@ import signal
 import sys
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 import anyio
 import httpx
@@ -75,10 +75,10 @@ from htco_application.messaging import (
 )
 from htco_application.order_intake import (
     ORDER_SYNC_JOB,
-    RECONCILE_SCHEDULE,
-    SWEEP_SCHEDULE,
+    RECONCILIATION_TICK,
     EngineSyncTrigger,
     OrderIntake,
+    due_reconciliation,
     enqueue_reconciliations,
 )
 from htco_application.shop_capabilities import CapabilityChecks
@@ -86,7 +86,6 @@ from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.guards import BreakerPolicy
 from htco_domain.integrations import TokenHealth
-from htco_domain.jobs import Schedule
 from htco_integrations.etsy import (
     EtsyAdapter,
     EtsyConfig,
@@ -313,22 +312,28 @@ def intake_handlers(database: Database, vault: PostgresTokenVault) -> dict[str, 
 
 
 def reconciliation_handlers(
-    enabled: tuple[str, ...], *, queue: JobQueue, directory: ShopDirectory
+    enabled: tuple[str, ...],
+    *,
+    queue: JobQueue,
+    directory: ShopDirectory,
+    times: tuple[time, ...],
+    clock: Callable[[], datetime] = _now,
 ) -> dict[str, JobHandler]:
-    """The enabled reconciliation schedules' fan-outs (slice 5.5): one `etsy.order_sync` job per
-    connected shop, which `order_sync_handlers` runs."""
+    """The hourly reconciliation tick (slice 5.5), when named: in the hour of a configured time
+    it enqueues one `etsy.order_sync` job per connected shop (the sweep for the day's last time,
+    a reconcile otherwise), which `order_sync_handlers` runs."""
+    if RECONCILIATION_TICK.kind not in enabled:
+        return {}
 
-    def fan_out(schedule: Schedule) -> JobHandler:
-        return _in_thread(
-            lambda: enqueue_reconciliations(directory, queue, schedule, now=_now()),
-            "orders.reconciliations_enqueued",
-        )
+    def tick() -> int:
+        now = clock()
+        due = due_reconciliation(times, now=now)
+        if due is None:
+            return 0
+        reason, slot = due
+        return enqueue_reconciliations(directory, queue, reason=reason, slot=slot, now=now)
 
-    return {
-        schedule.kind: fan_out(schedule)
-        for schedule in (RECONCILE_SCHEDULE, SWEEP_SCHEDULE)
-        if schedule.kind in enabled
-    }
+    return {RECONCILIATION_TICK.kind: _in_thread(tick, "orders.reconciliations_enqueued")}
 
 
 def order_sync_handlers(engine: DurableAutomationEngine) -> dict[str, JobHandler]:
@@ -435,7 +440,10 @@ async def _serve(settings: WorkerSettings) -> None:
         handlers |= webhook_handlers(webhook_processor(database, engine, adapter))
         handlers |= order_sync_handlers(engine)
         handlers |= reconciliation_handlers(
-            settings.schedules, queue=queue, directory=PostgresShopDirectory(database)
+            settings.schedules,
+            queue=queue,
+            directory=PostgresShopDirectory(database),
+            times=settings.reconciliation_times,
         )
     worker = Worker(
         queue,

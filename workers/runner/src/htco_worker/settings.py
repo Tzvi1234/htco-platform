@@ -2,6 +2,7 @@
 
 import os
 import socket
+from datetime import time
 from pathlib import Path
 from typing import Literal, Self
 
@@ -10,7 +11,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from htco_application.maintenance import EXPIRY_SCHEDULE, PROBE_SCHEDULE
 from htco_application.maintenance import SCHEDULES as MAINTENANCE_SCHEDULES
-from htco_application.order_intake import ORDER_SCHEDULES
+from htco_application.order_intake import (
+    DEFAULT_RECONCILIATION_TIMES,
+    ORDER_SCHEDULES,
+    parse_reconciliation_times,
+)
 from htco_platform.crypto import KeyRing
 
 # Every schedule a worker may run: maintenance (5.1) and order reconciliation (5.5).
@@ -51,6 +56,9 @@ class WorkerSettings(BaseSettings):
     # The Action Gateway (slice 5.4): `reads` (default) runs Etsy reads through the real gateway,
     # writes refused until approvals exist (5.14); `off` switches back to refusing every action.
     worker_action_gateway: Literal["reads", "off"] = "reads"
+    # Slice 5.5: when reconciliation runs, "HH:MM" in UTC, comma-separated; the day's last run is
+    # the full sweep. Twice a day by default (the owner's decision of 2026-10-24).
+    reconciliation_schedule: str = DEFAULT_RECONCILIATION_TIMES
     # The reviewed registry and the action contracts, copied into the image next to the code.
     registry_path: Path = Path("registry")
     action_schemas_path: Path = Path("packages/contracts/actions")
@@ -73,6 +81,10 @@ class WorkerSettings(BaseSettings):
         return tuple(name.strip() for name in self.worker_schedules.split(",") if name.strip())
 
     @property
+    def reconciliation_times(self) -> tuple[time, ...]:
+        return parse_reconciliation_times(self.reconciliation_schedule)
+
+    @property
     def key_ring(self) -> KeyRing | None:
         if self.token_vault_key is None:
             return None
@@ -81,6 +93,15 @@ class WorkerSettings(BaseSettings):
             self.token_vault_key.get_secret_value(),
             None if previous is None else previous.get_secret_value(),
         )
+
+    @field_validator("reconciliation_schedule")
+    @classmethod
+    def _reconciliation_times_parse(cls, value: str) -> str:
+        try:
+            parse_reconciliation_times(value)
+        except ValueError as error:
+            raise ValueError(f"HTCO_RECONCILIATION_SCHEDULE: {error}") from None
+        return value
 
     @model_validator(mode="after")
     def _schedules_are_known_and_configured(self) -> Self:

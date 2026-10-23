@@ -88,4 +88,3 @@ grant select, insert, update on app.sync_cursors to htco_worker;
 create policy sync_cursors_worker on app.sync_cursors for all to htco_worker
   using (organization_id = (select private.worker_organization_id()))
   with check (organization_id = (select private.worker_organization_id()));
-

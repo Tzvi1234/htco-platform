@@ -23,7 +23,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Any, Protocol
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
@@ -70,11 +70,14 @@ SYNC_REQUESTER = ActorRef(ActorKind.SYSTEM, "order-sync-request")
 RECONCILE = "reconcile"
 SWEEP = "sweep"
 RECONCILE_WINDOW = timedelta(days=INCREMENTAL_DAYS)
-# Reconciliation (slice 5.5): every 10 minutes and a nightly sweep, each a fan-out to one
-# `etsy.order_sync` job per connected shop. Off unless named in HTCO_WORKER_SCHEDULES.
-RECONCILE_SCHEDULE = Schedule("orders.reconcile_shops", timedelta(minutes=10))
-SWEEP_SCHEDULE = Schedule("orders.sweep_shops", timedelta(days=1))
-ORDER_SCHEDULES = {s.kind: s for s in (RECONCILE_SCHEDULE, SWEEP_SCHEDULE)}
+# Reconciliation (slice 5.5, the owner's decision of 2026-10-24: webhooks are the primary path,
+# reconciliation runs twice a day). An hourly tick, off unless named in HTCO_WORKER_SCHEDULES,
+# enqueues the runs whose configured time (UTC, HTCO_RECONCILIATION_SCHEDULE) falls in its hour:
+# the day's last run is the full sweep, any earlier one a 30-day reconcile.
+RECONCILIATION_TICK = Schedule("orders.reconciliation", timedelta(hours=1))
+ORDER_SCHEDULES = {RECONCILIATION_TICK.kind: RECONCILIATION_TICK}
+# 06:00 and 18:00 Israel summer time (05:00 and 17:00 in winter).
+DEFAULT_RECONCILIATION_TIMES = "03:00,15:00"
 _MODES = {"stale": "history", "manual": "history", RECONCILE: RECONCILE, SWEEP: SWEEP}
 
 _log = logging.getLogger(__name__)
@@ -252,9 +255,9 @@ class OrderIntake:
         *,
         sweep: bool,
     ) -> HandlerOutcome:
-        """Reconciliation (slice 5.5): every receipt changed in the last 30 days and every paid,
-        unshipped receipt, compared with the store (drifts recorded) and ingested; the nightly
-        sweep also compares Etsy's receipt count with the store's."""
+        """Reconciliation (slice 5.5): every receipt changed in the last 30 days, compared with
+        the store (drifts recorded) and ingested. The sweep also reads every paid, unshipped
+        receipt with no period limit and compares Etsy's receipt count with the store's."""
         kind = SWEEP if sweep else RECONCILE
         async with self.store.lock(integration.shop_id) as held:
             if not held:
@@ -266,14 +269,17 @@ class OrderIntake:
                 execution_id=ctx.execution_id,
                 detect_drift=True,
             )
+            more = more_drifts = 0
+            count = None
             try:
                 seen, drifts = await self._pages(
                     integration, receipts, context, since=started - RECONCILE_WINDOW
                 )
-                more, more_drifts = await self._pages(
-                    integration, receipts, context, open_orders=True
-                )
-                count = await self._count(integration, receipts) if sweep else None
+                if sweep:  # the full sweep: open orders of any age, and the count
+                    more, more_drifts = await self._pages(
+                        integration, receipts, context, open_orders=True
+                    )
+                    count = await self._count(integration, receipts)
             except Exception as error:
                 await self.store.record_cursor(
                     integration, kind, started_at=started, error=type(error).__name__
@@ -453,34 +459,63 @@ class ConnectedShops(Protocol):
     def connected_shops(self) -> list[TenantShop]: ...
 
 
+def parse_reconciliation_times(text: str) -> tuple[time, ...]:
+    """`"HH:MM,HH:MM"` (UTC) into the day's run times, sorted; raises `ValueError`."""
+    times: list[time] = []
+    for part in text.split(","):
+        raw = part.strip()
+        hours, _, minutes = raw.partition(":")
+        if not (hours.isdigit() and minutes.isdigit() and len(minutes) == 2):  # noqa: PLR2004
+            raise ValueError(f"reconciliation time {raw!r} is not HH:MM")
+        try:
+            times.append(time(int(hours), int(minutes)))
+        except ValueError:
+            raise ValueError(f"reconciliation time {raw!r} is not a time of day") from None
+    if len(set(times)) != len(times):
+        raise ValueError("reconciliation times repeat")
+    return tuple(sorted(times))
+
+
+def due_reconciliation(times: tuple[time, ...], *, now: datetime) -> tuple[str, str] | None:
+    """The run whose time falls in the tick's hour, and its slot key: the day's last time is the
+    full sweep, any earlier one a reconcile. None when no run is due in this hour."""
+    hour = now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    for at in times:
+        moment = datetime.combine(hour.date(), at, tzinfo=UTC)
+        if hour <= moment < hour + RECONCILIATION_TICK.every:
+            reason = SWEEP if at == times[-1] else RECONCILE
+            return reason, moment.strftime("%Y-%m-%dT%H:%M")
+    return None
+
+
 def enqueue_reconciliations(
-    shops: ConnectedShops, queue: JobQueue, schedule: Schedule, *, now: datetime
+    shops: ConnectedShops, queue: JobQueue, *, reason: str, slot: str, now: datetime
 ) -> int:
-    """The schedule's fan-out: one `etsy.order_sync` job per connected shop and period, under
-    the shop's orders lock (`shop:{shop_id}:orders`)."""
-    reason = SWEEP if schedule is SWEEP_SCHEDULE else RECONCILE
-    period = schedule.key_for(now).rsplit("@", 1)[-1]
+    """One run's fan-out: one `etsy.order_sync` job per connected shop and slot, under the
+    shop's orders lock (`shop:{shop_id}:orders`)."""
     connected = shops.connected_shops()
     for shop in connected:
         queue.enqueue(
             JobSpec(
                 kind=ORDER_SYNC_JOB,
-                idempotency_key=f"{ORDER_SYNC_JOB}:{shop.shop_id}:{reason}:{period}",
+                idempotency_key=f"{ORDER_SYNC_JOB}:{shop.shop_id}:{reason}:{slot}",
                 payload={"reason": reason},
                 organization_id=shop.organization_id,
                 shop_id=shop.shop_id,
                 lock_key=f"shop:{shop.shop_id}:orders",
-                correlation_id=f"order-{reason}:{shop.shop_id}:{period}"[:200],
+                correlation_id=f"order-{reason}:{shop.shop_id}:{slot}"[:200],
             ),
             now=now,
         )
     return len(connected)
 
 
-def daily_etsy_calls(*, shops: int, pages_30_days: int, open_pages: int) -> int:
-    """Etsy calls a day that reconciliation makes (AC-5.5.3): every 10 minutes the 30-day pages
-    and the open orders' pages per shop, and the nightly sweep's extra count read."""
-    runs = int(timedelta(days=1) / RECONCILE_SCHEDULE.every)
-    per_run = pages_30_days + open_pages
-    sweep = per_run + 1
-    return shops * (runs * per_run + sweep)
+def daily_etsy_calls(
+    *, shops: int, pages_30_days: int, open_pages: int, runs_per_day: int = 2
+) -> int:
+    """Etsy calls a day that reconciliation makes (AC-5.5.3): calls per run times runs per day.
+    Each reconcile reads the 30-day pages; the day's sweep also the open orders' pages and one
+    count read."""
+    reconciles = max(0, runs_per_day - 1)
+    sweep = pages_30_days + open_pages + 1
+    return shops * (reconciles * pages_30_days + sweep)

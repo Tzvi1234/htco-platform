@@ -30,8 +30,8 @@ Recorded payloads: `tests/fixtures/etsy/webhooks/events.json` (Etsy's documented
 
 | Level | What is covered | Location |
 |---|---|---|
-| Application | Drifts (status, items, shipments, missing after the grace, none when equal); the drift event without buyer data; reconcile and sweep runs (200 receipts alone, a lost webhook, open orders of any age, a drift once, the count, the lock, the cursor's error type); the fan-out; the budget from the schedule and the limiter | `tests/application/test_order_reconciliation.py` |
-| Worker | The schedules known and off unless named; the fan-out; each reason's run | `tests/worker/test_reconciliation_jobs.py` |
+| Application | Drifts (status, items, shipments, missing after the grace, none when equal); the drift event without buyer data; the times (default, parsing, which run is due); reconcile and sweep runs (200 receipts alone, a lost webhook, the sweep's open orders of any age, a drift once, the count, the lock, the cursor's error type); the fan-out; the budget from the schedule and the limiter | `tests/application/test_order_reconciliation.py` |
+| Worker | The tick known and off unless named; `HTCO_RECONCILIATION_SCHEDULE` (default twice a day, invalid refused); the due run only; each reason's run | `tests/worker/test_reconciliation_jobs.py` |
 | Adapter | The open-orders filters, one GET | `tests/integrations/test_etsy_order_intake_reads.py` |
 | Integration (Postgres) | A missing order once with its event; a status drift with both values; no drift when equal; the cursor | `tests/integration/test_order_reconciliation.py` |
 | Database (pgTAP) | Drift kinds and uniqueness, cursor error types, the worker's organization scope | `supabase/tests/database/18_order_reconciliation.test.sql` |
@@ -51,7 +51,7 @@ Recorded payloads: `tests/fixtures/etsy/webhooks/events.json` (Etsy's documented
 | AC-5.4.5 | `test_transition__every_allowed_edge_passes`; `test_transition__every_other_edge_is_refused`; `test_ingest_path__passes_every_state_in_between`; `test_transition_path__a_state_behind_is_refused`; `test_a_new_paid_order__passes_paid_ingested_awaiting_with_one_ingested_event`; `test_a_newer_copy__moves_the_state_and_publishes_an_update`; `test_cancelled_and_refunded__publish_their_own_events`; pgTAP `17_order_intake` |
 | AC-5.4.6 | `test_one_store__the_api_sync_and_the_worker_write_the_same_order`; `test_schema__no_second_order_table_exists`; `test_schema__no_column_can_hold_contact_data`; `test_get_order_receipt__fake_contact_values_are_never_kept`; `test_the_hash_and_the_events_carry_no_buyer_data`; `test_receipt__reread_through_the_gateway_and_ingested_with_its_buyer_row` |
 | AC-5.5.1 | `test_reconcile__200_receipts_ingested_by_reconciliation_alone` |
-| AC-5.5.2 | `test_reconcile__a_receipt_whose_webhook_was_lost__in_the_next_interval`; `test_fan_out__one_job_per_shop_and_period_under_the_orders_lock` |
+| AC-5.5.2 | `test_reconcile__a_receipt_whose_webhook_was_lost__in_the_next_run`; `test_fan_out__one_job_per_shop_and_run_under_the_orders_lock`; `test_due__the_first_run_reconciles_the_last_sweeps`; `test_tick__enqueues_the_due_run_only` |
 | AC-5.5.3 | `test_budget__the_pilots_daily_calls_stay_inside_the_app_budget`; `test_budget__the_gateways_limiter_enforces_it` |
 | AC-5.5.4 | `test_drifts__status_items_and_shipments_with_both_values`; `test_drifts__a_matching_order_has_none`; `test_drifts__missing_only_once_older_than_the_grace`; `test_drift_event__orders_drift_detected_with_no_buyer_data`; `test_reconcile__a_drift_is_recorded_once_with_its_event`; `test_a_missing_order__one_drift_and_one_event_however_often_reconciled` and `test_a_status_difference__recorded_with_both_values` (Postgres) |
 | AC-5.5.5 | `test_a_stale_read__asks_the_queue_and_runs_nothing_here`; `test_the_manual_sync__asks_the_queue_forced_and_is_audited`; `test_main__order_sync_runs_in_the_api_only_as_the_fallback` (in effect once `HTCO_ORDER_SYNC_IN_API` is off at activation) |
