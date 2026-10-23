@@ -50,7 +50,6 @@ fi
 repo_key="$(printf '%s' "$repo" | sha256sum | cut -c1-12)"
 export UV_PROJECT_ENVIRONMENT="$cache/venv-$repo_key"
 runner_temp="$cache/runner"
-rm -rf "$runner_temp"
 
 stop_stack() {
     local supabase="$runner_temp/supabase"
@@ -58,7 +57,9 @@ stop_stack() {
     [ -n "$supabase" ] && (cd "$repo" && "$supabase" stop --no-backup > /dev/null 2>&1) || true
 }
 # Start from a clean stack, like a fresh CI runner (a stack left by --keep-running is removed).
+# Stop it before clearing the runner directory: its CLI may be the only one on the machine.
 stop_stack
+rm -rf "$runner_temp"
 if [ "$keep_running" = false ]; then
     # Keep the script's own exit code: the cleanup's status must not replace a failure.
     trap 'code=$?; stop_stack; exit "$code"' EXIT

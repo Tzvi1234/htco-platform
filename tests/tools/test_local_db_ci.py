@@ -1,6 +1,8 @@
 """The local runner replays CI's `database` job from `ci.yml`, so local and CI never drift."""
 
+import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -186,3 +188,51 @@ def test_main__failing_job__exits_one_and_prints_fail(
 
     assert code == 1
     assert "database job: FAIL" in capsys.readouterr().out
+
+
+needs_flock = pytest.mark.skipif(
+    shutil.which("flock") is None or shutil.which("bash") is None, reason="needs bash and flock"
+)
+
+
+def _fake_tool(directory: Path, name: str, body: str) -> None:
+    tool = directory / name
+    tool.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
+    tool.chmod(0o755)
+
+
+@needs_flock
+def test_wrapper__stack_kept_by_an_earlier_run__is_stopped_before_its_cli_is_removed(
+    tmp_path: Path,
+) -> None:
+    # Given a run with --keep-running left the stack up, with the CLI only in the runner directory
+    repo = tmp_path / "repo"
+    (repo / ".github/workflows").mkdir(parents=True)
+    (repo / ".github/workflows/ci.yml").write_text("jobs: {}\n", encoding="utf-8")
+    (repo / "supabase").mkdir()
+    (repo / "supabase/config.toml").write_text("", encoding="utf-8")
+    cache = tmp_path / "cache"
+    (cache / "runner").mkdir(parents=True)
+    calls = tmp_path / "supabase-calls.txt"
+    _fake_tool(cache / "runner", "supabase", f'echo "$*" >> "{calls}"')
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_tool(bin_dir, "uv", "exit 0")
+    _fake_tool(bin_dir, "docker", "exit 0")
+
+    # When the next run starts
+    result = subprocess.run(
+        ["bash", str(REPO / "scripts/local-db-ci.sh"), str(repo)],  # noqa: S607
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "HTCO_LOCAL_CI_CACHE": str(cache),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    # Then the kept stack was stopped first
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls.read_text(encoding="utf-8").splitlines()[0] == "stop --no-backup"
