@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.inventory.update.input.json",
+  "title": "etsy.inventory.update input",
+  "type": "object",
+  "required": [
+    "listing_id",
+    "products"
+  ],
+  "properties": {
+    "listing_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "products": {
+      "type": "array",
+      "maxItems": 400,
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}

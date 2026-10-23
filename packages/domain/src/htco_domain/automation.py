@@ -98,6 +98,9 @@ class AutomationDefinition:
     # The policy capability a user needs to trigger it by hand (`user_action`); without one, no
     # user may (deny by default, AC-5.10.3).
     user_capability: str | None = None
+    # The business actions its handler may submit through the Action Gateway (ADR-0019); the
+    # machine-readable part of its `permissions` section. Empty: none.
+    allowed_actions: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if self.activation_phase < 0:

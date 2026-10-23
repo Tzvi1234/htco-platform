@@ -56,7 +56,7 @@ Failure paths:
 
 ## 2. Execution contract (Pydantic)
 
-These are the shapes of `packages/contracts/actions/*.json`, generated from Pydantic v2 models in `htco_application.execution.contracts`.
+These are the shapes of the action contracts. **As built (slice 5.12, owner-approved deviation of 2026-10-23):** the application layer imports only the standard library and the domain (ER-ARCH-01, enforced by `tests/architecture/test_layer_purity.py`), so the models are frozen standard-library dataclasses in `htco_application.execution` (`gateway.py`, `contracts.py`), not Pydantic. Each action's input and output contracts are hand-written JSON Schema 2020-12 files in `packages/contracts/actions/`, checked by a small validator (`execution/schema.py`) that refuses keywords it does not apply. A Pydantic export can be added later at an adapter edge. The fields below are the contract either way.
 
 ```python
 class Channel(StrEnum):

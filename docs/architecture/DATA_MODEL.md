@@ -170,7 +170,7 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `action_executions` | One per `(action_name, idempotency_key)`: action and version, actor, on-behalf-of user, organization, shop, state, channel, attempts, approval ID, owner-trigger flag, verification, evidence references, error code, correlation and causation IDs, cost; transition trigger; RLS by organization and shop | 5 |
+| `action_executions` | One per `(organization_id, action_name, idempotency_key)` (created in `20261023150000`): action and version, request hash, actor, on-behalf-of user, organization, shop, state, outcome, channel, attempts, approval ID, verification, evidence, error code and reason, output (never for R1 reads), correlation and causation IDs; finished rows never change (trigger); RLS by organization and shop for users (no output column), by the job's organization for the worker. Owner-trigger flag and cost follow with 5.14 and 5.15 | 5 |
 | `action_first_runs` | Per shop and write tool: the owner's first verified run (or its error) that unlocks the tool for automations and employees (ADR-0022) | 6–7 |
 | `rate_limit_buckets` | Postgres token buckets for app-wide limits (Etsy QPS and QPD) and per-shop browser pace | 5 |
 | `circuit_breakers` | Shared breaker state per key (`etsy:api`, `etsy:web`, `browser:{shop}`) | 5 |

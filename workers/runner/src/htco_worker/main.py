@@ -23,6 +23,7 @@ from htco_application.automation.durable import EXECUTION_JOB, DurableAutomation
 from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_tokens import VaultAccessTokenProvider
 from htco_application.execution.gateway import UnavailableGateway
+from htco_application.execution.service import EVENT_DESTINATION
 from htco_application.jobs import ClaimedJob, JobError, JobQueue
 from htco_application.maintenance import (
     EXPIRY_JOB,
@@ -49,6 +50,7 @@ from htco_application.messaging import (
     OUTBOX_DELIVERY_JOB,
     Deliverer,
     OutboxStore,
+    PendingDelivery,
     deliver_outbox_message,
 )
 from htco_application.shop_capabilities import CapabilityChecks
@@ -163,6 +165,18 @@ def maintenance_handlers(  # noqa: PLR0913 - the handlers' collaborators
     return handlers
 
 
+class AcceptedEvents:
+    """`events.publish` (slice 5.12): events such as `actions.executed.v1` stay in the outbox as
+    the record; their consumers subscribe from Phase 6, so delivering is accepting them."""
+
+    async def deliver(self, delivery: PendingDelivery) -> None:
+        _log.info(
+            "event.accepted",
+            event_type=delivery.message.payload.get("event_type"),
+            outbox_id=str(delivery.id),
+        )
+
+
 def outbox_handlers(
     store: OutboxStore, deliverers: Mapping[str, Deliverer]
 ) -> dict[str, JobHandler]:
@@ -265,7 +279,7 @@ async def _serve(settings: WorkerSettings) -> None:
         vault=vault,
         checks=checks,
         purge=PostgresPurgeStore(database),
-    ) | outbox_handlers(PostgresOutbox(database), {})
+    ) | outbox_handlers(PostgresOutbox(database), {EVENT_DESTINATION: AcceptedEvents()})
     handlers |= automation_handlers(worker_engine(database), settings.worker_id)
     worker = Worker(
         queue,

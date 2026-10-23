@@ -211,6 +211,9 @@ def parse_automation(document: Document) -> AutomationDefinition:
         specification=_specification(document),
         activation_phase=_integer(document, "activation_phase"),
         user_capability=_user_capability(document),
+        allowed_actions=frozenset(
+            _texts(document, "allowed_actions") if "allowed_actions" in document else ()
+        ),
     )
 
 

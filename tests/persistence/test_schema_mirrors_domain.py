@@ -3,6 +3,8 @@
 import re
 from pathlib import Path
 
+from htco_application.execution.gateway import ActionOutcome, Channel
+from htco_domain.actions import ActionState
 from htco_domain.actors import ActorKind
 from htco_domain.automation import ExecutionState, TriggerKind
 from htco_domain.identity import Role
@@ -66,3 +68,15 @@ def test_automation_definitions_readiness_check__lists_exactly_the_readiness_val
 
 def test_jobs_state_check__lists_exactly_the_job_states() -> None:
     assert _check_values("jobs_state_check") == {s.value for s in JobState}
+
+
+def test_action_executions_state_check__lists_exactly_the_action_states() -> None:
+    assert _check_values("action_executions_state_check") == {s.value for s in ActionState}
+
+
+def test_action_executions_outcome_check__lists_exactly_the_action_outcomes() -> None:
+    assert _check_values("action_executions_outcome_check") == {o.value for o in ActionOutcome}
+
+
+def test_action_executions_channel_check__lists_exactly_the_channels() -> None:
+    assert _check_values("action_executions_channel_check") == {c.value for c in Channel}

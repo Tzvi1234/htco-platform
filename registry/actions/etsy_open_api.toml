@@ -1,0 +1,38 @@
+# Execution contracts of Etsy Open API tools (slice 5.12, ADR-0019, ADR-0022): the approval
+# policy (equal to the tool's description), verification, channel bindings in order of preference,
+# limits keys and the JSON Schemas in packages/contracts/actions/. Reviewed data like the tools.
+# Writes stay off until the owner-triggered slices of Phases 6 and 7; none is ready yet.
+
+[[actions]]
+tool = "etsy.shop.read"
+approval_policy = "R0"
+verify = "schema"
+timeout_seconds = 30
+input_schema = "etsy.shop.read.input.json"
+output_schema = "etsy.shop.read.output.json"
+rate_limit_key = "etsy:app"
+user_capability = "view_overview"
+bindings = [{ channel = "api", recipe = "get_shop", requires_capability = "shop_details" }]
+
+[[actions]]
+tool = "etsy.receipts.read"
+approval_policy = "R1"
+verify = "schema"
+timeout_seconds = 60
+input_schema = "etsy.receipts.read.input.json"
+output_schema = "etsy.receipts.read.output.json"
+rate_limit_key = "etsy:app"
+user_capability = "view_orders"
+bindings = [{ channel = "api", recipe = "list_receipts", requires_capability = "receipts_read" }]
+
+[[actions]]
+tool = "etsy.inventory.update"
+approval_policy = "W2"
+verify = "reread"
+timeout_seconds = 120
+input_schema = "etsy.inventory.update.input.json"
+output_schema = "etsy.inventory.update.output.json"
+rate_limit_key = "etsy:app"
+concurrency_key = "shop:{shop_id}:writes"
+user_capability = "edit_product_facts"
+bindings = [{ channel = "api", recipe = "update_listing_inventory" }]

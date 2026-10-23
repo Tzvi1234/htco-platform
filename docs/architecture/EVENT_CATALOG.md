@@ -31,7 +31,7 @@ Events are published through the outbox (`jobs.outbox`, slice 5.2); the first pr
 | `automations.execution_finished.v1` | Automation engine | Activity records, metrics, monitors (Phase 10) | 5 |
 | `automations.execution_dead_lettered.v1` | Automation engine | Incident Detection & Escalation, Noa (Phase 10) | 5 |
 | `automations.execution_state_changed.v1` | Automation engine (including `WAITING`) | Status views, Agent Task Scheduling & Recovery | 5 |
-| `actions.executed.v1` | Action Gateway | Activity records, metrics, monitors (unverified writes) | 5 |
+| `actions.executed.v1` | Action Gateway (5.12; outbox destination `events.publish`, IDs and outcome only) | Activity records, metrics, monitors (unverified writes); accepted by the worker until consumers exist | 5 |
 | `actions.approval_required.v1` | Action Gateway | Approvals (Phase 7), notifications | 5 |
 | `actions.handed_to_human.v1` | Execution Router (Human channel) | Tasks (Phase 7), notifications | 5 |
 | `catalog.listing_changed.v1` | Webhook ingress (`listing.created`, `listing.updated`, `listing.deleted`) | Listing Health re-audit (11), Product Studio verification (12) | 5 |

@@ -1,12 +1,14 @@
 """The registry's TOML files (`registry/`): each employee, automation and advisor is one file;
 tools are grouped by family (`[[tools]]` tables)."""
 
+import json
 import tomllib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from htco_application.execution.contracts import ActionCatalog
 from htco_application.workforce.registry import Registry
 
 
@@ -40,3 +42,16 @@ def read_registry(root: Path) -> RegistryDocuments:
         automations=list(_documents(root / "automations")),
         advisors=list(_documents(root / "advisors")),
     )
+
+
+def read_action_catalog(root: Path, schemas: Path, registry: Registry) -> ActionCatalog:
+    """The action contracts of `registry/actions/*.toml` with their JSON Schemas (slice 5.12);
+    raises `ActionCatalogError` listing every problem."""
+    documents = [
+        action for family in _documents(root / "actions") for action in family.get("actions", [])
+    ]
+    loaded = {
+        path.name: json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(schemas.glob("*.json"))
+    }
+    return ActionCatalog.from_documents(documents, tools=registry.tools, schemas=loaded)
