@@ -102,7 +102,7 @@ class PostgresActionStore:
                 update app.action_executions
                 set state = %s, outcome = %s, channel = %s, attempts = attempts + %s,
                     verified = %s, error_code = %s, reason = %s, output = %s,
-                    evidence = %s, approval_id = coalesce(%s, approval_id),
+                    evidence = %s, approval_id = coalesce(%s, approval_id), retry_at = %s,
                     finished_at = case when %s then %s else finished_at end
                 where id = %s
                 """,
@@ -119,6 +119,7 @@ class PostgresActionStore:
                     else None,
                     Jsonb([]),
                     step.approval_id,
+                    result.retry_at,
                     final,
                     now,
                     execution_id,

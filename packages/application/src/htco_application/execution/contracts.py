@@ -15,6 +15,7 @@ from typing import Any
 
 from htco_application.access.policy import Capability
 from htco_application.execution.gateway import Channel
+from htco_application.execution.guards import RateBudget
 from htco_application.execution.schema import check_schema
 from htco_application.jobs import JsonValue
 from htco_domain.actions import ApprovalPolicy, VerifyMode
@@ -35,6 +36,7 @@ class ChannelBinding:
     requires_capability: str | None = None  # a shop capability, for example "receipts_read"
     browser_scope_id: str | None = None
     deterministic: bool = True  # False only for Browser Use recipes (employees only)
+    breaker_key: str | None = None  # the circuit breaker it shares: "etsy:api", "etsy:web"
 
 
 @dataclass(frozen=True)
@@ -82,12 +84,15 @@ def _binding(raw: Mapping[str, Any]) -> ChannelBinding:
         requires_capability=raw.get("requires_capability"),
         browser_scope_id=raw.get("browser_scope_id"),
         deterministic=bool(raw.get("deterministic", True)),
+        breaker_key=raw.get("breaker_key"),
     )
 
 
 @dataclass(frozen=True)
 class ActionCatalog:
     actions: Mapping[str, ActionDefinition]
+    # The rate budgets by key (`[[rate_limits]]`, slice 5.15): every action's key has one.
+    rate_budgets: Mapping[str, RateBudget] = field(default_factory=lambda: MappingProxyType({}))
 
     def get(self, name: str, version: int) -> ActionDefinition | None:
         definition = self.actions.get(name)
@@ -102,9 +107,21 @@ class ActionCatalog:
         *,
         tools: Mapping[str, ToolDefinition],
         schemas: Mapping[str, Mapping[str, Any]],
+        rate_limits: Iterable[Mapping[str, Any]] = (),
     ) -> ActionCatalog:
-        """`documents` are the `[[actions]]` tables; `schemas` the JSON Schemas by file name."""
+        """`documents` are the `[[actions]]` tables, `rate_limits` the `[[rate_limits]]` tables;
+        `schemas` the JSON Schemas by file name."""
         problems: list[str] = []
+        budgets: dict[str, RateBudget] = {}
+        for raw in rate_limits:
+            try:
+                budget = RateBudget(str(raw["key"]), int(raw["per_second"]), int(raw["per_day"]))
+            except (KeyError, TypeError, ValueError) as error:
+                problems.append(f"rate limit {raw.get('key', '?')!r}: {error}")
+                continue
+            if budget.key in budgets:
+                problems.append(f"duplicate rate limit {budget.key!r}")
+            budgets[budget.key] = budget
         actions: dict[str, ActionDefinition] = {}
         for document in documents:
             name = str(document.get("tool", "?"))
@@ -116,10 +133,14 @@ class ActionCatalog:
             if definition.name in actions:
                 problems.append(f"duplicate action {definition.name!r}")
                 continue
+            key = definition.rate_limit_key
+            if key is not None and key not in budgets:
+                problems.append(f"action {name!r}: no rate budget {key!r} in [[rate_limits]]")
+                continue
             actions[definition.name] = definition
         if problems:
             raise ActionCatalogError(problems)
-        return cls(MappingProxyType(actions))
+        return cls(MappingProxyType(actions), MappingProxyType(budgets))
 
 
 def _parse(

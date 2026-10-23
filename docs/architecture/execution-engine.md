@@ -432,10 +432,10 @@ These are unchanged from ADR-0013 and PR #58 (`ExecutionState`), and from PR #53
 |---|---|---|---|
 | Durable work, DLQ | Postgres job queue (ADR-0007) | All channels | `dead` jobs and `DEAD_LETTERED` executions in the admin view; audited retry |
 | Idempotency | Postgres unique keys | Gateway, engine, outbox, `Idempotency-Key` | One effect per key |
-| Retries inside an attempt | Tenacity | Adapters | Bounded, with jitter; never on 4xx except 429 |
-| Circuit breaker | PyBreaker with shared state in Postgres | `etsy:api`, `etsy:web`, `browser:{shop}` | Opens after 5 failures in 60 s; half-open after 120 s |
-| Rate limit | aiolimiter in-process plus a Postgres token bucket (Valkey optional) | `etsy:app` (one key's QPS and QPD across all shops), `browser:{shop}` | Budgets from the Developer Portal's real figures |
-| Concurrency | Postgres advisory locks and slot counters | One engine per browser profile; per-shop write slot | `pg_try_advisory_lock` held for the session |
+| Retries inside an attempt | `InlineRetry` in the gateway (slice 5.15) | Every channel call | At most 3 calls; 5xx and lost connections retried for reads only (a write is never resent blindly); a 429 waits for a short `Retry-After` (up to 5 s) or defers; any other 4xx never retried |
+| Circuit breaker | `htco_domain.guards` rules, state in `jobs.circuit_breakers` (slice 5.15) | `etsy:api`, `etsy:web`, `browser:{shop}` (the binding's `breaker_key`) | Opens after 5 failures in 60 s; half-open after 120 s with one probe at a time; 4xx and 429 are not failures |
+| Rate limit | Aligned-window counters in `jobs.rate_windows` (slice 5.15; Valkey optional later behind the `RateLimiter` port) | `etsy:app` (one key's QPS and QPD across all shops), `browser:{shop}` | `[[rate_limits]]` in `registry/actions/`; placeholders until the Developer Portal's real figures |
+| Concurrency | Leased slots in `jobs.concurrency_slots` (slice 5.15) | One engine per browser profile; per-shop write slot (`concurrency_key`) | A lease of the action's timeout plus 60 s; an expired lease is taken over, so no pooled connection is held during the call |
 | Preflight | Browser Controller | Before every browser session | Chromium health, connectivity, the egress IP equals the configured one, JavaScript and resource health, disk |
 | Session validation | Browser Controller | After start | Signed-in marker present; otherwise `LOGIN_REQUIRED` |
 | Network diagnostics | Health job | Daily | Egress IP stable; DNS and TLS to etsy.com; reputation lookups for the egress IP recorded (diagnostic only, never used to rotate IPs) |
@@ -445,6 +445,8 @@ These are unchanged from ADR-0013 and PR #58 (`ExecutionState`), and from PR #53
 | Cleanup | Controller and gateway | Always (finally) | Close the context, re-seal the profile, wipe temp files and secrets, release locks |
 | Observability | structlog, Prometheus, Grafana OSS | Workers and API | Metrics per channel, action, shop: executions, latency, retries, breaker state, challenges, DLQ size |
 | Secret access audit | Secret Broker | Every grant and redeem | Who, what, which execution; never the value |
+
+**As built (slice 5.15, deviation from the plan's tools, recorded 2026-10-23):** the application layer imports only the standard library and the domain (ER-ARCH-01). So the breaker, the rate limiter and the inline retries are small rules in `htco_domain.guards` and `htco_application.execution.guards` rather than PyBreaker, aiolimiter and Tenacity. Their shared state is in Postgres (`htco_persistence.guards`), which is where the plan put it anyway. Advisory locks became leased slot rows, so a call never pins a pooled connection. An in-process aiolimiter could be added later behind the `RateLimiter` port, but it is not needed for correctness: the Postgres windows are the authority.
 
 ## 9. Deployment
 

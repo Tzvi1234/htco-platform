@@ -14,9 +14,12 @@
    `PENDING_APPROVAL`, running nothing (AC-5.12.3). Resubmitted with the approval, every check runs
    again.
 5. **Route** to the first binding whose channel is deployed and whose shop capability is there
-   (the full Execution Router is slice 5.13; limits and breakers are 5.15).
-6. **Execute** through the channel adapter, then **verify** (re-read, schema or none).
-7. **Record**: the action execution's final state and result, an audit record for writes and
+   (the full Execution Router is slice 5.13).
+6. **Guard** (slice 5.15, `guards.py`): circuit breaker, then rate budget, then the concurrency
+   slot; any of them busy is `DEFERRED` with `retry_at`, and a resubmission runs every check again.
+7. **Execute** through the channel adapter, with bounded retries inside the attempt (each call
+   passes the breaker and the budget again), then **verify** (re-read, schema or none).
+8. **Record**: the action execution's final state and result, an audit record for writes and
    personal data, and `actions.executed.v1` through the outbox, in one transaction (AC-5.12.4).
 
 Every refusal is a result with a stable `error_code` and a reason that never contains the input
@@ -27,8 +30,9 @@ import hashlib
 import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
+from enum import Enum, auto
 from typing import Protocol
 
 from htco_application.access.policy import Outcome, Principal, ShopRef, decide
@@ -45,13 +49,16 @@ from htco_application.execution.gateway import (
     ActionResult,
     Channel,
 )
+from htco_application.execution.guards import Guards, InlineRetry
 from htco_application.execution.schema import validate
 from htco_application.jobs import JsonValue, describe_error
+from htco_application.marketplace import QuotaDeferredError
 from htco_application.messaging import OutboxMessage
 from htco_application.workforce.registry import Registry
 from htco_application.workforce.tool_access import ToolVerdict, decide_tool_access
 from htco_domain.actions import ActionState, ApprovalPolicy, VerifyMode, action_path
 from htco_domain.actors import ActorKind
+from htco_domain.guards import day_window
 from htco_domain.identity import Role
 
 EVENT_DESTINATION = "events.publish"
@@ -59,7 +66,30 @@ EXECUTED_EVENT = "actions.executed.v1"
 
 _S = ActionState
 # A claimed action that a resubmission continues: every check runs again.
-_RESUMABLE = frozenset({_S.WAITING_APPROVAL, _S.FAILED})
+_RESUMABLE = frozenset({_S.WAITING_APPROVAL, _S.FAILED, _S.DEFERRED})
+# Without guards: one call, no inline retries.
+_ONE_CALL = InlineRetry(max_attempts=1, backoff_seconds=())
+_CLIENT_ERRORS = range(400, 500)
+_TOO_MANY_REQUESTS = 429
+
+
+class _Failure(Enum):
+    RATE_LIMITED = auto()  # 429: wait for Retry-After
+    QUOTA = auto()  # the daily budget floor: the next UTC day
+    PERMANENT = auto()  # another 4xx: never retried, not a breaker failure
+    TRANSIENT = auto()  # 5xx, no answer, anything else: a breaker failure
+
+
+def _classify(error: Exception) -> tuple[_Failure, float | None]:
+    if isinstance(error, QuotaDeferredError):
+        return _Failure.QUOTA, None
+    status = getattr(error, "status", None)
+    if status == _TOO_MANY_REQUESTS:
+        wait = getattr(error, "retry_after_seconds", None)
+        return _Failure.RATE_LIMITED, None if wait is None else float(wait)
+    if isinstance(status, int) and status in _CLIENT_ERRORS:
+        return _Failure.PERMANENT, None
+    return _Failure.TRANSIENT, None
 
 
 def request_hash(request: ActionRequest) -> str:
@@ -154,6 +184,7 @@ class GatewayParts:
     adapters: Mapping[Channel, ChannelAdapter]
     capabilities: ShopCapabilities
     clock: Callable[[], datetime]
+    guards: Guards | None = None  # breakers, limits and retries (slice 5.15)
 
 
 class Refusal(Exception):  # noqa: N818 - a refusal is the result, not a failure of the gateway
@@ -165,6 +196,13 @@ class Refusal(Exception):  # noqa: N818 - a refusal is the result, not a failure
 
 class ActionGatewayService:
     def __init__(self, parts: GatewayParts) -> None:
+        if parts.guards is not None:
+            missing = sorted(
+                {d.rate_limit_key for d in parts.catalog.actions.values() if d.rate_limit_key}
+                - set(parts.catalog.rate_budgets)
+            )
+            if missing:
+                raise ValueError(f"no rate budget for {', '.join(missing)}")
         self._p = parts
 
     async def submit(self, request: ActionRequest) -> ActionResult:
@@ -332,20 +370,160 @@ class ActionGatewayService:
                 self._p.clock(),
             )
         binding, adapter = chosen
-        path += [_S.ROUTED, _S.RUNNING]
+        path.append(_S.ROUTED)
+        guards = self._p.guards
+        deferral = self._admit(definition, binding)
+        if deferral is not None:
+            return self._defer(claim, request, definition, path, *deferral)
+        slot = self._slot_key(request, definition) if guards is not None else None
+        if guards is not None and slot is not None:
+            now = self._p.clock()
+            retry_at = guards.slots.acquire(
+                slot,
+                limit=guards.slot_limit,
+                holder=claim.execution_id,
+                lease_until=now + definition.timeout + guards.slot_margin,
+                now=now,
+            )
+            if retry_at is not None:
+                return self._defer(claim, request, definition, path, "slot_busy", retry_at)
         try:
-            outcome = await adapter.execute(request, binding)
+            return await self._attempts(claim, request, definition, binding, adapter, path)
+        finally:
+            if guards is not None and slot is not None:
+                guards.slots.release(slot, holder=claim.execution_id)
+
+    async def _attempts(  # noqa: PLR0913, PLR0917 - the run and its channel
+        self,
+        claim: Claim,
+        request: ActionRequest,
+        definition: ActionDefinition,
+        binding: ChannelBinding,
+        adapter: ChannelAdapter,
+        path: list[ActionState],
+    ) -> ActionResult:
+        """Call the channel with bounded retries; each call after the first is guarded again."""
+        guards = self._p.guards
+        retry = _ONE_CALL if guards is None else guards.retry
+        path.append(_S.RUNNING)
+        attempts = 0
+        while True:
+            if attempts:
+                deferral = self._admit(definition, binding)
+                if deferral is not None:
+                    return self._defer(claim, request, definition, path, *deferral,
+                                       attempts=attempts, channel=binding.channel)  # fmt: skip
+            attempts += 1
+            try:
+                outcome = await adapter.execute(request, binding)
+            except Exception as error:
+                kind, wait = _classify(error)
+                more = attempts < retry.max_attempts
+                if kind is _Failure.RATE_LIMITED:
+                    if (
+                        guards is not None
+                        and more
+                        and wait is not None
+                        and (timedelta(seconds=wait) <= retry.max_inline_wait)
+                    ):
+                        await guards.sleep(wait)
+                        continue
+                    delay = retry.unknown_rate_wait if wait is None else timedelta(seconds=wait)
+                    return self._defer(claim, request, definition, path, "rate_limited",
+                                       self._p.clock() + delay, attempts=attempts,
+                                       channel=binding.channel)  # fmt: skip
+                if kind is _Failure.QUOTA:
+                    return self._defer(claim, request, definition, path, "rate_limited",
+                                       day_window(self._p.clock())[1], attempts=attempts,
+                                       channel=binding.channel)  # fmt: skip
+                self._breaker(binding, failed=kind is _Failure.TRANSIENT)
+                if (
+                    guards is not None
+                    and more
+                    and kind is _Failure.TRANSIENT
+                    and not definition.approval_policy.is_write  # never resend a write blindly
+                ):
+                    await guards.sleep(retry.backoff(attempts))
+                    continue
+                return self._fail(claim, request, definition, binding, path, error, attempts)
+            self._breaker(binding, failed=False)
+            break
+        try:
             verified = await self._verify(request, definition, adapter, outcome)
         except Exception as error:
-            result = self._result(
-                claim.execution_id, ActionOutcome.FAILED, channel=binding.channel,
-                error=describe_error(error)[:64],
-            )  # fmt: skip
-            reason = describe_error(error)
-            self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
-                         reason=reason, now=self._p.clock(), final=False)  # fmt: skip
-            return result
-        return self._finish_run(claim, request, definition, binding, outcome, verified, path)
+            return self._fail(claim, request, definition, binding, path, error, attempts)
+        return self._finish_run(claim, request, definition, binding, outcome, verified, path,
+                                attempts)  # fmt: skip
+
+    def _admit(
+        self, definition: ActionDefinition, binding: ChannelBinding
+    ) -> tuple[str, datetime] | None:
+        """The breaker, then the rate budget: None, or the reason code and `retry_at`."""
+        guards = self._p.guards
+        if guards is None:
+            return None
+        now = self._p.clock()
+        if binding.breaker_key is not None:
+            retry_at = guards.breakers.admit(binding.breaker_key, now=now)
+            if retry_at is not None:
+                return "breaker_open", retry_at
+        if definition.rate_limit_key is not None:
+            budget = self._p.catalog.rate_budgets[definition.rate_limit_key]
+            retry_at = guards.rates.acquire(budget, now=now)
+            if retry_at is not None:
+                return "rate_limited", retry_at
+        return None
+
+    def _breaker(self, binding: ChannelBinding, *, failed: bool) -> None:
+        if self._p.guards is not None and binding.breaker_key is not None:
+            self._p.guards.breakers.record(binding.breaker_key, failed=failed, now=self._p.clock())
+
+    @staticmethod
+    def _slot_key(request: ActionRequest, definition: ActionDefinition) -> str | None:
+        if definition.concurrency_key is None:
+            return None
+        return definition.concurrency_key.format(
+            shop_id=request.shop_id, organization_id=request.organization_id
+        )
+
+    def _defer(  # noqa: PLR0913, PLR0917 - the run, the reason and when to try again
+        self,
+        claim: Claim,
+        request: ActionRequest,
+        definition: ActionDefinition,
+        path: list[ActionState],
+        code: str,
+        retry_at: datetime,
+        *,
+        attempts: int = 0,
+        channel: Channel | None = None,
+    ) -> ActionResult:
+        result = ActionResult(
+            execution_id=claim.execution_id, outcome=ActionOutcome.DEFERRED, attempts=attempts,
+            channel=channel, error_code=code, retry_at=retry_at,
+        )  # fmt: skip
+        self._record(claim.execution_id, [*path, _S.DEFERRED], result, request, definition,
+                     reason=code, now=self._p.clock(), final=False)  # fmt: skip
+        return result
+
+    def _fail(  # noqa: PLR0913, PLR0917 - the run and what went wrong
+        self,
+        claim: Claim,
+        request: ActionRequest,
+        definition: ActionDefinition,
+        binding: ChannelBinding,
+        path: list[ActionState],
+        error: Exception,
+        attempts: int,
+    ) -> ActionResult:
+        result = replace(
+            self._result(claim.execution_id, ActionOutcome.FAILED, channel=binding.channel,
+                         error=describe_error(error)[:64]),
+            attempts=attempts,
+        )  # fmt: skip
+        self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
+                     reason=describe_error(error), now=self._p.clock(), final=False)  # fmt: skip
+        return result
 
     def _finish_run(  # noqa: PLR0913, PLR0917 - the run and what it produced
         self,
@@ -356,21 +534,25 @@ class ActionGatewayService:
         outcome: ChannelOutcome,
         verified: bool | None,
         path: list[ActionState],
+        attempts: int = 1,
     ) -> ActionResult:
         now = self._p.clock()
         if outcome.handed_to_human:
-            result = self._result(
-                claim.execution_id, ActionOutcome.HANDED_TO_HUMAN, channel=binding.channel
-            )
+            result = replace(
+                self._result(claim.execution_id, ActionOutcome.HANDED_TO_HUMAN,
+                             channel=binding.channel),
+                attempts=attempts,
+            )  # fmt: skip
             self._record(claim.execution_id, [*path, _S.HANDED_TO_HUMAN], result, request,
                          definition, reason="handed_to_human", now=now, final=False)  # fmt: skip
             return result
         if definition.verify is not VerifyMode.NONE:
             path.append(_S.VERIFYING)
         if verified is False:
-            result = self._result(
-                claim.execution_id, ActionOutcome.FAILED, channel=binding.channel,
-                error="verification",
+            result = replace(
+                self._result(claim.execution_id, ActionOutcome.FAILED, channel=binding.channel,
+                             error="verification"),
+                attempts=attempts,
             )  # fmt: skip
             self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
                          reason="verification failed", now=now, final=False)  # fmt: skip
@@ -378,7 +560,7 @@ class ActionGatewayService:
         result = ActionResult(
             execution_id=claim.execution_id,
             outcome=ActionOutcome.SUCCEEDED,
-            attempts=1,
+            attempts=attempts,
             channel=binding.channel,
             output=dict(outcome.output),
             verified=bool(verified),

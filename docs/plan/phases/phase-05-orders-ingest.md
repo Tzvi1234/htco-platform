@@ -30,7 +30,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 - [x] 5.12 Action Gateway and the generic execution contract (standard-library dataclasses and JSON Schemas, see execution-engine.md §2; production wiring with the channels of 5.13)
 - [ ] 5.13 Execution Router and channel adapters (API real, Browser interface and fake, Internal, Human contract)
 - [ ] 5.14 Shared approval contract (in-memory; Postgres in Phase 7)
-- [ ] 5.15 Circuit breaker, rate and concurrency control, idempotency for actions
+- [x] 5.15 Circuit breaker, rate and concurrency control, idempotency for actions (standard-library rules with Postgres state instead of PyBreaker, aiolimiter and Tenacity; see execution-engine.md §8; the real Etsy QPS and QPD figures are an owner question)
 - [ ] 5.16 Shop Environment Registry: data model, statuses, state machine (contracts only)
 - [ ] 5.17 Secret Broker and Authenticator contracts
 - [ ] 5.18 Status management for tasks, executions and environments

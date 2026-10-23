@@ -4,3 +4,7 @@
 - **State:** `select action_name, state, outcome, error_code, count(*) from app.action_executions group by 1, 2, 3, 4;`
 - **Waiting actions:** `state in ('waiting_approval', 'handed_to_human')` (index `action_executions_waiting_idx`).
 - **Rollback:** the migration is additive; the deployed API and worker still use `UnavailableGateway`, so nothing calls the gateway until 5.13 wires it.
+- **Breakers:** `select key, state, failures, opened_at, probe_at from jobs.circuit_breakers;` An open breaker closes by itself after one good probe. To close one by hand, run `update jobs.circuit_breakers set state = 'closed', failures = 0, opened_at = null, probe_at = null where key = 'etsy:api';` (audited operator action).
+- **Budget use today:** `select key, used from jobs.rate_windows where scope = 'day' and starts_at = date_trunc('day', now() at time zone 'utc') at time zone 'utc';`
+- **Slots:** `select key, holder, lease_until from jobs.concurrency_slots;` A slot whose lease has passed is taken over by the next write.
+- **Deferred actions:** `select action_name, error_code, retry_at from app.action_executions where state = 'deferred';`
