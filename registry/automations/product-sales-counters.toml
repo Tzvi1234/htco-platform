@@ -54,7 +54,7 @@ text = "The order history store and the two counter tables; no external system."
 
 [specification.error_handling]
 status = "defined"
-text = "A database error rolls the transaction back and raises into the retry policy; counters never go negative (a check constraint and greatest(0, ...))."
+text = "A database error rolls the transaction back and raises into the retry policy; counters never go negative: a move below zero (only drift or a bug, given the ledger) keeps zero under the check constraint and logs product_sales.clamped with the shop, listing and numbers."
 
 [specification.retry_policy]
 status = "defined"
