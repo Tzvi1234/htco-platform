@@ -11,6 +11,7 @@ import anyio
 import pytest
 
 from htco_application.access.policy import Principal
+from htco_application.execution.channels import MemoryHumanTasks
 from htco_application.execution.gateway import (
     ActionOutcome,
     ActionRef,
@@ -51,6 +52,7 @@ OTHER = uuid.UUID("7b000000-0000-0000-0000-000000000000")
 SHOP = uuid.UUID("7a300000-0000-0000-0000-000000000001")
 UNGRANTED = uuid.UUID("7a300000-0000-0000-0000-000000000002")
 USER = uuid.UUID("7a100000-0000-0000-0000-000000000001")
+DEFAULT_TASKS = MemoryHumanTasks()  # a marker: each world gets its own task store
 SECRET = "12345678.FAKE-TOKEN-SHOULD-NEVER-APPEAR"  # noqa: S105 - a fake to search for
 
 
@@ -79,8 +81,14 @@ def office() -> Registry:
 
 
 class World:
-    def __init__(self, role: Role = Role.OWNER, **channel: Any) -> None:
+    def __init__(
+        self,
+        role: Role = Role.OWNER,
+        human: MemoryHumanTasks | None = DEFAULT_TASKS,
+        **channel: Any,
+    ) -> None:
         self.registry = office()
+        self.human = MemoryHumanTasks() if human is DEFAULT_TASKS else human
         self.store = MemoryActionStore()
         self.approvals = Approvals()
         self.channel = FakeChannel(**channel)
@@ -107,6 +115,7 @@ class World:
                 adapters={Channel.API: self.channel},
                 capabilities=self.capabilities,
                 clock=lambda: NOW,
+                human=self.human,
             )
         )
 

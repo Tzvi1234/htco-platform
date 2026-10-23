@@ -110,6 +110,12 @@ class FakeMarketplace:
             raise self.fail
         return Page(items=self.receipts, total_count=len(self.receipts), offset=0)
 
+    async def get_receipt(self, shop_id: int, receipt_id: int) -> Receipt:
+        self.calls.append(("get_receipt", shop_id, {"receipt_id": receipt_id}))
+        if self.fail is not None:
+            raise self.fail
+        return receipt(receipt_id)
+
 
 @dataclass
 class EtsyShops:
@@ -583,3 +589,57 @@ async def test_fake_browser__preflight_reports_ready() -> None:
     report = await recorded_browser().preflight(uuid.uuid4())
 
     assert report.ok
+
+
+async def test_api__one_receipt_by_id__read_with_get_receipt() -> None:
+    marketplace = FakeMarketplace()
+    office_ = Office(receipts_action(API), EtsyApiChannel(marketplace, EtsyShops()))
+
+    result = await office_.gateway.submit(ask(input={"receipt_id": 91}))
+
+    assert result.outcome is ActionOutcome.SUCCEEDED
+    assert marketplace.calls == [("get_receipt", ETSY_SHOP, {"receipt_id": 91})]
+    assert result.output is not None
+    assert result.output["count"] == 1
+    [row] = cast("list[dict[str, Any]]", result.output["receipts"])
+    assert row["receipt_id"] == 91
+
+
+async def test_handed_to_human__another_request_with_the_same_key__refused_and_task_kept() -> None:
+    office_ = Office(receipts_action(BROWSER), recorded_browser(RecipeOutcome.challenge()))
+    first = await office_.gateway.submit(ask())
+    [task_id] = office_.human.tasks
+    office_.human.complete(task_id, {"receipts": [], "count": 0})
+
+    other = await office_.gateway.submit(ask(input={"limit": 99}))  # same key, another request
+    done = await office_.gateway.submit(ask())
+
+    assert (other.outcome, other.error_code) == (ActionOutcome.DENIED, "idempotency_conflict")
+    assert (done.outcome, done.execution_id) == (ActionOutcome.SUCCEEDED, first.execution_id)
+
+
+def test_gateway__a_browser_or_human_channel_needs_a_task_store() -> None:
+    world = World()
+
+    with pytest.raises(ValueError, match="task store"):
+        ActionGatewayService(
+            GatewayParts(
+                catalog=receipts_action(BROWSER),
+                registry=office,
+                store=MemoryActionStore(),
+                principals=world.principals,
+                shops=Shops(),
+                approvals=Approvals(),
+                adapters={Channel.BROWSER: recorded_browser()},
+                capabilities=Capabilities(),
+                clock=lambda: NOW,
+            )
+        )
+
+
+async def test_hand_off_without_a_task_store__failed_not_stranded() -> None:
+    world = World(hand_off=True, human=None)
+
+    result = await world.gateway.submit(ask())
+
+    assert (result.outcome, result.error_code) == (ActionOutcome.FAILED, "no_task_store")

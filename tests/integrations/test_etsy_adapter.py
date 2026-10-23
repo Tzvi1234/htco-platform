@@ -980,3 +980,30 @@ def test_app_key_fingerprint__the_same_key_pasted_with_surrounding_whitespace__t
 
     for pasted in (f"{KEYSTRING}\n", f" {KEYSTRING} ", f"{KEYSTRING}\r\n", f"\t{KEYSTRING}"):
         assert app_key_fingerprint(pasted) == first
+
+
+async def test_get_receipt__one_receipt_by_id__with_a_get(make: Callable[..., Harness]) -> None:
+    script = Scripted(ok(fixture("receipts_page.json")["results"][0]))
+    harness = make(script)
+
+    async with harness.client:
+        receipt = await harness.adapter.get_receipt(SHOP_ID, 3000000001)
+
+    [request] = script.requests
+    assert request.method == "GET"
+    assert request.url.path == f"/v3/application/shops/{SHOP_ID}/receipts/3000000001"
+    assert receipt.receipt_id == 3000000001
+    assert receipt.grand_total == MarketplaceMoney(amount=2599, divisor=100, currency_code="USD")
+
+
+async def test_get_receipt__an_invalid_id__refused_before_any_call(
+    make: Callable[..., Harness],
+) -> None:
+    script = Scripted(ok({}))
+    harness = make(script)
+
+    async with harness.client:
+        with pytest.raises(ValueError, match="receipt_id"):
+            await harness.adapter.get_receipt(SHOP_ID, 0)
+
+    assert script.requests == []
