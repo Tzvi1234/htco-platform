@@ -36,6 +36,7 @@ from htco_application.execution.gateway import UnavailableGateway
 from htco_application.marketplace import MarketplacePort
 from htco_application.mfa import Enrollment, Factor
 from htco_application.order_history import OrderSync
+from htco_application.order_intake import QueuedSyncRequests
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
 from htco_application.shop_data_cache import ShopDataCache
@@ -70,6 +71,7 @@ from htco_persistence.etsy_orders import PostgresOrderStore
 from htco_persistence.etsy_webhooks import PostgresWebhookInbox, PostgresWebhookShops
 from htco_persistence.idempotency import PostgresIdempotencyStore
 from htco_persistence.identity import PostgresMembershipReader
+from htco_persistence.jobs import PostgresJobQueue
 from htco_persistence.readiness import DatabaseCheck
 from htco_persistence.shop_integrations import (
     PostgresCapabilityStore,
@@ -513,13 +515,17 @@ def _etsy_wiring(
         # Etsy webhooks (slice 5.3): configured when enabled; Etsy's deliveries prove them.
         webhooks_configured=settings.etsy_webhooks_enabled,
     )
-    # The stored order history: synced from the API process until the Phase 5 worker exists.
+    # The stored order history (slice 5.4): synced by the worker's Etsy Order Intake once
+    # HTCO_ORDER_SYNC_IN_API is off; until then this process runs it as the fallback.
     history = OrderSync(
         store=PostgresOrderStore(database),
         source=adapter,
         tokens=tokens,
         clock=lambda: datetime.now(UTC),
         audit=PostgresAuditLog(database),
+        requests=None
+        if settings.order_sync_in_api
+        else QueuedSyncRequests(PostgresJobQueue(database), offload=anyio.to_thread.run_sync),
     )
     dashboard = ShopDashboard(
         connections=vault,

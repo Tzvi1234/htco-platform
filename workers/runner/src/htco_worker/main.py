@@ -19,12 +19,32 @@ import anyio
 import httpx
 import structlog
 
-from htco_application.automation.durable import EXECUTION_JOB, DurableAutomationEngine
+from htco_application.approvals import GatewayApprovals, MemoryApprovalService
+from htco_application.automation.durable import (
+    EXECUTION_JOB,
+    DurableAutomationEngine,
+    Handler,
+)
 from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_tokens import VaultAccessTokenProvider
-from htco_application.etsy_webhooks import WEBHOOK_JOB, EngineOrderIntake, WebhookProcessor
-from htco_application.execution.gateway import UnavailableGateway
-from htco_application.execution.service import EVENT_DESTINATION
+from htco_application.etsy_webhooks import (
+    ORDER_INTAKE,
+    WEBHOOK_JOB,
+    EngineOrderIntake,
+    WebhookProcessor,
+)
+from htco_application.execution.channels import EtsyApiChannel
+from htco_application.execution.gateway import (
+    ActionGateway,
+    Channel,
+    UnavailableGateway,
+)
+from htco_application.execution.guards import Guards
+from htco_application.execution.service import (
+    EVENT_DESTINATION,
+    ActionGatewayService,
+    GatewayParts,
+)
 from htco_application.jobs import ClaimedJob, JobError, JobQueue
 from htco_application.maintenance import (
     EXPIRY_JOB,
@@ -54,8 +74,15 @@ from htco_application.messaging import (
     PendingDelivery,
     deliver_outbox_message,
 )
+from htco_application.order_intake import (
+    ORDER_SYNC_JOB,
+    EngineSyncTrigger,
+    OrderIntake,
+)
 from htco_application.shop_capabilities import CapabilityChecks
+from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_domain.actors import ActorKind, ActorRef
+from htco_domain.guards import BreakerPolicy
 from htco_domain.integrations import TokenHealth
 from htco_integrations.etsy import (
     EtsyAdapter,
@@ -64,9 +91,12 @@ from htco_integrations.etsy import (
     app_key_fingerprint,
 )
 from htco_integrations.etsy_oauth import EtsyOAuthClient
+from htco_persistence.actions import PostgresActionStore
 from htco_persistence.automation import PostgresAutomationCatalog, PostgresExecutionStore
 from htco_persistence.database import Database, tenant_scope
+from htco_persistence.etsy_orders import PostgresOrderStore
 from htco_persistence.etsy_webhooks import PostgresWebhookInbox, PostgresWorkerShops
+from htco_persistence.guards import PostgresBreakers, PostgresRateLimiter, PostgresSlots
 from htco_persistence.jobs import PostgresJobQueue, PostgresWorkerHeartbeats
 from htco_persistence.maintenance import PostgresPurgeStore, PostgresShopDirectory
 from htco_persistence.messaging import PostgresOutbox
@@ -75,6 +105,7 @@ from htco_persistence.shop_integrations import (
     PostgresRefreshLock,
     PostgresTokenVault,
 )
+from htco_persistence.worker_gateway import PostgresShopFacts
 from htco_platform.crypto import EnvelopeSealer
 from htco_platform.http import new_async_http_client
 from htco_platform.logs import configure_logging
@@ -206,20 +237,87 @@ def automation_handlers(engine: DurableAutomationEngine, worker_id: str) -> dict
     return {EXECUTION_JOB: execute}
 
 
-def worker_engine(database: Database) -> DurableAutomationEngine:
-    """The engine on the worker's pool: definitions from the database, no handler deployed yet
-    (no automation is ready; slice 5.11 adds the first three)."""
+def worker_engine(
+    database: Database,
+    *,
+    gateway: ActionGateway | None = None,
+    handlers: Mapping[str, Handler] | None = None,
+) -> DurableAutomationEngine:
+    """The engine on the worker's pool: definitions from the database, the deployed handlers
+    (Etsy Order Intake, slice 5.4) and the Action Gateway. A deployed handler still runs only once
+    its automation is `ready` (the owner's activation, slice 5.11)."""
     catalog = PostgresAutomationCatalog(database)
     return DurableAutomationEngine(
         lambda: registry_from_rows(catalog.current()),
         PostgresExecutionStore(database),
-        {},
+        dict(handlers or {}),
         clock=_now,
         jitter=random.random,
-        # The Action Gateway arrives in slice 5.12; until then every action is refused.
-        gateway=UnavailableGateway(),
+        gateway=gateway or UnavailableGateway(),
         offload=anyio.to_thread.run_sync,
     )
+
+
+class NoUsers:
+    """Users never act in the worker: a user actor is refused as unknown."""
+
+    def principal(self, user_id: uuid.UUID, organization_id: uuid.UUID) -> None:  # noqa: ARG002 - the port
+        return None
+
+    def organization_of_shop(self, shop_id: uuid.UUID) -> None:  # noqa: ARG002 - the port
+        return None
+
+
+def worker_gateway(
+    settings: WorkerSettings, database: Database, adapter: EtsyAdapter | None
+) -> ActionGateway:
+    """The real Action Gateway for reads (`HTCO_WORKER_ACTION_GATEWAY=reads`, the default), or
+    `UnavailableGateway` (`off`, or without the Etsy app). Writes never run: they wait for an
+    approval that only Phase 7's approval store can give."""
+    if settings.worker_action_gateway == "off" or adapter is None:
+        return UnavailableGateway()
+    tools = read_registry(settings.registry_path).registry()
+    catalog = PostgresAutomationCatalog(database)
+    facts = PostgresShopFacts(database)
+    users = NoUsers()
+    return ActionGatewayService(
+        GatewayParts(
+            catalog=read_action_catalog(
+                settings.registry_path, settings.action_schemas_path, tools
+            ),
+            registry=lambda: registry_from_rows(catalog.current()),
+            store=PostgresActionStore(database),
+            principals=users,
+            shops=users,
+            # The shared approval contract (5.14) in memory: a write waits for an approval
+            # no one can give in the worker (Postgres approvals are Phase 7), so none runs.
+            approvals=GatewayApprovals(MemoryApprovalService(clock=_now), clock=_now),
+            adapters={Channel.API: EtsyApiChannel(adapter, facts)},
+            capabilities=facts,
+            clock=_now,
+            guards=Guards(
+                breakers=PostgresBreakers(database, BreakerPolicy()),
+                rates=PostgresRateLimiter(database),
+                slots=PostgresSlots(database),
+            ),
+        )
+    )
+
+
+def intake_handlers(database: Database, vault: PostgresTokenVault) -> dict[str, Handler]:
+    """Etsy Order Intake's handler (slice 5.4)."""
+    return {ORDER_INTAKE: OrderIntake(store=PostgresOrderStore(database), shops=vault, clock=_now)}
+
+
+def order_sync_handlers(engine: DurableAutomationEngine) -> dict[str, JobHandler]:
+    """The `etsy.order_sync` job (slice 5.4): a requested history run of the shop's orders."""
+    trigger = EngineSyncTrigger(engine, offload=anyio.to_thread.run_sync)
+
+    async def run(job: ClaimedJob) -> None:
+        started = await trigger.run(job)
+        _log.info("etsy.order_sync_requested", started=started, job_id=str(job.id))
+
+    return {ORDER_SYNC_JOB: run}
 
 
 def webhook_handlers(processor: WebhookProcessor) -> dict[str, JobHandler]:
@@ -307,10 +405,13 @@ async def _serve(settings: WorkerSettings) -> None:
         checks=checks,
         purge=PostgresPurgeStore(database),
     ) | outbox_handlers(PostgresOutbox(database), {EVENT_DESTINATION: AcceptedEvents()})
-    engine = worker_engine(database)
+    gateway = worker_gateway(settings, database, adapter)
+    deployed = {} if vault is None or adapter is None else intake_handlers(database, vault)
+    engine = worker_engine(database, gateway=gateway, handlers=deployed)
     handlers |= automation_handlers(engine, settings.worker_id)
-    if adapter is not None:  # webhook jobs wait in the queue until Etsy is configured
+    if adapter is not None:  # webhook and sync jobs wait in the queue until Etsy is configured
         handlers |= webhook_handlers(webhook_processor(database, engine, adapter))
+        handlers |= order_sync_handlers(engine)
     worker = Worker(
         queue,
         PostgresWorkerHeartbeats(database),

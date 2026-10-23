@@ -27,8 +27,18 @@ from htco_application.marketplace import (
     display_name,
 )
 from htco_application.order_history import SyncState
+from htco_application.order_ingest import (
+    BACKFILL,
+    SYNC,
+    IngestContext,
+    IngestPlan,
+    StoredOrder,
+    plan_ingest,
+)
 from htco_application.shop_integrations import ShopIntegration
+from htco_domain.orders import OrderState
 from htco_persistence.database import Database
+from htco_persistence.messaging import add_outbox_in
 
 _STATE = """
 select s.shop_id, s.etsy_shop_id, s.backfill_offset, s.backfill_completed_at,
@@ -54,33 +64,50 @@ on conflict (shop_id) do update set
   etsy_shop_id = excluded.etsy_shop_id
 """
 
-_UPSERT_ORDER = """
-insert into app.etsy_orders as o (
-  organization_id, shop_id, etsy_shop_id, receipt_id, status, is_paid, is_shipped,
-  grand_total_amount, grand_total_divisor, grand_total_currency,
-  subtotal_amount, subtotal_divisor, subtotal_currency,
-  shipping_amount, shipping_divisor, shipping_currency,
-  discount_amount, discount_divisor, discount_currency,
-  country_code, shipments, etsy_created_at, etsy_updated_at, synced_at
-) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-          %s, %s)
-on conflict (shop_id, receipt_id) do update set
-  etsy_shop_id = excluded.etsy_shop_id, status = excluded.status, is_paid = excluded.is_paid,
-  is_shipped = excluded.is_shipped,
-  grand_total_amount = excluded.grand_total_amount,
-  grand_total_divisor = excluded.grand_total_divisor,
-  grand_total_currency = excluded.grand_total_currency,
-  subtotal_amount = excluded.subtotal_amount, subtotal_divisor = excluded.subtotal_divisor,
-  subtotal_currency = excluded.subtotal_currency,
-  shipping_amount = excluded.shipping_amount, shipping_divisor = excluded.shipping_divisor,
-  shipping_currency = excluded.shipping_currency,
-  discount_amount = excluded.discount_amount, discount_divisor = excluded.discount_divisor,
-  discount_currency = excluded.discount_currency,
-  country_code = excluded.country_code, shipments = excluded.shipments,
-  etsy_created_at = excluded.etsy_created_at, etsy_updated_at = excluded.etsy_updated_at,
-  synced_at = excluded.synced_at
-where o.etsy_updated_at <= excluded.etsy_updated_at
-returning o.receipt_id
+_STORED_ORDER = """
+select etsy_updated_at, order_state, receipt_sha256 from app.etsy_orders
+where shop_id = %s and receipt_id = %s
+for update
+"""
+
+_ORDER_COLUMNS = (
+    "etsy_shop_id", "status", "is_paid", "is_shipped",
+    "grand_total_amount", "grand_total_divisor", "grand_total_currency",
+    "subtotal_amount", "subtotal_divisor", "subtotal_currency",
+    "shipping_amount", "shipping_divisor", "shipping_currency",
+    "discount_amount", "discount_divisor", "discount_currency",
+    "country_code", "shipments", "etsy_created_at", "etsy_updated_at", "synced_at",
+    "order_state", "receipt_sha256",
+)  # fmt: skip
+
+# A new order. `do nothing` on a race: the caller reads the row that won and updates it. (No
+# `do update`: that would need the worker to read every column, money included.)
+_INSERT_ORDER = (
+    "insert into app.etsy_orders (organization_id, shop_id, receipt_id, "  # noqa: S608 - fixed column names
+    + ", ".join(_ORDER_COLUMNS)
+    + ") values ("
+    + ", ".join(["%s"] * (3 + len(_ORDER_COLUMNS)))
+    + ") on conflict (shop_id, receipt_id) do nothing returning receipt_id"
+)
+
+_UPDATE_ORDER = (
+    "update app.etsy_orders set "  # noqa: S608 - fixed column names
+    + ", ".join(f"{column} = %s" for column in _ORDER_COLUMNS)
+    + " where shop_id = %s and receipt_id = %s"
+)
+
+_INSERT_STATUS_EVENT = """
+insert into app.order_status_events (
+  id, organization_id, shop_id, receipt_id, from_state, to_state, source, observed_at,
+  etsy_updated_at, receipt_sha256, execution_id, correlation_id
+) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+_INSERT_ENTRY = """
+insert into app.financial_entries (
+  id, organization_id, shop_id, receipt_id, kind, position, amount, currency, certainty, source,
+  occurred_at
+) values (%s, %s, %s, %s, %s, %s, %s, %s, 'estimated', 'etsy_receipt', %s)
 """
 
 _INSERT_ITEM = """
@@ -163,91 +190,205 @@ def _shipments(receipt: OrderReceipt, *, tracking: bool) -> Jsonb:
     )
 
 
-def _upsert(
+def _stored(
+    connection: psycopg.Connection[Any], shop: uuid.UUID, receipt_id: int
+) -> StoredOrder | None:
+    row = connection.execute(_STORED_ORDER, [shop, receipt_id]).fetchone()
+    if row is None:
+        return None
+    return StoredOrder(
+        etsy_updated_at=row[0],
+        order_state=None if row[1] is None else OrderState(row[1]),
+        receipt_sha256=None if row[2] is None else bytes(row[2]),
+    )
+
+
+def _order_values(
+    integration: ShopIntegration, r: OrderReceipt, plan: IngestPlan, now: datetime
+) -> list[Any]:
+    return [
+        integration.etsy_shop_id,
+        r.status,
+        r.is_paid,
+        r.is_shipped,
+        *_triple(r.grand_total),
+        *_triple(r.subtotal),
+        *_triple(r.shipping_total),
+        *_triple(r.discount_total),
+        r.country_code,
+        _shipments(r, tracking=False),
+        r.created_at,
+        r.updated_at,
+        now,
+        None if plan.state is None else plan.state.value,
+        plan.receipt_sha256,
+    ]
+
+
+def _plan(
+    connection: psycopg.Connection[Any],
+    integration: ShopIntegration,
+    receipt: OrderReceipt,
+    context: IngestContext,
+) -> tuple[StoredOrder | None, IngestPlan]:
+    stored = _stored(connection, integration.shop_id, receipt.receipt_id)
+    return stored, plan_ingest(
+        receipt,
+        stored,
+        context,
+        organization_id=integration.organization_id,
+        shop_id=integration.shop_id,
+    )
+
+
+def _write_order(
+    connection: psycopg.Connection[Any],
+    integration: ShopIntegration,
+    r: OrderReceipt,
+    context: IngestContext,
+    now: datetime,
+) -> IngestPlan:
+    shop = integration.shop_id
+    stored, plan = _plan(connection, integration, r, context)
+    if not plan.write:
+        return plan
+    if stored is None:
+        values = [integration.organization_id, shop, r.receipt_id]
+        inserted = connection.execute(
+            _INSERT_ORDER, [*values, *_order_values(integration, r, plan, now)]
+        ).fetchone()
+        if inserted is not None:
+            return plan
+        # Another writer stored it first: plan again against the row that won.
+        stored, plan = _plan(connection, integration, r, context)
+        if not plan.write:
+            return plan
+    connection.execute(
+        _UPDATE_ORDER, [*_order_values(integration, r, plan, now), shop, r.receipt_id]
+    )
+    return plan
+
+
+def _ingest(
     connection: psycopg.Connection[Any],
     integration: ShopIntegration,
     receipts: Sequence[OrderReceipt],
     now: datetime,
-) -> None:
+    context: IngestContext,
+) -> list[IngestPlan]:
+    """Every receipt through `plan_ingest`, in the caller's transaction: one shared path for the
+    backfill, the sync, webhooks and reconciliation (AC-5.4.6)."""
     organization, shop = integration.organization_id, integration.shop_id
+    plans: list[IngestPlan] = []
     for r in receipts:
-        changed = connection.execute(
-            _UPSERT_ORDER,
-            [
-                organization,
-                shop,
-                integration.etsy_shop_id,
-                r.receipt_id,
-                r.status,
-                r.is_paid,
-                r.is_shipped,
-                *_triple(r.grand_total),
-                *_triple(r.subtotal),
-                *_triple(r.shipping_total),
-                *_triple(r.discount_total),
-                r.country_code,
-                _shipments(r, tracking=False),
-                r.created_at,
-                r.updated_at,
-                now,
-            ],
-        ).fetchone()
-        if changed is None:  # an older copy than the stored one: nothing changes
+        plan = _write_order(connection, integration, r, context, now)
+        plans.append(plan)
+        if not plan.write:
             continue
-        key = [shop, r.receipt_id]
-        for table in ("etsy_order_items", "etsy_order_refunds", "etsy_order_buyers"):
+        _replace_children(connection, integration, r, plan)
+        for transition in plan.transitions:
             connection.execute(
-                f"delete from app.{table} where shop_id = %s and receipt_id = %s",  # noqa: S608 - fixed table names
-                key,
-            )
-        for position, line in enumerate(r.lines):
-            connection.execute(
-                _INSERT_ITEM,
+                _INSERT_STATUS_EVENT,
                 [
+                    uuid.uuid7(),
                     organization,
                     shop,
                     r.receipt_id,
-                    line.transaction_id,
-                    position,
-                    line.listing_id,
-                    line.title,
-                    line.sku,
-                    line.quantity,
-                    *_triple(line.unit_price),
-                    line.is_digital,
-                    line.expected_ship_date,
+                    None if transition.from_state is None else transition.from_state.value,
+                    transition.to_state.value,
+                    context.source.value,
+                    now,
+                    r.updated_at,
+                    plan.receipt_sha256,
+                    context.execution_id,
+                    context.correlation_id,
                 ],
             )
-        for position, refund in enumerate(r.refunds):
-            connection.execute(
-                _INSERT_REFUND,
-                [
-                    organization,
-                    shop,
-                    r.receipt_id,
-                    position,
-                    *_triple(refund.amount),
-                    refund.created_at,
-                    refund.reason,
-                    refund.status,
-                    refund.note_from_issuer,
-                ],
-            )
-        address = r.shipping_address
+        for event in plan.events:
+            add_outbox_in(connection, event, now=now)
+    return plans
+
+
+_CHILD_TABLES = ("etsy_order_items", "etsy_order_refunds", "etsy_order_buyers", "financial_entries")
+
+
+def _replace_children(
+    connection: psycopg.Connection[Any],
+    integration: ShopIntegration,
+    r: OrderReceipt,
+    plan: IngestPlan,
+) -> None:
+    """The receipt's items, refunds, buyer row and estimated money, replaced as a whole."""
+    organization, shop = integration.organization_id, integration.shop_id
+    key = [shop, r.receipt_id]
+    for table in _CHILD_TABLES:
         connection.execute(
-            _INSERT_BUYER,
+            f"delete from app.{table} where shop_id = %s and receipt_id = %s",  # noqa: S608 - fixed table names
+            key,
+        )
+    for position, line in enumerate(r.lines):
+        connection.execute(
+            _INSERT_ITEM,
             [
                 organization,
                 shop,
                 r.receipt_id,
-                r.buyer_name,
-                None if address is None else address.first_line,
-                None if address is None else address.second_line,
-                None if address is None else address.city,
-                None if address is None else address.state,
-                None if address is None else address.postal_code,
-                None if address is None else address.country_code,
-                _shipments(r, tracking=True),
+                line.transaction_id,
+                position,
+                line.listing_id,
+                line.title,
+                line.sku,
+                line.quantity,
+                *_triple(line.unit_price),
+                line.is_digital,
+                line.expected_ship_date,
+            ],
+        )
+    for position, refund in enumerate(r.refunds):
+        connection.execute(
+            _INSERT_REFUND,
+            [
+                organization,
+                shop,
+                r.receipt_id,
+                position,
+                *_triple(refund.amount),
+                refund.created_at,
+                refund.reason,
+                refund.status,
+                refund.note_from_issuer,
+            ],
+        )
+    address = r.shipping_address
+    connection.execute(
+        _INSERT_BUYER,
+        [
+            organization,
+            shop,
+            r.receipt_id,
+            r.buyer_name,
+            None if address is None else address.first_line,
+            None if address is None else address.second_line,
+            None if address is None else address.city,
+            None if address is None else address.state,
+            None if address is None else address.postal_code,
+            None if address is None else address.country_code,
+            _shipments(r, tracking=True),
+        ],
+    )
+    for entry in plan.entries:
+        connection.execute(
+            _INSERT_ENTRY,
+            [
+                uuid.uuid7(),
+                organization,
+                shop,
+                r.receipt_id,
+                entry.kind,
+                entry.position,
+                entry.amount.amount,
+                entry.amount.currency,
+                entry.occurred_at,
             ],
         )
 
@@ -287,6 +428,7 @@ class PostgresOrderStore:
         *,
         next_offset: int | None,
         now: datetime,
+        context: IngestContext = BACKFILL,
     ) -> None:
         def run() -> None:
             with self._database.connection() as connection, connection.transaction():
@@ -299,7 +441,7 @@ class PostgresOrderStore:
                         now,
                     ],
                 )
-                _upsert(connection, integration, receipts, now)
+                _ingest(connection, integration, receipts, now, context)
                 connection.execute(
                     """
                     update app.etsy_order_sync_state
@@ -320,6 +462,7 @@ class PostgresOrderStore:
         *,
         finished_at: datetime | None,
         now: datetime,
+        context: IngestContext = SYNC,
     ) -> None:
         def run() -> None:
             with self._database.connection() as connection, connection.transaction():
@@ -332,7 +475,7 @@ class PostgresOrderStore:
                         now,
                     ],
                 )
-                _upsert(connection, integration, receipts, now)
+                _ingest(connection, integration, receipts, now, context)
                 if finished_at is not None:
                     connection.execute(
                         """
@@ -344,6 +487,23 @@ class PostgresOrderStore:
                     )
 
         await anyio.to_thread.run_sync(run)
+
+    async def ingest_receipts(
+        self,
+        integration: ShopIntegration,
+        receipts: Sequence[OrderReceipt],
+        *,
+        context: IngestContext,
+        now: datetime,
+    ) -> tuple[IngestPlan, ...]:
+        """Store receipts read one by one (a webhook's receipt) in one transaction, with no
+        checkpoint change."""
+
+        def run() -> tuple[IngestPlan, ...]:
+            with self._database.connection() as connection, connection.transaction():
+                return tuple(_ingest(connection, integration, receipts, now, context))
+
+        return await anyio.to_thread.run_sync(run)
 
     async def record_failure(self, shop_id: uuid.UUID, *, error: str, now: datetime) -> None:
         def run() -> None:

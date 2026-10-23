@@ -456,6 +456,19 @@ class EtsyAdapter:
         )
         return _parse("list_order_receipts", lambda data: _page(data, _order_receipt, offset), body)
 
+    async def get_order_receipt(
+        self, shop_id: int, receipt_id: int, *, tokens: AccessTokenProvider | None = None
+    ) -> OrderReceipt:
+        """One receipt for the stored order history (`getShopReceipt`, a GET), parsed like
+        `list_order_receipts`: contact data is never read."""
+        if receipt_id < 1:
+            raise ValueError("receipt_id must be a positive Etsy receipt ID")
+        body = await self._request(
+            "GET", "get_order_receipt", shop_id, f"/shops/{shop_id}/receipts/{receipt_id}", {},
+            urgent=False, tokens=tokens,
+        )  # fmt: skip
+        return _parse("get_order_receipt", _order_receipt, body)
+
     async def list_reviews(
         self,
         shop_id: int,

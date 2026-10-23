@@ -2,6 +2,7 @@
 
 import os
 import socket
+from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -42,6 +43,12 @@ class WorkerSettings(BaseSettings):
     etsy_daily_quota_floor: int = Field(default=500, ge=0)
     token_vault_key: SecretStr | None = None
     token_vault_previous_keys: SecretStr | None = None
+    # The Action Gateway (slice 5.4): `reads` (default) runs Etsy reads through the real gateway,
+    # writes refused until approvals exist (5.14); `off` switches back to refusing every action.
+    worker_action_gateway: Literal["reads", "off"] = "reads"
+    # The reviewed registry and the action contracts, copied into the image next to the code.
+    registry_path: Path = Path("registry")
+    action_schemas_path: Path = Path("packages/contracts/actions")
 
     @field_validator(
         "etsy_keystring",

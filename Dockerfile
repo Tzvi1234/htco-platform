@@ -28,6 +28,10 @@ RUN groupadd --system --gid 10001 htco \
  && useradd --system --uid 10001 --gid htco --no-create-home --home-dir /nonexistent \
       --shell /usr/sbin/nologin htco
 COPY --from=build /app/.venv /app/.venv
+# The worker's Action Gateway reads the reviewed registry and the action contracts (slice 5.4).
+COPY --from=build /src/registry /app/registry
+COPY --from=build /src/packages/contracts/actions /app/packages/contracts/actions
+WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

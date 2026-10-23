@@ -26,11 +26,15 @@ from htco_application.jobs import JsonValue
 from htco_application.marketplace import (
     MarketplaceMoney,
     MarketplaceNotFoundError,
+    MarketplacePermissionError,
     MarketplaceShop,
     MarketplaceWriteRefusedError,
+    OrderReceipt,
     Page,
     Receipt,
 )
+from htco_application.order_receipts import receipt_to_json
+from htco_domain.actors import ActorKind
 
 SECURITY_CHALLENGE = "security_challenge"
 HUMAN_CHANNEL = "human_channel"
@@ -56,6 +60,19 @@ class EtsyReads(Protocol):
     ) -> Page[Receipt]: ...
 
     async def get_receipt(self, shop_id: int, receipt_id: int) -> Receipt: ...
+
+    async def list_order_receipts(  # noqa: PLR0913 - the port's filters
+        self,
+        shop_id: int,
+        *,
+        min_created: datetime | None,
+        min_last_modified: datetime | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        urgent: bool = False,
+    ) -> Page[OrderReceipt]: ...
+
+    async def get_order_receipt(self, shop_id: int, receipt_id: int) -> OrderReceipt: ...
 
 
 class EtsyShopIds(Protocol):
@@ -109,7 +126,35 @@ class EtsyApiChannel:
             return ChannelOutcome(
                 output={"shop_id": shop.shop_id, "name": shop.name, "currency": shop.currency_code}
             )
+        if request.input.get("order_history") is True:
+            if request.actor.kind is not ActorKind.AUTOMATION:
+                # The whole receipt, buyer data included, is Etsy Order Intake's alone (ADR-0018).
+                raise MarketplacePermissionError(
+                    "the order history form is for the order intake automation", status=403
+                )
+            return ChannelOutcome(output=await self._order_history(etsy_shop, request.input))
         return ChannelOutcome(output=await self._receipts(etsy_shop, request.input))
+
+    async def _order_history(
+        self, etsy_shop: int, values: Mapping[str, JsonValue]
+    ) -> dict[str, JsonValue]:
+        """Receipts as the order history stores them (`order_receipts`): an R1 output the
+        gateway returns and never stores."""
+        receipt_id = values.get("receipt_id")
+        if isinstance(receipt_id, int):
+            one = await self._etsy.get_order_receipt(etsy_shop, receipt_id)
+            return {"receipts": [receipt_to_json(one)], "count": 1}
+        since = values.get("min_last_modified")
+        page = await self._etsy.list_order_receipts(
+            etsy_shop,
+            min_created=None,
+            min_last_modified=None
+            if not isinstance(since, int)
+            else datetime.fromtimestamp(since, UTC),
+            limit=int(str(values.get("limit", 100))),
+            offset=int(str(values.get("offset", 0))),
+        )
+        return {"receipts": [receipt_to_json(r) for r in page.items], "count": page.total_count}
 
     async def _receipts(
         self, etsy_shop: int, values: Mapping[str, JsonValue]
