@@ -24,7 +24,8 @@ from htco_persistence.database import Database
 from htco_persistence.messaging import add_outbox_in
 
 _SNAPSHOT = """
-select etsy_updated_at, grand_total_amount, grand_total_divisor, grand_total_currency
+select etsy_updated_at,
+       private.order_grand_total_matches(shop_id, receipt_id, %s, %s, %s)
 from app.etsy_orders
 where shop_id = %s and receipt_id = %s
 """
@@ -78,16 +79,22 @@ class PostgresOrderAutomationStore:
     def __init__(self, database: Database) -> None:
         self._database = database
 
-    async def snapshot(self, shop_id: uuid.UUID, receipt_id: int) -> StoredSnapshot | None:
+    async def snapshot(self, shop_id: uuid.UUID, receipt: OrderReceipt) -> StoredSnapshot | None:
+        total = receipt.grand_total
+        receipt_id = receipt.receipt_id
+
         def run() -> StoredSnapshot | None:
             with self._database.connection() as c:
-                row = c.execute(_SNAPSHOT, [shop_id, receipt_id]).fetchone()
+                row = c.execute(
+                    _SNAPSHOT,
+                    [total.amount, total.divisor, total.currency_code, shop_id, receipt_id],
+                ).fetchone()
                 if row is None:
                     return None
                 items = c.execute(_ITEMS, [shop_id, receipt_id]).fetchall()
             return StoredSnapshot(
                 etsy_updated_at=row[0],
-                grand_total=(int(row[1]), int(row[2]), str(row[3])),
+                total_matches=row[1] is True,
                 items=tuple((int(r[0]), int(r[1])) for r in items),
             )
 

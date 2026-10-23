@@ -36,7 +36,7 @@ def stored_of(r: object, **changes: object) -> StoredSnapshot:
     found = receipt(1, created=NOW) if r is None else r
     values: dict[str, object] = {
         "etsy_updated_at": found.updated_at,  # type: ignore[attr-defined]
-        "grand_total": (2400, 100, "USD"),
+        "total_matches": True,
         "items": tuple((li.transaction_id, li.quantity) for li in found.lines),  # type: ignore[attr-defined]
     } | changes
     return StoredSnapshot(**values)  # type: ignore[arg-type]
@@ -55,15 +55,14 @@ ETSY = receipt(7, created=NOW, lines=(line(70), line(71)))
         (stored_of(ETSY), []),
         (None, ["missing"]),
         (stored_of(ETSY, orders=0), ["missing"]),
-        (stored_of(ETSY, grand_total=(2500, 100, "USD")), ["totals"]),
-        (stored_of(ETSY, grand_total=(2400, 100, "EUR")), ["totals"]),
+        (stored_of(ETSY, total_matches=False), ["totals"]),
         (stored_of(ETSY, items=((700, 1),)), ["items"]),
         (stored_of(ETSY, items=((700, 2), (710, 1))), ["items"]),
-        (stored_of(ETSY, grand_total=(1, 100, "USD"), items=()), ["totals", "items"]),
+        (stored_of(ETSY, total_matches=False, items=()), ["totals", "items"]),
         # Another version of the order: its own ingest and verification follow.
         (stored_of(ETSY, etsy_updated_at=NOW - timedelta(hours=1), items=()), []),
     ],
-    ids=["match", "not-stored", "no-order-row", "total", "currency", "fewer-items",
+    ids=["match", "not-stored", "no-order-row", "total", "fewer-items",
          "other-quantity", "both", "other-version"],
 )  # fmt: skip
 def test_verify__one_difference_per_kind_and_none_for_a_match(
@@ -73,10 +72,10 @@ def test_verify__one_difference_per_kind_and_none_for_a_match(
 
 
 def test_verify__a_total_difference__never_quotes_an_amount() -> None:
-    [found] = verify(stored_of(ETSY, grand_total=(9999, 100, "USD")), ETSY)
+    [found] = verify(stored_of(ETSY, total_matches=False), ETSY)
 
-    assert "9999" not in str(found)
     assert "2400" not in str(found)
+    assert "24.00" not in str(found)
 
 
 # --- AC-5.11.5: counters --------------------------------------------------------------------

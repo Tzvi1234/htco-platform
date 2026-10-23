@@ -349,11 +349,13 @@ async def test_verification__a_matching_order_none__a_changed_one_drifts_once(
     tenant, integration = await stored(admin, worker_db, receipt)
     store = PostgresOrderAutomationStore(worker_db)
     with tenant_scope(tenant.organization_id):
-        snapshot = await store.snapshot(integration.shop_id, receipt.receipt_id)
+        snapshot = await store.snapshot(integration.shop_id, receipt)
         assert snapshot is not None
         assert verify(snapshot, receipt) == ()
         changed = replace(receipt, grand_total=replace(receipt.grand_total, amount=2700))
-        differences = verify(snapshot, changed)
+        changed_snapshot = await store.snapshot(integration.shop_id, changed)
+        assert changed_snapshot is not None
+        differences = verify(changed_snapshot, changed)
         first = await store.record_differences(integration, changed, differences,
                                                execution_id=uuid.uuid4(), correlation_id="c",
                                                now=NOW)  # fmt: skip
@@ -385,7 +387,7 @@ async def test_verification__a_matching_order_none__a_changed_one_drifts_once(
 
 def test_snapshot_type__holds_no_buyer_field() -> None:
     assert set(StoredSnapshot.__dataclass_fields__) == {
-        "etsy_updated_at", "grand_total", "items", "orders",
+        "etsy_updated_at", "total_matches", "items", "orders",
     }  # fmt: skip
 
 

@@ -9,10 +9,11 @@
 -- and what it counted before, so a replayed cancellation changes nothing the second time.
 --
 -- `app.sync_drifts` gains the kind `totals` (the stored grand total differs from Etsy's; the
--- values say which field, never an amount) and the source `verification`. The worker may read
--- the stored grand total's three columns to compare them; they are not personal data.
+-- values say which field, never an amount) and the source `verification`. The worker still reads
+-- no money column: `private.order_grand_total_matches` answers only whether the stored total
+-- equals the one it is given, for its job's organization.
 --
--- Safe on the live database: two new tables, two widened check constraints and one column grant.
+-- Safe on the live database: two new tables, two widened check constraints and one function.
 
 create table app.product_sales_counters (
   organization_id uuid not null,
@@ -87,6 +88,21 @@ alter table app.sync_drifts add constraint sync_drifts_source_check check (
   source in ('reconciliation', 'webhook', 'backfill', 'sync', 'verification')
 );
 
--- The stored grand total, to compare with Etsy's (no buyer data in these columns).
-grant select (grand_total_amount, grand_total_divisor, grand_total_currency)
-  on app.etsy_orders to htco_worker;
+-- Whether the stored grand total equals Etsy's, without the worker reading the amount. Null when
+-- the order is not stored in the worker's organization.
+create function private.order_grand_total_matches(
+  p_shop_id uuid, p_receipt_id bigint, p_amount bigint, p_divisor integer, p_currency text
+) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select o.grand_total_amount = p_amount
+     and o.grand_total_divisor = p_divisor
+     and o.grand_total_currency = p_currency
+  from app.etsy_orders o
+  where o.shop_id = p_shop_id
+    and o.receipt_id = p_receipt_id
+    and o.organization_id = (select private.worker_organization_id())
+$$;
+revoke all on function private.order_grand_total_matches(uuid, bigint, bigint, integer, text)
+  from public, anon, authenticated, service_role;
+grant execute on function private.order_grand_total_matches(uuid, bigint, bigint, integer, text)
+  to htco_worker;

@@ -75,10 +75,11 @@ async def _inline(work: Callable[[], Any]) -> Any:
 
 @dataclass(frozen=True)
 class StoredSnapshot:
-    """What verification compares: the stored order's version, grand total and items."""
+    """What verification compares: the stored order's version, whether its grand total equals
+    Etsy's (the worker never reads the amount), and its items."""
 
     etsy_updated_at: datetime
-    grand_total: tuple[int, int, str]  # amount, divisor, currency
+    total_matches: bool
     items: tuple[tuple[int, int], ...]  # (transaction_id, quantity), by transaction
     orders: int = 1  # stored orders for the receipt (the key allows one)
 
@@ -104,8 +105,7 @@ def verify(stored: StoredSnapshot | None, receipt: OrderReceipt) -> tuple[Differ
     if stored.etsy_updated_at != receipt.updated_at:
         return ()  # another version: its own ingest and verification follow
     found: list[Difference] = []
-    total = receipt.grand_total
-    if stored.grand_total != (total.amount, total.divisor, total.currency_code):
+    if not stored.total_matches:
         found.append(Difference(DriftKinds.TOTALS, {"grand_total": "stored"},
                                 {"grand_total": "differs"}))  # fmt: skip
     seen = tuple(sorted((line.transaction_id, line.quantity) for line in receipt.lines))
@@ -148,7 +148,9 @@ def difference_event(
 
 
 class VerificationStore(Protocol):
-    async def snapshot(self, shop_id: Any, receipt_id: int) -> StoredSnapshot | None: ...
+    async def snapshot(self, shop_id: Any, receipt: OrderReceipt) -> StoredSnapshot | None:
+        """The stored order of the receipt, compared with this copy's grand total."""
+        ...
 
     async def record_differences(  # noqa: PLR0913 - the order, what differed and the run
         self,
@@ -184,7 +186,7 @@ class OrderVerification:
         ):
             return Completed({"skipped": "not_connected"})
         receipt = await GatewayReceipts(ctx, self.clock).get_order_receipt(receipt_id)
-        stored = await self.store.snapshot(ctx.shop_id, receipt_id)
+        stored = await self.store.snapshot(ctx.shop_id, receipt)
         differences = verify(stored, receipt)
         recorded = await self.store.record_differences(
             integration, receipt, differences, execution_id=ctx.execution_id,
