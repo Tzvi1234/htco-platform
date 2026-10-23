@@ -31,7 +31,7 @@
 
 | Feature | What it shows or does | Data | Kind | Phase |
 |---|---|---|---|---|
-| **Profit per order** | Revenue − Etsy fees (ledger) − supplier cost − shipping − ads share, per order, labelled estimated or verified | `etsy.ledger.read`, `etsy.payments.read`, supplier mappings | D | 13 (estimated from 5 with fees only) |
+| **Profit per order** | AutoVA's profit field shown at once (estimated); then revenue − Etsy fees (ledger) − supplier cost − shipping − ads share, cross-checked with AutoVA's figure, a difference opens a finding | `autova_orders` (A-01), `etsy.ledger.read`, `etsy.payments.read`, supplier mappings | D | 8A (AutoVA figure), 13 (verified) |
 | **Ship-by SLA alerts** | Warning before `expected_ship_date` without a shipment; overdue escalation | Receipts, processing profiles, holidays | D | 6 (slice 6.9) |
 | **Refund-reason analysis → improvement tasks** | Groups refunds and cancellations by Etsy's reason and Eitan's annotated reason; opens one improvement task per recurring cause (listing, supplier, packaging) | `etsy_order_refunds` (#57), `orders.annotate` | D+AI | 9 (Eitan's reasons), 10 (tasks from patterns) |
 | **Seasonality and stock forecasts** | Units per listing by week and month, last year vs this year, a simple forecast (seasonal naive, then exponential smoothing) with a stock-out date | Order history store, inventory | D | 13 |
@@ -45,6 +45,9 @@
 | **Multi-shop comparison** | Shops side by side: revenue, orders, average order value, profit, ship time, review average, fee share | Per-shop stores | D | 21 (from 2 shops; the view can ship in 13) |
 | **Sale before/after results** | For a sale or coupon (recorded as a Human task or B-08), orders, revenue and margin for the same days before vs during vs after | Order history, the task record | D | 13 |
 | **Low-review alerts with drafted replies** | Alert for ≤ 3 stars (6.9); a drafted reply and a recovery task (Dana) | `etsy.reviews.read` | D+AI | 6 (alert), 14 (draft) |
+| **AutoVA quotes for a new product** | Every quote email parsed at once (no model) and shown under its product on a "New product quotes" screen, with a notification; the owner picks one (approval every time); then the quote is approved in AutoVA (Human task, then recipe A-02) and the supplier mapping is recorded | Quote mailbox (D-23), `supplier_quotes` | D | 7 (7.13–7.17), 8A (A-02) |
+| **AutoVA order monitor** | Every AutoVA order's status, paid flag, carrier and tracking from the Export (screen read as fallback); an Unpaid order past its window alerts the owner (payment stays AutoVA's Auto Pay; HTCO never pays) | Recipe A-01 | D | 8A |
+| **AutoVA tracking to Etsy** | The relay copies AutoVA's carrier and tracking number to Etsy (API first; B-12 or a Human task) | A-01, `etsy.shipments.create` | D | 6 (6.10, Human task until 8A), 8A (A-01) |
 
 ## 3. More from the Etsy docs
 
@@ -71,8 +74,8 @@
 |---|---|---|
 | 5 | Order store on the queue, webhooks for all 11 events, token and scope health | — |
 | 6 | Ship-by SLA, holiday calendar, country map and ship times, low-review and out-of-stock alerts, owner-triggered shipment writes | — |
-| 7 | Morning summary (email and in-app), vacation switch, sections, holiday writes | — |
-| 8A | Stats and ads exports (B-02, B-03) where scoped | — |
+| 7 | Morning summary (email and in-app), vacation switch, sections, holiday writes, AutoVA quotes from email to the owner's choice | — |
+| 8A | AutoVA recipes A-01 (orders, tracking, profit; Export first) and A-02 (approve the chosen quote); stats and ads exports (B-02, B-03) where scoped | — |
 | 9 | — | Eitan's refund and cancellation reasons |
 | 10 | Repeat customers, refund-pattern improvement tasks | Noa's review of findings |
 | 11 | Health checks, expiring listings, unintended edits, attribute, shipping and translation coverage, stats and ads uploads | Daniel's audits, Noam's fixes |

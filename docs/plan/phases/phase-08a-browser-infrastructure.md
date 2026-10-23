@@ -50,6 +50,7 @@ Phases 5 and 7 provided the contracts and the Human channel. Listing Health (11)
 
 ## Owner prerequisites
 
+- Confirm that AutoVA's terms allow reading his own account (A-01) and approving quotes (A-02) with a browser (A-08), and send a sample AutoVA Export file.
 - Fill in the scope rows B-01, B-02 and B-03 in [etsy-automation-approval.md](../../architecture/etsy-automation-approval.md). The written confirmation is recommended first ([D-16](../../product/ASSUMPTIONS.md#1-owner-decisions-needed)).
 - Approve the `browser-worker` cost (see Cost impact) and the fixed egress option ([D-18](../../product/ASSUMPTIONS.md#1-owner-decisions-needed)).
 - Consent text for storing the shop's Etsy password (ADR-0020 rule 6), approved by the owner.
@@ -116,7 +117,7 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 - **The recipe catalog** (`registry/browser-recipes/*.toml`, reviewed data). Each recipe has an ID, site, scope row (for Etsy), allowed URL patterns, allowed actions (click, type, download), its Playwright steps, an output Pydantic model and a verification rule.
 - **Extraction:** Playwright reads the DOM or the downloaded file; Pydantic validates it; Postgres stores it in typed tables with source, `observed_at` and the recipe version.
 - **The first recipes:** B-02 (stats export, to `listing_metrics` and `shop_traffic_daily`) and B-03 (ads report, to `ads_daily`). Both are behind their flags, and both are read-only.
-- **AutoVA (owner priority, 2026-10-23):** A-01 reads an order's status and tracking number from the owner's own AutoVA account (read-only; the input of the Phase 6 relay, slice 6.10). B-12 marks an Etsy order as shipped with that tracking number in Shop Manager, only when the API shipment write is blocked (A-04), with the owner's approval each time. A-01 is built right after the controller and the challenge handler, before B-02 and B-03.
+- **AutoVA (owner priority, 2026-10-23):** A-01 reads an order's status and tracking number from the owner's own AutoVA account (read-only; the input of the Phase 6 relay, slice 6.10). B-12 marks an Etsy order as shipped with that tracking number in Shop Manager, only when the API shipment write is blocked (A-04), with the owner's approval each time. A-01 is built right after the controller and the challenge handler, before B-02 and B-03. Updated 2026-10-23: AutoVA signs in with email and password and has no TOTP, so A-01 needs the Secret Broker (5.17) but not the Authenticator (8B). A-01 and A-02 are specified in slice 8A.10 and in the [AutoVA integration](../../architecture/autova-integration.md) page.
 
 | ID | Acceptance criterion |
 |---|---|
@@ -183,6 +184,33 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 |---|---|
 | AC-8A.9.1 | Creating an environment requires step-up and the consent text; both are recorded. |
 | AC-8A.9.2 | The kill switch stops running sessions within one step and refuses new ones. |
+
+### 8A.10 — AutoVA recipes: A-01 (Export first) and A-02 (approve the chosen quote)
+
+AutoVA is the owner's supplier platform (`beta.autova.io`). These recipes run in the owner's own AutoVA Browser Environment, within AutoVA's terms (A-08), each behind its own flag. AutoVA's password comes from the Secret Broker (5.17); there is no TOTP. See the [AutoVA integration](../../architecture/autova-integration.md) page for the fields and the money rule.
+
+- **A-01 — Orders and tracking (read).** It runs on a schedule (every 30 minutes by default) and whenever the tracking relay (6.10) asks.
+  1. **Export first:** press Export, download the file, parse it, validate every row (Pydantic), and upsert `autova_orders` snapshots with `source = autova_export`.
+  2. **Fallback:** if the export fails or fails its schema, read the Orders page table (`source = autova_screen`).
+
+  Its output feeds:
+  - the tracking relay (carrier and tracking number);
+  - the order monitor (Unpaid past its window → one alert and a Human task; HTCO never pays);
+  - the profit field (Phase 13 cross-check).
+- **A-02 — Approve the chosen quote and confirm the order (write).** It runs only for an Owner-approved quote (slice 7.17, policy W3). Steps:
+  1. open the quote by its AutoVA reference;
+  2. check that the supplier, price and terms on the page equal the approved quote, and stop if they differ;
+  3. approve that quote and confirm the order.
+
+  The allowed actions exclude every payment control. A payment step on the page stops the run and hands it to the owner. The result is verified by A-01 showing the order as confirmed, and only then is the supplier mapping recorded.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-8A.10.1 | With a valid export, A-01 stores one snapshot per AutoVA order and never reads the screen; with a broken export, it falls back to the screen once and records the fallback. |
+| AC-8A.10.2 | A status that moves backwards (for example Shipped → Confirmed) is stored as a drift with a finding, never applied. |
+| AC-8A.10.3 | A-02 refuses to act when the page's supplier, price or terms differ from the approved quote's hash, and opens a Human task. |
+| AC-8A.10.4 | A fixture page with a Pay button: A-02 never clicks it (the allowlist test), and a payment step stops the run with a Human task. |
+| AC-8A.10.5 | An AutoVA order still Unpaid after its window raises exactly one alert and one task for the owner; HTCO takes no payment action. |
 
 ## Test plan
 

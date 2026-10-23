@@ -13,7 +13,7 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 
 ## Progress
 
-- [ ] 14.1 Inbound pipeline: webhook, inbox, fetch, attachments, quarantine
+- [ ] 14.1 Inbound pipeline: webhook, inbox, fetch, attachments, quarantine (generalizes the quote mailbox of slice 7.14)
 - [ ] 14.2 Email Intake & Routing automation: threads, tickets, customer linking
 - [ ] 14.3 Quarantined extractor to a validated ticket schema
 - [ ] 14.4 Dana's drafts and approval-to-send
