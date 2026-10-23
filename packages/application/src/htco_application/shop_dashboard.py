@@ -28,6 +28,7 @@ from typing import Protocol
 
 from htco_application.access.authentication import AuthContext, NoMembershipError
 from htco_application.access.policy import Capability, Outcome, ShopRef, decide
+from htco_application.etsy_webhooks import WindowLimiter
 from htco_application.marketplace import (
     AccessTokenProvider,
     ListingDetails,
@@ -49,6 +50,7 @@ from htco_application.marketplace import (
 )
 from htco_application.order_history import (
     STALE_AFTER,
+    AuditAppender,
     HistorySync,
     OrderStatusChange,
     OrderSync,
@@ -285,6 +287,24 @@ class ShopDashboard:
     successes: SuccessRecorder | None = None
     # The stored order history; without it orders and statistics are always read live.
     history: OrderSync | None = None
+    # The bulk actions (slice 5.7): the export's audit, and the queue and per-shop rate limit of
+    # "Re-sync selected". Without them, those actions are refused as unavailable.
+    audit: AuditAppender | None = None
+    resync: ReceiptResyncQueue | None = None
+    resync_limiter: WindowLimiter | None = None
+
+
+class ReceiptResyncQueue(Protocol):
+    async def enqueue_receipts(
+        self,
+        integration: ShopIntegration,
+        receipt_ids: tuple[int, ...],
+        *,
+        now: datetime,
+        correlation_id: str,
+    ) -> int:
+        """One Etsy Order Intake re-read per receipt on the queue; the number queued."""
+        ...
 
 
 # --- Results -----------------------------------------------------------------------------------
@@ -1039,6 +1059,58 @@ async def _open(
         raise ShopNotConnectedError.of(integration)
     tokens = dashboard.tokens.pinned(shop_id, generation=integration.generation)
     return _Opened(dashboard, integration, tokens, now)
+
+
+@dataclass(frozen=True)
+class ExportSource:
+    """The orders an export writes, as the Orders screen would list them (slice 5.7)."""
+
+    organization_id: uuid.UUID
+    rows: tuple[tuple[OrderReceipt, OrderView], ...]
+    buyer_data: bool
+
+
+async def orders_for_export(  # noqa: PLR0913 - the shop, the caller and the screen's filter
+    dashboard: ShopDashboard,
+    auth: AuthContext,
+    shop_id: uuid.UUID,
+    *,
+    now: datetime,
+    period: OrderPeriod,
+    state: OrderFilter | None,
+    order_ids: tuple[int, ...],
+) -> ExportSource:
+    """Every order of the period that matches the filter (and the selection, when one is made),
+    newest first, from the stored history once complete; buyer data only for buyer-data roles."""
+    opened = await _open(dashboard, auth, shop_id, Capability.VIEW_ORDERS, now)
+    contact = _sees_buyer_contact(opened, auth, now)
+    sync_state = await _sync_state(opened)
+    start = _period_start(period, now)
+    receipts = await _stored(opened, sync_state, since=start, buyer_data=contact)
+    if receipts is None:
+        window = await opened.get(_RECEIPTS[period], opened.history(period))
+        receipts = tuple(r for r in window.value.receipts if start is None or r.created_at >= start)
+    chosen = set(order_ids)
+    rows = tuple(
+        (receipt, view)
+        for receipt in receipts
+        if not chosen or receipt.receipt_id in chosen
+        for view in (_order_view(receipt, now, contact=contact),)
+        if _matches(view, state)
+    )
+    return ExportSource(opened.integration.organization_id, rows, contact)
+
+
+async def resync_target(
+    dashboard: ShopDashboard, auth: AuthContext, shop_id: uuid.UUID, *, now: datetime
+) -> tuple[ShopIntegration, bool]:
+    """The shop's connection, and whether the caller may re-read its orders (`retry_sync`)."""
+    opened = await _open(dashboard, auth, shop_id, Capability.VIEW_ORDERS, now)
+    integration = opened.integration
+    principal = auth.principal_for(integration.organization_id)
+    shop = ShopRef(id=shop_id, organization_id=integration.organization_id)
+    allowed = decide(principal, Capability.RETRY_SYNC, shop=shop, now=now).outcome
+    return integration, allowed is Outcome.ALLOW
 
 
 async def _sync_state(opened: _Opened) -> SyncState | None:

@@ -346,9 +346,7 @@ async def test_resync__one_job_per_receipt_on_the_shops_orders_lock() -> None:
     requests = QueuedSyncRequests(queue)
     integration = _vault().rows[SHOP]
 
-    queued = await requests.enqueue_receipts(
-        integration, (11, 12), now=NOW, correlation_id="req-9"
-    )
+    queued = await requests.enqueue_receipts(integration, (11, 12), now=NOW, correlation_id="req-9")
     again = await requests.enqueue_receipts(
         integration, (11,), now=NOW + timedelta(seconds=10), correlation_id="req-10"
     )
@@ -356,7 +354,7 @@ async def test_resync__one_job_per_receipt_on_the_shops_orders_lock() -> None:
     jobs = list(queue.jobs.values())
     assert (queued, again) == (2, 1)
     assert len(jobs) == 2  # the same receipt within the minute is one job
-    assert sorted(j.spec.payload["receipt_id"] for j in jobs) == [11, 12]
+    assert sorted(str(j.spec.payload["receipt_id"]) for j in jobs) == ["11", "12"]
     assert {j.spec.payload["reason"] for j in jobs} == {"resync"}
     assert {j.spec.lock_key for j in jobs} == {f"shop:{SHOP}:orders"}
     assert {j.spec.correlation_id for j in jobs} == {"req-9"}

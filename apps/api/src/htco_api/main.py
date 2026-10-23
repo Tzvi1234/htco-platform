@@ -5,7 +5,7 @@ import random
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import anyio
 import httpx
@@ -564,6 +564,12 @@ def _etsy_wiring(
         cache=ShopDataCache(clock=lambda: datetime.now(UTC)),
         successes=vault,
         history=history,
+        # The Orders screen's bulk actions (slice 5.7): the export's audit, and "Re-sync
+        # selected" on the queue (the worker's Etsy Order Intake re-reads, GET-only), at most
+        # five requests a minute per shop and instance.
+        audit=PostgresAuditLog(database),
+        resync=QueuedSyncRequests(PostgresJobQueue(database), offload=anyio.to_thread.run_sync),
+        resync_limiter=WindowLimiter(5, window=timedelta(minutes=1)),
     )
     return etsy, adapter, checks, dashboard
 
