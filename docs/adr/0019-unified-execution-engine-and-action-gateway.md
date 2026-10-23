@@ -1,6 +1,6 @@
 # ADR-0019: One execution engine and one Action Gateway for automations and AI employees
 
-- **Status:** Accepted 2026-10-23: its trigger, the Phase 5 alignment (slice 5.0), merged with #53, #62 and #58 (proposed with the owner's architecture upgrade brief, 2026-10-23)
+- **Status:** Proposed (owner's architecture upgrade brief, 2026-10-23); accepted when the Phase 5 alignment slice merges
 - **Date:** 2026-10-23
 - **Deciders:** Owner, engineering
 - **Amends:** [ADR-0013](0013-automation-engine.md) (the engine gains a gateway and four channels), [ADR-0014](0014-tool-registry.md) (tool calls of every actor pass the gateway), [ADR-0007](0007-job-queue.md) (the queue is the engine's only transport; optional Valkey), [ADR-0003](0003-agent-runtime-langgraph.md) (the LangGraph Postgres checkpointer is named; LangGraph never runs deterministic work)
@@ -89,4 +89,8 @@ Option 3.
 ## Validation log
 
 - 2026-10-23 — Proposed with the plan update. The contracts and state machines are specified in [execution-engine.md](../architecture/execution-engine.md).
-- 2026-10-23 — Accepted: the alignment slice 5.0 merged, and slices 5.1, 5.2, 5.4, 5.10 and 5.12 to 5.18 were built on it. Two owner-approved tooling deviations from Decision §2 and §5 are recorded in [execution-engine.md](../architecture/execution-engine.md) §2 and §8: standard-library dataclass contracts instead of Pydantic models, and in-house breaker, limiter and retries instead of PyBreaker, aiolimiter and Tenacity. Those sections take precedence where this ADR names the libraries. The architecture audit of the same day ([review](../reviews/2026-10-23-architecture-audit.md)) lists the Etsy reads that still bypass the gateway.
+- 2026-10-23 — Still proposed. Slices 5.1, 5.2, 5.4, 5.10 and 5.12 to 5.18 are built on it, but slice 5.0 is not complete. Two of its criteria have no test yet ([architecture audit](../reviews/2026-10-23-architecture-audit.md), P1-6):
+  - AC-5.0.1: the migration-order test does not exist.
+  - AC-5.0.2: no test traces one correlation ID from trigger to execution to job to outbox. `tests/application/test_messaging.py:186` checks only the outbox-to-delivery-job hop.
+
+  Accept the ADR when every 5.0 criterion is met. Two owner-approved tooling deviations from Decision §2 and §5 are recorded in [execution-engine.md](../architecture/execution-engine.md) §2 and §8: standard-library dataclass contracts instead of Pydantic models, and in-house breaker, limiter and retries instead of PyBreaker, aiolimiter and Tenacity. Those sections take precedence where this ADR names the libraries. The architecture audit of the same day ([review](../reviews/2026-10-23-architecture-audit.md)) lists the Etsy reads that still bypass the gateway.

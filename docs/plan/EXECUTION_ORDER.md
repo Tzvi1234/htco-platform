@@ -13,8 +13,8 @@
 | 1 | **This plan PR reviewed by the owner** (ADRs 0019–0022, Phase 5 change list) | — | The owner approves, or lists changes | S |
 | 2 | **Align #53**: renumber the migration after `20261022120000` and pgTAP `08` → `09`; add `correlation_id` and `causation_id` to jobs; rebase on the plan | 1 | AC-5.0.1, AC-5.0.2 (jobs part); AC-5.1.x unchanged and green | S |
 | 3 | Merge #53 (slice 5.1) | 2 | CI green, Codex review handled | — |
-| 4 | **Align #55** (closed; replaced by #62, which merged as slice 5.2): renumber (migration and pgTAP `09` → `10`); add `action_execution_id` and `correlation_id` to the outbox; rebase | 3 | AC-5.0.2 (outbox part); AC-5.2.x green | S |
-| 5 | Merge #55 (slice 5.2) | 4 | CI green | — |
+| 4 | **Align the outbox** (done in #62, which replaced #55): renumber (migration and pgTAP `09` → `10`); add `action_execution_id` and `correlation_id` to the outbox; rebase | 3 | AC-5.0.2 (outbox part); AC-5.2.x green | S |
+| 5 | Merge #62 (slice 5.2; #55 was closed) | 4 | CI green | — |
 | 6 | **Align #58**: renumber (migration and pgTAP `10` → `11`); `HandlerContext`; `ExecutionState.WAITING` with its transitions; rebase | 5 | AC-5.0.3, AC-5.0.4; AC-5.10.x green | M |
 | 7 | Merge #58 (slice 5.10) | 6 | CI green | — |
 | 8 | Owner decision on #54 (`agent-worker`, +$5) and merge | 3, D-22 | AC-5.1 deployment notes; budget check passes | S |
