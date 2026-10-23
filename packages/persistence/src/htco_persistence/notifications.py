@@ -76,8 +76,8 @@ class PostgresNotificationStore:
                     """
                     insert into app.notifications
                       (id, organization_id, user_id, kind, params, dedup_key, shop_id, incident_id,
-                       created_at)
-                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       created_at, in_app)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     on conflict (organization_id, user_id, dedup_key) do nothing
                     returning id
                     """,
@@ -91,6 +91,7 @@ class PostgresNotificationStore:
                         n.shop_id,
                         n.incident_id,
                         n.created_at,
+                        n.in_app,
                     ],
                 ).fetchone()
                 if row is None:
@@ -164,7 +165,8 @@ class PostgresNotificationInbox:
             rows = connection.execute(
                 f"""
                 select {_NOTIFICATION_COLUMNS} from app.notifications
-                where organization_id = %s and user_id = %s and (not %s or read_at is null)
+                where organization_id = %s and user_id = %s and in_app
+                  and (not %s or read_at is null)
                 order by created_at desc, id desc
                 limit %s
                 """,  # noqa: S608 - a constant column list
@@ -173,7 +175,7 @@ class PostgresNotificationInbox:
             unread = connection.execute(
                 """
                 select count(*) from app.notifications
-                where organization_id = %s and user_id = %s and read_at is null
+                where organization_id = %s and user_id = %s and in_app and read_at is null
                 """,
                 [organization_id, user_id],
             ).fetchone()

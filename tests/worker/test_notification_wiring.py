@@ -4,7 +4,7 @@ the log adapter by default and Resend only when configured with its key."""
 import httpx
 import pytest
 
-from htco_application.incidents import INCIDENT_OPENED
+from htco_application.incidents import INCIDENT_OPENED, INCIDENT_RESOLVED
 from htco_application.notifications import EMAIL_DESTINATION, NOTIFICATION_REQUESTED, EventDeliverer
 from htco_integrations.email import LogEmailAdapter, ResendEmailAdapter
 from htco_platform.settings import ConfigurationError, load_settings
@@ -23,7 +23,7 @@ def test_events_and_email_are_delivered_by_default_with_the_log_adapter() -> Non
     deliverers = notification_deliverers(settings, NoDatabase(), httpx.AsyncClient())  # type: ignore[arg-type]
     events = deliverers["events.publish"]
     assert isinstance(events, EventDeliverer)
-    assert set(events.subscribers) == {INCIDENT_OPENED, NOTIFICATION_REQUESTED}
+    assert set(events.subscribers) == {INCIDENT_OPENED, INCIDENT_RESOLVED, NOTIFICATION_REQUESTED}
     assert EMAIL_DESTINATION in deliverers
     assert isinstance(email_port(settings, httpx.AsyncClient()), LogEmailAdapter)
 

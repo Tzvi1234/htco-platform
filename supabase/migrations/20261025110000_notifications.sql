@@ -30,6 +30,8 @@ create table app.notifications (
   incident_id uuid references app.incidents (id) on delete set null,
   created_at timestamptz not null,
   read_at timestamptz,
+  -- False: the recipient chose email only for this kind; the inbox leaves it out.
+  in_app boolean not null default true,
   constraint notifications_shop_fkey foreign key (shop_id, organization_id)
     references app.shops (id, organization_id) on delete cascade,
   constraint notifications_recipient_key unique (organization_id, user_id, dedup_key)

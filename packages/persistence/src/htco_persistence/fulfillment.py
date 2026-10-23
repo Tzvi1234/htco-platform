@@ -373,17 +373,24 @@ class PostgresIncidentReader:
         self._database = database
 
     def list_incidents(
-        self, organization_id: uuid.UUID, *, open_only: bool, limit: int
+        self,
+        organization_id: uuid.UUID,
+        *,
+        open_only: bool,
+        limit: int,
+        shop_ids: frozenset[uuid.UUID] | None = None,
     ) -> tuple[IncidentRecord, ...]:
+        shops = None if shop_ids is None else list(shop_ids)
         with self._database.connection() as connection:
             rows = connection.execute(
                 f"""
                 select {_INCIDENT_COLUMNS} from app.incidents
                 where organization_id = %s and (not %s or state <> 'resolved')
+                  and (%s::uuid[] is null or shop_id = any(%s::uuid[]))
                 order by detected_at desc
                 limit %s
                 """,  # noqa: S608 - a constant column list
-                [organization_id, open_only, limit],
+                [organization_id, open_only, shops, shops, limit],
             ).fetchall()
         return tuple(_incident(r) for r in rows)
 

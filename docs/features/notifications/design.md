@@ -11,14 +11,14 @@
 
 ## Data (`20261025110000_notifications.sql`)
 
-- `app.notifications`: unique `(organization_id, user_id, dedup_key)`; `params` identifiers only (1 kB).
+- `app.notifications`: unique `(organization_id, user_id, dedup_key)`; `params` identifiers only (1 kB); `in_app` false when the recipient chose email only for that kind (the inbox leaves it out).
 - `app.notification_settings` (language) and `app.notification_preferences` (in-app, email per kind): the user's own.
 - `app.email_deliveries`: sent, failed or skipped, with a status code; never the address or the body.
 - `app.worker_notification_recipients(roles, user, shop)` and `app.worker_member_email(user)`: security definer, executable only by the worker, scoped to its job's organization.
 
 ## Flows
 
-1. A source writes an event in its own transaction (`incidents.opened.v1` with the incident; `notifications.requested.v1` from the API).
+1. A source writes an event (`incidents.opened.v1` and `incidents.resolved.v1` both have a subscriber) in its own transaction (`incidents.opened.v1` with the incident; `notifications.requested.v1` from the API).
 2. The outbox delivers it to `events.publish`; `EventDeliverer` hands it to its subscriber (idempotent).
 3. `NotificationService` finds the recipients by audience (owners, owners and admins, or the user), applies preferences (security emails cannot be turned off), and writes the rows and one `email.send` message per recipient, keyed `email:{dedup_key}:{user_id}`, in one transaction.
 4. `email.send` renders the template, reads the address now, and sends with the outbox key as the provider's `Idempotency-Key`. 409, 429, 5xx and network errors are temporary (the outbox's backoff); other 4xx are permanent (recorded `failed`, not retried).

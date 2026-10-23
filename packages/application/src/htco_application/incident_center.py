@@ -48,8 +48,16 @@ class IncidentReader(Protocol):
     """Synchronous; run in a worker thread."""
 
     def list_incidents(
-        self, organization_id: uuid.UUID, *, open_only: bool, limit: int
-    ) -> Sequence[IncidentRecord]: ...
+        self,
+        organization_id: uuid.UUID,
+        *,
+        open_only: bool,
+        limit: int,
+        shop_ids: frozenset[uuid.UUID] | None = None,
+    ) -> Sequence[IncidentRecord]:
+        """Newest first; `shop_ids` (a shop-scoped role's grants) is applied before `limit`
+        and leaves out organization-wide incidents."""
+        ...
 
     def incident_detail(
         self, organization_id: uuid.UUID, incident_id: uuid.UUID
@@ -97,12 +105,12 @@ def list_incidents(  # noqa: PLR0913 - the caller, the reader and the filters
     """Raises `PermissionError` for a role that may not view incidents."""
     organization = _organization(auth, organization_id)
     principal = auth.principal_for(organization)
-    if (
-        decide(principal, Capability.VIEW_INCIDENTS, shop=None, now=now).outcome
-        is not Outcome.ALLOW
-    ):
+    overall = decide(principal, Capability.VIEW_INCIDENTS, shop=None, now=now)
+    if overall.outcome is not Outcome.ALLOW:
         raise PermissionError("the role may not view incidents")
-    rows = reader.list_incidents(organization, open_only=open_only, limit=limit)
+    # Shop scope in the query, before the limit (Codex review of #87).
+    shops = principal.granted_shops if overall.scope is Scope.GRANTED_SHOPS else None
+    rows = reader.list_incidents(organization, open_only=open_only, limit=limit, shop_ids=shops)
     return tuple(
         i
         for i in rows

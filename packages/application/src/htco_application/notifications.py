@@ -41,6 +41,7 @@ from htco_domain.notifications import (
 
 EMAIL_DESTINATION = "email.send"
 EVENTS_DESTINATION = "events.publish"
+INCIDENT_RESOLVED_EVENT = "incidents.resolved.v1"
 SENDER = "HTCO Office <noreply@office.ht-co.app>"
 
 _log = logging.getLogger(__name__)
@@ -83,6 +84,8 @@ class Notification:
     shop_id: uuid.UUID | None = None
     incident_id: uuid.UUID | None = None
     read_at: datetime | None = None
+    # False: the recipient wants this kind by email only; the inbox does not show it.
+    in_app: bool = True
 
 
 class NotificationStore(Protocol):
@@ -166,6 +169,7 @@ class NotificationService:
                 created_at=now,
                 shop_id=request.shop_id,
                 incident_id=request.incident_id,
+                in_app=wants_in_app(request.kind, recipient.preference),
             )
             notifications.append(notification)
             if wants_email(request.kind, recipient.preference):
@@ -190,12 +194,15 @@ class EventSubscriber(Protocol):
 
 @dataclass
 class IncidentNotifications:
-    """`incidents.opened.v1` → one notification (and email) per owner and admin."""
+    """`incidents.opened.v1` and `incidents.resolved.v1` → one notification per owner and
+    admin (an email too for an opening, by default)."""
 
     service: NotificationService
 
     async def handle(self, message: OutboxMessage) -> None:
         payload = message.payload
+        resolved = payload.get("event_type") == INCIDENT_RESOLVED_EVENT
+        kind = NotificationKind.INCIDENT_RESOLVED if resolved else NotificationKind.INCIDENT_OPENED
         incident_id = uuid.UUID(str(payload["incident_id"]))
         params: dict[str, object] = {
             "incident_id": str(incident_id),
@@ -207,8 +214,8 @@ class IncidentNotifications:
         await self.service.notify(
             NotificationRequest(
                 organization_id=message.organization_id,
-                kind=NotificationKind.INCIDENT_OPENED,
-                dedup_key=f"incident_opened:{incident_id}",
+                kind=kind,
+                dedup_key=f"{kind.value}:{incident_id}",
                 params=params,
                 shop_id=message.shop_id,
                 incident_id=incident_id,

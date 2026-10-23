@@ -32,3 +32,7 @@ The notification dispatcher (6.4) consumes `incidents.opened.v1`.
 - The machine follows FR-INC-02 literally; evidence may arrive in any open state, so every open state has an edge to `VERIFYING`, except `REMEDIATION_PROPOSED`, whose only exits are remedies: evidence there records `DEVELOPER_REQUIRED` (handled outside HTCO) before verifying.
 - `move` never resolves: resolution has its own call that needs evidence.
 - Stale writes are refused (`StaleIncident`): the store locks the row and checks the state the caller read.
+
+## The incident center API (slice 6.4, for 6.5)
+
+`GET /v1/incidents` applies a shop-scoped role's grants in the query, before the limit, so other shops' incidents never crowd out its own (Codex review of #87).
