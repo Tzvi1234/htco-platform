@@ -195,3 +195,20 @@ def test_receipt_json__round_trips(receipt_id: int, cents: int, paid: bool, ship
     receipt = replace(receipt, is_paid=paid)
     back = receipt_from_json(json.loads(json.dumps(receipt_to_json(receipt))))
     assert back == receipt
+
+
+@pytest.mark.ac("AC-5.4.5")
+def test_delivered_after_the_same_copy_was_stored__still_moves_to_delivered() -> None:
+    """Codex review of #72: a sync stored the shipped receipt first; the later `order.delivered`
+    re-read returns the identical copy, and the delivery must not be skipped."""
+    receipt = shipped(paid_receipt(), minutes=30)
+    stored = stored_after(receipt, plan(receipt))
+    delivered = IngestContext(IngestSource.WEBHOOK, delivered=frozenset({receipt.receipt_id}))
+
+    p = plan(receipt, stored, delivered)
+
+    assert p.write
+    assert p.transitions == (Transition(_O.SHIPPED, _O.DELIVERED),)
+    assert p.state is _O.DELIVERED
+    again = plan(receipt, stored_after(receipt, p), delivered)
+    assert not again.write  # once delivered, a replay changes nothing
