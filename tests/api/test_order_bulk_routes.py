@@ -1,4 +1,5 @@
-"""`POST /v1/shops/{shop_id}/order-exports|order-resyncs` (slice 5.7): the CSV is made on the server,
+"""`POST /v1/shops/{shop_id}/order-exports|order-resyncs` (slice 5.7): the CSV is made on the
+server,
 streamed `no-store` and audited; the re-sync queues one intake re-read per receipt, is
 rate-limited and audited (invented data)."""
 

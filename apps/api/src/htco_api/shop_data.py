@@ -1115,7 +1115,10 @@ def _add_bulk_routes(router: APIRouter, *, clock: Callable[[], datetime]) -> Non
         responses={
             200: {"content": {"text/csv": {"schema": {"type": "string"}}},
                   "description": "The CSV file (UTF-8 with a byte-order mark)"},
-            **problem_responses({**_SHOP_ERRORS, 503: "Not set up (orders-bulk-unavailable)"}),
+            **problem_responses(
+                {**_SHOP_ERRORS, 400: "The body is not valid JSON",
+                 503: "Not set up (orders-bulk-unavailable)"}
+            ),
         },
     )  # fmt: skip
     async def export_shop_orders(
@@ -1154,6 +1157,7 @@ def _add_bulk_routes(router: APIRouter, *, clock: Callable[[], datetime]) -> Non
         responses=problem_responses(
             {
                 **_SHOP_ERRORS,
+                400: "The body is not valid JSON",
                 403: "The role may not re-sync orders (orders-action-forbidden)",
                 429: "Re-synced moments ago (resync-rate-limited; see Retry-After)",
                 503: "Re-syncs are not set up (orders-bulk-unavailable)",
