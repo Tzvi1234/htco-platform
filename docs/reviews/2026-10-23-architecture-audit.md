@@ -241,7 +241,7 @@ Each item says what to write into the plan now:
   - no Pydantic in the adapters;
   - routers never import adapters.
 - SOFTWARE_DESIGN §4.3 lists them.
-- The router contract covers the whole `htco_api` package, exempting only `main` and `cli` (follow-up to #76 after its Codex review).
+- The router contract covers the whole `htco_api` package, exempting only `main` and `cli`, once #80 (the follow-up to #76 after its Codex review) merges. Until then, a new router module must be added to its list.
 
 ### P3 findings
 
