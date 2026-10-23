@@ -59,7 +59,8 @@ async def test_verify__token_without_aal__is_treated_as_aal1() -> None:
         ({"aal": "aal9"}, TokenProblem.MALFORMED),
         ({"role": "anon"}, TokenProblem.NOT_A_USER),
         ({"role": "service_role"}, TokenProblem.NOT_A_USER),
-        ({"nbf": int(time.time()) + 600}, TokenProblem.MALFORMED),
+        # A day ahead: the suite may run longer than ten minutes after collection.
+        ({"nbf": int(time.time()) + 86400}, TokenProblem.MALFORMED),
     ],
     ids=[
         "expired",
