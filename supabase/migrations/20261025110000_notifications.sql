@@ -118,9 +118,10 @@ create policy email_deliveries_worker on app.email_deliveries for all to htco_wo
   using (organization_id = (select private.worker_organization_id()))
   with check (organization_id = (select private.worker_organization_id()));
 
+-- In `app` (the worker has no usage on `private`); executable by the worker only.
 -- The active members of the worker's organization with one of `p_roles` (or the one user), with
 -- their language. Owners and admins reach every shop; other roles only with access to `p_shop`.
-create function private.notification_recipients(p_roles text[], p_user uuid, p_shop uuid)
+create function app.worker_notification_recipients(p_roles text[], p_user uuid, p_shop uuid)
 returns table (user_id uuid, locale text)
 language sql stable security definer set search_path = '' as $$
   select m.user_id, coalesce(s.locale, 'he')
@@ -136,11 +137,12 @@ language sql stable security definer set search_path = '' as $$
       or exists (select 1 from app.shop_access a where a.membership_id = m.id and a.shop_id = p_shop)
     )
 $$;
-revoke all on function private.notification_recipients(text[], uuid, uuid) from public;
-grant execute on function private.notification_recipients(text[], uuid, uuid) to htco_worker;
+revoke all on function app.worker_notification_recipients(text[], uuid, uuid)
+  from public, anon, authenticated, service_role;
+grant execute on function app.worker_notification_recipients(text[], uuid, uuid) to htco_worker;
 
 -- One active member's sign-in address, at send time; null when they left the organization.
-create function private.member_email(p_user uuid) returns text
+create function app.worker_member_email(p_user uuid) returns text
 language sql stable security definer set search_path = '' as $$
   select u.email::text
   from auth.users u
@@ -149,5 +151,5 @@ language sql stable security definer set search_path = '' as $$
     and m.organization_id = (select private.worker_organization_id())
   limit 1
 $$;
-revoke all on function private.member_email(uuid) from public;
-grant execute on function private.member_email(uuid) to htco_worker;
+revoke all on function app.worker_member_email(uuid) from public, anon, authenticated, service_role;
+grant execute on function app.worker_member_email(uuid) to htco_worker;

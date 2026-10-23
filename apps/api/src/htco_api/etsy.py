@@ -31,6 +31,7 @@ import structlog
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
+from htco_api import notices
 from htco_api.auth import CurrentAuth, web_session_id
 from htco_api.identity import ORGANIZATION_REQUIRED, ShopView, problem_responses
 from htco_api.policy_guard import (
@@ -95,6 +96,7 @@ from htco_domain.integrations import (
     ShopCapability,
     TokenHealth,
 )
+from htco_domain.notifications import NotificationKind
 
 ETSY_UNAVAILABLE = ProblemType(
     "etsy-unavailable",
@@ -419,6 +421,10 @@ def etsy_router(*, clock: Callable[[], datetime]) -> APIRouter:
         except EtsyShopConnectedElsewhereError:
             raise ProblemError(ETSY_SHOP_CONNECTED_ELSEWHERE) from None
         response.headers["Cache-Control"] = "no-store"
+        await notices.shop_changed(
+            request, NotificationKind.SHOP_CONNECTED, connected.integration.organization_id,
+            connected.integration.shop_id, at=now,
+        )  # fmt: skip
         probed = await _probe_after_connect(request, connected, auth, now)
         return _connected_view(connected, now, probed)
 
@@ -539,6 +545,9 @@ def _add_connection_routes(router: APIRouter, *, clock: Callable[[], datetime]) 
         dashboard = getattr(request.app.state, "dashboard", None)
         if isinstance(dashboard, ShopDashboard):
             dashboard.cache.forget(shop_id)
+        await notices.shop_changed(
+            request, NotificationKind.SHOP_DISCONNECTED, after.organization_id, shop_id, at=now
+        )
         return _view(IntegrationSummary.of(after), now)
 
     @router.delete(

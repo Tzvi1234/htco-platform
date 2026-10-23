@@ -71,12 +71,19 @@ class WorkerSettings(BaseSettings):
     # The reviewed registry and the action contracts, copied into the image next to the code.
     registry_path: Path = Path("registry")
     action_schemas_path: Path = Path("packages/contracts/actions")
+    # Email (slice 6.4): `log` (default) sends nothing and logs the kind and key; `resend` sends
+    # through Resend, only once the owner verified office.ht-co.app (SPF, DKIM, DMARC).
+    email_provider: Literal["log", "resend"] = "log"
+    resend_api_key: SecretStr | None = None
+    email_reply_to: str = Field(default="support@ht-co.app", pattern=r"^[^@\s]+@[^@\s]+$")
+    office_url: str = Field(default="https://office.ht-co.app", pattern=r"^https://[^\s]+$")
 
     @field_validator(
         "etsy_keystring",
         "etsy_shared_secret",
         "token_vault_key",
         "token_vault_previous_keys",
+        "resend_api_key",
         mode="before",
     )
     @classmethod
@@ -143,6 +150,8 @@ class WorkerSettings(BaseSettings):
         } & set(self.schedules)
         if etsy_schedules and ring is None:
             raise ValueError(f"{sorted(etsy_schedules)} need HTCO_TOKEN_VAULT_KEY")
+        if self.email_provider == "resend" and self.resend_api_key is None:
+            raise ValueError("HTCO_EMAIL_PROVIDER=resend needs HTCO_RESEND_API_KEY")
         etsy_app = self.etsy_keystring is not None and self.etsy_shared_secret is not None
         for needs_app in (PROBE_SCHEDULE.kind, RECONCILIATION_TICK.kind):
             if needs_app in self.schedules and not etsy_app:

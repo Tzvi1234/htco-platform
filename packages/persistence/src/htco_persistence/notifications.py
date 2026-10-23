@@ -1,7 +1,7 @@
 """Notifications, preferences and email deliveries on Postgres (slice 6.4), as the worker.
 
 Synchronous; run in worker threads. Members are reached only through
-`private.notification_recipients` and `private.member_email`, inside the job's organization.
+`app.worker_notification_recipients` and `app.worker_member_email`, inside the job's organization.
 """
 
 import uuid
@@ -40,7 +40,7 @@ class PostgresNotificationStore:
             rows = connection.execute(
                 """
                 select r.user_id, r.locale, p.in_app, p.email
-                from private.notification_recipients(%s, %s, %s) r
+                from app.worker_notification_recipients(%s, %s, %s) r
                 left join app.notification_preferences p
                   on p.organization_id = %s and p.user_id = r.user_id and p.kind = %s
                 order by r.user_id
@@ -108,7 +108,7 @@ class PostgresEmailDirectory:
 
     def address_of(self, organization_id: uuid.UUID, user_id: uuid.UUID) -> str | None:  # noqa: ARG002 - the job's organization scopes the function
         with self._database.connection() as connection:
-            row = connection.execute("select private.member_email(%s)", [user_id]).fetchone()
+            row = connection.execute("select app.worker_member_email(%s)", [user_id]).fetchone()
         return None if row is None or row[0] is None else str(row[0])
 
     def record_email(  # noqa: PLR0913 - one delivery's facts

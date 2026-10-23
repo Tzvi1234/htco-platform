@@ -14,7 +14,7 @@
 - [x] 6.1 Tracking detection (migration `20261025100000_fulfillment_incidents.sql`, pgTAP `19_fulfillment_incidents`; [feature docs](../../features/fulfillment-monitoring/overview.md); inactive until 6.7)
 - [x] 6.2 SLA policies and inspector (default window 10 business days until the owner agrees the windows; schedule `fulfillment.inspect`, off by flag)
 - [x] 6.3 Incidents ([feature docs](../../features/incidents/overview.md); AC-6.3.4's trigger from `sync_drifts` is wired after 5.5 merges)
-- [ ] 6.4 Notifications and email
+- [x] 6.4 Notifications and email (migration `20261025110000_notifications.sql`, pgTAP `25_notifications`; [feature docs](../../features/notifications/overview.md); Resend built and OFF until the owner's DNS for `office.ht-co.app`)
 - [ ] 6.5 Incident center UI
 - [ ] 6.6 Guarded shipment write
 - [ ] 6.7 Fulfillment automations activated

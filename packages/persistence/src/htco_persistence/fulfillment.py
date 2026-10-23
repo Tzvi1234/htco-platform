@@ -12,12 +12,20 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
+from htco_application.incident_center import IncidentDetail, IncidentHistoryEntry
 from htco_application.incidents import IncidentRecord, IncidentStep, StaleIncident
 from htco_application.messaging import OutboxMessage
 from htco_application.sla_inspector import AwaitingOrder
 from htco_application.tracking_sync import RecordedTracking, TrackingObservation, TrackingSource
 from htco_domain.fulfillment import BusinessCalendar, SlaPolicy, WindowUnit
-from htco_domain.incidents import Cause, IncidentState, ResourceKind, Severity
+from htco_domain.incidents import (
+    Cause,
+    Evidence,
+    EvidenceKind,
+    IncidentState,
+    ResourceKind,
+    Severity,
+)
 from htco_persistence.database import Database
 from htco_persistence.messaging import add_outbox_in
 
@@ -355,3 +363,66 @@ class PostgresIncidentStore:
                 [organization_id, shop_id, shop_id],
             ).fetchall()
         return tuple(_incident(r) for r in rows)
+
+
+class PostgresIncidentReader:
+    """The incident center's reads (the API's pool, organization filter in every query; the
+    use case filters shops by role)."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def list_incidents(
+        self, organization_id: uuid.UUID, *, open_only: bool, limit: int
+    ) -> tuple[IncidentRecord, ...]:
+        with self._database.connection() as connection:
+            rows = connection.execute(
+                f"""
+                select {_INCIDENT_COLUMNS} from app.incidents
+                where organization_id = %s and (not %s or state <> 'resolved')
+                order by detected_at desc
+                limit %s
+                """,  # noqa: S608 - a constant column list
+                [organization_id, open_only, limit],
+            ).fetchall()
+        return tuple(_incident(r) for r in rows)
+
+    def incident_detail(
+        self, organization_id: uuid.UUID, incident_id: uuid.UUID
+    ) -> IncidentDetail | None:
+        with self._database.connection() as connection:
+            row = connection.execute(
+                f"""
+                select {_INCIDENT_COLUMNS} from app.incidents
+                where organization_id = %s and id = %s
+                """,  # noqa: S608 - a constant column list
+                [organization_id, incident_id],
+            ).fetchone()
+            if row is None:
+                return None
+            events = connection.execute(
+                """
+                select from_state, to_state, actor_kind, actor_id, occurred_at, note,
+                       evidence_kind, evidence_source, evidence_reference, evidence_observed_at
+                from app.incident_events where incident_id = %s
+                order by occurred_at, created_at, (to_state = 'resolved')
+                """,
+                [incident_id],
+            ).fetchall()
+        return IncidentDetail(
+            incident=_incident(row),
+            history=tuple(
+                IncidentHistoryEntry(
+                    from_state=None if e[0] is None else IncidentState(e[0]),
+                    to_state=IncidentState(e[1]),
+                    actor_kind=e[2],
+                    actor_id=e[3],
+                    at=e[4],
+                    note=e[5],
+                    evidence=None
+                    if e[6] is None
+                    else Evidence(EvidenceKind(e[6]), e[9], e[7], e[8]),
+                )
+                for e in events
+            ),
+        )

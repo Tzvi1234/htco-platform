@@ -93,8 +93,9 @@ class World:
 
     async def incident(self, shop: uuid.UUID = SHOP, receipt: int = 7) -> IncidentRecord:
         incident, _ = await self.service.open(
-            Detection(ORG, Cause.TRACKING_MISSING, ResourceKind.ORDER, order_resource(shop, receipt),
-                      NOW, "sla_inspector", shop_id=shop, receipt_id=receipt),
+            Detection(ORG, Cause.TRACKING_MISSING, ResourceKind.ORDER,
+                      order_resource(shop, receipt), NOW, "sla_inspector", shop_id=shop,
+                      receipt_id=receipt),
             actor=DETECTOR,
         )  # fmt: skip
         return incident
