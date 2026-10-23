@@ -91,6 +91,7 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "remove_etsy_shop",
         "get_shop_overview",
         "list_shop_orders",
+        "get_shop_order",
         "list_shop_listings",
         "list_shop_reviews",
         "get_shop_shipping",
