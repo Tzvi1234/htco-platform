@@ -80,6 +80,7 @@ from htco_persistence.notifications import (
     PostgresNotificationInbox,
     PostgresSecurityNoticeStore,
 )
+from htco_persistence.operations_health import PostgresOperationsHealth
 from htco_persistence.readiness import DatabaseCheck
 from htco_persistence.shop_integrations import (
     PostgresCapabilityStore,
@@ -204,6 +205,7 @@ def main(
         execution_chain=wiring.execution_chain,
         incident_center=wiring.incident_center,
         security_notices=wiring.security_notices,
+        operations=wiring.operations,
         resources=wiring.resources,
     )
     try:
@@ -366,6 +368,7 @@ class _Wiring:
     execution_chain: PostgresChainReader | None = None
     incident_center: IncidentCenter | None = None
     security_notices: SecurityNotices | None = None
+    operations: PostgresOperationsHealth | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -470,6 +473,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
             clock=lambda: datetime.now(UTC),
             offload=anyio.to_thread.run_sync,
         ),
+        operations=PostgresOperationsHealth(database),
         resources=resources,
     )
 

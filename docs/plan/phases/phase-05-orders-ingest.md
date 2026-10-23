@@ -24,7 +24,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 - [x] 5.6 Orders API onto the stored order (rewritten after the audit: no second endpoint; `GET /v1/shops/{shop_id}/orders/{order_id}` with the status timeline; `last_synced_at` everywhere; no migration)
 - [ ] 5.7 Orders UI onto the stored order (no second screen)
 - [ ] 5.8 Drills
-- [ ] 5.9 Queue, execution and sync health (Prometheus metrics)
+- [ ] 5.9 Queue, execution and sync health: the admin view and its API built (`GET /v1/operations/health`, the audited `POST /v1/operations/dead-letters/{job_id}/retry`, per-automation metrics; exception messages scrubbed from logs and Sentry); Prometheus exposition and alert rules (AC-5.9.1's alert, AC-5.9.4) still open
 - [x] 5.10 Durable automation engine (PR #58; aligned: migration `20261023140000_automation_engine.sql`, pgTAP `12_automation_engine`, handlers get a `HandlerContext` with an `ActionGateway` client, `WAITING` state; no automation is ready yet)
 - [ ] 5.11 Order automations activated
 - [x] 5.12 Action Gateway and the generic execution contract (standard-library dataclasses and JSON Schemas, see execution-engine.md §2; production wiring with the channels of 5.13)

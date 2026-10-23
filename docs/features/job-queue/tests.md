@@ -31,6 +31,9 @@
 | AC-5.2.2 | `test_crash_after_the_business_commit__the_effect_is_delivered_exactly_once` (real process, SIGKILL); `test_deliver__replayed_job__delivers_once` |
 | AC-5.2.3 | `test_same_key_same_body__returns_the_stored_response_without_a_second_effect`; `test_same_key_other_body__is_refused_without_an_effect`; `test_idempotency_store__replays_refuses_and_expires`; `test_idempotency_store__concurrent_first_requests__one_runs` |
 | Security checklist: worker role with explicit tenant filters | `test_worker_role__sees_only_the_jobs_organization`; `test_worker_role__cannot_write_another_organizations_rows`; `test_worker_role__has_no_access_to_sessions_identities_or_audit_history`; pgTAP worker-role checks |
+| AC-5.9.2 | `test_health__dead_letters_with_their_last_error`; `test_retry__a_dead_job__queued_again_and_audited_without_its_payload`; `test_retry__a_dead_job__202_and_audited`; `test_retry__queues_the_dead_job_and_writes_the_audit_in_one_transaction` and `test_snapshot__the_organizations_dead_letters_workers_syncs_and_intake` (Postgres); refusals: `test_retry__an_execution_job__*`, `test_retry__not_dead__409`, `test_retry__other_roles__*`, `test_find_and_retry__another_organizations_job__none_and_nothing_changed` |
+| AC-5.9.1 (view part), AC-5.9.3 (view part) | `test_health__a_worker_past_the_threshold__shown_as_stopped`; `test_health__a_shop_past_its_sync_window__shown_as_stale` |
+| 5.9 metrics per automation | `test_metrics__per_automation_success_rate_retries_dead_letters_and_latency`; `test_metrics__nothing_finished__no_rate_and_no_latency` |
 | AC-4.5.2 (kept): probes only read | `test_daily_probe_job__reaches_etsy_with_gets_only`; `test_probe_shop_daily__reads_the_shop_and_stores_results_as_the_scheduler` |
 
 ## Verification
