@@ -22,6 +22,7 @@ import structlog
 from htco_application.automation.durable import EXECUTION_JOB, DurableAutomationEngine
 from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_tokens import VaultAccessTokenProvider
+from htco_application.etsy_webhooks import WEBHOOK_JOB, EngineOrderIntake, WebhookProcessor
 from htco_application.execution.gateway import UnavailableGateway
 from htco_application.execution.service import EVENT_DESTINATION
 from htco_application.jobs import ClaimedJob, JobError, JobQueue
@@ -65,6 +66,7 @@ from htco_integrations.etsy import (
 from htco_integrations.etsy_oauth import EtsyOAuthClient
 from htco_persistence.automation import PostgresAutomationCatalog, PostgresExecutionStore
 from htco_persistence.database import Database, tenant_scope
+from htco_persistence.etsy_webhooks import PostgresWebhookInbox, PostgresWorkerShops
 from htco_persistence.jobs import PostgresJobQueue, PostgresWorkerHeartbeats
 from htco_persistence.maintenance import PostgresPurgeStore, PostgresShopDirectory
 from htco_persistence.messaging import PostgresOutbox
@@ -220,12 +222,37 @@ def worker_engine(database: Database) -> DurableAutomationEngine:
     )
 
 
+def webhook_handlers(processor: WebhookProcessor) -> dict[str, JobHandler]:
+    """The `etsy.webhook_event` job (slice 5.3): re-read what the webhook names."""
+
+    async def process(job: ClaimedJob) -> None:
+        outcome = await processor.process(job)
+        _log.info("etsy.webhook_processed", outcome=outcome, job_id=str(job.id))
+
+    return {WEBHOOK_JOB: process}
+
+
+def webhook_processor(
+    database: Database, engine: DurableAutomationEngine, adapter: EtsyAdapter
+) -> WebhookProcessor:
+    inbox = PostgresWebhookInbox(database)
+    return WebhookProcessor(
+        orders=EngineOrderIntake(engine, offload=anyio.to_thread.run_sync),
+        catalog=adapter,
+        shops=PostgresWorkerShops(database),
+        outbox=PostgresOutbox(database),
+        marks=inbox,
+        clock=_now,
+        offload=anyio.to_thread.run_sync,
+    )
+
+
 def _etsy_checks(
     settings: WorkerSettings, database: Database, http: httpx.AsyncClient
-) -> tuple[PostgresTokenVault | None, CapabilityChecks | None]:
+) -> tuple[PostgresTokenVault | None, CapabilityChecks | None, EtsyAdapter | None]:
     ring = settings.key_ring
     if ring is None:
-        return None, None
+        return None, None, None
     # Like the API: tokens issued for a replaced Etsy app read as `needs_reauth`.
     app_key = (
         None
@@ -234,7 +261,7 @@ def _etsy_checks(
     )
     vault = PostgresTokenVault(database, EnvelopeSealer(ring), app_key_fingerprint=app_key)
     if settings.etsy_keystring is None or settings.etsy_shared_secret is None:
-        return vault, None
+        return vault, None, None
     credentials = EtsyCredentials(
         keystring=settings.etsy_keystring.get_secret_value(),
         shared_secret=settings.etsy_shared_secret.get_secret_value(),
@@ -258,7 +285,7 @@ def _etsy_checks(
         tokens=tokens,
         webhooks_configured=False,
     )
-    return vault, checks
+    return vault, checks, adapter
 
 
 async def _serve(settings: WorkerSettings) -> None:
@@ -271,7 +298,7 @@ async def _serve(settings: WorkerSettings) -> None:
         )
     )
     queue = PostgresJobQueue(database)
-    vault, checks = _etsy_checks(settings, database, http)
+    vault, checks, adapter = _etsy_checks(settings, database, http)
     handlers = maintenance_handlers(
         settings.schedules,
         queue=queue,
@@ -280,7 +307,10 @@ async def _serve(settings: WorkerSettings) -> None:
         checks=checks,
         purge=PostgresPurgeStore(database),
     ) | outbox_handlers(PostgresOutbox(database), {EVENT_DESTINATION: AcceptedEvents()})
-    handlers |= automation_handlers(worker_engine(database), settings.worker_id)
+    engine = worker_engine(database)
+    handlers |= automation_handlers(engine, settings.worker_id)
+    if adapter is not None:  # webhook jobs wait in the queue until Etsy is configured
+        handlers |= webhook_handlers(webhook_processor(database, engine, adapter))
     worker = Worker(
         queue,
         PostgresWorkerHeartbeats(database),

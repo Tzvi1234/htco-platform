@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+import anyio
 import httpx
 import structlog
 import uvicorn
@@ -29,6 +30,7 @@ from htco_application.automation.durable import DurableAutomationEngine
 from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_tokens import VaultAccessTokenProvider
+from htco_application.etsy_webhooks import EtsyWebhookIngress, WebhookSecret, WindowLimiter
 from htco_application.execution.gateway import UnavailableGateway
 from htco_application.marketplace import MarketplacePort
 from htco_application.mfa import Enrollment, Factor
@@ -60,6 +62,7 @@ from htco_persistence.automation import (
 from htco_persistence.database import Database
 from htco_persistence.etsy_connect import PostgresPendingAuthorizations, PostgresShopConnector
 from htco_persistence.etsy_orders import PostgresOrderStore
+from htco_persistence.etsy_webhooks import PostgresWebhookInbox, PostgresWebhookShops
 from htco_persistence.idempotency import PostgresIdempotencyStore
 from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.readiness import DatabaseCheck
@@ -149,6 +152,8 @@ def main(
         # Off without the Etsy credentials, the redirect URI, the vault key or web sign-in.
         etsy_connect="on" if wiring.etsy is not None else "off",
         # Off without HTCO_AUTOMATIONS_ENABLED: automations are listed, never started (5.10).
+        # Off without HTCO_ETSY_WEBHOOKS_ENABLED and HTCO_ETSY_WEBHOOK_SECRET (slice 5.3).
+        etsy_webhooks="on" if wiring.etsy_webhooks is not None else "off",
         automation_triggers="on"
         if wiring.automations is not None and wiring.automations.engine is not None
         else "off",
@@ -175,6 +180,10 @@ def main(
         shop_remover=wiring.shop_remover,
         dashboard=wiring.dashboard,
         automations=wiring.automations,
+        etsy_webhooks=wiring.etsy_webhooks,
+        etsy_webhook_limiter=None
+        if wiring.etsy_webhooks is None
+        else WindowLimiter(settings.etsy_webhook_rate_per_second),
         resources=wiring.resources,
     )
     try:
@@ -331,6 +340,8 @@ class _Wiring:
     # in-memory cache; off when the connect flow is off.
     dashboard: ShopDashboard | None = None
     automations: AutomationServices | None = None
+    # Etsy webhooks (slice 5.3): on with HTCO_ETSY_WEBHOOKS_ENABLED and the signing secret.
+    etsy_webhooks: EtsyWebhookIngress | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -416,7 +427,22 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         access=PostgresAccessStore(database),
         inviter=inviter,
         automations=automation_services(database, enabled=settings.automations_enabled),
+        etsy_webhooks=etsy_webhook_ingress(settings, database),
         resources=resources,
+    )
+
+
+def etsy_webhook_ingress(settings: ApiSettings, database: Database) -> EtsyWebhookIngress | None:
+    """The webhook ingress when enabled with its secret (validated with the settings)."""
+    secret = settings.etsy_webhook_secret
+    if not settings.etsy_webhooks_enabled or secret is None:
+        return None
+    return EtsyWebhookIngress(
+        secret=WebhookSecret.parse(secret.get_secret_value()),
+        inbox=PostgresWebhookInbox(database),
+        shops=PostgresWebhookShops(database),
+        clock=lambda: datetime.now(UTC),
+        offload=anyio.to_thread.run_sync,
     )
 
 
@@ -470,8 +496,8 @@ def _etsy_wiring(
         marketplace=adapter,
         store=PostgresCapabilityStore(database),
         tokens=tokens,
-        # Etsy webhooks arrive with Phase 5 (signing secret, endpoint); until then not configured.
-        webhooks_configured=False,
+        # Etsy webhooks (slice 5.3): configured when enabled; Etsy's deliveries prove them.
+        webhooks_configured=settings.etsy_webhooks_enabled,
     )
     # The stored order history: synced from the API process until the Phase 5 worker exists.
     history = OrderSync(

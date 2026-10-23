@@ -49,9 +49,11 @@ from opentelemetry import metrics
 from htco_application.marketplace import (
     AccessTokenProvider,
     CredentialsRejectionSink,
+    InventorySnapshot,
     Listing,
     ListingDetails,
     ListingImage,
+    ListingSnapshot,
     ListingState,
     MarketplaceConflictError,
     MarketplaceCredentialsRejectedError,
@@ -71,6 +73,7 @@ from htco_application.marketplace import (
     OrderShipment,
     Page,
     ProductionPartner,
+    ProductStock,
     QuotaDeferredError,
     QuotaSnapshot,
     Receipt,
@@ -270,6 +273,26 @@ class EtsyAdapter:
             urgent=urgent,
         )  # fmt: skip
         return _parse("get_receipt", _receipt, body)
+
+    async def get_listing(self, shop_id: int, listing_id: int) -> ListingSnapshot:
+        """One listing by ID (`getListing`, a GET), with the shop it belongs to: the webhook
+        re-read (slice 5.3) checks that it is the shop the webhook named."""
+        if listing_id < 1:
+            raise ValueError("listing_id must be a positive Etsy listing ID")
+        body = await self._request(
+            "GET", "get_listing", shop_id, f"/listings/{listing_id}", {}, urgent=False
+        )
+        return _parse("get_listing", _listing_snapshot, body)
+
+    async def get_listing_inventory(self, shop_id: int, listing_id: int) -> InventorySnapshot:
+        """A listing's products and stock (`getListingInventory`, a GET, `listings_r`)."""
+        if listing_id < 1:
+            raise ValueError("listing_id must be a positive Etsy listing ID")
+        body = await self._request(
+            "GET", "get_listing_inventory", shop_id, f"/listings/{listing_id}/inventory", {},
+            urgent=False,
+        )  # fmt: skip
+        return _parse("get_listing_inventory", lambda data: _inventory(listing_id, data), body)
 
     async def list_listings(  # noqa: PLR0913 - the query and its token source
         self,
@@ -979,6 +1002,41 @@ def _receipt(value: object) -> Receipt:
         grand_total=_money(data["grandtotal"]),
         lines=tuple(_receipt_line(entry) for entry in transactions),
     )
+
+
+def _listing_snapshot(value: object) -> ListingSnapshot:
+    data = _object(value)
+    return ListingSnapshot(
+        listing_id=_int(data, "listing_id"),
+        etsy_shop_id=_int(data, "shop_id"),
+        state=_str(data, "state").lower()[:32],
+        quantity=_int(data, "quantity"),
+        updated_at=_timestamp(data, "updated_timestamp"),
+    )
+
+
+def _inventory(listing_id: int, value: object) -> InventorySnapshot:
+    """Each product's stock: the quantities of its enabled, not deleted offerings."""
+    data = _object(value)
+    products = data.get("products") or []
+    if not isinstance(products, list):
+        raise TypeError("products must be a list")
+    stock = []
+    for raw in products:
+        product = _object(raw)
+        if product.get("is_deleted") is True:
+            continue
+        offerings = product.get("offerings") or []
+        if not isinstance(offerings, list):
+            raise TypeError("offerings must be a list")
+        quantity = sum(
+            _int(_object(o), "quantity")
+            for o in offerings
+            if _object(o).get("is_enabled", True) is not False
+            and _object(o).get("is_deleted") is not True
+        )
+        stock.append(ProductStock(product_id=_int(product, "product_id"), quantity=quantity))
+    return InventorySnapshot(listing_id=listing_id, products=tuple(stock))
 
 
 def _listing(value: object) -> Listing:
