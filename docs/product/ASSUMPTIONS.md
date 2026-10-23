@@ -42,9 +42,11 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 | A-02 | The owner can register an Etsy Seller App for the pilot shop | Etsy developer portal | Owner | Phase 0 | Open |
 | A-03 | Etsy order webhooks are available to a Seller App | Developer portal "webhooks" option | Owner + platform | Phase 0 | Open |
 | A-04 | `createReceiptShipment` is permitted for our app in the shop's region | Capability probe on a real receipt without sending a shipment | Platform | Phase 4 | Open |
-| A-05 | AutoVA writes tracking numbers to Etsy for every fulfilled order | Compare 20 recent orders in Etsy and AutoVA | Owner | Phase 0 | Open |
+| A-05 | AutoVA writes tracking numbers to Etsy for every fulfilled order | Compare 20 recent orders in Etsy and AutoVA | Owner | Phase 0 | Answered 2026-10-23: no; the owner copies tracking from AutoVA to Etsy by hand. Covered by the relay (slice 6.10) |
 | A-06 | AutoVA offers an API, export or partner integration | Ask AutoVA support | Owner | Phase 0 | Open |
 | A-07 | AutoVA's automatic supplier ordering is active for the shop (their site calls it a concept demonstration) | Owner's AutoVA account | Owner | Phase 0 | Open |
+| A-08 | Where AutoVA shows tracking, how its account signs in (password, TOTP or another provider), and whether its terms allow reading the owner's own account with a browser | The owner checks his AutoVA account and AutoVA's terms | Owner | Phase 6 | Open (2026-10-23: not sure) |
+| A-09 | AutoVA or the supplier sends an email with the tracking number | The owner checks his mailbox for a recent order | Owner | Phase 6 | Open (2026-10-23: not sure) |
 | A-08 | Etsy rate limits for our key are enough for polling every few minutes | Developer portal numbers | Owner | Phase 0 | Open |
 | A-09 | Etsy's current API Terms allow storing order data for our retention periods and sending buyer data to AI models when needed | Owner reads the live terms | Owner | Phase 4 | Open |
 | A-10 | LangGraph works on Python 3.14 in our setup | Smoke test in Phase 1 CI | Platform | Phase 1 | Verified 2026-10-14 (langgraph 1.2.14 on CPython 3.14.8, `tests/agent_runtime`) |

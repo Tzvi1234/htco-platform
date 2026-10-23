@@ -116,6 +116,7 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 - **The recipe catalog** (`registry/browser-recipes/*.toml`, reviewed data). Each recipe has an ID, site, scope row (for Etsy), allowed URL patterns, allowed actions (click, type, download), its Playwright steps, an output Pydantic model and a verification rule.
 - **Extraction:** Playwright reads the DOM or the downloaded file; Pydantic validates it; Postgres stores it in typed tables with source, `observed_at` and the recipe version.
 - **The first recipes:** B-02 (stats export, to `listing_metrics` and `shop_traffic_daily`) and B-03 (ads report, to `ads_daily`). Both are behind their flags, and both are read-only.
+- **AutoVA (owner priority, 2026-10-23):** A-01 reads an order's status and tracking number from the owner's own AutoVA account (read-only; the input of the Phase 6 relay, slice 6.10). B-12 marks an Etsy order as shipped with that tracking number in Shop Manager, only when the API shipment write is blocked (A-04), with the owner's approval each time. A-01 is built right after the controller and the challenge handler, before B-02 and B-03.
 
 | ID | Acceptance criterion |
 |---|---|

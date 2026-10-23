@@ -20,6 +20,7 @@
 - [ ] 6.7 Fulfillment automations activated
 - [ ] 6.8 Owner-triggered fulfillment writes (receipt and shipment tools)
 - [ ] 6.9 Ship-by SLA, holiday calendar and low-review alerts (deterministic)
+- [ ] 6.10 AutoVA tracking relay (copy tracking from AutoVA to Etsy)
 
 Slices 6.1 to 6.4 are built as two automations on the engine of [Phase 5](phase-05-orders-ingest.md): **Tracking Synchronization** (slice 6.1) and **Incident Detection & Escalation** (slices 6.2 to 6.4). Slice 6.7 completes their specifications and activates them.
 
@@ -129,7 +130,7 @@ Only when the capability probe says shipment writes are allowed: an operator con
 
 ### 6.7 — Fulfillment automations activated
 
-Tracking Synchronization runs on a schedule and on `order.shipped` events (idempotency key per receipt and shipment); it reads shipment records from Etsy (AutoVA writes tracking there), records tracking codes with the source of proof, and never writes a second shipment. Incident Detection & Escalation evaluates SLA rules, opens exactly one incident per root cause and resource, notifies once, and escalates by severity and age. Both specifications are completed to all 18 sections.
+Tracking Synchronization runs on a schedule and on `order.shipped` events (idempotency key per receipt and shipment); it reads shipment records from Etsy (tracking reaches Etsy through the relay of slice 6.10, not by itself: the owner confirmed on 2026-10-23 that he copies it by hand from AutoVA today, A-05), records tracking codes with the source of proof, and never writes a second shipment. Incident Detection & Escalation evaluates SLA rules, opens exactly one incident per root cause and resource, notifies once, and escalates by severity and age. Both specifications are completed to all 18 sections.
 
 | ID | Acceptance criterion |
 |---|---|
@@ -161,6 +162,28 @@ All deterministic ([feature backlog](../../product/FEATURE_BACKLOG.md)).
 |---|---|
 | AC-6.9.1 | An order whose ship-by date is within the warning window without a shipment raises one alert; holidays from the shop's preferences are excluded. |
 | AC-6.9.2 | A new review of 3 stars or fewer raises one alert, once, with the listing and order linked. |
+
+### 6.10 — AutoVA tracking relay
+
+The owner orders from suppliers through AutoVA and today copies each tracking number from AutoVA into Etsy by hand (2026-10-23). AutoVA has no known API (A-06). The relay closes that loop for every paid order:
+
+1. **Detect:** a paid order (`order.paid` webhook or reconciliation) with no shipment after its supplier window opens a relay item.
+2. **Get the tracking number**, in this order of preference:
+   - **Until Phase 8A:** a Human task, "Copy the tracking number from AutoVA", with the order, the AutoVA link and a field in the dashboard where the owner pastes the number and picks the carrier. The carrier and number format are validated.
+   - **From Phase 8A:** the read-only browser recipe A-01 (AutoVA order status and tracking) in the owner's own AutoVA environment (password and TOTP from the vault and the Authenticator of Phase 8B), within AutoVA's terms (A-08).
+   - **If AutoVA sends an email with the tracking** (A-09): the email intake of Phase 14 reads it; if confirmed early, that slice moves forward.
+3. **Upload to Etsy:**
+   - **API first:** `etsy.shipments.create` (W2, owner-trigger first, slice 6.8).
+   - **If the API is blocked for our key (A-04):** the approved browser row B-12 ("mark as shipped with tracking" in Shop Manager, W2, the owner's approval each time, D-16).
+   - **Otherwise:** a Human task with a copy button.
+4. **Verify:** re-read the receipt and record the shipment with its source (`autova_manual`, `autova_browser`, `autova_email`). A mismatch opens one incident (6.3). The same number is never uploaded twice (idempotency key per receipt and tracking code).
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-6.10.1 | A paid order without tracking past its window produces exactly one relay item, and pasting a number in the dashboard uploads it once (replay-safe). |
+| AC-6.10.2 | A tracking number already present on the Etsy receipt is never uploaded again; the relay item closes on that evidence. |
+| AC-6.10.3 | When the API refuses the shipment write, the item moves to B-12 only if its flag and scope row are on; otherwise to a Human task, never silently. |
+| AC-6.10.4 | The carrier and tracking formats are validated before any write; an invalid value is rejected with a clear message. |
 
 ## Test plan
 
