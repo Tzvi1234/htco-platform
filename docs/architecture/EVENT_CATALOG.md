@@ -30,10 +30,11 @@ Events are published through the outbox (`jobs.outbox`, slice 5.2); the first pr
 | `orders.cancelled.v1`, `orders.refunded.v1` | Etsy Order Intake | Product Sales Counters, finance, incidents (close) | 5 |
 | `automations.execution_finished.v1` | Automation engine | Activity records, metrics, monitors (Phase 10) | 5 |
 | `automations.execution_dead_lettered.v1` | Automation engine | Incident Detection & Escalation, Noa (Phase 10) | 5 |
-| `automations.execution_state_changed.v1` | Automation engine (including `WAITING`) | Status views, Agent Task Scheduling & Recovery | 5 |
+| `automations.execution_state_changed.v1` | Automation engine (including `WAITING`; slice 5.18: one per recorded state change, written by the execution store with the change; execution, from and to state, status kind, actor, time) | Status views, Agent Task Scheduling & Recovery | 5 |
 | `actions.executed.v1` | Action Gateway (5.12; outbox destination `events.publish`, IDs and outcome only) | Activity records, metrics, monitors (unverified writes); accepted by the worker until consumers exist | 5 |
-| `actions.approval_required.v1` | Action Gateway | Approvals (Phase 7), notifications | 5 |
-| `actions.handed_to_human.v1` | Execution Router (Human channel) | Tasks (Phase 7), notifications | 5 |
+| `actions.approval_required.v1` | Action Gateway (slice 5.18: the step that starts waiting for an approval) | Approvals (Phase 7), notifications | 5 |
+| `actions.handed_to_human.v1` | Action Gateway, from the Execution Router's hand-off (slice 5.18: the step that hands the action to a person) | Tasks (Phase 7), notifications | 5 |
+| `actions.deferred.v1` | Action Gateway (slice 5.18: a step deferred by a breaker, the rate budget, a slot or a 429; same payload as `actions.executed.v1`) | Monitors, metrics (5.9) | 5 |
 | `catalog.listing_changed.v1` | Webhook ingress (`listing.created`, `listing.updated`, `listing.deleted`) | Listing Health re-audit (11), Product Studio verification (12) | 5 |
 | `catalog.inventory_changed.v1` | Webhook ingress (`inventory.created`, `inventory.updated`, `inventory.deleted`) | Price and stock monitoring (13) | 5 |
 | `catalog.out_of_stock.v1` | Webhook ingress (`inventory.out_of_stock`) | Notifications (6), Daniel (11) | 5 |

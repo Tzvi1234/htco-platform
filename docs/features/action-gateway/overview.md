@@ -29,6 +29,8 @@ Every business action of an automation or an AI employee goes through one gatewa
 | AC-5.14.1 | The request hash covers every parameter that will be sent; a resubmission whose request differs from the approved hash is refused. | Pass (in memory) |
 | AC-5.14.2 | An approved request executes at most once (the second resubmission returns the first result). | Pass (in memory) |
 | AC-5.14.3 | An automation execution waiting for an approval is `WAITING` and holds no job lease; on decision it resumes once; on rejection or expiry it is `CANCELLED` with the reason. | Pass (in memory, with the durable engine) |
+| AC-5.18.1 | For one order, the chain view shows the webhook, the intake execution, every action with its channel and outcome, and the resulting events, in causal order. | Pass (in memory; Postgres in CI) |
+| AC-5.18.2 | Every status change of an execution, an action or an environment emits exactly one event (coverage test). | Pass (in memory; Postgres in CI) |
 | AC-5.15.1 | With two workers and four shops, total Etsy calls never exceed the configured QPS in any second, or the QPD in a day (simulated clock). | Pass (in memory and Postgres) |
 | AC-5.15.2 | Five failures in 60 s open the breaker for that key; calls return `DEFERRED` with `retry_at`; half-open after the cooldown lets one call through. | Pass (in memory and Postgres) |
 | AC-5.15.3 | A 4xx other than 429 is never retried; a 429 waits for `Retry-After`. | Pass |
