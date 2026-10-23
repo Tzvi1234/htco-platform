@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/automations/order-dedup-verification.input.json",
+  "title": "Order Deduplication & Verification input",
+  "description": "The receipt to verify; never buyer data.",
+  "type": "object",
+  "properties": {
+    "receipt_id": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "receipt_id"
+  ],
+  "additionalProperties": false
+}

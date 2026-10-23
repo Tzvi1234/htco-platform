@@ -187,6 +187,16 @@ source_modules = [
 forbidden_modules = ["langgraph", "langchain_core"]
 
 [[tool.importlinter.contracts]]
+id = "order-automations-deterministic"
+name = "The three order automations make no model, agent or browser call (AC-5.11.7)"
+type = "forbidden"
+source_modules = [
+  "htco_application.order_intake", "htco_application.order_automations",
+  "htco_application.order_ingest", "htco_persistence.order_automations",
+]
+forbidden_modules = ["htco_agent_runtime", "langgraph", "langchain_core"]
+
+[[tool.importlinter.contracts]]
 id = "database-driver-only-in-persistence"
 name = "Only persistence imports the database driver (ADR-0011)"
 type = "forbidden"

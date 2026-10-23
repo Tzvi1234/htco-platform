@@ -29,7 +29,7 @@ To rotate the secret: roll it in the portal, update `ETSY_WEBHOOK_SECRET`, redep
 
 ## Metrics and alerts
 
-Until slice 5.9's Prometheus metrics: the logs `etsy.webhook_received`, `etsy.webhook_rejected` (with `reason`), `etsy.webhook_stored_unrouted` and the worker's `etsy.webhook_processed` (with `outcome`). The ingress counts unrouted events by reason (`EtsyWebhookIngress.unrouted`) for 5.9.
+Admin › Health (slice 5.9) shows the queue, the automations' metrics, the shops' sync freshness and the webhook intake. Logs: the logs `etsy.webhook_received`, `etsy.webhook_rejected` (with `reason`), `etsy.webhook_stored_unrouted` and the worker's `etsy.webhook_processed` (with `outcome`). The ingress counts unrouted events by reason (`EtsyWebhookIngress.unrouted`) for 5.9.
 
 ### Reconciliation (slice 5.5)
 
@@ -52,15 +52,45 @@ Call budget (placeholder `etsy:app` 5,000 a day): calls per run times runs per d
 ### Orders arrive by webhook but are not stored
 Etsy Order Intake is not active until the owner approves it (5.11): the worker logs `etsy.webhook_order_not_ingested`. That is expected; reconciliation keeps the store complete.
 
-## Activating Etsy Order Intake (slice 5.11, the owner)
+### Etsy Order Intake fails or dead-letters (slice 5.11)
+1. **Check:** Admin › Health: the Automations row (`etsy-order-intake`: success rate, retries, dead letters) and the dead letters' last error. Open the execution for its chain (`GET /v1/executions/{id}`).
+2. **Likely cause:** `MarketplaceRateLimitedError` or a deferral (the Etsy budget or a 429), `IntakeActionError` (the gateway refused or failed the read), `ShopBusyError` (another sync of the shop held its lock: retried, never lost), a database error (shown as its type and SQLSTATE).
+3. **Fix:** fix the cause, then **Retry the execution** in its sheet (audited; the same execution, a new attempt). Ingest is idempotent, so a retry never doubles an order. A webhook's event stays in `jobs.inbox` meanwhile, and reconciliation re-reads every receipt changed in 30 days.
+4. **Verify:** the execution reaches `succeeded`; the order is in Orders with its timeline.
 
-1. Deploy (the image carries the handler and the registry; `htco registry sync --apply` stores the definition with its `allowed_actions`).
-2. The owner approves the activation; the definition moves to `ready` in a reviewed pull request and the registry sync stores it.
-3. Set `HTCO_ORDER_SYNC_IN_API` to `"false"`: the API stops syncing; stale reads and the manual sync go to the worker.
-3a. Add `orders.reconciliation` to the worker's `HTCO_WORKER_SCHEDULES` (slice 5.5): reconciliation at the times of `HTCO_RECONCILIATION_SCHEDULE`, twice a day by default.
-4. Verify: a webhook or a stale read creates an `etsy-order-intake` execution that succeeds; `app.order_status_events` grows; `orders.ingested.v1` appears in the outbox.
+### Order Deduplication & Verification records a drift (slice 5.11)
+1. **Check:** `app.sync_drifts` with `source = 'verification'` and its kind: `missing` (no stored order for a receipt Etsy has), `totals` (the stored grand total differs; the row names the field, never the amount), `items` (item IDs or quantities differ, both sides recorded). Each drift has an `orders.drift_detected.v1` event.
+2. **Likely cause:** an ingest that failed half-way for an older version, a manual change at Etsy, or a bug in the receipt mapping.
+3. **Fix:** a drift is a finding, never a change. Re-sync the order from the Orders screen (**Re-sync selected**) or let reconciliation re-read it; a new version is verified again. From Phase 6 a drift opens an incident.
+4. **Verify:** the next verification of the order's version records nothing new (a drift is unique per receipt, kind and Etsy update time).
 
-Rollback: `HTCO_ORDER_SYNC_IN_API` back to `"true"` (the API syncs again), and the definition back to `draft` (new triggers refused).
+### Product Sales Counters look wrong (slice 5.11)
+1. **Check:** `app.product_sales_counters` for the listing, and `app.product_sales_applications` for the receipts that count it (`counted`: listing → units; empty for unpaid, cancelled or refunded orders).
+2. **Likely cause:** the automation is not active yet (no execution), it dead-lettered (Admin › Health), or an order's stored state is behind Etsy.
+3. **Fix:** retry the dead-lettered execution, or run the **rebuild** for the shop (as in [activation step 2b](#activation-checklist-slice-511-for-the-owner)). Each run moves the counters by the difference only (through `app.product_sales_applications`), so re-running is always safe.
+4. **Verify:** the counters equal the units of the listing's orders that count as sales.
+
+## Activation checklist (slice 5.11, for the owner)
+
+The three automations are built, tested and **`readiness = "draft"`**. The engine refuses their triggers (logged, never retried in a loop), and the API's order sync is the fallback. Activation is the owner's approval (ADR-0012 rule 2); this list is what follows it, in this order:
+
+1. **Approve.** The owner approves Etsy Order Intake, Order Deduplication & Verification and Product Sales Counters.
+2. **Ready.** In one reviewed pull request, set `readiness = "ready"` in `registry/automations/etsy-order-intake.toml`, `order-dedup-verification.toml` and `product-sales-counters.toml`. Every section is already `defined` (the loader refuses `ready` otherwise). After it merges, the migrate workflow's `htco registry sync --automations --apply` stores them.
+2b. **Count the stored orders.** The history backfill publishes no events, and the events of the draft period were refused, so the counters start empty. For each shop, an owner or admin starts the rebuild once: `POST /v1/automations/product-sales-counters/executions` with an `Idempotency-Key` and the body `{"organization_id": "<org>", "shop_id": "<shop>", "payload": {"rebuild": true}}`. It recounts every stored receipt through the applications ledger, so running it again (or alongside new events) moves nothing. Verify: the execution succeeds with `rebuilt` equal to the shop's stored orders, and a listing's counter equals the units of its orders that count as sales.
+3. **Worker sync.** Set `HTCO_ORDER_SYNC_IN_API` to `"false"` in `infra/digitalocean/app.yaml` (the API service). The API stops syncing; stale reads, the manual sync and "Re-sync selected" go to the worker as `etsy.order_sync` jobs.
+4. **Reconciliation.** Add `orders.reconciliation` to the worker's `HTCO_WORKER_SCHEDULES`. Reconciliation then runs at the times of `HTCO_RECONCILIATION_SCHEDULE` (06:00 and 18:00 Asia/Jerusalem by default; the 18:00 run is the full sweep).
+5. **Webhooks.** Register the endpoint and its secret in the Etsy developer portal ([above](#registering-the-webhook-in-the-etsy-developer-portal)), then set `HTCO_ETSY_WEBHOOKS_ENABLED` to `"true"`.
+6. **Verify**, within the first hour:
+   - a webhook or a stale read creates an `etsy-order-intake` execution that succeeds;
+   - its `orders.ingested.v1` starts one `order-dedup-verification` and one `product-sales-counters` execution;
+   - Admin › Health shows the three automations with their success rates;
+   - the Orders screen says "Synced from Etsy".
+
+Rollback, in reverse order and each step on its own:
+- `HTCO_ETSY_WEBHOOKS_ENABLED` back to `"false"`;
+- remove `orders.reconciliation` from the schedules;
+- `HTCO_ORDER_SYNC_IN_API` back to `"true"` (the API syncs again);
+- the definitions back to `"draft"` (new triggers are refused and running executions finish).
 
 ## Rollback
 
