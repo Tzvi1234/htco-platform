@@ -136,9 +136,9 @@ The fixes below touch files that #75 also edits, so they were not made here. The
 - **Why it matters:** `order_history.py:286` itself notes that database errors can quote buyer rows. A psycopg error with a DETAIL line would carry a buyer's name or address into logs and Sentry.
 - **Proposal (small, but it changes runtime behaviour):** add one structlog processor and the matching Sentry `before_send`. Both replace the message of `psycopg.Error`, and of any exception not on an allow-list, with its type and SQLSTATE. Prove it with a log-capture test. **Suggested owner:** `p5-pipeline`, alongside 5.9 observability.
 
-### P1-6: migration versions are future-dated, and nothing checks the order (AC-5.0.1 unmet)
+### P1-6: migration versions are future-dated, nothing checks the order, and slice 5.0 is open (AC-5.0.1 and AC-5.0.2 unmet)
 
-AC-5.0.1 requires "a migration-order test fails if a new migration is older than the newest on `main`" (`phase-05-orders-ingest.md:181`). That test does not exist, so slice 5.0 is still open and ADR-0019 stays Proposed.
+AC-5.0.1 requires "a migration-order test fails if a new migration is older than the newest on `main`" (`phase-05-orders-ingest.md:181`). That test does not exist. AC-5.0.2 (`:182`) requires one test that traces a correlation ID from trigger to execution to job to outbox. The only candidate, `tests/application/test_messaging.py:186-193`, builds the outbox message directly and checks one hop. So slice 5.0 is still open and ADR-0019 stays Proposed.
 
 - The newest migrations are `20261024100000`, `20261024200000` and `20261024210000`, all merged on 2026-10-23. A migration stamped with the real time sorts before them, and `supabase db push` refuses it as out of order.
 - pgTAP prefix `14` is used twice: `14_action_guards` and `14_worker_order_purge`. Slice 5.0 was meant to prevent exactly this collision.
@@ -279,7 +279,7 @@ Each item says what to write into the plan now:
 |---|---|
 | #76 | Four import-linter contracts; SOFTWARE_DESIGN §4.3 |
 | #77 | `.env.example` lists all API and worker variables; `tests/tools/test_env_example.py` |
-| This PR | ADR-0019 validation log: why it is still Proposed (AC-5.0.1), and the tooling deviations. The ADR index row for ADR-0003 now says "to be validated". THREAT_MODEL gateway row corrected. EXECUTION_ORDER: D-22 and D-18 marked decided, #55 marked replaced by #62 |
+| This PR | ADR-0019 validation log: why it is still Proposed (AC-5.0.1, AC-5.0.2), and the tooling deviations. The ADR index row for ADR-0003 now says "to be validated". THREAT_MODEL gateway row corrected. EXECUTION_ORDER: D-22 and D-18 marked decided, #55 marked replaced by #62 |
 
 ## Proposed refactors, with a suggested phase
 
@@ -288,7 +288,7 @@ Each item says what to write into the plan now:
 | One domain `OrderState`; 5.6 and 5.7 rewritten onto the stored order (P0-1) | 5, before 5.6 |
 | The gateway owns retries; the adapter is built with a single attempt in the worker (P1-2) | 5.11 |
 | Log and Sentry scrubbing of exception messages (P1-5) | 5.9 |
-| A migration order check (finishes slice 5.0 and accepts ADR-0019), unique pgTAP prefixes, the "Live-safety:" header (P1-6) | 5, next |
+| A migration order check and the end-to-end correlation trace test (together they finish slice 5.0 and let ADR-0019 be accepted), unique pgTAP prefixes, the "Live-safety:" header (P1-6) | 5, next |
 | `authenticated` RLS tests for six tables (P1-7) | 5 |
 | Status vocabulary: jobs, approvals and orders (P2-1) | 5, after 5.5 |
 | Architecture test for gateway bypass; webhook re-reads through actions (P1-1) | 6, before ADR-0022 writes |
