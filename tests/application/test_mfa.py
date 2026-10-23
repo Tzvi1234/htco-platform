@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
+import anyio
 import pytest
 
 from htco_application.access.authentication import AuthContext, Membership
@@ -23,6 +24,7 @@ from htco_application.mfa import (
     MfaNotEnrolledError,
     SessionNotFoundError,
     list_sessions,
+    mfa_failure_key,
     mfa_status,
     revoke_session,
     start_enrollment,
@@ -38,7 +40,7 @@ from htco_application.web_sessions import (
     sign_in,
 )
 from htco_domain.identity import AssuranceLevel, Role
-from tests.session_fakes import CLIENT, NOW, USER, Auth, Store, Tokens, tokens
+from tests.session_fakes import CLIENT, NOW, USER, Auth, Store, Tokens, at_once, tokens
 
 pytestmark = pytest.mark.anyio
 
@@ -61,6 +63,7 @@ class Mfa:
 
     async def verify_totp(self, access_token: str, factor_id: str, code: str) -> IssuedTokens:
         self.calls.append(f"verify {access_token} {factor_id}")
+        await anyio.lowlevel.checkpoint()  # a network call
         if code != "123456" or factor_id not in {f.id for f in self.factors}:
             raise CredentialsRefusedError
         self.factors = [replace(f, verified=True) if f.id == factor_id else f for f in self.factors]
@@ -174,6 +177,34 @@ async def test_step_up__uses_the_verified_factor() -> None:
 
     assert mfa.calls == ["verify access-1 f1"]
     assert store.sessions[session.session_id].reauthenticated_at == NOW
+
+
+async def test_step_up__a_burst_of_wrong_codes__only_the_limit_is_verified() -> None:
+    """Each code is reserved against the user's limit before Supabase verifies it."""
+    store, auth = Store(), Auth()
+    mfa = Mfa(factors=[Factor("f1", verified=True, name="Phone")])
+    session = await active(store, auth)
+
+    async def wrong(_: int) -> None:
+        await step_up(session, mfa, store, "000000", client=CLIENT, now=NOW)
+
+    outcomes = await at_once(MAX_CODE_FAILURES * 3, wrong)
+
+    assert outcomes.count("MfaCodeRefusedError") == MAX_CODE_FAILURES
+    assert outcomes.count("TooManyAttemptsError") == MAX_CODE_FAILURES * 2
+    assert mfa.calls.count("verify access-1 f1") == MAX_CODE_FAILURES
+
+
+async def test_step_up__right_code__recorded_as_a_success_not_a_failure() -> None:
+    store, auth = Store(), Auth()
+    mfa = Mfa(factors=[Factor("f1", verified=True, name="Phone")])
+    session = await active(store, auth)
+
+    await step_up(session, mfa, store, "123456", client=CLIENT, now=NOW)
+
+    key = mfa_failure_key(USER)
+    assert [a[2] for a in store.attempts if a[0] == key] == [True]
+    assert await store.recent_failures(key, None, NOW - timedelta(minutes=15)) == (0, 0)
 
 
 async def test_step_up__without_a_verified_factor__refused() -> None:
