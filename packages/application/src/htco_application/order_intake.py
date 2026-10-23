@@ -428,6 +428,37 @@ class QueuedSyncRequests:
         await self.offload(lambda: self.queue.enqueue(spec, now=now))
         return True
 
+    async def enqueue_receipts(
+        self,
+        integration: ShopIntegration,
+        receipt_ids: tuple[int, ...],
+        *,
+        now: datetime,
+        correlation_id: str,
+    ) -> int:
+        """ "Re-sync selected" (slice 5.7): one job per receipt, the same receipt once a minute,
+        on the shop's orders lock; the worker re-reads each through Etsy Order Intake."""
+        bucket = MANUAL_PERIOD.key_for(now).rsplit("@", 1)[-1]
+        specs = [
+            JobSpec(
+                kind=ORDER_SYNC_JOB,
+                idempotency_key=f"{ORDER_SYNC_JOB}:{integration.shop_id}:resync:{receipt_id}:{bucket}",
+                payload={"reason": "resync", "receipt_id": receipt_id},
+                organization_id=integration.organization_id,
+                shop_id=integration.shop_id,
+                lock_key=f"shop:{integration.shop_id}:orders",
+                correlation_id=correlation_id[:200],
+            )
+            for receipt_id in receipt_ids
+        ]
+
+        def run() -> int:
+            for spec in specs:
+                self.queue.enqueue(spec, now=now)
+            return len(specs)
+
+        return int(await self.offload(run))
+
 
 @dataclass
 class EngineSyncTrigger:
@@ -439,6 +470,9 @@ class EngineSyncTrigger:
     async def run(self, job: ClaimedJob) -> bool:
         if job.organization_id is None or job.shop_id is None:
             raise JobError("an order sync job names its shop and organization")
+        receipt_id = job.payload.get("receipt_id")
+        if isinstance(receipt_id, int) and not isinstance(receipt_id, bool):
+            return await self._resync(job, receipt_id)
         raw = job.payload.get("reason")
         reason = raw if isinstance(raw, str) and raw in _MODES else "stale"
         mode = _MODES[reason]
@@ -458,6 +492,28 @@ class EngineSyncTrigger:
             await self.offload(lambda: self.engine.trigger(request))
         except AutomationRefused:
             _log.warning("etsy.order_sync_not_started: shop=%s", job.shop_id)
+            return False
+        return True
+
+    async def _resync(self, job: ClaimedJob, receipt_id: int) -> bool:
+        """A selected receipt's re-read: Etsy Order Intake's receipt path, as for a webhook."""
+        assert job.organization_id is not None  # noqa: S101 - checked by run
+        assert job.shop_id is not None  # noqa: S101 - checked by run
+        request = TriggerRequest(
+            automation_id=ORDER_INTAKE,
+            trigger=TriggerKind.EVENT,
+            actor=SYNC_REQUESTER,
+            idempotency_key=f"etsy:{job.shop_id}:{receipt_id}:resync:{job.idempotency_key[-24:]}",
+            payload={"receipt_id": receipt_id, "event_type": "resync"},
+            correlation_id=job.correlation_id or f"job:{job.id}",
+            organization_id=job.organization_id,
+            shop_id=job.shop_id,
+            causation_id=f"job:{job.id}",
+        )
+        try:
+            await self.offload(lambda: self.engine.trigger(request))
+        except AutomationRefused:
+            _log.warning("etsy.order_resync_not_started: shop=%s", job.shop_id)
             return False
         return True
 

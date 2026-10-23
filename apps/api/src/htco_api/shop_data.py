@@ -6,6 +6,10 @@ sales of today, the last 7 and 30 days (in the caller's time zone, `utc_offset_m
 days by default, 90 days, 12 months or all time).
 `GET /v1/shops/{shop_id}/orders/{order_id}`: one order with its status timeline from the stored
 history (slice 5.6); an order not stored yet comes from the live 30-day read, with no timeline.
+`POST /v1/shops/{shop_id}/order-exports`: the filtered (or selected) orders as CSV, audited;
+buyer columns only for buyer-data roles (slice 5.7).
+`POST /v1/shops/{shop_id}/order-resyncs`: one queued Etsy Order Intake re-read per selected
+receipt (GET-only, through the engine and the gateway), rate-limited and audited (slice 5.7).
 `GET /v1/shops/{shop_id}/listings`: the Products screen, active listings with images.
 `GET /v1/shops/{shop_id}/reviews`: the newest reviews and the spread of stars.
 `GET /v1/shops/{shop_id}/shipping`: shipping profiles, return policies, production partners.
@@ -29,7 +33,7 @@ from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
-from pydantic import BaseModel, WithJsonSchema
+from pydantic import BaseModel, Field, WithJsonSchema
 
 from htco_api.auth import CurrentAuth
 from htco_api.etsy import not_connected
@@ -50,6 +54,15 @@ from htco_application.marketplace import (
     MarketplaceMoney,
     ShopProfile,
     ShopReview,
+)
+from htco_application.order_bulk import (
+    MAX_RESYNC,
+    ExportUnavailableError,
+    OrdersForbiddenError,
+    ResyncRateLimitedError,
+    ResyncUnavailableError,
+    export_orders,
+    resync_orders,
 )
 from htco_application.order_history import HistoryState, HistorySync, request_order_sync
 from htco_application.order_ingest import IngestSource
@@ -972,6 +985,7 @@ def shop_data_router(*, clock: Callable[[], datetime]) -> APIRouter:
         return _stats(found)
 
     _add_order_route(router, clock=clock)
+    _add_bulk_routes(router, clock=clock)
     _add_sync_route(router, clock=clock)
     return router
 
@@ -1053,3 +1067,126 @@ def _add_sync_route(router: APIRouter, *, clock: Callable[[], datetime]) -> None
         return SyncView(
             state=sync.state, orders_stored=sync.orders_stored, last_synced_at=sync.last_synced_at
         )
+
+
+class ExportOrdersRequest(BaseModel):
+    period: OrderPeriod = OrderPeriod.DAYS_30
+    state: OrderFilter | None = None
+    # The selected orders; empty: every order the filter matches.
+    order_ids: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list, max_length=2000)
+
+
+class ResyncOrdersRequest(BaseModel):
+    order_ids: list[Annotated[int, Field(ge=1)]] = Field(min_length=1, max_length=MAX_RESYNC)
+
+
+class ResyncOrdersView(BaseModel):
+    # Re-reads queued for the worker's Etsy Order Intake (the same receipt once a minute).
+    queued: int
+
+
+ORDERS_ACTION_FORBIDDEN = ProblemType(
+    "orders-action-forbidden",
+    "Not allowed for this role",
+    403,
+    "This role may see the orders but not re-sync them.",
+)
+RESYNC_RATE_LIMITED = ProblemType(
+    "resync-rate-limited",
+    "Too many re-syncs",
+    429,
+    "This shop's orders were re-synced moments ago. Try again shortly.",
+)
+BULK_UNAVAILABLE = ProblemType(
+    "orders-bulk-unavailable",
+    "Not available",
+    503,
+    "Exports and re-syncs are not set up on this server.",
+)
+
+
+def _add_bulk_routes(router: APIRouter, *, clock: Callable[[], datetime]) -> None:
+    """The Orders screen's bulk actions (slice 5.7)."""
+
+    @router.post(
+        "/order-exports",
+        summary="The filtered or selected orders as CSV (audited)",
+        response_class=Response,
+        responses={
+            200: {"content": {"text/csv": {"schema": {"type": "string"}}},
+                  "description": "The CSV file (UTF-8 with a byte-order mark)"},
+            **problem_responses(
+                {**_SHOP_ERRORS, 400: "The body is not valid JSON",
+                 503: "Not set up (orders-bulk-unavailable)"}
+            ),
+        },
+    )  # fmt: skip
+    async def export_shop_orders(
+        shop_id: uuid.UUID,
+        body: ExportOrdersRequest,
+        request: Request,
+        auth: CurrentAuth,
+        dashboard: _Dashboard,
+    ) -> Response:
+        """Newest first, as the Orders screen lists them. Buyer name, address and tracking
+        columns only for Owner, Admin, Operations and Support; for other roles they are left
+        out. Cells that would start a spreadsheet formula begin with an apostrophe. Never cached."""
+        try:
+            found = await export_orders(
+                dashboard, auth, shop_id, now=clock(), period=body.period, state=body.state,
+                order_ids=tuple(body.order_ids), correlation_id=request_id_of(request),
+            )  # fmt: skip
+        except ExportUnavailableError:
+            raise ProblemError(BULK_UNAVAILABLE) from None
+        except _KNOWN as error:
+            raise _problem_of(error) from None
+        return Response(
+            content="\ufeff" + found.text,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": f'attachment; filename="{found.filename}"',
+                "X-Orders-Exported": str(found.orders),
+            },
+        )
+
+    @router.post(
+        "/order-resyncs",
+        status_code=202,
+        summary="Re-read the selected orders from Etsy (queued, audited)",
+        responses=problem_responses(
+            {
+                **_SHOP_ERRORS,
+                400: "The body is not valid JSON",
+                403: "The role may not re-sync orders (orders-action-forbidden)",
+                429: "Re-synced moments ago (resync-rate-limited; see Retry-After)",
+                503: "Re-syncs are not set up (orders-bulk-unavailable)",
+            }
+        ),
+    )
+    async def resync_shop_orders(
+        shop_id: uuid.UUID,
+        body: ResyncOrdersRequest,
+        request: Request,
+        auth: CurrentAuth,
+        dashboard: _Dashboard,
+    ) -> ResyncOrdersView:
+        """One Etsy Order Intake re-read per receipt, queued for the worker (GET-only, through
+        the engine and the Action Gateway). Owner and Admin, and Operations and Developer for
+        their granted shops. At most 50 receipts a request; audited with the receipt IDs."""
+        try:
+            queued = await resync_orders(
+                dashboard, auth, shop_id, tuple(body.order_ids), now=clock(),
+                correlation_id=request_id_of(request) or str(uuid.uuid7()),
+            )  # fmt: skip
+        except OrdersForbiddenError:
+            raise ProblemError(ORDERS_ACTION_FORBIDDEN) from None
+        except ResyncRateLimitedError as error:
+            raise ProblemError(
+                RESYNC_RATE_LIMITED, headers={"Retry-After": str(round(error.retry_after_seconds))}
+            ) from None
+        except ResyncUnavailableError:
+            raise ProblemError(BULK_UNAVAILABLE) from None
+        except _KNOWN as error:
+            raise _problem_of(error) from None
+        return ResyncOrdersView(queued=queued)

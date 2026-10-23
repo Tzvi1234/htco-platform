@@ -296,7 +296,10 @@ The existing Orders screen in htco-clients, moved onto 5.6. No second screen.
 
 - **Freshness:** a sync indicator in the header: the history's age (`last_synced_at`), "syncing" while the backfill runs, and a stale banner past the window.
 - **Order detail:** the existing detail adds the status timeline with sources, and a slot for the Phase 6 order-to-incident link (filled by 6.3).
-- Deferred, for the owner to confirm: the bulk actions of the first plan (export selected to CSV with an audit record, the old AC-5.7.4, and re-sync of selected orders through the engine). The Owner's existing manual sync of the whole shop stays.
+- **Bulk actions** (the owner's decision of 2026-10-23, both in 5.7):
+  - **Export to CSV** of the filtered or selected orders (`POST /v1/shops/{shop_id}/order-exports`). The file is made on the server and streamed `no-store`. Buyer name, address and tracking columns go only to the buyer-data roles (Owner, Admin, Operations, Support); for other roles they are left out. Formula injection is escaped. Each export is audited with its counts and filter.
+  - **Re-sync selected** (`POST /v1/shops/{shop_id}/order-resyncs`): one Etsy Order Intake re-read per receipt, queued as an `etsy.order_sync` job (GET-only, through the engine and the gateway). At most 50 receipts a request and five requests a minute per shop; audited with the receipt IDs. Until the owner activates Etsy Order Intake (5.11), the engine refuses the re-read and logs it.
+  - The Owner's existing manual sync of the whole shop stays.
 
 | ID | Acceptance criterion |
 |---|---|
@@ -304,6 +307,8 @@ The existing Orders screen in htco-clients, moved onto 5.6. No second screen.
 | AC-5.7.2 | Receipt numbers, SKUs and tracking numbers display LTR inside Hebrew UI. |
 | AC-5.7.3 | Keyboard-only: find an order by search and open its detail. |
 | AC-5.7.4 | The order detail shows the status timeline from the store, each step with its source, in Hebrew and English. |
+| AC-5.7.5 | Exporting produces a CSV with buyer columns only for buyer-data roles, formula cells escaped, `no-store`, and one audit record without buyer data. |
+| AC-5.7.6 | Re-sync selected queues one intake re-read per receipt (the same receipt once a minute), refuses roles without `retry_sync`, answers 429 over the per-shop rate, and is audited. |
 
 ### 5.8 — Drills
 
