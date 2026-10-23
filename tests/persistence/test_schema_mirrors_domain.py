@@ -7,6 +7,7 @@ from htco_application.execution.gateway import ActionOutcome, Channel
 from htco_domain.actions import ActionState
 from htco_domain.actors import ActorKind
 from htco_domain.automation import ExecutionState, TriggerKind
+from htco_domain.guards import BreakerState
 from htco_domain.identity import Role
 from htco_domain.integrations import (
     CapabilityState,
@@ -80,3 +81,7 @@ def test_action_executions_outcome_check__lists_exactly_the_action_outcomes() ->
 
 def test_action_executions_channel_check__lists_exactly_the_channels() -> None:
     assert _check_values("action_executions_channel_check") == {c.value for c in Channel}
+
+
+def test_circuit_breakers_state_check__lists_exactly_the_breaker_states() -> None:
+    assert _check_values("circuit_breakers_state_check") == {s.value for s in BreakerState}

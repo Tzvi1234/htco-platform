@@ -47,11 +47,13 @@ def read_registry(root: Path) -> RegistryDocuments:
 def read_action_catalog(root: Path, schemas: Path, registry: Registry) -> ActionCatalog:
     """The action contracts of `registry/actions/*.toml` with their JSON Schemas (slice 5.12);
     raises `ActionCatalogError` listing every problem."""
-    documents = [
-        action for family in _documents(root / "actions") for action in family.get("actions", [])
-    ]
+    families = list(_documents(root / "actions"))
+    documents = [action for family in families for action in family.get("actions", [])]
+    limits = [limit for family in families for limit in family.get("rate_limits", [])]
     loaded = {
         path.name: json.loads(path.read_text(encoding="utf-8"))
         for path in sorted(schemas.glob("*.json"))
     }
-    return ActionCatalog.from_documents(documents, tools=registry.tools, schemas=loaded)
+    return ActionCatalog.from_documents(
+        documents, tools=registry.tools, schemas=loaded, rate_limits=limits
+    )

@@ -23,7 +23,9 @@ from htco_persistence.audit import append_audit
 from htco_persistence.database import Database
 from htco_persistence.messaging import add_outbox_in
 
-_COLUMNS = "id, state, outcome, channel, attempts, verified, error_code, output, approval_id"
+_COLUMNS = (
+    "id, state, outcome, channel, attempts, verified, error_code, output, approval_id, retry_at"
+)
 
 
 def _stored_result(row: tuple[Any, ...]) -> ActionResult | None:
@@ -91,6 +93,8 @@ class PostgresActionStore:
             state=state,
             result=_stored_result(row) if state in ACTION_FINAL_STATES else None,
             approval_id=row[8],
+            retry_at=row[9],
+            error_code=row[6],
         )
 
     def record(self, execution_id: uuid.UUID, step: Finish, *, now: datetime) -> None:
@@ -102,7 +106,7 @@ class PostgresActionStore:
                 update app.action_executions
                 set state = %s, outcome = %s, channel = %s, attempts = attempts + %s,
                     verified = %s, error_code = %s, reason = %s, output = %s,
-                    evidence = %s, approval_id = coalesce(%s, approval_id),
+                    evidence = %s, approval_id = coalesce(%s, approval_id), retry_at = %s,
                     finished_at = case when %s then %s else finished_at end
                 where id = %s
                 """,
@@ -119,6 +123,7 @@ class PostgresActionStore:
                     else None,
                     Jsonb([]),
                     step.approval_id,
+                    result.retry_at,
                     final,
                     now,
                     execution_id,

@@ -226,6 +226,7 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 | `jobs.inbox` | External events, unique by `(source, event_id)`, with payload hash and processing job. **Created** (slice 5.2, `20261023130000_inbox_outbox.sql`) | 5 |
 | `private.idempotency_keys` | Stored request hash and response for unsafe API requests with an `Idempotency-Key` (24 h), per user. **Created** (slice 5.2) | 5 |
 | `jobs.outbox` | Pending external side effects, unique by idempotency key, with status, attempts, next attempt (kept equal to its delivery job's), and the optional `action_execution_id` and `correlation_id` of the gateway (ADR-0019). **Created** (slice 5.2) | 5 |
+| `jobs.rate_windows`, `jobs.circuit_breakers`, `jobs.concurrency_slots` | The Action Gateway's guards: calls spent per key per UTC second and day, one breaker per key, leased slots. No tenant data; worker role only. **Created** (slice 5.15, `20261023160000_action_guards.sql`, which also adds `app.action_executions.retry_at`) | 5 |
 | `jobs.jobs` | Technical job queue ([ADR-0007](../adr/0007-job-queue.md)): unique `(kind, idempotency_key)`, optional `organization_id`/`shop_id`, `lock_key` (one running job per key), state, attempts and backoff, lease, last error, `correlation_id`, `causation_id`. RLS on; only the `htco_worker` role and the login role. **Created** (slice 5.1) | 5 |
 | `agent_runtime.*` | LangGraph checkpoints, writes, blobs, store | 8 |
 

@@ -12,7 +12,11 @@ input_schema = "etsy.shop.read.input.json"
 output_schema = "etsy.shop.read.output.json"
 rate_limit_key = "etsy:app"
 user_capability = "view_overview"
-bindings = [{ channel = "api", recipe = "get_shop", requires_capability = "shop_details" }]
+[[actions.bindings]]
+channel = "api"
+recipe = "get_shop"
+requires_capability = "shop_details"
+breaker_key = "etsy:api"
 
 [[actions]]
 tool = "etsy.receipts.read"
@@ -23,7 +27,11 @@ input_schema = "etsy.receipts.read.input.json"
 output_schema = "etsy.receipts.read.output.json"
 rate_limit_key = "etsy:app"
 user_capability = "view_orders"
-bindings = [{ channel = "api", recipe = "list_receipts", requires_capability = "receipts_read" }]
+[[actions.bindings]]
+channel = "api"
+recipe = "list_receipts"
+requires_capability = "receipts_read"
+breaker_key = "etsy:api"
 
 [[actions]]
 tool = "etsy.inventory.update"
@@ -35,4 +43,15 @@ output_schema = "etsy.inventory.update.output.json"
 rate_limit_key = "etsy:app"
 concurrency_key = "shop:{shop_id}:writes"
 user_capability = "edit_product_facts"
-bindings = [{ channel = "api", recipe = "update_listing_inventory" }]
+[[actions.bindings]]
+channel = "api"
+recipe = "update_listing_inventory"
+breaker_key = "etsy:api"
+
+# The app-wide Etsy budget (slice 5.15): one key's calls per second and per UTC day, shared by
+# every shop and worker. Conservative placeholders below Etsy's documented defaults until the
+# owner copies the real figures from the Developer Portal (the 5.15 owner question).
+[[rate_limits]]
+key = "etsy:app"
+per_second = 5
+per_day = 5000

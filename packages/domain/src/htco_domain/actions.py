@@ -63,7 +63,8 @@ _ACTION_TRANSITIONS: Mapping[ActionState, frozenset[ActionState]] = {
     _S.ROUTED: frozenset({_S.RUNNING, _S.DEFERRED, _S.DENIED}),
     _S.RUNNING: frozenset({_S.VERIFYING, _S.SUCCEEDED, _S.DEFERRED, _S.HANDED_TO_HUMAN, _S.FAILED}),
     _S.VERIFYING: frozenset({_S.SUCCEEDED, _S.FAILED}),
-    _S.DEFERRED: frozenset({_S.ROUTED}),
+    # Resubmitted after `retry_at`: every check runs again before it is routed.
+    _S.DEFERRED: frozenset({_S.AUTHORIZED, _S.ROUTED, _S.DENIED}),
     _S.HANDED_TO_HUMAN: frozenset({_S.RUNNING, _S.CANCELLED}),
     # A retry with the same key runs every check again before it is routed.
     _S.FAILED: frozenset({_S.AUTHORIZED, _S.ROUTED, _S.DENIED, _S.DEAD_LETTERED}),

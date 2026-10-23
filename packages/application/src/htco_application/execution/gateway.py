@@ -81,6 +81,7 @@ class ActionResult:
     verified: bool = False
     error_code: str | None = None  # stable codes: "scope_missing", "capability_blocked", ...
     cost: Decimal | None = None
+    retry_at: datetime | None = None  # DEFERRED: when a resubmission may run (slice 5.15)
 
 
 class ActionGateway(Protocol):
