@@ -20,3 +20,4 @@ Every feature has its own folder here, created from [`_template/`](_template/) a
 | [etsy-integration](etsy-integration/overview.md) | 4 | In progress (4.1 to 4.5 done at the platform; 4.7 disconnect done, restore rehearsal pending) |
 | [job-queue](job-queue/overview.md) | 5 | 5.1 and 5.2 built; worker deployment pending the owner |
 | [automation-engine](automation-engine/overview.md) | 5 | 5.10 built; first automations in 5.11 |
+| [action-gateway](action-gateway/overview.md) | 5 | 5.12 built; channels in 5.13 |
