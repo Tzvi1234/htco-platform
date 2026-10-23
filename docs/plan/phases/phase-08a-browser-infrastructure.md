@@ -6,7 +6,7 @@
 | **Milestone** | — |
 | **Repositories** | `htco-platform` (most work), `htco-clients` (environment screens) |
 | **Size** | L |
-| **Depends on** | [Phase 5](phase-05-orders-ingest.md) (gateway, router, Browser interface, Environment Registry), [Phase 7](phase-07-tasks-approvals.md) (Human channel: tasks and approvals). Slice 8A.6 (Browser Use) also needs [Phase 9](phase-09-router-advisor.md) (model gateway, budgets). The secret-injection part of 8A.4 needs [Phase 8B](phase-08b-authenticator.md); until then, login is a Human task. |
+| **Depends on** | [Phase 5](phase-05-orders-ingest.md) (gateway, router, Browser interface, Environment Registry), [Phase 7](phase-07-tasks-approvals.md) (Human channel: tasks and approvals). **Starts right after Phase 6, in parallel with Phase 7** (owner, 2026-10-23): until Phase 7's task store lands, Human hand-offs use the relay item of slice 6.10, which Phase 7 then absorbs. The AutoVA recipes (8A.10) are built first, right after the worker, controller, preflight and challenge handler (8A.1 to 8A.4). Slice 8A.6 (Browser Use) also needs [Phase 9](phase-09-router-advisor.md) (model gateway, budgets). The secret-injection part of 8A.4 needs [Phase 8B](phase-08b-authenticator.md); until then, login is a Human task. |
 | **Parallel with** | Phase 8 and Phase 8B |
 | **Decisions** | [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md), [ADR-0020](../../adr/0020-per-shop-browser-environment.md), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md), [Etsy automation approval](../../architecture/etsy-automation-approval.md) |
 | **Status** | PLANNED |

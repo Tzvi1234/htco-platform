@@ -67,7 +67,7 @@ Sizes are relative effort for one developer working with AI agents: S ≈ under 
 
 **Web first ([ADR-0016](../adr/0016-web-first.md)).** Every feature ships on the web first and completely; the native apps implement features the web already has, against the same API, and never lead.
 
-**Parallel tracks.** Phases 8, 8A and 8B run in parallel after Phase 7 (8A's Browser Use slice waits for Phase 9).  Phase 16 (Android) may start any time after Phase 7, and Phase 17 (Windows) after Phase 15, if the owner wants them earlier; they consume the same API and implement only features the web already has. Phase 3's design system work can overlap the end of Phase 2. Phase 18 can start once Phase 13 has produced real cost data.
+**Parallel tracks.** Phase 8A starts **right after Phase 6, in parallel with Phase 7** (owner, 2026-10-23): the AutoVA flow needs the browser engine, so its recipes A-01 and A-02 come as early as possible. Until Phase 7 lands, 8A's Human hand-offs use the relay item of slice 6.10. Phases 8 and 8B run in parallel after Phase 7 (8A's Browser Use slice still waits for Phase 9). AutoVA signs in with email and password only, so its recipes need the Secret Broker (5.17) and not Phase 8B.  Phase 16 (Android) may start any time after Phase 7, and Phase 17 (Windows) after Phase 15, if the owner wants them earlier; they consume the same API and implement only features the web already has. Phase 3's design system work can overlap the end of Phase 2. Phase 18 can start once Phase 13 has produced real cost data.
 
 ## 3. Dependency map
 
