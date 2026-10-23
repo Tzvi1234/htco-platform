@@ -422,3 +422,22 @@ async def test_unavailable_gateway__refuses_every_action() -> None:
     assert (result.outcome, result.error_code) == (ActionOutcome.DENIED, "gateway_unavailable")
     assert not result.outcome.waits
     assert ActionOutcome.PENDING_APPROVAL.waits
+
+
+async def test_execution_jobs__share_one_lock_per_execution__so_two_runs_never_overlap() -> None:
+    """Post-merge review: a job replayed after its worker died (after recording the failure but
+    before completing the job) and the retry job that run had enqueued could both be claimed; the
+    second found the execution RUNNING, took it for a dead run and ran the handler again while the
+    first was still running it. Every job of an execution holds the same lock key, so the queue
+    never runs two of them at once (AC-5.1.2)."""
+    world = World()
+    world.book.failures = 1
+    execution = world.engine.trigger(paid())
+
+    await world.engine.execute(execution.id, worker=WORKER)  # fails: a retry job
+    world.book.wait_for_approval = True
+    await world.engine.execute(execution.id, worker=WORKER)  # waits
+    world.engine.resume(ORG, execution.id, actor=ADMIN, reason="approval_decided")
+
+    assert len(world.store.jobs) == 3  # the trigger's, the retry's and the resume's
+    assert {job.lock_key for job in world.store.jobs} == {f"automation_execution:{execution.id}"}

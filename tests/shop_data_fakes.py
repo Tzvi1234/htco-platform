@@ -252,6 +252,7 @@ class ShopData:
         shop_id: int,
         *,
         min_created: datetime | None,
+        min_last_modified: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
         urgent: bool = False,
@@ -259,7 +260,12 @@ class ShopData:
     ) -> Page[OrderReceipt]:
         self._record("list_order_receipts", shop_id, tokens, urgent=urgent)
         self.windows.append(min_created)
-        found = [r for r in self.receipts if min_created is None or r.created_at >= min_created]
+        found = [
+            r
+            for r in self.receipts
+            if (min_created is None or r.created_at >= min_created)
+            and (min_last_modified is None or r.updated_at >= min_last_modified)
+        ]
         found.sort(key=lambda r: r.created_at, reverse=True)
         return Page(tuple(found[offset : offset + limit]), len(found), offset)
 

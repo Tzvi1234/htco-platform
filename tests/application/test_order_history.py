@@ -55,7 +55,9 @@ class Recording:
 
     def __init__(self, source: ShopData, *, rate_limited: int = 0) -> None:
         self.source = source
+        # (the window's start, whichever filter names it; the offset)
         self.offsets: list[tuple[datetime | None, int]] = []
+        self.modified_since: list[datetime] = []
         self.rate_limited = rate_limited
 
     async def list_order_receipts(  # noqa: PLR0913 - the port's signature
@@ -63,6 +65,7 @@ class Recording:
         shop_id: int,
         *,
         min_created: datetime | None,
+        min_last_modified: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
         urgent: bool = False,
@@ -71,10 +74,13 @@ class Recording:
         if self.rate_limited:
             self.rate_limited -= 1
             raise MarketplaceRateLimitedError("fake 429", retry_after_seconds=2)
-        self.offsets.append((min_created, offset))
+        self.offsets.append((min_created or min_last_modified, offset))
+        if min_last_modified is not None:
+            self.modified_since.append(min_last_modified)
         return await self.source.list_order_receipts(
             shop_id,
             min_created=min_created,
+            min_last_modified=min_last_modified,
             limit=limit,
             offset=offset,
             urgent=urgent,
@@ -225,6 +231,31 @@ async def test_incremental__status_change_refund_and_shipment__update_the_stored
     assert stored.status == "fully refunded"
     assert stored.refunds == (refund,)
     assert len(setup.store.orders) == 1
+
+
+async def test_incremental__a_late_refund_of_an_order_older_than_30_days__reaches_the_store() -> (
+    None
+):
+    """Post-merge review: the incremental sync read receipts *created* in the last 30 days, so a
+    refund or cancellation of an older order never reached the stored history (Statistics kept
+    counting it as a sale). It reads the receipts *changed* in the last 30 days."""
+    old = personal(receipt(7003, created=NOW - timedelta(days=45)))
+    setup = Setup([old])
+    await setup.sync.run(setup.integration)
+
+    later = NOW + timedelta(minutes=20)
+    setup.world.clock.now = later
+    refund = OrderRefund(usd(2400), later, "damaged", "refunded")
+    setup.world.source.receipts = [
+        replace(old, status="fully refunded", updated_at=later, refunds=(refund,))
+    ]
+    setup.recording.modified_since.clear()
+    await setup.sync.run(setup.integration)
+
+    assert setup.recording.modified_since == [later - timedelta(days=30)]
+    stored = setup.store.orders[SHOP, 7003]
+    assert stored.status == "fully refunded"
+    assert stored.refunds == (refund,)
 
 
 async def test_incremental__an_older_copy__never_overwrites_a_newer_one() -> None:

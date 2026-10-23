@@ -967,3 +967,16 @@ def test_app_key_fingerprint__short_stable_and_never_the_key() -> None:
     assert KEYSTRING not in first
     credentials = EtsyCredentials(keystring=KEYSTRING, shared_secret=SHARED_SECRET)
     assert credentials.fingerprint == first
+
+
+def test_app_key_fingerprint__the_same_key_pasted_with_surrounding_whitespace__the_same_app() -> (
+    None
+):
+    """Post-merge review: the API's startup check marks every connection whose fingerprint
+    differs from the configured key's `needs_reauth`, and that status stays. A secret re-entered
+    with a trailing newline or space (the same Etsy app; HTTP drops the whitespace around a
+    header value) must not make every healthy shop need reconnecting."""
+    first = app_key_fingerprint(KEYSTRING)
+
+    for pasted in (f"{KEYSTRING}\n", f" {KEYSTRING} ", f"{KEYSTRING}\r\n", f"\t{KEYSTRING}"):
+        assert app_key_fingerprint(pasted) == first
