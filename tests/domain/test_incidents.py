@@ -116,3 +116,15 @@ def test_incidents_in_hand_or_resolved_do_not_escalate() -> None:
     old = NOW - timedelta(days=30)
     for state in [_I.VERIFYING, _I.APPROVAL_REQUIRED, _I.RESOLVED, _I.ESCALATED]:
         assert not should_escalate(state, Severity.CRITICAL, detected_at=old, now=NOW)
+
+
+def test_incident_states_map_to_the_office_status_vocabulary() -> None:
+    """Architecture audit P2-2: the incident machine speaks the 5.18 status words."""
+    from htco_domain.status import StatusKind, status_kind  # noqa: PLC0415
+
+    assert status_kind(IncidentState.RESOLVED) is StatusKind.SUCCEEDED
+    assert status_kind(IncidentState.APPROVAL_REQUIRED) is StatusKind.WAITING
+    assert {status_kind(s) for s in IncidentState if s.is_open} <= {
+        StatusKind.ACTIVE,
+        StatusKind.WAITING,
+    }

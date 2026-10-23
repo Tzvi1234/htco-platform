@@ -8,9 +8,12 @@ from htco_domain.actions import ACTION_FINAL_STATES, ActionState
 from htco_domain.automation import ExecutionState
 from htco_domain.browser import EnvironmentStatus
 from htco_domain.status import StatusKind, WaitingReason, status_kind, vocabularies, waiting_reason
+from htco_domain.incidents import IncidentState
 from htco_domain.tasks import TaskState
 
-LIFECYCLES: list[type[Enum]] = [ExecutionState, ActionState, EnvironmentStatus, TaskState]
+LIFECYCLES: list[type[Enum]] = [
+    ExecutionState, ActionState, EnvironmentStatus, TaskState, IncidentState,
+]  # fmt: skip
 
 
 @pytest.mark.parametrize("lifecycle", LIFECYCLES)
