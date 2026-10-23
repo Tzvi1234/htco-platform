@@ -19,7 +19,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 - [x] 5.1 Job queue and worker (PR #53; aligned: migration `20261023120000_job_queue.sql` because a shop fix took `20261023090000`, pgTAP `10_job_queue`, `correlation_id` and `causation_id` on jobs; deployment in #54)
 - [x] 5.2 Inbox and outbox (PR #55; aligned: migration `20261023130000_inbox_outbox.sql`, pgTAP `11_inbox_outbox`, `action_execution_id` and `correlation_id` on outbox messages)
 - [x] 5.3 Webhook ingress for all 11 Etsy events (behind `HTCO_ETSY_WEBHOOKS_ENABLED`, off; migration `20261024100000_etsy_webhook_intake.sql`, pgTAP `15_etsy_webhook_intake`; the owner registers the endpoint and the `ETSY_WEBHOOK_SECRET`, see [orders-ingest operations](../../features/orders-ingest/operations.md#registering-the-webhook-in-the-etsy-developer-portal))
-- [ ] 5.4 Receipt ingest on the order history store (#57)
+- [x] 5.4 Receipt ingest on the order history store (#57) (migration `20261024210000_order_intake.sql`, pgTAP `17_order_intake`; the worker's gateway is real for reads behind `HTCO_WORKER_ACTION_GATEWAY`; the API's sync stays as the fallback behind `HTCO_ORDER_SYNC_IN_API` until 5.11; Etsy fees are not estimated yet: the receipt carries none, they come with the ledger in Phase 13)
 - [ ] 5.5 Reconciliation and backfill on the queue
 - [ ] 5.6 Orders API
 - [ ] 5.7 Orders UI

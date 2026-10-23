@@ -13,6 +13,19 @@
 
 Recorded payloads: `tests/fixtures/etsy/webhooks/events.json` (Etsy's documented shape, invented IDs).
 
+### Slice 5.4
+
+| Level | What is covered | Location |
+|---|---|---|
+| Domain | Every allowed and every illegal transition; observed states; ingest paths; paths are legal (property); counts exclude cancelled, refunded and unpaid (property); exact money, floats refused | `tests/domain/test_orders.py` |
+| Application | `plan_ingest`: new order, replays, older copies, newer copies, cancel and refund events, behind, backfill without events, delivered; Decimal entries; no buyer data in the hash or events; JSON round trip (property) | `tests/application/test_order_ingest.py` |
+| Application | The handler through the real gateway and API channel: receipt re-read with its buyer row, ten replays, delivered, disconnected, denied, deferred, history run (backfill then 30 days), lock held; the channel's automation-only form; the API's queued requests; the worker's sync trigger | `tests/application/test_order_intake.py`, `tests/application/test_order_sync_requests.py` |
+| Adapter | `get_order_receipt` one GET on a strict mock; fake contact values kept nowhere | `tests/integrations/test_etsy_order_intake_reads.py` |
+| Worker | The gateway flag; a write never reaches a channel; the sync job wired | `tests/worker/test_worker_gateway.py` |
+| API | `HTCO_ORDER_SYNC_IN_API` wiring | `tests/api/test_etsy_wiring.py` |
+| Integration (Postgres) | As `htco_worker`: ten replays, an older copy, the same row as the API's backfill, no second order table, no contact column, another organization refused | `tests/integration/test_order_intake.py` |
+| Database (pgTAP) | The machine's trigger, entry kinds, the worker's column grants and organization scope | `supabase/tests/database/17_order_intake.test.sql` |
+
 ## Acceptance criteria → tests
 
 | Criterion | Tests |
@@ -21,6 +34,12 @@ Recorded payloads: `tests/fixtures/etsy/webhooks/events.json` (Etsy's documented
 | AC-5.3.2 | `test_webhook__20_concurrent_valid_webhooks__p95_under_one_second` |
 | AC-5.3.3 | `test_limiter__over_the_limit_waits_until_the_window_ends_then_admits`; `test_webhook__over_the_rate_limit__429_with_retry_after_then_accepted` |
 | AC-5.3.4 | `test_parse__recorded_payloads_name_their_resource` (11 types); `test_ingress__each_event_type_is_stored_and_routed_to_one_job` (11 types); `test_ingress__an_unknown_event_type_is_stored_and_counted_with_no_job`; `test_process__order_events_trigger_etsy_order_intake_once_per_receipt`; `test_process__listing_events_reread_the_listing_and_publish_it`; `test_process__inventory_events_reread_the_stock_and_publish_it`; `test_process__out_of_stock_is_published_when_the_reread_confirms_it`; `test_webhook_job__rereads_through_the_adapter_with_gets_only`; `test_webhook__routed_to_the_connected_shop_with_one_job`; `test_webhook__unknown_type_or_shop__stored_with_no_job` |
+| AC-5.4.1 | `test_the_same_receipt_replayed__writes_nothing_more`; `test_receipt__the_same_event_ten_times__one_order_and_one_ingested_event`; `test_worker__the_same_receipt_ten_times__one_order_one_event_one_history` (Postgres) |
+| AC-5.4.2 | `test_an_older_copy_after_a_newer_one__changes_nothing`; `test_worker__an_older_copy_after_a_newer_one__changes_nothing` (Postgres) |
+| AC-5.4.3 | `test_counts__cancelled_refunded_and_unpaid_orders_never_count`; `test_counts__units_and_orders_are_counted_separately` (property tests) |
+| AC-5.4.4 | `test_money__a_float_anywhere_fails`; `test_money__exact_from_amount_and_divisor`; `test_financial_entries__exact_decimals_with_their_currency` |
+| AC-5.4.5 | `test_transition__every_allowed_edge_passes`; `test_transition__every_other_edge_is_refused`; `test_ingest_path__passes_every_state_in_between`; `test_transition_path__a_state_behind_is_refused`; `test_a_new_paid_order__passes_paid_ingested_awaiting_with_one_ingested_event`; `test_a_newer_copy__moves_the_state_and_publishes_an_update`; `test_cancelled_and_refunded__publish_their_own_events`; pgTAP `17_order_intake` |
+| AC-5.4.6 | `test_one_store__the_api_sync_and_the_worker_write_the_same_order`; `test_schema__no_second_order_table_exists`; `test_schema__no_column_can_hold_contact_data`; `test_get_order_receipt__fake_contact_values_are_never_kept`; `test_the_hash_and_the_events_carry_no_buyer_data`; `test_receipt__reread_through_the_gateway_and_ingested_with_its_buyer_row` |
 
 ## Verification
 

@@ -19,6 +19,7 @@ import anyio
 import httpx
 import structlog
 
+from htco_application.approvals import GatewayApprovals, MemoryApprovalService
 from htco_application.automation.durable import (
     EXECUTION_JOB,
     DurableAutomationEngine,
@@ -35,7 +36,6 @@ from htco_application.etsy_webhooks import (
 from htco_application.execution.channels import EtsyApiChannel
 from htco_application.execution.gateway import (
     ActionGateway,
-    ActionRequest,
     Channel,
     UnavailableGateway,
 )
@@ -44,7 +44,6 @@ from htco_application.execution.service import (
     EVENT_DESTINATION,
     ActionGatewayService,
     GatewayParts,
-    Refusal,
 )
 from htco_application.jobs import ClaimedJob, JobError, JobQueue
 from htco_application.maintenance import (
@@ -259,20 +258,6 @@ def worker_engine(
     )
 
 
-class NoApprovals:
-    """The approval contract arrives with slice 5.14 (Postgres in Phase 7). Until then every
-    write is refused before any channel runs; reads need no approval."""
-
-    def request(
-        self, request: ActionRequest, *, request_hash: str, definition: object
-    ) -> uuid.UUID:
-        del request, request_hash, definition
-        raise Refusal("approval_unavailable", "approvals arrive with slice 5.14")
-
-    def is_approved(self, approval_id: uuid.UUID, *, request_hash: str) -> bool:  # noqa: ARG002 - the port
-        raise Refusal("approval_unavailable", "approvals arrive with slice 5.14")
-
-
 class NoUsers:
     """Users never act in the worker: a user actor is refused as unknown."""
 
@@ -287,7 +272,8 @@ def worker_gateway(
     settings: WorkerSettings, database: Database, adapter: EtsyAdapter | None
 ) -> ActionGateway:
     """The real Action Gateway for reads (`HTCO_WORKER_ACTION_GATEWAY=reads`, the default), or
-    `UnavailableGateway` (`off`, or without the Etsy app). Writes are refused either way."""
+    `UnavailableGateway` (`off`, or without the Etsy app). Writes never run: they wait for an
+    approval that only Phase 7's approval store can give."""
     if settings.worker_action_gateway == "off" or adapter is None:
         return UnavailableGateway()
     tools = read_registry(settings.registry_path).registry()
@@ -303,7 +289,9 @@ def worker_gateway(
             store=PostgresActionStore(database),
             principals=users,
             shops=users,
-            approvals=NoApprovals(),
+            # The shared approval contract (5.14) in memory: a write waits for an approval
+            # no one can give in the worker (Postgres approvals are Phase 7), so none runs.
+            approvals=GatewayApprovals(MemoryApprovalService(clock=_now), clock=_now),
             adapters={Channel.API: EtsyApiChannel(adapter, facts)},
             capabilities=facts,
             clock=_now,

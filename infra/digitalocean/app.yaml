@@ -163,6 +163,11 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: ${HTCO_ETSY_WEBHOOK_SECRET}
+      # Slice 5.4: the order history sync runs here only as the fallback; set to "false" once Etsy
+      # Order Intake is active (5.11), so stale reads and the manual sync go to the worker's queue.
+      - key: HTCO_ORDER_SYNC_IN_API
+        scope: RUN_TIME
+        value: "true"
 # The agent-worker (slice 5.1, ADR-0007): the API's image running the job queue's worker. It
 # connects to the same database and switches to the `htco_worker` role. Its scheduled jobs run only
 # when named in HTCO_WORKER_SCHEDULES. A fixed-size instance, $5 per month, that cannot scale.
@@ -218,6 +223,11 @@ workers:
       - key: HTCO_WORKER_SCHEDULES
         scope: RUN_TIME
         value: maintenance.capability_probes,maintenance.refresh_token_expiry,maintenance.purge_disconnected_shops,maintenance.prune_finished_jobs
+      # Slice 5.4: Etsy reads of the automations through the real Action Gateway ("reads"); "off"
+      # switches back to refusing every action. Writes never run (no approvals in the worker).
+      - key: HTCO_WORKER_ACTION_GATEWAY
+        scope: RUN_TIME
+        value: reads
       - key: HTCO_WORKER_HEALTH_PORT
         scope: RUN_TIME
         value: "8081"

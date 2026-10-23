@@ -93,7 +93,7 @@ The phase column says when a table first appears.
 | `etsy_order_sync_state` | Per shop: the backfill's offset checkpoint, when it completed, the last 30-day sync, the last error type | 4 (ahead of 5) |
 | `orders` | **Not created as a separate table** (2026-10-23): `etsy_orders` (#57) is the order store, and Phase 5 extends it (`external_updated_at`, raw payload hash). A channel-neutral `orders` view over the marketplace stores is added with the Shopify adapter (Phase 21) | 21 (view) |
 | `order_items` | As `orders`: `etsy_order_items` is the store; `variant_id` (nullable until the catalog maps it, Phases 11–12) is added to it | 5 (column), 21 (view) |
-| `order_status_events` | Every order state transition with source and proof; references `etsy_orders` | 5 |
+| `order_status_events` | Every order state transition with source and proof; references `etsy_orders` (created: migration `20261024210000_order_intake.sql`) | 5 |
 | `shipments` | Shipment records from the marketplace (carrier, tracking code); today embedded in `etsy_orders` and `etsy_order_buyers` (tracking numbers); split into a table only when Phase 6 needs one row per shipment | 6 |
 | `tracking_events` | Tracking facts with source and `observed_at` | 6 |
 | `sla_policies` | SLA windows per shop, supplier and shipping method | 6 |
@@ -117,7 +117,7 @@ The phase column says when a table first appears.
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `financial_entries` | Ledger lines (revenue, fees, refunds, costs) with source and `ESTIMATED`/`VERIFIED` | 5 (basic), 13 |
+| `financial_entries` | Ledger lines (revenue, fees, refunds, costs) with source and `ESTIMATED`/`VERIFIED` (created: migration `20261024210000_order_intake.sql`, revenue and refunds only; fees with the ledger) | 5 (basic), 13 |
 | `payouts`, `fees`, `refunds`, `cost_snapshots` | Marketplace and supplier finance detail | 13 |
 | `budgets`, `budget_ledger` | AI and infrastructure budgets, reserved and actual, per organization, shop, employee, task, day and month | 9 |
 

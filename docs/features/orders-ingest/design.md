@@ -55,3 +55,24 @@ sequenceDiagram
 - **Duplicate deliveries.** Etsy retries with the same `webhook-id`: the inbox's `(source, event_id)` keeps one row. The same order change announced with two IDs shares one job and one execution key.
 - **Rate limit per instance.** A fixed one-second window per source (`HTCO_ETSY_WEBHOOK_RATE_PER_SECOND`, 50) guards against floods; Etsy retries a 429 later.
 - **Catalog re-reads use the adapter directly** in the worker, like the daily probes. Moving them onto the gateway needs `etsy.listings.read` action contracts; that follows with the catalog slices.
+
+## Etsy Order Intake (slice 5.4)
+
+| Layer | Module | Responsibility |
+|---|---|---|
+| Domain | `htco_domain.orders` | `OrderState` and its transitions (FR-ORD-03), `observed_state` from Etsy's facts, `ingest_path` (a new paid order passes `PAID → INGESTED`, a jump passes every state in between), `order_count` and `units_sold` (sales only), `Money` (Decimal, floats refused) |
+| Application | `htco_application.order_ingest` | `plan_ingest`: write or not (older or identical copy: nothing), transitions, estimated entries, `orders.*` events (IDs and states only); the facts hash excludes buyer data |
+| Application | `htco_application.order_receipts` | The order history form of a receipt as JSON (the gateway's R1 output) and back |
+| Application | `htco_application.order_intake` | The handler (`OrderIntake`), `GatewayReceipts` (the #57 `ReceiptSource` over the gateway), `QueuedSyncRequests` (the API asks the queue), `EngineSyncTrigger` (the worker's `etsy.order_sync` job) |
+| Application | `htco_application.execution.channels` | `etsy.receipts.read` with `order_history: true`: whole receipts through `get_order_receipt` / `list_order_receipts`, for the automation actor only |
+| Adapters | `htco_persistence.etsy_orders` | `_ingest`: one transaction per page or receipt, select-for-update then insert or update (no `on conflict do update`, so the worker never reads money columns), children replaced, transitions, entries, outbox |
+| Adapters | `htco_persistence.worker_gateway` | The shop's Etsy ID and probed capabilities for the worker's gateway |
+| Transport | `htco_worker.main` | `worker_gateway` (real for reads, `HTCO_WORKER_ACTION_GATEWAY`), `intake_handlers`, `order_sync_handlers` |
+
+**Gateway in the worker.** `ActionGatewayService` with the registry and action contracts copied into the image (`/app/registry`, `/app/packages/contracts/actions`), the Postgres action store, breakers, rate budget (`etsy:app`, 5/s and 5,000/day placeholders) and slots, and the shared approval contract (#70) in memory: a write waits for an approval no one can give in the worker, so no write runs. Users never act in the worker.
+
+**Keys.** A webhook's run: `etsy:{shop_id}:{receipt_id}:{event_type}` (5.11). A requested history run: `etsy:{shop_id}:history:{job key}` with one `etsy.order_sync` job per shop and 10 minutes (stale reads), or per minute (the Owner's manual sync). Each gateway read is keyed by the execution, its attempt and the page.
+
+**Locks.** The history run keeps the #57 per-shop advisory lock, shared with the API process's fallback run, so the two never sync one shop at once.
+
+**Tables (migration `20261024210000_order_intake.sql`).** `app.etsy_orders` gains `order_state` and `receipt_sha256`; `app.order_status_events` (source, `observed_at`, Etsy's update time and the facts hash as proof; a trigger refuses illegal pairs); `app.financial_entries` (revenue and refunds, `estimated`, `numeric(20,6)`). The worker gets column-level grants: no money column, no buyer value readable.
