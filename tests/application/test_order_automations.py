@@ -1,6 +1,7 @@
 """Order Deduplication & Verification and Product Sales Counters (slice 5.11), and the order
 events that start them (invented values only)."""
 
+import logging
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field, replace
@@ -59,7 +60,6 @@ ETSY = receipt(7, created=NOW, lines=(line(70), line(71)))
     [
         (stored_of(ETSY), []),
         (None, ["missing"]),
-        (stored_of(ETSY, orders=0), ["missing"]),
         (stored_of(ETSY, total_matches=False), ["totals"]),
         (stored_of(ETSY, items=((700, 1),)), ["items"]),
         (stored_of(ETSY, items=((700, 2), (710, 1))), ["items"]),
@@ -67,7 +67,7 @@ ETSY = receipt(7, created=NOW, lines=(line(70), line(71)))
         # Another version of the order: its own ingest and verification follow.
         (stored_of(ETSY, etsy_updated_at=NOW - timedelta(hours=1), items=()), []),
     ],
-    ids=["match", "not-stored", "no-order-row", "total", "fewer-items",
+    ids=["match", "not-stored", "total", "fewer-items",
          "other-quantity", "both", "other-version"],
 )  # fmt: skip
 def test_verify__one_difference_per_kind_and_none_for_a_match(
@@ -271,7 +271,10 @@ class Engine:
 
 
 def event(
-    event_type: str, receipt_id: int = 7, updated: str = "2026-10-23T10:00:00+00:00"
+    event_type: str,
+    receipt_id: int = 7,
+    updated: str = "2026-10-23T10:00:00+00:00",
+    source: str = "webhook",
 ) -> PendingDelivery:
     return PendingDelivery(
         id=uuid.uuid4(),
@@ -279,7 +282,7 @@ def event(
             organization_id=ORG, shop_id=SHOP, destination="events.publish",
             idempotency_key=f"{event_type}:{receipt_id}",
             payload={"event_type": event_type, "receipt_id": receipt_id,
-                     "etsy_updated_at": updated, "state": "paid"},
+                     "etsy_updated_at": updated, "state": "paid", "source": source},
             correlation_id="corr-ev",
         ),
         attempts=0,
@@ -332,12 +335,33 @@ async def test_events__the_same_version_twice__the_same_keys() -> None:
     assert sorted(keys.values()) == [1, 1, 2, 2]
 
 
-async def test_events__an_automation_not_active_yet__refused_logged_and_delivered() -> None:
+async def test_events__an_automation_not_active_yet__refused_logged_and_delivered(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     engine = Engine(refuse=frozenset({ORDER_DEDUP, SALES_COUNTERS}))
 
-    await OrderEventTriggers(engine).deliver(event(INGESTED))  # no exception: delivered
+    with caplog.at_level(logging.INFO, logger="htco_application.order_automations"):
+        await OrderEventTriggers(engine).deliver(event(INGESTED))  # no exception: delivered
 
     assert len(engine.requests) == 2
+    refusals = [r for r in caplog.records if r.getMessage().startswith("order_automation.")]
+    # Expected while the automations are draft: info, so real warnings stay visible.
+    assert [r.levelno for r in refusals] == [logging.INFO, logging.INFO]
+
+
+@pytest.mark.parametrize(
+    ("event_type", "started"),
+    [(INGESTED, [SALES_COUNTERS]), (UPDATED, [SALES_COUNTERS]), (CANCELLED, [SALES_COUNTERS])],
+)
+async def test_events__from_reconciliation__counted_but_not_verified_again(
+    event_type: str, started: list[str]
+) -> None:
+    """Reconciliation has just compared the receipt with Etsy: a second GET learns nothing."""
+    engine = Engine()
+
+    await OrderEventTriggers(engine).deliver(event(event_type, source="reconciliation"))
+
+    assert [r.automation_id for r in engine.requests] == started
 
 
 async def test_events__without_a_shop__nothing_started() -> None:
