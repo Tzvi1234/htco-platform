@@ -5,32 +5,24 @@ another workflow) enters through `trigger`, which checks the automation's readin
 trigger kind and, for employees, the employee's automation grants. An execution is keyed by
 `(automation_id, idempotency_key)`: a replayed trigger returns the existing execution and never
 runs the business action again. Failures follow the automation's retry policy and end in the
-dead-letter state. This version runs a handler in-process against an `ExecutionStore` port;
-durable queuing (inbox, outbox, leases) arrives with the job queue in Phase 5.
+dead-letter state.
+
+This module keeps what every engine shares: the trigger request, the refusal and `authorize`.
+The engine itself is `htco_application.automation.durable.DurableAutomationEngine` (slice 5.10);
+the first in-memory engine was retired with slice 5.11 (audit P2-5).
 """
 
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
 
 from htco_application.workforce.registry import Registry
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import (
     AutomationDefinition,
-    AutomationExecution,
-    ExecutionState,
     TriggerKind,
 )
 from htco_domain.workforce import PRODUCTION_READINESS
-
-type Handler = Callable[[Mapping[str, object]], Mapping[str, object]]
-
-
-class ExecutionStore(Protocol):
-    def find(self, automation_id: str, idempotency_key: str) -> AutomationExecution | None: ...
-
-    def save(self, execution: AutomationExecution) -> None: ...
 
 
 class AutomationRefused(Exception):  # noqa: N818 - reads as "automation (was) refused"
@@ -84,69 +76,3 @@ def _authorize_employee(
         raise AutomationRefused(f"{employee} is not active ({profile.readiness.value})")
     if definition.id not in profile.allowed_automations:
         raise AutomationRefused(f"{definition.id} is not granted to {employee}")
-
-
-class AutomationEngine:
-    def __init__(
-        self,
-        registry: Registry,
-        store: ExecutionStore,
-        handlers: Mapping[str, Handler],
-        new_id: Callable[[], uuid.UUID],
-    ) -> None:
-        self._registry = registry
-        self._store = store
-        self._handlers = handlers
-        self._new_id = new_id
-        self._payloads: dict[tuple[str, str], Mapping[str, object]] = {}
-
-    def trigger(self, request: TriggerRequest) -> AutomationExecution:
-        definition = self._authorize(request)
-        existing = self._store.find(request.automation_id, request.idempotency_key)
-        if existing is not None:
-            return existing
-        execution = AutomationExecution(
-            id=self._new_id(),
-            automation_id=definition.id,
-            automation_version=definition.version,
-            idempotency_key=request.idempotency_key,
-            trigger=request.trigger,
-            actor=request.actor,
-            state=ExecutionState.PENDING,
-            attempts=0,
-            correlation_id=request.correlation_id,
-        )
-        self._store.save(execution)
-        self._payloads[(definition.id, request.idempotency_key)] = request.payload
-        return self._run(definition, execution)
-
-    def retry(self, automation_id: str, idempotency_key: str) -> AutomationExecution:
-        """Run a scheduled retry (called by the scheduler when the backoff has passed)."""
-        execution = self._store.find(automation_id, idempotency_key)
-        if execution is None or execution.state is not ExecutionState.RETRY_SCHEDULED:
-            raise AutomationRefused(f"{automation_id}: nothing to retry for {idempotency_key}")
-        return self._run(self._registry.automations[automation_id], execution)
-
-    def _authorize(self, request: TriggerRequest) -> AutomationDefinition:
-        return authorize(self._registry, self._handlers, request)
-
-    def _run(
-        self, definition: AutomationDefinition, execution: AutomationExecution
-    ) -> AutomationExecution:
-        running = execution.transition(ExecutionState.RUNNING)
-        self._store.save(running)
-        payload = self._payloads.get((definition.id, execution.idempotency_key), {})
-        try:
-            self._handlers[definition.id](payload)
-        except Exception:
-            failed = running.transition(ExecutionState.FAILED)
-            next_state = (
-                ExecutionState.RETRY_SCHEDULED
-                if failed.attempts < definition.retry.max_attempts
-                else ExecutionState.DEAD_LETTERED
-            )
-            finished = failed.transition(next_state)
-        else:
-            finished = running.transition(ExecutionState.SUCCEEDED)
-        self._store.save(finished)
-        return finished

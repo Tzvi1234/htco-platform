@@ -3,7 +3,7 @@
 - `GET /v1/automations`: the current definitions ("View the office").
 - `GET /v1/automations/{automation_id}/executions`: an organization's executions, newest first,
   cursor-paged; shop-scoped roles see their granted shops' executions (RLS).
-- `POST /v1/automations/{automation_id}/executions`: a user action through `AutomationEngine`'s
+- `POST /v1/automations/{automation_id}/executions`: a user action through `DurableAutomationEngine`'s
   single entry point, with an `Idempotency-Key` (required); 202 with the execution. The policy
   engine decides: 403 without the automation's capability, 404 for a shop the user may not use,
   409 when the engine refuses (not active, no handler deployed, not callable by users).
