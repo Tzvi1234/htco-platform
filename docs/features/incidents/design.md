@@ -36,3 +36,5 @@ The notification dispatcher (6.4) consumes `incidents.opened.v1`.
 ## The incident center API (slice 6.4, for 6.5)
 
 `GET /v1/incidents` applies a shop-scoped role's grants in the query, before the limit, so other shops' incidents never crowd out its own (Codex review of #87).
+
+`GET /v1/incidents` also narrows to one shop (`shop_id`) or one order (`shop_id` and `receipt_id`), so the order sheet asks for one order's incidents instead of the whole history. It pages newest first by keyset on (`detected_at`, `id`): `limit` (1 to 200, default 200) and an opaque `cursor`, with `next_cursor` null on the last page. The order sheet and the center send the organization on every call. Every filter applies in the query, before the limit.
