@@ -29,6 +29,14 @@ To rotate the secret: roll it in the portal, update `ETSY_WEBHOOK_SECRET`, redep
 
 Until slice 5.9's Prometheus metrics: the logs `etsy.webhook_received`, `etsy.webhook_rejected` (with `reason`), `etsy.webhook_stored_unrouted` and the worker's `etsy.webhook_processed` (with `outcome`). The ingress counts unrouted events by reason (`EtsyWebhookIngress.unrouted`) for 5.9.
 
+### Reconciliation (slice 5.5)
+
+| Signal | Where | Meaning |
+|---|---|---|
+| `app.sync_cursors.last_succeeded_at` per shop (`reconcile`, `sweep`) | Database (the 5.9 freshness metric reads it) | Older than 30 minutes: reconciliation is not running or failing; `last_error` names the type |
+| New rows in `app.sync_drifts` | Database, `orders.drift_detected.v1` | `missing`: a webhook was lost or arrived late; `status`, `items`, `shipments`: the store differed from Etsy and was corrected |
+| The sweep's `etsy_receipts` and `orders_stored` (execution output) | `app.automation_executions` | A gap means the backfill is incomplete; a manual sync resumes it |
+
 ## Runbook
 
 ### Etsy shows failed deliveries
@@ -45,6 +53,7 @@ Etsy Order Intake is not active until the owner approves it (5.11): the worker l
 1. Deploy (the image carries the handler and the registry; `htco registry sync --apply` stores the definition with its `allowed_actions`).
 2. The owner approves the activation; the definition moves to `ready` in a reviewed pull request and the registry sync stores it.
 3. Set `HTCO_ORDER_SYNC_IN_API` to `"false"`: the API stops syncing; stale reads and the manual sync go to the worker.
+3a. Add `orders.reconcile_shops,orders.sweep_shops` to the worker's `HTCO_WORKER_SCHEDULES` (slice 5.5): reconciliation every 10 minutes and nightly.
 4. Verify: a webhook or a stale read creates an `etsy-order-intake` execution that succeeds; `app.order_status_events` grows; `orders.ingested.v1` appears in the outbox.
 
 Rollback: `HTCO_ORDER_SYNC_IN_API` back to `"true"` (the API syncs again), and the definition back to `draft` (new triggers refused).

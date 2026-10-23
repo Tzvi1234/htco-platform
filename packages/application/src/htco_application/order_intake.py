@@ -81,6 +81,8 @@ _log = logging.getLogger(__name__)
 
 
 class IntakeStore(OrderStore, Protocol):
+    async def order_count(self, shop_id: uuid.UUID, etsy_shop_id: int) -> int: ...
+
     async def record_cursor(
         self,
         integration: ShopIntegration,
@@ -330,8 +332,7 @@ class OrderIntake:
     ) -> dict[str, JsonValue]:
         """Etsy's receipt count against the store's (the nightly sweep): a gap is reported."""
         page = await receipts.list_order_receipts(0, min_created=None, limit=1, offset=0)
-        state = await self.store.state(integration.shop_id)
-        stored = 0 if state is None else state.orders_stored
+        stored = await self.store.order_count(integration.shop_id, integration.etsy_shop_id)
         return {"etsy_receipts": page.total_count, "orders_stored": stored}
 
     async def _receipt(

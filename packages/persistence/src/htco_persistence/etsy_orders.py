@@ -572,6 +572,19 @@ class PostgresOrderStore:
 
         return await anyio.to_thread.run_sync(run)
 
+    async def order_count(self, shop_id: uuid.UUID, etsy_shop_id: int) -> int:
+        """How many orders of the Etsy shop the store holds (the nightly sweep's comparison)."""
+
+        def run() -> int:
+            with self._database.connection() as connection:
+                row = connection.execute(
+                    "select count(*) from app.etsy_orders where shop_id = %s and etsy_shop_id = %s",
+                    [shop_id, etsy_shop_id],
+                ).fetchone()
+            return 0 if row is None else int(row[0])
+
+        return await anyio.to_thread.run_sync(run)
+
     async def record_cursor(
         self,
         integration: ShopIntegration,

@@ -21,6 +21,6 @@ Every feature has its own folder here, created from [`_template/`](_template/) a
 | [job-queue](job-queue/overview.md) | 5 | 5.1 and 5.2 built; worker deployment pending the owner |
 | [automation-engine](automation-engine/overview.md) | 5 | 5.10 built; first automations in 5.11 |
 | [action-gateway](action-gateway/overview.md) | 5 | 5.12 built; channels in 5.13 |
-| [orders-ingest](orders-ingest/overview.md) | 5 | 5.3 webhooks and 5.4 receipt ingest built (off behind flags until 5.11); 5.5 next |
+| [orders-ingest](orders-ingest/overview.md) | 5 | 5.3 webhooks, 5.4 receipt ingest and 5.5 reconciliation built (off behind flags and schedules until 5.11) |
 | [secret-broker](secret-broker/overview.md) | 5, 8B | 5.17 contracts and in-memory implementations built; tables and UI in 8B |
 | [browser-environments](browser-environments/overview.md) | 5, 8A | 5.16 contracts, table and state machine built; the browser in 8A |

@@ -20,7 +20,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 - [x] 5.2 Inbox and outbox (PR #55; aligned: migration `20261023130000_inbox_outbox.sql`, pgTAP `11_inbox_outbox`, `action_execution_id` and `correlation_id` on outbox messages)
 - [x] 5.3 Webhook ingress for all 11 Etsy events (behind `HTCO_ETSY_WEBHOOKS_ENABLED`, off; migration `20261024100000_etsy_webhook_intake.sql`, pgTAP `15_etsy_webhook_intake`; the owner registers the endpoint and the `ETSY_WEBHOOK_SECRET`, see [orders-ingest operations](../../features/orders-ingest/operations.md#registering-the-webhook-in-the-etsy-developer-portal))
 - [x] 5.4 Receipt ingest on the order history store (#57) (migration `20261024210000_order_intake.sql`, pgTAP `17_order_intake`; the worker's gateway is real for reads behind `HTCO_WORKER_ACTION_GATEWAY`; the API's sync stays as the fallback behind `HTCO_ORDER_SYNC_IN_API` until 5.11; Etsy fees are not estimated yet: the receipt carries none, they come with the ledger in Phase 13)
-- [ ] 5.5 Reconciliation and backfill on the queue
+- [x] 5.5 Reconciliation and backfill on the queue (migration `20261024220000_order_reconciliation.sql`, pgTAP `18_order_reconciliation`; schedules `orders.reconcile_shops` every 10 minutes and `orders.sweep_shops` nightly, off until named in `HTCO_WORKER_SCHEDULES`; each run re-reads 30 days by `min_last_modified` and every paid, unshipped order with no period limit; drifts in `sync_drifts`)
 - [ ] 5.6 Orders API
 - [ ] 5.7 Orders UI
 - [ ] 5.8 Drills
