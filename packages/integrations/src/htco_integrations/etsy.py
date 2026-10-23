@@ -317,6 +317,10 @@ class EtsyAdapter:
         )
         return _parse("list_listings", lambda data: _page(data, _listing, offset), body)
 
+    @property
+    def config(self) -> EtsyConfig:
+        return self._config
+
     def last_seen_quota(self) -> QuotaSnapshot | None:
         return self._quota
 

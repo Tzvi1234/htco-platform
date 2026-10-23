@@ -441,3 +441,13 @@ async def test_execution_jobs__share_one_lock_per_execution__so_two_runs_never_o
 
     assert len(world.store.jobs) == 3  # the trigger's, the retry's and the resume's
     assert {job.lock_key for job in world.store.jobs} == {f"automation_execution:{execution.id}"}
+
+
+@pytest.mark.ac("AC-5.0.2")
+async def test_execution_jobs__carry_the_triggers_correlation_and_the_execution_as_cause() -> None:
+    world = World()
+
+    execution = world.engine.trigger(paid(correlation_id="corr-trace"))
+
+    [job] = world.store.jobs
+    assert (job.correlation_id, job.causation_id) == ("corr-trace", str(execution.id))

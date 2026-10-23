@@ -13,6 +13,7 @@ import signal
 import sys
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta, tzinfo
 
 import anyio
@@ -442,12 +443,29 @@ def webhook_processor(
     )
 
 
-def _etsy_checks(
-    settings: WorkerSettings, database: Database, http: httpx.AsyncClient
-) -> tuple[PostgresTokenVault | None, CapabilityChecks | None, EtsyAdapter | None]:
+def gateway_etsy_config(*, daily_quota_floor: int) -> EtsyConfig:
+    """The adapter behind the gateway's API channel fails fast: one attempt, and a 429 is raised
+    at once with its `Retry-After`. The gateway's guards (5.15) own retries, inline waits and
+    defers, so one read makes at most `InlineRetry.max_attempts` calls (audit P1-2)."""
+    return EtsyConfig(
+        max_attempts=1, max_retry_after_seconds=0, daily_quota_floor=daily_quota_floor
+    )
+
+
+@dataclass(frozen=True)
+class EtsyParts:
+    vault: PostgresTokenVault | None = None
+    checks: CapabilityChecks | None = None
+    # With its own retries, for the capability probes and the webhook re-reads.
+    adapter: EtsyAdapter | None = None
+    # Failing fast, for the Action Gateway's API channel.
+    gateway_adapter: EtsyAdapter | None = None
+
+
+def etsy_parts(settings: WorkerSettings, database: Database, http: httpx.AsyncClient) -> EtsyParts:
     ring = settings.key_ring
     if ring is None:
-        return None, None, None
+        return EtsyParts()
     # Like the API: tokens issued for a replaced Etsy app read as `needs_reauth`.
     app_key = (
         None
@@ -456,7 +474,7 @@ def _etsy_checks(
     )
     vault = PostgresTokenVault(database, EnvelopeSealer(ring), app_key_fingerprint=app_key)
     if settings.etsy_keystring is None or settings.etsy_shared_secret is None:
-        return vault, None, None
+        return EtsyParts(vault=vault)
     credentials = EtsyCredentials(
         keystring=settings.etsy_keystring.get_secret_value(),
         shared_secret=settings.etsy_shared_secret.get_secret_value(),
@@ -480,7 +498,13 @@ def _etsy_checks(
         tokens=tokens,
         webhooks_configured=False,
     )
-    return vault, checks, adapter
+    gateway_adapter = EtsyAdapter(
+        http,
+        credentials=credentials,
+        access_tokens=tokens,
+        config=gateway_etsy_config(daily_quota_floor=settings.etsy_daily_quota_floor),
+    )
+    return EtsyParts(vault, checks, adapter, gateway_adapter)
 
 
 async def _serve(settings: WorkerSettings) -> None:
@@ -493,7 +517,8 @@ async def _serve(settings: WorkerSettings) -> None:
         )
     )
     queue = PostgresJobQueue(database)
-    vault, checks, adapter = _etsy_checks(settings, database, http)
+    etsy = etsy_parts(settings, database, http)
+    vault, checks, adapter = etsy.vault, etsy.checks, etsy.adapter
     handlers = maintenance_handlers(
         settings.schedules,
         queue=queue,
@@ -502,7 +527,7 @@ async def _serve(settings: WorkerSettings) -> None:
         checks=checks,
         purge=PostgresPurgeStore(database),
     ) | outbox_handlers(PostgresOutbox(database), {EVENT_DESTINATION: AcceptedEvents()})
-    gateway = worker_gateway(settings, database, adapter)
+    gateway = worker_gateway(settings, database, etsy.gateway_adapter)
     deployed = {} if vault is None or adapter is None else intake_handlers(database, vault)
     deployed |= fulfillment_handlers(database, None if adapter is None else vault)
     engine = worker_engine(database, gateway=gateway, handlers=deployed)

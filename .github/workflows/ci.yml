@@ -276,6 +276,29 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: uv run python -m tools.test_integrity --base "$BASE_SHA"
 
+  migration-order:
+    name: migration-order
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.13.0"
+          enable-cache: true
+          cache-python: true
+      # AC-5.0.1: a new migration sorts after the newest one on main, so `db push` applies it in order.
+      - name: New migrations sort after main's newest
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: uv run python -m tools.migration_order --base "$BASE_SHA"
+
   pr-title:
     name: pr-title
     if: github.event_name == 'pull_request'
@@ -300,7 +323,8 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [checks, tests, database, security, workflows, image, contract, test-integrity, pr-title]
+    needs:
+      [checks, tests, database, security, workflows, image, contract, test-integrity, migration-order, pr-title]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -315,7 +339,7 @@ jobs:
 
           needs = json.loads(os.environ["NEEDS"])
           # Pull-request-only jobs are skipped on pushes to main; everything else must succeed.
-          pull_request_only = {"contract", "test-integrity", "pr-title"}
+          pull_request_only = {"contract", "test-integrity", "migration-order", "pr-title"}
           on_push = os.environ["EVENT_NAME"] != "pull_request"
           failed = {
               name: job["result"]
