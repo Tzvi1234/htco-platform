@@ -3,7 +3,9 @@
 import os
 import re
 import shutil
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -302,3 +304,165 @@ def test_main__job_without_steps__exits_one_like_its_fail_summary(
 
     assert code == 1
     assert "database job: FAIL" in capsys.readouterr().out
+
+
+# --- timeout-minutes (#114): a hung step ends, and so does everything it started -------------
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    # A zombie (dead, not yet reaped) does not count.
+    status = Path(f"/proc/{pid}/stat")
+    return not (status.exists() and status.read_text(encoding="utf-8").split()[2] == "Z")
+
+
+def test_load_job__reads_step_and_job_timeouts() -> None:
+    job = load_job(
+        "jobs:\n  database:\n    timeout-minutes: 20\n    steps:\n"
+        "      - name: Bounded\n        timeout-minutes: 3\n        run: echo a\n"
+        "      - name: Unbounded\n        run: echo b\n",
+        "database",
+    )
+
+    assert job.timeout_minutes == 20
+    assert [s.timeout_minutes for s in local_steps(job)] == [3, None]
+
+
+def test_load_job__without_a_job_timeout__uses_githubs_default_of_360_minutes() -> None:
+    assert load_job("jobs:\n  database:\n    steps: []\n", "database").timeout_minutes == 360
+
+
+needs_posix_bash = pytest.mark.skipif(
+    shutil.which("bash") is None or os.name != "posix", reason="needs bash and POSIX signals"
+)
+
+
+@needs_posix_bash
+def test_run_steps__step_past_its_timeout__killed_with_its_children_and_the_rest_skipped(
+    tmp_path: Path,
+) -> None:
+    pid_file = tmp_path / "child.pid"
+    steps = [
+        Step(
+            name="Hangs",
+            # A child that would outlive its step, and a step that never ends on its own.
+            run=f'sleep 300 &\necho $! > "{pid_file}"\nsleep 300\n',
+            timeout_minutes=0.02,  # 1.2 seconds
+        ),
+        Step(name="After", run="echo not-reached"),
+    ]
+
+    started = time.monotonic()
+    results = run_steps(steps, {}, cwd=tmp_path, log=tmp_path / "log.txt")
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 30
+    assert [(r.ran, r.passed, r.timed_out) for r in results] == [
+        (True, False, True),
+        (False, False, False),
+    ]
+    child = int(pid_file.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 10
+    while _alive(child) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not _alive(child), "the step's child outlived the timeout"
+    assert "not-reached" not in (tmp_path / "log.txt").read_text(encoding="utf-8")
+
+
+@needs_posix_bash
+def test_run_steps__the_job_timeout_bounds_a_step_without_its_own(tmp_path: Path) -> None:
+    started = time.monotonic()
+    results = run_steps(
+        [Step(name="Hangs", run="sleep 300")], {}, cwd=tmp_path, job_timeout_minutes=0.02
+    )
+
+    assert time.monotonic() - started < 30
+    assert results[0].timed_out
+
+
+@needs_posix_bash
+def test_run_steps__a_step_that_ignores_sigterm__is_killed(tmp_path: Path) -> None:
+    started = time.monotonic()
+    results = run_steps(
+        [Step(name="Stubborn", run="trap '' TERM\nwhile true; do sleep 1; done",
+              timeout_minutes=0.02)],
+        {}, cwd=tmp_path,
+    )  # fmt: skip
+
+    assert time.monotonic() - started < 30
+    assert results[0].timed_out
+
+
+def test_format_summary__a_timed_out_step__says_so() -> None:
+    results = [StepResult("Hangs", ran=True, passed=False, seconds=1200.0, timed_out=True)]
+
+    summary = format_summary(results, total_seconds=1200.0)
+
+    assert "TIME  Hangs  (20m00s, timed out)" in summary
+    assert summary.rstrip().endswith("database job: FAIL in 20m00s")
+
+
+@needs_flock
+def test_wrapper__a_process_left_by_the_run__does_not_keep_the_lock(tmp_path: Path) -> None:
+    """A step's leftover process must not inherit the lock: the next agent's run would wait for
+    it forever (this happened once, across a PC sleep)."""
+    repo = tmp_path / "repo"
+    (repo / ".github/workflows").mkdir(parents=True)
+    (repo / ".github/workflows/ci.yml").write_text("jobs: {}\n", encoding="utf-8")
+    (repo / "supabase").mkdir()
+    (repo / "supabase/config.toml").write_text("", encoding="utf-8")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    pid_file = tmp_path / "leftover.pid"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    # The runner (through uv) leaves a process behind, as a killed step's child would.
+    _fake_tool(bin_dir, "uv", f'sleep 300 > /dev/null 2>&1 &\necho $! > "{pid_file}"\nexit 0')
+    _fake_tool(bin_dir, "docker", "exit 0")
+
+    result = subprocess.run(
+        ["bash", str(REPO / "scripts/local-db-ci.sh"), str(repo)],  # noqa: S607
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "HTCO_LOCAL_CI_CACHE": str(cache),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    leftover = int(pid_file.read_text(encoding="utf-8"))
+    try:
+        assert result.returncode == 0, result.stdout + result.stderr
+        free = subprocess.run(
+            ["flock", "--nonblock", str(cache / "lock"), "true"],  # noqa: S607
+            check=False,
+        )
+        assert free.returncode == 0, "the leftover process still holds the lock"
+    finally:
+        os.kill(leftover, signal.SIGTERM)
+
+
+def test_setup__pins_the_sha256_of_the_uv_that_ci_uses() -> None:
+    """The setup script trusts only its own pin; it must follow CI's uv version (#114)."""
+    setup = (REPO / "scripts/local-db-setup.sh").read_text(encoding="utf-8")
+    pinned = re.search(r'^uv_pinned_version="([0-9.]+)"$', setup, re.MULTILINE)
+    digest = re.search(r'^uv_pinned_sha256="([0-9a-f]{64})"$', setup, re.MULTILINE)
+    ci = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    versions = {
+        step["with"]["version"]
+        for job in ci["jobs"].values()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).startswith("astral-sh/setup-uv")
+    }
+
+    assert pinned is not None
+    assert digest is not None
+    assert versions == {pinned.group(1)}
+    assert '.sha256"' not in setup  # never the release's own checksum file
