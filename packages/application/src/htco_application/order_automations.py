@@ -6,12 +6,14 @@ them: the order events Etsy Order Intake publishes.
 `OrderEventTriggers` delivers those events:
 
 - an ingested or updated order starts **Order Deduplication & Verification** as a workflow step
-  of Intake, keyed by the receipt and Etsy's update time;
+  of Intake, keyed by the receipt and Etsy's update time, unless reconciliation stored it
+  (`source: reconciliation`): reconciliation has just compared that receipt with Etsy, so a
+  second read would spend the Etsy budget and learn nothing;
 - an ingested, updated, cancelled or refunded order starts **Product Sales Counters**, keyed by
   the receipt, the event and Etsy's update time.
 
-An automation that is not active yet refuses the trigger. The refusal is logged and the event is
-still delivered: nothing loops.
+An automation that is not active yet refuses the trigger. The refusal is logged (info: expected
+while the automations are draft) and the event is still delivered: nothing loops.
 
 **Order Deduplication & Verification** re-reads the receipt through the Action Gateway
 (`etsy.receipts.read`, GET-only) and compares it with the stored order: exactly one stored order
@@ -49,6 +51,7 @@ from htco_application.order_ingest import (
     INGESTED,
     REFUNDED,
     UPDATED,
+    IngestSource,
 )
 from htco_application.order_intake import GatewayReceipts, IntakeShops
 from htco_application.shop_integrations import ShopIntegration
@@ -64,6 +67,8 @@ SALES_COUNTERS = "product-sales-counters"
 EVENT_TRIGGER_ACTOR = ActorRef(ActorKind.SYSTEM, "order-events")
 INTAKE_ACTOR = ActorRef(ActorKind.AUTOMATION, ORDER_INTAKE)
 VERIFIED_EVENTS = frozenset({INGESTED, UPDATED})
+# Sources whose events verification skips: they have just compared the receipt with Etsy.
+COMPARED_SOURCES = frozenset({IngestSource.RECONCILIATION.value})
 COUNTED_EVENTS = frozenset({INGESTED, UPDATED, CANCELLED, REFUNDED})
 
 type Offload = Callable[[Callable[[], Any]], Any]
@@ -84,7 +89,6 @@ class StoredSnapshot:
     etsy_updated_at: datetime
     total_matches: bool
     items: tuple[tuple[int, int], ...]  # (transaction_id, quantity), by transaction
-    orders: int = 1  # stored orders for the receipt (the key allows one)
 
 
 class DriftKinds:
@@ -103,7 +107,7 @@ class Difference:
 def verify(stored: StoredSnapshot | None, receipt: OrderReceipt) -> tuple[Difference, ...]:
     """The differences between the stored order and Etsy's copy of the same version. Item IDs
     and quantities only; a total that differs is named, never quoted (no money in drifts)."""
-    if stored is None or stored.orders == 0:
+    if stored is None:  # the key (shop, receipt) allows one stored order at most
         return (Difference(DriftKinds.MISSING, None, {"status": receipt.status}),)
     if stored.etsy_updated_at != receipt.updated_at:
         return ()  # another version: its own ingest and verification follow
@@ -345,7 +349,7 @@ class OrderEventTriggers:
             return
         cause = f"outbox:{message.idempotency_key}"[:200]
         correlation = message.correlation_id or cause
-        if event_type in VERIFIED_EVENTS:
+        if event_type in VERIFIED_EVENTS and payload.get("source") not in COMPARED_SOURCES:
             await self._trigger(
                 TriggerRequest(
                     automation_id=ORDER_DEDUP, trigger=TriggerKind.WORKFLOW, actor=INTAKE_ACTOR,
@@ -373,10 +377,13 @@ class OrderEventTriggers:
         try:
             await self.offload(lambda: self.engine.trigger(request))
         except AutomationRefused:
-            _log.warning("order_automation.not_started: %s", request.automation_id)
+            # Expected while an automation is draft (every order event); info keeps real
+            # warnings visible. Admin > Health shows the automations' state.
+            _log.info("order_automation.not_started: %s", request.automation_id)
 
 
 __all__ = [
+    "COMPARED_SOURCES",
     "COUNTED_EVENTS",
     "ORDER_DEDUP",
     "REBUILD_PAGE",
