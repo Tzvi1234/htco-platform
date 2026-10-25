@@ -31,6 +31,7 @@ class Capability(StrEnum):
     UPDATE_INCIDENTS = "update_incidents"
     RETRY_SYNC = "retry_sync"
     CONFIRM_SHIPMENT_WRITE = "confirm_shipment_write"
+    UPDATE_SHOP_SETTINGS = "update_shop_settings"
     REQUEST_BULK_RESYNC = "request_bulk_resync"
     VIEW_TASKS = "view_tasks"
     DECIDE_LOW_RISK_APPROVAL = "decide_low_risk_approval"
@@ -151,6 +152,8 @@ _MATRIX: dict[Capability, dict[Role, Grant]] = {
         _AD: _ORG_MFA_STEP_UP,
         _OP: _SHOPS_APPROVAL,
     },
+    # The shop's settings every buyer sees, vacation mode first (7.12): the Owner, stepped up.
+    Capability.UPDATE_SHOP_SETTINGS: {_O: _ORG_MFA_STEP_UP},
     Capability.REQUEST_BULK_RESYNC: {
         _O: _ORG,
         _AD: _ORG,

@@ -1,9 +1,11 @@
 """The Action Gateway's channel adapters (slice 5.13, `execution-engine.md` §3).
 
-- `EtsyApiChannel`: real. It reads through `MarketplacePort`, the guarded Etsy adapter that
-  sends GET requests only. Every write recipe is refused before anything leaves HTCO: Etsy writes
-  stay disabled until the owner-triggered slices of Phases 6 and 7, which deliver them through
-  the outbox with one `Deliverer` per write action.
+- `EtsyApiChannel`: real. It reads through `MarketplacePort`, the guarded Etsy adapter. Its only
+  writes are the owner-triggered ones of slices 6.6 and 6.8 (the tracking upload and vacation
+  mode, `EtsyWrites`): each re-reads Etsy first and sends nothing when the change is already
+  there, sends once (a write is never retried blindly), and is verified by a re-read. The gateway
+  has checked the Owner's trigger, the step-up, the scope and the write flag before. Every other
+  write recipe is refused before anything leaves HTCO.
 - `InternalChannel`: runs an application use case by recipe name.
 - `BrowserChannel` (the Protocol) and `FakeBrowserChannel`, which replays recorded recipe
   outcomes, including a security challenge (the real controller is Phase 8A).
@@ -108,21 +110,47 @@ def _receipt(receipt: Receipt) -> dict[str, JsonValue]:
     }
 
 
+class EtsyWrites(Protocol):
+    """The Etsy writes the owner triggers (ADR-0022); only this channel calls them (the
+    gateway-bypass contract, tests/architecture/test_gateway_bypass.py)."""
+
+    async def create_receipt_shipment(
+        self, shop_id: int, receipt_id: int, *, tracking_code: str, carrier_name: str
+    ) -> None: ...
+
+    async def update_shop_vacation(
+        self, shop_id: int, *, is_vacation: bool, vacation_message: str | None
+    ) -> None: ...
+
+
+_READ_RECIPES = frozenset({"get_shop", "list_receipts"})
+_WRITE_RECIPES = frozenset({"create_receipt_shipment", "update_shop_vacation"})
+
+
 class EtsyApiChannel:
     channel = Channel.API
 
-    def __init__(self, etsy: EtsyReads, shops: EtsyShopIds) -> None:
+    def __init__(
+        self, etsy: EtsyReads, shops: EtsyShopIds, *, writes: EtsyWrites | None = None
+    ) -> None:
         self._etsy = etsy
         self._shops = shops
+        self._writes = writes
 
-    async def execute(self, request: ActionRequest, binding: ChannelBinding) -> ChannelOutcome:
-        if binding.recipe not in {"get_shop", "list_receipts"}:
-            raise MarketplaceWriteRefusedError(
-                f"{request.action.name}: Etsy writes stay disabled until Phases 6 and 7"
-            )
+    def _etsy_shop(self, request: ActionRequest) -> int:
         etsy_shop = None if request.shop_id is None else self._shops.etsy_shop_id(request.shop_id)
         if etsy_shop is None:
             raise MarketplaceNotFoundError("the shop has no Etsy connection", status=404)
+        return etsy_shop
+
+    async def execute(self, request: ActionRequest, binding: ChannelBinding) -> ChannelOutcome:
+        if binding.recipe in _WRITE_RECIPES and self._writes is not None:
+            return await self._write(request, binding.recipe, self._writes)
+        if binding.recipe not in _READ_RECIPES:
+            raise MarketplaceWriteRefusedError(
+                f"{request.action.name}: this Etsy write is not deployed"
+            )
+        etsy_shop = self._etsy_shop(request)
         if binding.recipe == "get_shop":
             shop = await self._etsy.get_shop(etsy_shop)
             return ChannelOutcome(
@@ -178,8 +206,57 @@ class EtsyApiChannel:
         )
         return {"receipts": [_receipt(r) for r in page.items], "count": page.total_count}
 
+    async def _write(
+        self, request: ActionRequest, recipe: str, writes: EtsyWrites
+    ) -> ChannelOutcome:
+        etsy_shop = self._etsy_shop(request)
+        values = request.input
+        if recipe == "create_receipt_shipment":
+            receipt_id = int(str(values["receipt_id"]))
+            code = str(values["tracking_code"])
+            # Re-read first (AC-6.6.2): a code already on the receipt is never sent again.
+            receipt = await self._etsy.get_order_receipt(etsy_shop, receipt_id)
+            present = _has_tracking(receipt, code)
+            if not present:
+                await writes.create_receipt_shipment(
+                    etsy_shop,
+                    receipt_id,
+                    tracking_code=code,
+                    carrier_name=str(values["carrier_name"]),
+                )
+            # The output never carries the code: it can locate the parcel, and so the buyer.
+            return ChannelOutcome(
+                output={"receipt_id": receipt_id, "sent": not present, "already_present": present}
+            )
+        wanted = values["is_vacation"] is True
+        already = (await self._etsy.get_shop(etsy_shop, urgent=True)).is_vacation is wanted
+        if not already:
+            message = values.get("vacation_message")
+            await writes.update_shop_vacation(
+                etsy_shop,
+                is_vacation=wanted,
+                vacation_message=message if isinstance(message, str) else None,
+            )
+        return ChannelOutcome(output={"is_vacation": wanted, "sent": not already})
+
     async def verify(self, request: ActionRequest, outcome: ChannelOutcome) -> bool:  # noqa: ARG002
-        return False  # no write runs through this channel yet, so nothing is re-read
+        """Re-read Etsy after a write: the tracking code is on the receipt, or the shop is in the
+        vacation state asked for. Reads verify nothing."""
+        if request.action.name not in {"etsy.shipments.create", "etsy.shop.update"}:
+            return False
+        etsy_shop = self._etsy_shop(request)
+        values = request.input
+        if request.action.name == "etsy.shipments.create":
+            receipt_id = int(str(values["receipt_id"]))
+            receipt = await self._etsy.get_order_receipt(etsy_shop, receipt_id)
+            return _has_tracking(receipt, str(values["tracking_code"]))
+        shop = await self._etsy.get_shop(etsy_shop, urgent=True)
+        return shop.is_vacation is (values["is_vacation"] is True)
+
+
+def _has_tracking(receipt: OrderReceipt, code: str) -> bool:
+    wanted = code.replace(" ", "").upper()
+    return any(s.tracking_code.replace(" ", "").upper() == wanted for s in receipt.shipments)
 
 
 def _flag(value: JsonValue) -> bool | None:

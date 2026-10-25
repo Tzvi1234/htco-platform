@@ -57,6 +57,19 @@ class NoBrowser:
         return None
 
 
+class ShopScopes(Protocol):
+    """The Etsy OAuth scopes the shop's current grant holds (recorded at connect, slice 4.3)."""
+
+    def scopes_of(self, shop_id: uuid.UUID) -> frozenset[str]: ...
+
+
+class NoScopes:
+    """No grant is known: every binding that needs a scope is refused."""
+
+    def scopes_of(self, shop_id: uuid.UUID) -> frozenset[str]:  # noqa: ARG002
+        return frozenset()
+
+
 @dataclass(frozen=True)
 class Route:
     binding: ChannelBinding
@@ -75,10 +88,16 @@ class ExecutionRouter:
         adapters: Mapping[Channel, ChannelAdapter],
         capabilities: ShopCapabilities,
         browser: BrowserGate,
+        *,
+        scopes: ShopScopes | None = None,
+        write_flags: frozenset[str] = frozenset(),
     ) -> None:
         self._adapters = adapters
         self._capabilities = capabilities
         self._browser = browser
+        self._scopes = scopes or NoScopes()
+        # The API writes switched on, by action name (W2's per-action flag): off unless named.
+        self._write_flags = write_flags
 
     def choose(self, definition: ActionDefinition, request: ActionRequest) -> Route | NoRoute:
         bindings = sorted(
@@ -108,6 +127,20 @@ class ExecutionRouter:
             or not self._capabilities.available(request.shop_id, binding.requires_capability)
         ):
             return NoRoute("scope_missing", f"the shop lacks {binding.requires_capability}")
+        if binding.requires_scope is not None and (
+            request.shop_id is None
+            or binding.requires_scope not in self._scopes.scopes_of(request.shop_id)
+        ):
+            return NoRoute(
+                "scope_missing",
+                f"the shop's grant lacks {binding.requires_scope}: reconnect the shop to grant it",
+            )
+        if (
+            definition.approval_policy.is_write
+            and binding.channel is not Channel.BROWSER
+            and definition.name not in self._write_flags
+        ):
+            return NoRoute("flag_off", f"the write flag of {definition.name} is off")
         if binding.channel is Channel.BROWSER:
             return self._browser_refusal(definition, request, binding)
         return None

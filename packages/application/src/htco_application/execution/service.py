@@ -60,7 +60,13 @@ from htco_application.execution.gateway import (
     Channel,
 )
 from htco_application.execution.guards import Guards, InlineRetry
-from htco_application.execution.router import BrowserGate, ExecutionRouter, NoBrowser, NoRoute
+from htco_application.execution.router import (
+    BrowserGate,
+    ExecutionRouter,
+    NoBrowser,
+    NoRoute,
+    ShopScopes,
+)
 from htco_application.execution.schema import validate
 from htco_application.jobs import JsonValue, describe_error
 from htco_application.marketplace import (
@@ -240,6 +246,8 @@ class GatewayParts:
     guards: Guards | None = None  # breakers, limits and retries (slice 5.15)
     browser: BrowserGate = field(default_factory=NoBrowser)  # environments, flags, scopes (5.13)
     human: HumanTasks | None = None  # hand-offs to a person (slice 5.13; Postgres in Phase 7)
+    scopes: ShopScopes | None = None  # the shops' granted Etsy scopes (ADR-0022 §4)
+    write_flags: frozenset[str] = frozenset()  # the writes switched on, by action (W2's flag)
 
 
 class Refusal(Exception):  # noqa: N818 - a refusal is the result, not a failure of the gateway
@@ -261,7 +269,13 @@ class ActionGatewayService:
         if parts.human is None and {Channel.BROWSER, Channel.HUMAN} & set(parts.adapters):
             raise ValueError("a browser or human channel needs a task store for its hand-offs")
         self._p = parts
-        self._router = ExecutionRouter(parts.adapters, parts.capabilities, parts.browser)
+        self._router = ExecutionRouter(
+            parts.adapters,
+            parts.capabilities,
+            parts.browser,
+            scopes=parts.scopes,
+            write_flags=parts.write_flags,
+        )
 
     async def submit(self, request: ActionRequest) -> ActionResult:
         now = self._p.clock()
@@ -334,6 +348,11 @@ class ActionGatewayService:
         kind = request.actor.kind
         if kind is ActorKind.ADVISOR:
             raise Refusal("forbidden", "advisors never act")
+        if definition.owner_trigger_only and not (kind is ActorKind.USER and request.owner_trigger):
+            # No approval opens it either: the Owner runs it by hand, each time (ADR-0022 §3).
+            raise Refusal(
+                "owner_trigger_required", f"only the Owner runs {definition.name}, by hand"
+            )
         if kind is ActorKind.SYSTEM:
             if definition.approval_policy is not ApprovalPolicy.R0:
                 raise Refusal("forbidden", "the platform runs R0 reads only")
@@ -361,10 +380,14 @@ class ActionGatewayService:
             raise Refusal("not_found", "no such organization for the user")
         if definition.user_capability is None:
             raise Refusal("forbidden", f"no user may start {definition.name}")
-        if (
-            decide(principal, definition.user_capability, shop=None, now=self._p.clock()).outcome
-            is not Outcome.ALLOW
-        ):
+        outcome = decide(
+            principal, definition.user_capability, shop=None, now=self._p.clock()
+        ).outcome
+        if outcome is Outcome.STEP_UP_REQUIRED:
+            raise Refusal("step_up_required", f"{definition.name} needs a recent step-up")
+        if outcome is Outcome.MFA_REQUIRED:
+            raise Refusal("mfa_required", f"{definition.name} needs a second factor")
+        if outcome is not Outcome.ALLOW:
             raise Refusal("forbidden", f"the role may not use {definition.name}")
         if request.shop_id is not None:
             owner = self._p.shops.organization_of_shop(request.shop_id)
@@ -613,6 +636,13 @@ class ActionGatewayService:
                          error=code or describe_error(error)[:64]),
             attempts=attempts,
         )  # fmt: skip
+        if definition.owner_trigger_only:
+            # One press of the Owner's, one send at most: the failure is final for this key, and
+            # the next press is a new request (with its own key) that runs every check again.
+            self._record(claim.execution_id, [*path, _S.FAILED, _S.DEAD_LETTERED], result,
+                         request, definition, reason=describe_error(error),
+                         now=self._p.clock())  # fmt: skip
+            return result
         self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
                      reason=describe_error(error), now=self._p.clock(), final=False)  # fmt: skip
         return result
