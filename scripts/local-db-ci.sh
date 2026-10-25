@@ -41,7 +41,7 @@ fi
 
 if ! docker info > /dev/null 2>&1; then
     echo "starting Docker..."
-    service docker start > /dev/null
+    service docker start > /dev/null 9>&-  # dockerd must not inherit the lock
     for _ in $(seq 30); do docker info > /dev/null 2>&1 && break; sleep 1; done
     docker info > /dev/null 2>&1 || { echo "Docker did not start" >&2; exit 2; }
 fi
@@ -54,7 +54,7 @@ runner_temp="$cache/runner"
 stop_stack() {
     local supabase="$runner_temp/supabase"
     [ -x "$supabase" ] || supabase="$(command -v supabase || true)"
-    [ -n "$supabase" ] && (cd "$repo" && "$supabase" stop --no-backup > /dev/null 2>&1) || true
+    [ -n "$supabase" ] && (cd "$repo" && "$supabase" stop --no-backup > /dev/null 2>&1 9>&-) || true
 }
 # Start from a clean stack, like a fresh CI runner (a stack left by --keep-running is removed).
 # Stop it before clearing the runner directory: its CLI may be the only one on the machine.
@@ -72,8 +72,10 @@ status=0
 runner="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tools/local_db_ci.py"
 pyyaml="$(awk -F'"' 'found { print $2; exit } $0 == "name = \"pyyaml\"" { found = 1 }' \
     "$(dirname "$runner")/../uv.lock")"
+# `9>&-`: the runner and every step start without the lock's descriptor, so a process a step
+# leaves behind can never keep the lock (the runner enforces timeout-minutes on the steps).
 (cd "$repo" && uv run --quiet --no-project --with "pyyaml==${pyyaml:?no pyyaml in uv.lock}" \
-    python "$runner" --root . --runner-temp "$runner_temp" --log "$cache/last-run.log") \
+    python "$runner" --root . --runner-temp "$runner_temp" --log "$cache/last-run.log") 9>&- \
     || status=$?
 echo "total wall time including setup: $(( (SECONDS - started) / 60 ))m$(( (SECONDS - started) % 60 ))s;" \
     "full log: $cache/last-run.log"

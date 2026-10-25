@@ -57,12 +57,26 @@ wsl -d Ubuntu -u root -- bash /mnt/c/<path to clone>/scripts/local-db-ci.sh /mnt
 - Without a path, it tests the clone the script is in.
 - The runner always comes from the script's clone, so you can test a branch that is older than the
   runner.
-- The end of the output is a summary with `PASS`, `FAIL` or `SKIP` and the time of each step, then
-  `database job: PASS` or `FAIL`. The full output is in `~/.cache/htco-local-db-ci/last-run.log`.
+- The end of the output is a summary with `PASS`, `FAIL`, `TIME` (timed out) or `SKIP` and the
+  time of each step, then `database job: PASS` or `FAIL`. The full output is in `~/.cache/htco-local-db-ci/last-run.log`.
 - Exit code: 0 when every step passed, 1 when a step failed, 2 for a setup problem (missing tool,
   Docker not starting, not an htco-platform clone).
+- `timeout-minutes` is enforced as in CI: each step's own, and the job's (20 minutes for
+  `database`). A step past its time is stopped with every process it started, fails as timed out,
+  and the rest are skipped. One run at a time holds a lock (`~/.cache/htco-local-db-ci/lock`);
+  no step or leftover process inherits it, so a hung or killed run never blocks the next one.
 - `--keep-running` leaves the database on `postgresql://postgres:postgres@127.0.0.1:54322/postgres`
   for more `just test-db` runs; the next run removes it first.
+
+## Trust boundary
+
+`local-db-ci.sh` runs the tested clone's own code (its workflow steps, migrations, tests and
+scripts) **as root in WSL, with read and write access to the Windows disk under `/mnt/c`**. Run
+it only on team branches of `Tzvi1234/htco-platform` that you would merge. Never run it on a fork,
+a contributor's branch or any clone you have not read: anything such a branch does runs with those
+rights. `local-db-setup.sh` checks uv's archive against the SHA-256 pinned in the script itself
+(not the release's own `.sha256` file), and the Supabase CLI against the SHA-256 pinned in
+`ci.yml`.
 
 ## Timing
 

@@ -5,14 +5,20 @@ Made for the `database` job (docs/engineering/LOCAL_DB_TESTS.md): because the st
 (`bash --noprofile --norc -eo pipefail`, job and step `env`, `RUNNER_TEMP`, `GITHUB_PATH`, `CI`).
 `actions/checkout` is skipped (the repository is already here) and `astral-sh/setup-uv` becomes a
 check that the pinned uv version is installed. The first failing step stops the job, as in CI.
+`timeout-minutes` is enforced like GitHub's: per step, and for the job (360 minutes when unset).
+A step past its time is stopped with its whole process group (SIGTERM, then SIGKILL), fails as
+timed out, and the rest are skipped, so a hung step never holds the wrapper's lock for good.
 Run as `python -m tools.local_db_ci [--root DIR] [--job NAME]`; scripts/local-db-ci.sh wraps it.
 """
 
 import argparse
+import contextlib
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +29,9 @@ import yaml
 _SKIPPED_ACTIONS = frozenset({"actions/checkout"})
 _SETUP_UV = "astral-sh/setup-uv"
 _MINUTE = 60
+# GitHub's default job timeout, and how long a timed-out step gets between SIGTERM and SIGKILL.
+_DEFAULT_JOB_MINUTES = 360.0
+_KILL_GRACE_SECONDS = 5.0
 # Keys the runner replays faithfully; anything else (`if`, `shell`, `working-directory`,
 # `continue-on-error`, `defaults`, `services`, `container`, `strategy`…) would be replayed wrong,
 # so it stops the run instead. `${{ }}` expressions are rejected for the same reason.
@@ -40,12 +49,14 @@ class WorkflowStep:
     uses: str | None = None
     with_: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
+    timeout_minutes: float | None = None
 
 
 @dataclass(frozen=True)
 class Job:
     env: dict[str, str]
     steps: list[WorkflowStep]
+    timeout_minutes: float = _DEFAULT_JOB_MINUTES
 
 
 @dataclass(frozen=True)
@@ -55,6 +66,7 @@ class Step:
     name: str
     run: str
     env: dict[str, str] = field(default_factory=dict)
+    timeout_minutes: float | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +75,7 @@ class StepResult:
     ran: bool
     passed: bool
     seconds: float
+    timed_out: bool = False
 
 
 def _strings(mapping: Any) -> dict[str, str]:
@@ -76,6 +89,12 @@ def _reject_unsupported(where: str, raw: dict[str, Any], allowed: frozenset[str]
             f"{where} uses {', '.join(unsupported)}, which tools/local_db_ci cannot replay;"
             " teach the runner before adding it to the job"
         )
+
+
+def _minutes(where: str, value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        raise ValueError(f"{where} has timeout-minutes {value!r}; expected a positive number")
+    return float(value)
 
 
 def _reject_expressions(where: str, *values: str | None) -> None:
@@ -99,23 +118,34 @@ def load_job(workflow_text: str, job_name: str) -> Job:
     _reject_unsupported(f"job {job_name!r}", job, _JOB_KEYS)
     env = _strings(workflow.get("env")) | _strings(job.get("env"))
     _reject_expressions(f"the env of job {job_name!r}", *env.values())
+    job_minutes = (
+        _minutes(f"job {job_name!r}", job["timeout-minutes"])
+        if "timeout-minutes" in job
+        else _DEFAULT_JOB_MINUTES
+    )
     steps = []
     for raw in job.get("steps", []):
         uses = raw.get("uses")
         action = uses.split("@", 1)[0] if uses else None
+        name = str(raw.get("name") or action or raw.get("run", "").splitlines()[0])
         step = WorkflowStep(
-            name=str(raw.get("name") or action or raw.get("run", "").splitlines()[0]),
+            name=name,
             run=raw.get("run"),
             uses=action,
             with_=_strings(raw.get("with")),
             env=_strings(raw.get("env")),
+            timeout_minutes=(
+                _minutes(f"step {name!r}", raw["timeout-minutes"])
+                if "timeout-minutes" in raw
+                else None
+            ),
         )
         _reject_unsupported(f"step {step.name!r}", raw, _STEP_KEYS)
         _reject_expressions(
             f"step {step.name!r}", step.run, *step.env.values(), *step.with_.values()
         )
         steps.append(step)
-    return Job(env=env, steps=steps)
+    return Job(env=env, steps=steps, timeout_minutes=job_minutes)
 
 
 def local_steps(job: Job) -> list[Step]:
@@ -123,7 +153,12 @@ def local_steps(job: Job) -> list[Step]:
     steps = []
     for step in job.steps:
         if step.run is not None:
-            steps.append(Step(name=step.name, run=step.run, env=step.env))
+            steps.append(
+                Step(
+                    name=step.name, run=step.run, env=step.env,
+                    timeout_minutes=step.timeout_minutes,
+                )
+            )  # fmt: skip
         elif step.uses == _SETUP_UV:
             version = step.with_["version"]
             check = (
@@ -151,15 +186,40 @@ def _stream(process: subprocess.Popen[str], sink: IO[str] | None) -> None:
             sink.write(line)
 
 
-def run_steps(
+def _stop_group(process: subprocess.Popen[str]) -> None:
+    """End the step and everything it started: SIGTERM to its process group, then SIGKILL."""
+    if sys.platform != "win32":
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=_KILL_GRACE_SECONDS)
+        # What is left of the group: the step's shell, and children that ignored SIGTERM.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+    else:  # the runner targets Linux (WSL); Windows has no process groups to signal
+        process.kill()
+    process.wait()
+
+
+def _step_seconds(step: Step, job_deadline: float) -> float:
+    remaining = max(job_deadline - time.monotonic(), 0.0)
+    if step.timeout_minutes is None:
+        return remaining
+    return min(step.timeout_minutes * _MINUTE, remaining)
+
+
+def run_steps(  # noqa: PLR0913 - the job's steps, env and where to run them
     steps: list[Step],
     job_env: dict[str, str],
     *,
     cwd: Path,
     log: Path | None = None,
     runner_temp: Path | None = None,
+    job_timeout_minutes: float = _DEFAULT_JOB_MINUTES,
 ) -> list[StepResult]:
-    """Run the steps in order like a GitHub runner; after a failure the rest are skipped."""
+    """Run the steps in order like a GitHub runner; after a failure the rest are skipped. Each
+    step ends at its own `timeout-minutes` or at the job's, whichever comes first."""
+    job_deadline = time.monotonic() + job_timeout_minutes * _MINUTE
     temp = runner_temp or Path(tempfile.mkdtemp(prefix="local-ci-"))
     temp.mkdir(parents=True, exist_ok=True)
     github_path = temp / "github_path"
@@ -190,6 +250,7 @@ def run_steps(
                 "PATH": os.pathsep.join([*reversed(added_paths), os.environ.get("PATH", "")]),
             }
             started = time.monotonic()
+            timed_out = False
             with subprocess.Popen(  # noqa: S603 - runs the repository's own workflow steps
                 ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],  # noqa: S607
                 cwd=cwd,
@@ -199,10 +260,29 @@ def run_steps(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                # Its own process group, so a timeout ends everything the step started.
+                start_new_session=True,
             ) as process:
-                _stream(process, sink)
-            passed = process.returncode == 0
-            results.append(StepResult(step.name, True, passed, time.monotonic() - started))
+                # The output is read on a thread: a hung step that prints nothing must still
+                # meet its deadline.
+                reader = threading.Thread(target=_stream, args=(process, sink), daemon=True)
+                reader.start()
+                try:
+                    process.wait(timeout=_step_seconds(step, job_deadline))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    _stop_group(process)
+                # A process that left the group may still hold the pipe: never wait on it.
+                reader.join(timeout=_KILL_GRACE_SECONDS)
+            if timed_out:
+                message = f"\n=== {step.name}: timed out, stopped with its processes\n"
+                sys.stdout.write(message)
+                if sink is not None:
+                    sink.write(message)
+            passed = process.returncode == 0 and not timed_out
+            results.append(
+                StepResult(step.name, True, passed, time.monotonic() - started, timed_out)
+            )
             failed = not passed
             added_paths = [
                 line for line in github_path.read_text(encoding="utf-8").splitlines() if line
@@ -228,6 +308,9 @@ def format_summary(
 ) -> str:
     lines = ["", f"--- {job} job, local run ---"]
     for result in results:
+        if result.timed_out:
+            lines.append(f"TIME  {result.name}  ({_duration(result.seconds)}, timed out)")
+            continue
         mark = "SKIP" if not result.ran else "PASS" if result.passed else "FAIL"
         timing = f"  ({_duration(result.seconds)})" if result.ran else ""
         lines.append(f"{mark}  {result.name}{timing}")
@@ -249,7 +332,12 @@ def main(argv: list[str]) -> int:
     job = load_job(workflow.read_text(encoding="utf-8"), args.job)
     started = time.monotonic()
     results = run_steps(
-        local_steps(job), job.env, cwd=args.root, log=args.log, runner_temp=args.runner_temp
+        local_steps(job),
+        job.env,
+        cwd=args.root,
+        log=args.log,
+        runner_temp=args.runner_temp,
+        job_timeout_minutes=job.timeout_minutes,
     )
     sys.stdout.write(
         format_summary(results, total_seconds=time.monotonic() - started, job=args.job)

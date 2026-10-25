@@ -9,6 +9,12 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ci="$repo/.github/workflows/ci.yml"
 uv_version="$(grep -m1 -oP 'version: "\K[0-9.]+(?=")' "$ci")"
 python_version="$(tr -d '[:space:]' < "$repo/.python-version")"
+# uv's archive is checked against this pin, kept in the repository and reviewed like code; the
+# release's own .sha256 file comes from the same origin as the archive, so it proves nothing.
+# When CI moves to a new uv, update both lines together (the digest is on the release page and in
+# `gh api repos/astral-sh/uv/releases/tags/<version>`, field `digest`).
+uv_pinned_version="0.13.0"
+uv_pinned_sha256="1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -30,13 +36,17 @@ else
 fi
 
 if [ "$(uv --version 2> /dev/null | cut -d' ' -f2)" != "$uv_version" ]; then
+    if [ "$uv_version" != "$uv_pinned_version" ]; then
+        echo "CI uses uv $uv_version but this script pins the SHA-256 of $uv_pinned_version:" \
+            "update uv_pinned_version and uv_pinned_sha256" >&2
+        exit 1
+    fi
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     base="https://github.com/astral-sh/uv/releases/download/$uv_version"
     archive="uv-x86_64-unknown-linux-gnu.tar.gz"
     curl -fsSL -o "$tmp/$archive" "$base/$archive"
-    curl -fsSL -o "$tmp/$archive.sha256" "$base/$archive.sha256"
-    (cd "$tmp" && sha256sum --check --strict "$archive.sha256")
+    echo "$uv_pinned_sha256  $tmp/$archive" | sha256sum --check --strict --quiet
     tar -xzf "$tmp/$archive" -C "$tmp"
     install -m 755 "$tmp/uv-x86_64-unknown-linux-gnu/uv" "$tmp/uv-x86_64-unknown-linux-gnu/uvx" \
         /usr/local/bin/
