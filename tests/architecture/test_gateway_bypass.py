@@ -24,7 +24,9 @@ from tests.architecture.gateway_bypass import (
     DYNAMIC_GETATTR,
     Call,
     calls_of,
+    channel_runs,
     etsy_operations,
+    etsy_urls,
     etsy_writes,
     importers_of,
 )
@@ -40,6 +42,7 @@ SOURCE_ROOTS = sorted(
     ]
 )
 APPLICATION = "packages/application/src/htco_application/"
+INTEGRATIONS = "packages/integrations/src/htco_integrations/"
 # The gateway's API channel: the one place an Etsy write may be sent from.
 API_CHANNEL = APPLICATION + "execution/channels.py"
 
@@ -185,16 +188,95 @@ def test_the_write_choke_point_is_pinned() -> None:
     assert flag_users == {"<module>", "EtsyAdapter._send", "_WriteGuard.__call__"}
 
 
-def test_only_the_adapter_names_etsys_shop_api_host() -> None:
-    """A second Etsy client would escape every rule above, which key on the adapter."""
-    naming = {
+# Etsy URLs named outside the adapter, exactly: the OAuth client's two endpoints (consent in the
+# browser, the token exchange) and the documentation it cites. Anything else is a second client.
+ETSY_URLS_OUTSIDE_THE_ADAPTER = frozenset(
+    {
+        (APPLICATION + "etsy_connect.py", "developers.etsy.com"),
+        (
+            INTEGRATIONS + "etsy_oauth.py",
+            "developers.etsy.com/documentation/essentials/authentication",
+        ),
+        (INTEGRATIONS + "etsy_oauth.py", "www.etsy.com/oauth/connect"),
+        (INTEGRATIONS + "etsy_oauth.py", "api.etsy.com/v3/public/oauth/token"),
+    }
+)
+
+
+def test_only_the_adapter_names_etsys_api_hosts() -> None:
+    """A second Etsy client would escape every rule above, which key on the adapter: any Etsy
+    host (openapi.etsy.com, api.etsy.com, *.etsy.com) outside it is on the exact list above."""
+    named = {
+        (_relative(path), url.rstrip(".,;"))
+        for root in SOURCE_ROOTS
+        for path in root.rglob("*.py")
+        if path.resolve() != ADAPTER.resolve()
+        for url in etsy_urls(path.read_text(encoding="utf-8"))
+    }
+
+    assert named == ETSY_URLS_OUTSIDE_THE_ADAPTER
+
+
+def test_scanner__finds_every_etsy_host() -> None:
+    text = (
+        "A = 'https://api.etsy.com/v3/application/shops'\n"
+        'B = "https://openapi.etsy.com/v3/application"\n'
+        "C = f'https://{host}.etsy.com/x'  # an unseen subdomain\n"
+        "D = 'https://ETSY.COM/x'\n"
+        "E = 'https://notetsy.company.example/x'\n"
+    )
+
+    assert etsy_urls(text) == [
+        "api.etsy.com/v3/application/shops",
+        "openapi.etsy.com/v3/application",
+        ".etsy.com/x",
+        "etsy.com/x",
+    ]
+
+
+def test_only_the_adapter_calls_its_request_choke_point() -> None:
+    """A second class in etsy.py calling `adapter._request(..., allow_write=True)` would escape
+    `etsy_writes`, which reads the adapter's methods and the module's functions only."""
+    tree = ast.parse(ADAPTER.read_text(encoding="utf-8"))
+    users = {where for where, name in _named(tree) if name == "_request"}
+
+    assert users
+    assert all(where.startswith("EtsyAdapter.") for where in users), users
+
+
+# Sage (a): the API channel holds the write port; only the gateway runs a channel.
+CHANNEL_HOLDERS = frozenset({API_CHANNEL, "workers/runner/src/htco_worker/main.py"})
+CHANNEL_RUNNERS = frozenset({APPLICATION + "execution/service.py"})
+
+
+def test_only_the_composition_roots_hold_the_etsy_api_channel() -> None:
+    holders = {
         _relative(path)
         for root in SOURCE_ROOTS
         for path in root.rglob("*.py")
-        if "openapi.etsy.com" in path.read_text(encoding="utf-8")
+        if any(name == "EtsyApiChannel" for _, name in _named(_parse(path)))
     }
 
-    assert naming == {_relative(ADAPTER)}
+    # The class is defined in the channel module; the worker builds the only one today.
+    assert holders <= CHANNEL_HOLDERS | {"apps/api/src/htco_api/main.py"}, holders
+    assert "workers/runner/src/htco_worker/main.py" in holders
+
+
+def test_only_the_gateway_runs_a_channel() -> None:
+    """`adapter.execute(request, binding)` sends the action; outside the gateway's service it
+    would skip every check."""
+    runners = {
+        _relative(path)
+        for root in SOURCE_ROOTS
+        for path in root.rglob("*.py")
+        if channel_runs(_parse(path))
+    }
+
+    assert runners == CHANNEL_RUNNERS
+
+
+def _parse(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"))
 
 
 def _named(tree: ast.AST) -> list[tuple[str, str]]:
@@ -206,6 +288,15 @@ def _named(tree: ast.AST) -> list[tuple[str, str]]:
             inner = scope
             if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
                 inner = (*scope, child.name)
+            elif (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "getattr"
+                and len(child.args) >= 2  # getattr(object, "name")
+                and isinstance(child.args[1], ast.Constant)
+                and isinstance(child.args[1].value, str)
+            ):
+                found.append((".".join(scope) or "<module>", child.args[1].value))
             elif isinstance(child, ast.Name):
                 found.append((".".join(scope) or "<module>", child.id))
             elif isinstance(child, ast.Attribute):
@@ -283,6 +374,28 @@ def test_scanner__any_write_flag_but_a_literal_false__is_a_write(tmp_path: Path)
     # `_request` and `_send` are the choke point every call passes (pinned on the real adapter
     # by test_the_write_choke_point_is_pinned): what a caller hands them decides a write.
     assert etsy_writes(adapter) == {"by_flag", "by_options", "by_send"}
+
+
+def test_scanner__getattr_with_a_written_name_is_that_name(tmp_path: Path) -> None:
+    adapter = tmp_path / "etsy.py"
+    adapter.write_text(
+        "class EtsyAdapter:\n"
+        "    async def by_getattr(self):\n"
+        "        return await getattr(self, '_send')('POST', 1, write=True)\n"
+        "    async def by_dynamic(self, name):\n"
+        "        return await getattr(self, name)('POST', 1)\n"
+        "    async def reads(self):\n"
+        "        return await getattr(self, '_request')('GET', 1)\n"
+        "    async def _request(self, method, shop_id, *, allow_write=False):\n"
+        "        return await self._send(method, shop_id, write=allow_write)\n"
+        "    async def _send(self, method, shop_id, *, write):\n"
+        "        return None\n",
+        encoding="utf-8",
+    )
+
+    # A dynamic getattr inside the adapter could reach the choke point: it fails closed.
+    assert etsy_writes(adapter) == {"by_getattr", "by_dynamic"}
+    assert ("EtsyAdapter.by_getattr", "_send") in _named(ast.parse(adapter.read_text("utf-8")))
 
 
 def test_scanner__every_reference_to_an_operation__is_a_site(sources: Path) -> None:

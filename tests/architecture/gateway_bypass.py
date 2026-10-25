@@ -18,6 +18,7 @@ out of its reach.
 """
 
 import ast
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,9 @@ ADAPTER_CLASS = "EtsyAdapter"
 ADAPTER_MODULE = "htco_integrations.etsy"
 # What a `getattr` with a name the source does not spell is reported as.
 DYNAMIC_GETATTR = "getattr(?)"
+# Any Etsy host named in source: etsy.com and every *.etsy.com, with what follows it up to a quote,
+# a space or a closing parenthesis (an f-string's `{host}.etsy.com` shows as `.etsy.com`).
+_ETSY_URL = re.compile(r"(?<![a-z0-9-])\.?(?:[a-z0-9-]+\.)*etsy\.com\b[^\s\"'`)]*", re.IGNORECASE)
 # Every request passes these two; what their callers hand them decides a write (the contract
 # pins that only `_request` calls `_send`).
 CHOKE_POINT = frozenset({"_request", "_send"})
@@ -65,10 +69,13 @@ def _not_false(value: ast.expr) -> bool:
 
 
 def _sends_write(function: _Function) -> bool:
-    """It hands the choke point a write flag that is not the literal `False`."""
+    """It hands the choke point a write flag that is not the literal `False`, or it reaches a
+    name it does not spell (`getattr` with a computed name fails closed)."""
     for node in ast.walk(function):
         if not isinstance(node, ast.Call):
             continue
+        if _dynamic_getattr(node):
+            return True
         name = _called_name(node)
         for keyword in node.keywords:
             if keyword.arg == "allow_write" and _not_false(keyword.value):
@@ -87,7 +94,10 @@ def _callees(function: _Function, methods: set[str], helpers: set[str]) -> set[s
         if not isinstance(node, ast.Call):
             continue
         target = node.func
-        if (
+        literal = _getattr_name(target) if isinstance(target, ast.Call) else None
+        if literal is not None and literal in methods:  # getattr(self, "x")(...)
+            called.add(literal)
+        elif (
             isinstance(target, ast.Attribute)
             and isinstance(target.value, ast.Name)
             and target.value.id == "self"
@@ -127,12 +137,60 @@ def _walk(node: ast.AST, scope: tuple[str, ...]) -> Iterator[tuple[ast.AST, tupl
         yield from _walk(child, scope)
 
 
+def _is_getattr(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2  # getattr(object, name)
+    )
+
+
+def _getattr_name(node: ast.Call) -> str | None:
+    """The name a `getattr` spells in the source, or None."""
+    if not _is_getattr(node):
+        return None
+    name = node.args[1]
+    return name.value if isinstance(name, ast.Constant) and isinstance(name.value, str) else None
+
+
+def _dynamic_getattr(node: ast.Call) -> bool:
+    return _is_getattr(node) and _getattr_name(node) is None
+
+
 def _called_name(call: ast.Call) -> str | None:
+    """The name a call reaches: `x.name(…)`, `name(…)` or `getattr(x, "name")(…)`."""
     if isinstance(call.func, ast.Attribute):
         return call.func.attr
     if isinstance(call.func, ast.Name):
         return call.func.id
+    if isinstance(call.func, ast.Call):
+        return _getattr_name(call.func)
     return None
+
+
+def etsy_urls(text: str) -> list[str]:
+    """Every Etsy host named in `text`, lower-cased, with its path, in order."""
+    return [match.group(0).lower() for match in _ETSY_URL.finditer(text)]
+
+
+def channel_runs(tree: ast.AST) -> bool:
+    """`tree` runs a gateway channel: it calls `.execute(...)` with a channel `binding`."""
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "execute"
+        ):
+            continue
+        arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
+        if any(
+            (isinstance(a, ast.Name) and a.id == "binding")
+            or (isinstance(a, ast.Attribute) and a.attr == "binding")
+            for a in arguments
+        ):
+            return True
+    return False
 
 
 def _referenced(node: ast.AST, methods: frozenset[str]) -> str | None:
