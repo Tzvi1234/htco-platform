@@ -185,6 +185,17 @@ def test_without_a_policy_the_generous_default_applies() -> None:
     assert policy.unit is WindowUnit.BUSINESS_DAYS
 
 
+def test_the_default_window_is_seven_business_days() -> None:
+    # The owner's decision of 2026-10-23 (it was ten). Paid on Monday 2026-10-26: due seven
+    # business days later, on Wednesday 2026-11-04, the weekend between not counted.
+    paid = datetime(2026, 10, 26, 15, 30, tzinfo=UTC)
+    policy = default_policy()
+    assert policy.window == 7  # the owner's number
+    assert policy.deadline(paid) == datetime(2026, 11, 4, 15, 30, tzinfo=UTC)
+    assert not policy.is_breached(paid, now=datetime(2026, 11, 4, 15, 29, tzinfo=UTC))
+    assert policy.is_breached(paid, now=datetime(2026, 11, 4, 15, 31, tzinfo=UTC))
+
+
 # --- Ship-by warnings (AC-6.9.1) -----------------------------------------------------------------
 
 
