@@ -14,9 +14,9 @@ python_version="$(tr -d '[:space:]' < "$repo/.python-version")"
 # release's own .sha256 file comes from the same origin as the archive, so it proves nothing.
 # When CI moves to a new uv, update the version and both digests together (each is on the release
 # page and in `gh api repos/astral-sh/uv/releases/tags/<version>`, field `digest`).
-uv_pinned_version="0.13.0"
-uv_sha256_x86_64="1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
-uv_sha256_aarch64="3ccfb6af6e242433eb552f7d9676abd5412c6595c497e990d9c8cb7b5bd4d2c3"
+uv_pinned_version="0.13.5"
+uv_sha256_x86_64="f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
+uv_sha256_aarch64="4bb69cf95ed13f23713bb7bc09f241896ea0c75b7c557e615a20604b82f9c403"
 machine="$(uname -m)"
 case "$machine" in
     x86_64 | amd64) uv_target="x86_64-unknown-linux-gnu" uv_sha256="$uv_sha256_x86_64" ;;
