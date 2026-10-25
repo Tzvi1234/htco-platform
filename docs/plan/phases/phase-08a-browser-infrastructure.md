@@ -9,7 +9,7 @@
 | **Depends on** | [Phase 5](phase-05-orders-ingest.md) (gateway, router, Browser interface, Environment Registry), [Phase 7](phase-07-tasks-approvals.md) (Human channel: tasks and approvals). **Starts right after Phase 6, in parallel with Phase 7** (owner, 2026-10-23): until Phase 7's task store lands, Human hand-offs use the relay item of slice 6.10, which Phase 7 then absorbs. The AutoVA recipes (8A.10) are built first, right after the worker, controller, preflight and challenge handler (8A.1 to 8A.4). Slice 8A.6 (Browser Use) also needs [Phase 9](phase-09-router-advisor.md) (model gateway, budgets). The secret-injection part of 8A.4 needs [Phase 8B](phase-08b-authenticator.md); until then, login is a Human task. |
 | **Parallel with** | Phase 8 and Phase 8B |
 | **Decisions** | [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md), [ADR-0020](../../adr/0020-per-shop-browser-environment.md), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md), [Etsy automation approval](../../architecture/etsy-automation-approval.md) |
-| **Status** | IN PROGRESS (8A.1 built) |
+| **Status** | IN PROGRESS (8A.1 and the 8A.2 controller built) |
 
 ## Goal
 
@@ -94,6 +94,14 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.2.1 | Two concurrent sessions for one environment never both start: the second waits up to its deadline or is `DEFERRED`. Sessions for two shops run in parallel. |
 | AC-8A.2.2 | Killing the worker mid-session releases the lock (the connection drops), and the next session re-seals from the last good archive. |
 | AC-8A.2.3 | A session past its deadline is closed and recorded as `FAILED (timeout)`; the environment's error counter increments. |
+
+**As built (slice 8A.2, the controller):** migration `20261025190000_browser_sessions.sql`, pgTAP `30_browser_sessions`.
+
+- **`htco_application.browser_controller.BrowserController.session`.** It refuses a suspended, failed or deleted environment (`SessionRefusedError`) and takes the profile lock (`ProfileLocks`). It then unpacks the profile through 8A.1's workspace, starts one engine (`BrowserEngine`) and enforces the deadline with `asyncio.timeout`. The application layer imports the standard library only. Cleanup always runs to its end, even under cancellation: the engine closes, the profile is re-sealed on a clean exit only and wiped always, and the lock is released.
+- **Session outcomes.** `succeeded`; `failed` with the code `timeout` or `error`, which also increments the environment's error counter; or `deferred` when another session held the profile past the deadline (`SessionDeferredError`). A `TimeoutError` raised by the work itself is an `error`, not the deadline.
+- **`htco_persistence.browser_sessions`.** `PostgresProfileLocks` polls `pg_try_advisory_lock(hashtextextended('htco.browser_profile:<environment>', 0))` on a dedicated connection until the deadline. A killed worker's connection drops, which releases the lock. `PostgresSessionLog` writes `app.browser_sessions` and the environment's `error_count` and `last_session_at` on the browser role.
+- **`app.browser_sessions`.** Purpose and failure are codes, never free text, and an ended session is final. The browser role may insert and end its organization's sessions; the Owner and Admins read theirs. The browser role's only new environment column right is `error_count`; it still cannot change a status.
+- **Still to come in 8A.2:** the Playwright engine adapter (`launch_persistent_context` on the unpacked profile, stock fingerprint), the `browser-worker` image (read-only root, tmpfs), the pinned Playwright dependency and a real-Chromium test against a local page. The Browser Use fallback is 8A.6.
 
 ### 8A.3 — Preflight, session validation and network health
 
