@@ -56,11 +56,21 @@ def _adapter(tree: ast.Module) -> ast.ClassDef:
 
 
 def etsy_operations(adapter_source: Path) -> frozenset[str]:
-    """The adapter's public Etsy operations: its public coroutines."""
+    """The adapter's public Etsy operations: its public coroutines, and any public plain method
+    that reaches the choke point through the adapter's own methods (sage on #106)."""
+    tree = _parse(adapter_source)
+    methods = {n.name: n for n in _adapter(tree).body if isinstance(n, _FUNCTIONS)}
+    graph = {name: _callees(node, set(methods), set()) for name, node in methods.items()}
+    reaching = set(CHOKE_POINT)
+    while True:
+        more = {name for name, callees in graph.items() if callees & reaching} - reaching
+        if not more:
+            break
+        reaching |= more
     return frozenset(
-        node.name
-        for node in _adapter(_parse(adapter_source)).body
-        if isinstance(node, ast.AsyncFunctionDef) and not node.name.startswith("_")
+        name
+        for name, node in methods.items()
+        if not name.startswith("_") and (isinstance(node, ast.AsyncFunctionDef) or name in reaching)
     )
 
 

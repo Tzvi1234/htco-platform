@@ -376,6 +376,28 @@ def test_scanner__any_write_flag_but_a_literal_false__is_a_write(tmp_path: Path)
     assert etsy_writes(adapter) == {"by_flag", "by_options", "by_send"}
 
 
+def test_scanner__a_plain_method_that_reaches_etsy_is_an_operation(tmp_path: Path) -> None:
+    """Sage's note on #106: a public `def` (not a coroutine) that reaches the choke point, here
+    through a private helper, is an Etsy operation too; a plain accessor is not."""
+    adapter = tmp_path / "etsy.py"
+    adapter.write_text(
+        "class EtsyAdapter:\n"
+        "    def start_read(self, shop_id):\n"
+        "        return self._later(shop_id)\n"
+        "    def config(self):\n"
+        "        return self._config\n"
+        "    def _later(self, shop_id):\n"
+        "        return self._request('GET', shop_id)\n"
+        "    async def get_shop(self, shop_id):\n"
+        "        return await self._request('GET', shop_id)\n"
+        "    async def _request(self, method, shop_id, *, allow_write=False):\n"
+        "        return None\n",
+        encoding="utf-8",
+    )
+
+    assert etsy_operations(adapter) == {"start_read", "get_shop"}
+
+
 def test_scanner__getattr_with_a_written_name_is_that_name(tmp_path: Path) -> None:
     adapter = tmp_path / "etsy.py"
     adapter.write_text(
