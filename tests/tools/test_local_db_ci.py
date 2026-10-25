@@ -257,6 +257,53 @@ def _fake_tool(directory: Path, name: str, body: str) -> None:
     tool.chmod(0o755)
 
 
+# The wrapper's markers in its cache: the cache is the runner's, and the stack it left running.
+OWNER_MARKER = ".htco-local-db-ci"
+STACK_MARKER = "stack-started"
+
+
+def _fake_docker(bin_dir: Path, tmp_path: Path, *, running: bool) -> None:
+    """`docker ps` lists one container of the project while a stack runs, until `supabase stop`
+    is called (the fake supabase records its calls in supabase-calls.txt)."""
+    log = tmp_path / "docker-calls.txt"
+    stops = tmp_path / "supabase-calls.txt"
+    listing = "c0ffee" if running else ""
+    _fake_tool(
+        bin_dir,
+        "docker",
+        f'echo "$*" >> "{log}"\n'
+        f'if [ "$1" = ps ] && [ -n "{listing}" ] && ! grep -qs stop "{stops}"; then\n'
+        f"  echo {listing}\nfi\nexit 0",
+    )
+
+
+def _wrapper_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    (repo / ".github/workflows").mkdir(parents=True)
+    (repo / ".github/workflows/ci.yml").write_text("jobs: {}\n", encoding="utf-8")
+    (repo / "supabase").mkdir()
+    (repo / "supabase/config.toml").write_text('project_id = "htco-platform"\n', encoding="utf-8")
+    return repo
+
+
+def _run_wrapper(
+    repo: Path, bin_dir: Path, cache: Path | str, *args: str, home: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(REPO / "scripts/local-db-ci.sh"), str(repo), *args],  # noqa: S607
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "HTCO_LOCAL_CI_CACHE": str(cache),
+            **({"HOME": str(home)} if home is not None else {}),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+
 @needs_flock
 def test_wrapper__stack_kept_by_an_earlier_run__is_stopped_before_its_cli_is_removed(
     tmp_path: Path,
@@ -266,15 +313,17 @@ def test_wrapper__stack_kept_by_an_earlier_run__is_stopped_before_its_cli_is_rem
     (repo / ".github/workflows").mkdir(parents=True)
     (repo / ".github/workflows/ci.yml").write_text("jobs: {}\n", encoding="utf-8")
     (repo / "supabase").mkdir()
-    (repo / "supabase/config.toml").write_text("", encoding="utf-8")
+    (repo / "supabase/config.toml").write_text('project_id = "htco-platform"\n', encoding="utf-8")
     cache = tmp_path / "cache"
     (cache / "runner").mkdir(parents=True)
+    (cache / OWNER_MARKER).write_text("", encoding="utf-8")
+    (cache / STACK_MARKER).write_text("htco-platform\n", encoding="utf-8")
     calls = tmp_path / "supabase-calls.txt"
     _fake_tool(cache / "runner", "supabase", f'echo "$*" >> "{calls}"')
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _fake_tool(bin_dir, "uv", "exit 0")
-    _fake_tool(bin_dir, "docker", "exit 0")
+    _fake_docker(bin_dir, tmp_path, running=True)
 
     # When the next run starts
     result = subprocess.run(
@@ -415,7 +464,7 @@ def test_wrapper__a_process_left_by_the_run__does_not_keep_the_lock(tmp_path: Pa
     (repo / ".github/workflows").mkdir(parents=True)
     (repo / ".github/workflows/ci.yml").write_text("jobs: {}\n", encoding="utf-8")
     (repo / "supabase").mkdir()
-    (repo / "supabase/config.toml").write_text("", encoding="utf-8")
+    (repo / "supabase/config.toml").write_text('project_id = "htco-platform"\n', encoding="utf-8")
     cache = tmp_path / "cache"
     cache.mkdir()
     pid_file = tmp_path / "leftover.pid"
@@ -453,7 +502,8 @@ def test_setup__pins_the_sha256_of_the_uv_that_ci_uses() -> None:
     """The setup script trusts only its own pin; it must follow CI's uv version (#114)."""
     setup = (REPO / "scripts/local-db-setup.sh").read_text(encoding="utf-8")
     pinned = re.search(r'^uv_pinned_version="([0-9.]+)"$', setup, re.MULTILINE)
-    digest = re.search(r'^uv_pinned_sha256="([0-9a-f]{64})"$', setup, re.MULTILINE)
+    digest = re.search(r'^uv_sha256_x86_64="([0-9a-f]{64})"$', setup, re.MULTILINE)
+    arm = re.search(r'^uv_sha256_aarch64="([0-9a-f]{64})"$', setup, re.MULTILINE)
     ci = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     versions = {
         step["with"]["version"]
@@ -464,5 +514,176 @@ def test_setup__pins_the_sha256_of_the_uv_that_ci_uses() -> None:
 
     assert pinned is not None
     assert digest is not None
+    assert arm is not None
     assert versions == {pinned.group(1)}
     assert '.sha256"' not in setup  # never the release's own checksum file
+
+
+# --- Codex (local) on #99, P1: never stop a Supabase stack the script did not start ----------
+
+
+def _wrapper_tools(tmp_path: Path, *, running: bool) -> tuple[Path, Path]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "supabase-calls.txt"
+    _fake_tool(bin_dir, "supabase", f'echo "$*" >> "{calls}"')
+    _fake_tool(bin_dir, "uv", "exit 0")
+    _fake_docker(bin_dir, tmp_path, running=running)
+    return bin_dir, calls
+
+
+@needs_flock
+def test_wrapper__a_stack_it_did_not_start__left_alone_and_the_run_refused(tmp_path: Path) -> None:
+    # Given a developer's own stack (`just db-start`) is running, with no marker of this script
+    repo = _wrapper_repo(tmp_path)
+    bin_dir, calls = _wrapper_tools(tmp_path, running=True)
+
+    result = _run_wrapper(repo, bin_dir, tmp_path / "cache")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "did not start" in result.stderr
+    assert not calls.exists(), "the developer's stack was stopped"
+
+
+@needs_flock
+def test_wrapper__no_stack_running__stops_nothing_before_the_run(tmp_path: Path) -> None:
+    repo = _wrapper_repo(tmp_path)
+    bin_dir, calls = _wrapper_tools(tmp_path, running=False)
+
+    result = _run_wrapper(repo, bin_dir, tmp_path / "cache", "--keep-running")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not calls.exists()
+
+
+@needs_flock
+def test_wrapper__keep_running__marks_the_stack_as_its_own(tmp_path: Path) -> None:
+    repo = _wrapper_repo(tmp_path)
+    bin_dir, _ = _wrapper_tools(tmp_path, running=False)
+    cache = tmp_path / "cache"
+
+    result = _run_wrapper(repo, bin_dir, cache, "--keep-running")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (cache / STACK_MARKER).read_text(encoding="utf-8").strip() == "htco-platform"
+
+
+@needs_flock
+def test_wrapper__a_normal_run__stops_its_stack_and_drops_the_marker(tmp_path: Path) -> None:
+    repo = _wrapper_repo(tmp_path)
+    bin_dir, calls = _wrapper_tools(tmp_path, running=False)
+    cache = tmp_path / "cache"
+
+    result = _run_wrapper(repo, bin_dir, cache)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls.read_text(encoding="utf-8").splitlines() == ["stop --no-backup"]
+    assert not (cache / STACK_MARKER).exists()
+
+
+# --- Codex (local) on #99, P2: the cache it deletes in, as root, must be its own --------------
+
+
+@needs_flock
+@pytest.mark.parametrize("where", ["root", "home", "mnt-c", "repo", "inside-repo", "above-repo"])
+def test_wrapper__a_cache_path_that_is_not_its_own__refused_before_anything_is_touched(
+    tmp_path: Path, where: str
+) -> None:
+    repo = _wrapper_repo(tmp_path)
+    (repo / "runner").mkdir()
+    (repo / "runner/keep.txt").write_text("mine", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "runner").mkdir()
+    bin_dir, _ = _wrapper_tools(tmp_path, running=False)
+    link = tmp_path / "link-to-root"
+    link.symlink_to("/")
+    cache = {
+        "root": link,  # a symlink: the check must canonicalize
+        "home": home,
+        "mnt-c": Path("/mnt/c"),
+        "repo": repo,
+        "inside-repo": repo / ".cache",
+        "above-repo": tmp_path,
+    }[where]
+
+    result = _run_wrapper(repo, bin_dir, cache, home=home)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "HTCO_LOCAL_CI_CACHE" in result.stderr
+    assert (repo / "runner/keep.txt").exists()
+    assert (home / "runner").exists()
+    assert not (home / "lock").exists()
+
+
+@needs_flock
+def test_wrapper__a_non_empty_directory_without_its_marker__refused(tmp_path: Path) -> None:
+    repo = _wrapper_repo(tmp_path)
+    bin_dir, _ = _wrapper_tools(tmp_path, running=False)
+    cache = tmp_path / "somebody-elses"
+    (cache / "runner").mkdir(parents=True)
+    (cache / "runner/data.txt").write_text("theirs", encoding="utf-8")
+
+    result = _run_wrapper(repo, bin_dir, cache)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert (cache / "runner/data.txt").exists()
+
+
+@needs_flock
+def test_wrapper__a_new_cache__created_with_its_marker(tmp_path: Path) -> None:
+    repo = _wrapper_repo(tmp_path)
+    bin_dir, _ = _wrapper_tools(tmp_path, running=False)
+    cache = tmp_path / "new-cache"
+
+    result = _run_wrapper(repo, bin_dir, cache)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (cache / OWNER_MARKER).exists()
+
+
+# --- Codex (local) on #99, P2: uv for the machine's architecture, each pinned ---------------
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("machine", "archive"),
+    [
+        ("x86_64", "uv-x86_64-unknown-linux-gnu.tar.gz"),
+        ("aarch64", "uv-aarch64-unknown-linux-gnu.tar.gz"),
+        ("arm64", "uv-aarch64-unknown-linux-gnu.tar.gz"),
+    ],
+)
+def test_setup__picks_the_uv_archive_and_pin_for_the_architecture(
+    tmp_path: Path, machine: str, archive: str
+) -> None:
+    _fake_tool(tmp_path, "uname", f"echo {machine}")
+
+    result = subprocess.run(
+        ["bash", str(REPO / "scripts/local-db-setup.sh"), "--uv-asset"],  # noqa: S607
+        env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    name, digest = result.stdout.split()
+    assert name == archive
+    assert re.fullmatch(r"[0-9a-f]{64}", digest)
+
+
+@needs_bash
+def test_setup__an_unsupported_architecture__fails_clearly(tmp_path: Path) -> None:
+    _fake_tool(tmp_path, "uname", "echo armv7l")
+
+    result = subprocess.run(
+        ["bash", str(REPO / "scripts/local-db-setup.sh"), "--uv-asset"],  # noqa: S607
+        env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "armv7l" in result.stderr
