@@ -184,6 +184,7 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 | Table | Purpose | Phase |
 |---|---|---|
 | `shop_browser_environments` | One per shop (optional; created in `20261024200000`): status (`NOT_CONFIGURED`, `PROVISIONING`, `READY`, `LOGIN_REQUIRED`, `DEGRADED`, `SUSPENDED`, `FAILED`; created `PROVISIONING`, every change checked against the transition table by a trigger), consent (text version, user, time, address hash; all or none), profile storage key and key ID (8A), last health, last session, challenge count; no proxy or fingerprint columns (ADR-0020). RLS: Owner and Admin read their organization's rows (no consent or profile columns); the worker reads its job's organization's statuses. Enabled actions follow with the scope flags (8A) | 5 (table and state machine), 8A |
+| `browser_profile_archives` | One sealed profile archive per environment (created in `20261025170000`): environment, shop and organization (composite foreign key to the environment), key ID, the sealed bytes (1 byte to 25 MiB), sealed time. Only `htco_browser` reads or writes it, in its organization; no client role and not the agent-worker | 8A |
 | `browser_environment_events` | Append-only (created in `20261024200000`): `transition` rows (from, to, actor, reason, correlation ID; only the table's edges) and `health` rows (ok, problem codes) | 5, 8A |
 | `browser_sessions` | Each session: environment, execution, purpose, recipe, started and ended, outcome, preflight report, challenge kind | 8A |
 | `browser_artifacts` | Downloaded exports and challenge screenshots (by storage key and hash; screenshots kept 7 days) | 8A |
@@ -269,7 +270,7 @@ Data classes are written DC0–DC4 so they are never confused with requirement p
 
 | Class | Examples | Where | Default handling |
 |---|---|---|---|
-| DC0 Secret | OAuth tokens, API keys, session tokens, PKCE verifiers, shop passwords, TOTP secrets and codes, browser profiles (cookies) | `shop_integrations`, `web_sessions`, `oauth_authorizations`, `shop_credentials`, `totp_accounts`, sealed profile archives | Application-level encryption with the one key ring; never logged, never shown (a TOTP code only on the code view), never sent to a model |
+| DC0 Secret | OAuth tokens, API keys, session tokens, PKCE verifiers, shop passwords, TOTP secrets and codes, browser profiles (cookies) | `shop_integrations`, `web_sessions`, `oauth_authorizations`, `shop_credentials`, `totp_accounts`, sealed profile archives | Application-level encryption with the one key ring (browser profiles: the browser worker's own ring, ADR-0020 §8); never logged, never shown (a TOTP code only on the code view), never sent to a model |
 | DC1 Buyer contact | Buyer name, shipping address, email (if granted) | `orders`, `customers` | Masked in lists and logs; visible only to roles that need it |
 | DC2 Buyer content | Messages, emails, attachments | `customer_messages`, `email_*` | Untrusted; masked before model calls unless needed |
 | DC3 User account | Team members' names and emails | `user_profiles` | Visible inside the organization |
