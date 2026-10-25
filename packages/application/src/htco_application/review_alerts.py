@@ -26,7 +26,9 @@ LOW_REVIEW_STARS = 3
 # Twice the hourly period and more: a missed run or a slow Etsy still sees each review.
 REVIEW_LOOKBACK = timedelta(hours=48)
 PAGE = 100
-MAX_PAGES = 5
+# Pages until the window's reviews run out (Codex review of #108). The bound (SECURITY GATE item
+# 9) is the app's whole daily Etsy budget (5000 calls, `etsy:app`): no run could read further.
+MAX_PAGES = 50
 
 type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
 
@@ -48,15 +50,22 @@ async def low_review_alerts(  # noqa: PLR0913 - the execution and its collaborat
     offload: Offload,
     clock: Callable[[], datetime],
 ) -> dict[str, JsonValue]:
-    since = int((clock() - REVIEW_LOOKBACK).timestamp())
+    start = clock() - REVIEW_LOOKBACK
+    since = int(start.timestamp())
     reviews: list[Mapping[str, JsonValue]] = []
-    for page in range(MAX_PAGES):
+    truncated = False
+    for page in range(MAX_PAGES + 1):
+        if page == MAX_PAGES:
+            truncated = True  # said in the output, never silent
+            break
         output = await _read(ctx, shop_id, since=since, offset=page * PAGE, clock=clock)
         found = output.get("reviews")
         items = [r for r in found if isinstance(r, dict)] if isinstance(found, list) else []
         reviews += items
         count = output.get("count")
         if len(items) < PAGE or not isinstance(count, int) or count <= (page + 1) * PAGE:
+            break
+        if _older_than(items[-1], start):  # newest first: the window's edge is reached
             break
     low = [r for r in reviews if _low(r)]
     transactions = tuple(t for r in low if isinstance(t := r.get("transaction_id"), int))
@@ -90,7 +99,22 @@ async def low_review_alerts(  # noqa: PLR0913 - the execution and its collaborat
             )
             > 0
         )
-    return {"mode": "reviews", "reviews_read": len(reviews), "low_review_alerts": raised}
+    result: dict[str, JsonValue] = {
+        "mode": "reviews",
+        "reviews_read": len(reviews),
+        "low_review_alerts": raised,
+    }
+    if truncated:
+        result["truncated"] = True
+    return result
+
+
+def _older_than(review: Mapping[str, JsonValue], start: datetime) -> bool:
+    try:
+        written = datetime.fromisoformat(str(review.get("created_at")))
+    except ValueError:
+        return False
+    return written.tzinfo is not None and written < start
 
 
 def _low(review: Mapping[str, JsonValue]) -> bool:

@@ -31,7 +31,7 @@ from htco_application.jobs import DEFAULT_RETRY, ClaimedJob, JobError, JsonValue
 from htco_application.maintenance import TenantShop
 from htco_application.marketplace import MarketplaceRateLimitedError
 from htco_application.notifications import NotificationService, render_email
-from htco_application.review_alerts import REVIEW_LOOKBACK, REVIEWS_READ
+from htco_application.review_alerts import MAX_PAGES, REVIEW_LOOKBACK, REVIEWS_READ
 from htco_application.sla_inspector import IncidentDetection
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import TriggerKind
@@ -251,3 +251,55 @@ def test_a_draft_automation_is_refused_without_failing_the_review_job() -> None:
         ReviewCheck(Engine()).run(review_job({}))
     with pytest.raises(JobError, match="shop and organization"):
         ReviewCheck(Engine()).run(review_job({"period": "p"}, shop=None))
+
+
+# --- Codex review of #108 ---------------------------------------------------------------------
+
+
+def page_of(reviews: list[dict[str, JsonValue]], count: int) -> ActionResult:
+    return ActionResult(
+        execution_id=uuid.uuid7(), outcome=ActionOutcome.SUCCEEDED, attempts=1,
+        output={"reviews": list(reviews), "count": count},
+    )  # fmt: skip
+
+
+async def test_every_page_of_the_window_is_read_past_the_old_five_page_cap() -> None:
+    """A busy shop: 650 reviews in the window. The last low review is on the seventh page."""
+    detection, notes = handler()
+    pages = [[review(10_000 + p * 100 + n, 5) for n in range(100)] for p in range(6)]
+    pages.append([review(20_000, 2, listing=799), *[review(20_001 + n, 5) for n in range(49)]])
+    gateway = ScriptedGateway([page_of(p, 650) for p in pages])
+
+    outcome = await detection(context(gateway))
+
+    assert isinstance(outcome, Completed)
+    assert outcome.output["reviews_read"] == 650
+    assert outcome.output["low_review_alerts"] == 1
+    assert [r.input["offset"] for r in gateway.requests] == [n * 100 for n in range(7)]
+    [row] = notes.rows.values()
+    assert row.params["listing_id"] == "799"
+
+
+async def test_a_full_page_older_than_the_window_ends_the_paging() -> None:
+    """Defensive: if Etsy ever ignored `min_created`, paging stops at the window's edge."""
+    detection, _ = handler()
+    old = (NOW - REVIEW_LOOKBACK - timedelta(hours=1)).isoformat()
+    stale = [{**review(30_000 + n, 5), "created_at": old} for n in range(100)]
+    gateway = ScriptedGateway([page_of(stale, 10_000)])
+
+    await detection(context(gateway))
+
+    assert len(gateway.requests) == 1
+
+
+async def test_paging_stops_at_the_daily_budget_and_says_so() -> None:
+    """Bounded (SECURITY GATE item 9): never more pages than the app's daily Etsy budget."""
+    detection, _ = handler()
+    full = [review(40_000 + n, 5) for n in range(100)]
+    gateway = ScriptedGateway([page_of(full, 1_000_000) for _ in range(MAX_PAGES + 1)])
+
+    outcome = await detection(context(gateway))
+
+    assert isinstance(outcome, Completed)
+    assert len(gateway.requests) == MAX_PAGES
+    assert outcome.output["truncated"] is True

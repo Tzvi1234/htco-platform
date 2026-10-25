@@ -12,6 +12,7 @@
     "mode": {"type": "string", "enum": ["reviews"]},
     "reviews_read": {"type": "integer", "minimum": 0},
     "low_review_alerts": {"type": "integer", "minimum": 0},
+    "truncated": {"type": "boolean"},
     "incident_id": {"type": "string", "pattern": "^[0-9a-f-]{36}$"}
   },
   "additionalProperties": false
