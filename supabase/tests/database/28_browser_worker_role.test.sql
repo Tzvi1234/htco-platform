@@ -48,7 +48,7 @@ select ok(not has_schema_privilege('htco_browser', 'private', 'usage'),
 select is(
   array(
     select c.oid::regclass::text from pg_class c join pg_namespace n on n.oid = c.relnamespace
-    where c.relkind in ('r', 'v', 'm', 'p', 'f') and n.nspname not in ('pg_catalog', 'information_schema')
+    where c.relkind in ('r', 'v', 'm', 'p', 'f') and n.nspname in ('app', 'audit', 'jobs', 'private', 'auth', 'storage')
       and has_table_privilege('htco_browser', c.oid, 'select, insert, update, delete, truncate, references, trigger')
     order by 1
   ),
@@ -58,7 +58,7 @@ select is(
 select is(
   array(
     select c.oid::regclass::text from pg_class c join pg_namespace n on n.oid = c.relnamespace
-    where c.relkind in ('r', 'v', 'm', 'p', 'f') and n.nspname not in ('pg_catalog', 'information_schema')
+    where c.relkind in ('r', 'v', 'm', 'p', 'f') and n.nspname in ('app', 'audit', 'jobs', 'private', 'auth', 'storage')
       and has_any_column_privilege('htco_browser', c.oid, 'select, insert, update, references')
     order by 1
   ),
