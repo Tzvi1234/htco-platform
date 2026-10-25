@@ -393,6 +393,30 @@ async def test_email_only_preference_writes_no_visible_in_app_notification() -> 
     assert any(m.payload["user_id"] == str(OWNER) for m in store.outbox.values())
 
 
+async def test_an_escalated_incident_notifies_once_with_an_email() -> None:
+    """6.7: an escalation reaches the Owners and Admins in the app and by email, once."""
+    store = members()
+    service = NotificationService(store, clock=lambda: NOW)
+    escalated = OutboxMessage(
+        organization_id=ORG, shop_id=SHOP, destination=EVENTS,
+        idempotency_key=f"incidents.escalated.v1:{INCIDENT}",
+        payload={"event_type": "incidents.escalated.v1", "incident_id": str(INCIDENT),
+                 "cause": "tracking_missing", "severity": "medium", "receipt_id": 4000000001,
+                 "escalated_from": "detected"},
+    )  # fmt: skip
+    deliverer = EventDeliverer({"incidents.escalated.v1": IncidentNotifications(service)})
+
+    await deliverer.deliver(delivery(escalated))
+    await deliverer.deliver(delivery(escalated))
+
+    rows = {(n.user_id, n.kind, n.dedup_key) for n in store.rows.values()}
+    assert rows == {
+        (user, NotificationKind.INCIDENT_ESCALATED, f"incident_escalated:{INCIDENT}")
+        for user in (OWNER, ADMIN)
+    }
+    assert len(store.outbox) == 2  # one email each: an escalation is urgent
+
+
 async def test_a_resolved_incident_notifies_once() -> None:
     """Codex review of #87: `incidents.resolved.v1` has a subscriber."""
     store = members()

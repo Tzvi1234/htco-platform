@@ -40,6 +40,9 @@ from htco_domain.incidents import (
 EVENTS = "events.publish"
 INCIDENT_OPENED = "incidents.opened.v1"
 INCIDENT_RESOLVED = "incidents.resolved.v1"
+# An incident moved to escalated (by the inspector's age rule or a person): the owner is told
+# once per incident (slice 6.7).
+INCIDENT_ESCALATED = "incidents.escalated.v1"
 SLA_BREACHED = "fulfillment.sla_breached.v1"
 
 
@@ -301,6 +304,15 @@ class IncidentService:
             )
             current = target
         events: tuple[OutboxMessage, ...] = ()
+        if current is IncidentState.ESCALATED and incident.state is not IncidentState.ESCALATED:
+            events = (
+                _event(
+                    INCIDENT_ESCALATED,
+                    incident,
+                    extra={"escalated_from": incident.state.value, "escalated_at": now.isoformat()},
+                    correlation=correlation_id,
+                ),
+            )
         if current is IncidentState.RESOLVED and evidence is not None:
             events = (
                 _event(
