@@ -65,6 +65,14 @@ wsl -d Ubuntu -u root -- bash /mnt/c/<path to clone>/scripts/local-db-ci.sh /mnt
   `database`). A step past its time is stopped with every process it started, fails as timed out,
   and the rest are skipped. One run at a time holds a lock (`~/.cache/htco-local-db-ci/lock`);
   no step or leftover process inherits it, so a hung or killed run never blocks the next one.
+- **Your own stack is safe.** The Supabase project is the clone's (`htco-platform`), the same one
+  `just db-start` uses. The script stops only a stack it started itself (it records that in
+  `~/.cache/htco-local-db-ci/stack-started`). If another stack of the project is running, it stops
+  with exit code 2 and leaves that stack alone: stop it yourself (`supabase stop`) and run again.
+- **The cache.** `HTCO_LOCAL_CI_CACHE` (default `~/.cache/htco-local-db-ci`) must be a directory of
+  its own: the script refuses `/`, a home directory, a `/mnt` drive, anything that contains or is
+  inside the clone under test, and a non-empty directory without its `.htco-local-db-ci` marker,
+  because it deletes in it as root.
 - `--keep-running` leaves the database on `postgresql://postgres:postgres@127.0.0.1:54322/postgres`
   for more `just test-db` runs; the next run removes it first.
 
@@ -74,8 +82,9 @@ wsl -d Ubuntu -u root -- bash /mnt/c/<path to clone>/scripts/local-db-ci.sh /mnt
 scripts) **as root in WSL, with read and write access to the Windows disk under `/mnt/c`**. Run
 it only on team branches of `Tzvi1234/htco-platform` that you would merge. Never run it on a fork,
 a contributor's branch or any clone you have not read: anything such a branch does runs with those
-rights. `local-db-setup.sh` checks uv's archive against the SHA-256 pinned in the script itself
-(not the release's own `.sha256` file), and the Supabase CLI against the SHA-256 pinned in
+rights. `local-db-setup.sh` installs the uv archive for the machine (x86_64 or aarch64; any other
+architecture stops with exit code 2) and checks it against the SHA-256 pinned in the script itself,
+not the release's own `.sha256` file. The Supabase CLI is checked against the SHA-256 pinned in
 `ci.yml`.
 
 ## Timing

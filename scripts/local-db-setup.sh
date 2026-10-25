@@ -3,6 +3,7 @@
 # Installs Docker, git and just from apt, and uv and Python at the versions CI uses. The Supabase
 # CLI is not installed here: local-db-ci.sh runs CI's own install step, with its pinned SHA-256.
 # Run as root: wsl -d Ubuntu -u root -- bash <repo>/scripts/local-db-setup.sh
+# `--uv-asset` only prints the uv archive and pinned SHA-256 for this machine, and changes nothing.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,10 +12,24 @@ uv_version="$(grep -m1 -oP 'version: "\K[0-9.]+(?=")' "$ci")"
 python_version="$(tr -d '[:space:]' < "$repo/.python-version")"
 # uv's archive is checked against this pin, kept in the repository and reviewed like code; the
 # release's own .sha256 file comes from the same origin as the archive, so it proves nothing.
-# When CI moves to a new uv, update both lines together (the digest is on the release page and in
-# `gh api repos/astral-sh/uv/releases/tags/<version>`, field `digest`).
+# When CI moves to a new uv, update the version and both digests together (each is on the release
+# page and in `gh api repos/astral-sh/uv/releases/tags/<version>`, field `digest`).
 uv_pinned_version="0.13.0"
-uv_pinned_sha256="1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
+uv_sha256_x86_64="1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
+uv_sha256_aarch64="3ccfb6af6e242433eb552f7d9676abd5412c6595c497e990d9c8cb7b5bd4d2c3"
+machine="$(uname -m)"
+case "$machine" in
+    x86_64 | amd64) uv_target="x86_64-unknown-linux-gnu" uv_sha256="$uv_sha256_x86_64" ;;
+    aarch64 | arm64) uv_target="aarch64-unknown-linux-gnu" uv_sha256="$uv_sha256_aarch64" ;;
+    *)
+        echo "unsupported architecture $machine: uv is pinned for x86_64 and aarch64 only" >&2
+        exit 2
+        ;;
+esac
+if [ "${1:-}" = "--uv-asset" ]; then
+    echo "uv-$uv_target.tar.gz $uv_sha256"
+    exit 0
+fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -38,18 +53,17 @@ fi
 if [ "$(uv --version 2> /dev/null | cut -d' ' -f2)" != "$uv_version" ]; then
     if [ "$uv_version" != "$uv_pinned_version" ]; then
         echo "CI uses uv $uv_version but this script pins the SHA-256 of $uv_pinned_version:" \
-            "update uv_pinned_version and uv_pinned_sha256" >&2
+            "update uv_pinned_version and the uv_sha256_* digests" >&2
         exit 1
     fi
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     base="https://github.com/astral-sh/uv/releases/download/$uv_version"
-    archive="uv-x86_64-unknown-linux-gnu.tar.gz"
+    archive="uv-$uv_target.tar.gz"
     curl -fsSL -o "$tmp/$archive" "$base/$archive"
-    echo "$uv_pinned_sha256  $tmp/$archive" | sha256sum --check --strict --quiet
+    echo "$uv_sha256  $tmp/$archive" | sha256sum --check --strict --quiet
     tar -xzf "$tmp/$archive" -C "$tmp"
-    install -m 755 "$tmp/uv-x86_64-unknown-linux-gnu/uv" "$tmp/uv-x86_64-unknown-linux-gnu/uvx" \
-        /usr/local/bin/
+    install -m 755 "$tmp/uv-$uv_target/uv" "$tmp/uv-$uv_target/uvx" /usr/local/bin/
 fi
 uv python install "$python_version"
 
