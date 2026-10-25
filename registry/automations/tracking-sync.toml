@@ -38,7 +38,7 @@ text = "packages/contracts/automations/tracking-sync.input.json: a receipt_id wi
 
 [specification.preconditions]
 status = "defined"
-text = "The shop exists in the execution's organization and is connected; otherwise the run completes as skipped: not_connected, with no Etsy read. A missing shop or a malformed payload is a job error."
+text = "The shop exists in the execution's organization and is connected; otherwise (an unknown or foreign shop included) the run completes as skipped: not_connected, with no Etsy read. A job that names no shop, or a malformed payload, is a job error."
 
 [specification.steps]
 status = "defined"
@@ -54,7 +54,7 @@ text = "Etsy Open API v3 through the Action Gateway (reads); the order history s
 
 [specification.error_handling]
 status = "defined"
-text = "A deferred read (429 or the daily floor) or a refused read raises into the retry policy; nothing is recorded for that receipt in that attempt. Errors are recorded as their type name only. A receipt whose read fails stays due for the next run."
+text = "A deferred read (429 or the daily floor) or a refused read raises into the retry policy; nothing is recorded for that receipt in that attempt. Errors are recorded as their type name only (a job error also keeps its safe message). A receipt whose read fails stays due for the next run."
 
 [specification.retry_policy]
 status = "defined"
@@ -66,7 +66,7 @@ text = "The engine's unique (automation_id, idempotency_key) absorbs a repeated 
 
 [specification.timeouts_and_sla]
 status = "defined"
-text = "120 s per attempt; every 15 minutes per shop once the schedule is on, or within a minute of an order.shipped webhook at p95."
+text = "120 s per attempt; every 15 minutes per shop once the schedule is on, or, as a target not yet measured, within a minute of an order.shipped webhook at p95."
 
 [specification.permissions]
 status = "defined"
@@ -90,4 +90,4 @@ text = "None: it reads Etsy and records HTCO's own facts. A tracking write to Et
 
 [specification.metrics]
 status = "defined"
-text = "Admin › Health (slice 5.9): executions, success rate, retries, dead letters and latency p50 and p95 over 7 days; the tracking events recorded per shop."
+text = "Admin › Health (slice 5.9): executions, success rate, retries, dead letters and latency p50 and p95 over 7 days; per run, the execution's output counts the new tracking events (recorded)."

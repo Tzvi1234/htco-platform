@@ -4,7 +4,7 @@
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `HTCO_WORKER_SCHEDULES` contains `fulfillment.inspect` | absent (off) | The 15-minute inspection per connected shop. Removing it is the phase's rollback: incidents stay for review |
+| `HTCO_WORKER_SCHEDULES` contains `fulfillment.inspect` | absent (off) | The 15-minute inspection per connected shop. Removing it stops the schedule only: once Tracking Synchronization is active, `order.shipped` webhooks still start it. The full rollback sets both automations' `readiness` back to `draft` in `registry/automations/` (a deploy); the engine then refuses every trigger. Incidents stay for review |
 | `app.sla_policies` rows | none | No row: 10 business days from payment to the first tracking. Add a row per shop, supplier or shipping method once the owner agrees the windows |
 
 Tracking Synchronization is deployed in the worker only when the Etsy app and the token vault are configured; Incident Detection always.

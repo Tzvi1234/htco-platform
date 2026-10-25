@@ -217,7 +217,7 @@ Create a synthetic late order in a test shop; watch the incident and email arriv
 
 ## Rollback
 
-Disable the inspector schedule by flag; incidents remain for review.
+Set Tracking Synchronization's and Incident Detection & Escalation's `readiness` back to `draft` (a registry change and a deploy): the engine refuses every trigger, the schedule and the `order.shipped` webhook alike. Removing `fulfillment.inspect` from `HTCO_WORKER_SCHEDULES` stops the schedule only. Incidents remain for review.
 
 ## Risks
 

@@ -37,7 +37,7 @@ text = "packages/contracts/automations/incident-detection-escalation.input.json:
 
 [specification.preconditions]
 status = "defined"
-text = "The shop belongs to the execution's organization; a missing shop, an unknown mode or a malformed drift is a job error. It reads only HTCO's own store, so a disconnected shop is still inspected from the stored orders."
+text = "The shop belongs to the execution's organization; a job that names no shop, an unknown mode or a malformed drift is a job error, and an unknown shop finds nothing under RLS. It reads only HTCO's own store, so a disconnected shop is still inspected from the stored orders."
 
 [specification.steps]
 status = "defined"
@@ -53,7 +53,7 @@ text = "HTCO's own store only: app.sla_policies, app.etsy_orders, app.tracking_e
 
 [specification.error_handling]
 status = "defined"
-text = "A database error raises into the retry policy; nothing half-written survives, because each opening is one transaction. A temporary email failure is retried by the outbox; a permanent one is recorded on the delivery. Errors are recorded as their type name only."
+text = "A database error raises into the retry policy; nothing half-written survives, because each opening is one transaction. A temporary email failure is retried by the outbox; a permanent one is recorded on the delivery. Errors are recorded as their type name only (a job error also keeps its safe message)."
 
 [specification.retry_policy]
 status = "defined"
@@ -69,7 +69,7 @@ text = "120 s per attempt; every 15 minutes per shop once the schedule is on, so
 
 [specification.permissions]
 status = "defined"
-text = "Runs as the htco_worker role inside its job's organization: select on sla_policies and the etsy_orders columns it needs; select and insert on incidents (update of state, severity and its times only) and incident_events; select and insert on notifications and email_deliveries; the outbox. No action through the Action Gateway, no Etsy call."
+text = "Runs as the htco_worker role inside its job's organization: select on sla_policies and the etsy_orders columns it needs; select and insert on incidents (update of state, severity and its times only) and incident_events; select and insert on notifications and email_deliveries, select on notification_settings and notification_preferences, and execute on the security-definer functions app.worker_notification_recipients and app.worker_member_email, which read the members' email addresses for the fan-out; the outbox. No action through the Action Gateway, no Etsy call."
 
 [specification.audit]
 status = "defined"
