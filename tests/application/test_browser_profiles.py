@@ -376,3 +376,29 @@ def test_workspace__refuses_a_corrupt_or_oversized_archive(
     with pytest.raises(ProfileUnsafeError), workspaces.checkout(env):
         pass  # pragma: no cover - never entered
     assert everything_under(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "caps", [{"max_unpacked_bytes": 4}, {"max_members": 1}], ids=["unpacked-cap", "member-cap"]
+)
+def test_workspace__a_session_past_the_unpack_caps_keeps_the_last_good_archive(
+    tmp_path: Path, caps: dict[str, int]
+) -> None:
+    """Codex on #116: a profile the next checkout would refuse is never sealed over the good one."""
+    profiles = vault()
+    env = environment()
+    workspaces = ProfileWorkspaces(profiles, tmp_path, **caps)
+    workspaces.create(env)
+    good = profiles.open(env)
+
+    def grow(directory: Path) -> None:
+        (directory / "a").write_bytes(b"12345")
+        (directory / "b").write_bytes(b"")
+
+    with pytest.raises(ProfileTooLargeError), workspaces.checkout(env) as directory:
+        grow(directory)
+
+    assert everything_under(tmp_path) == []
+    assert profiles.open(env) == good
+    with workspaces.checkout(env) as directory:
+        assert list(directory.iterdir()) == []

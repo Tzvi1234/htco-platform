@@ -195,7 +195,7 @@ class ProfileWorkspaces:
 
     def create(self, environment: BrowserEnvironment) -> SealedArchive:
         """Seal an empty profile: Chromium fills it on the first launch."""
-        return self._vault.seal(environment, _pack(None))
+        return self._vault.seal(environment, _pack([]))
 
     @contextmanager
     def checkout(self, environment: BrowserEnvironment) -> Iterator[Path]:
@@ -206,9 +206,19 @@ class ProfileWorkspaces:
             if archive is not None:
                 self._unpack(archive, directory)
             yield directory
-            self._vault.seal(environment, _pack(directory))
+            self._vault.seal(environment, self._packed(directory))
         finally:
             _wipe(directory)
+
+    def _packed(self, directory: Path) -> bytes:
+        """The session's profile, refused before sealing when the next checkout would refuse
+        it, so an oversized session never replaces the last good archive."""
+        files = list(_profile_files(directory))
+        if len(files) > self._max_members:
+            raise ProfileTooLargeError("the profile has too many entries")
+        if sum(path.stat().st_size for path in files if path.is_file()) > self._max_unpacked:
+            raise ProfileTooLargeError("the profile is past the unpacked cap")
+        return _pack([(path, path.relative_to(directory).as_posix()) for path in files])
 
     def _unpack(self, archive: bytes, directory: Path) -> None:
         try:
@@ -232,12 +242,11 @@ class ProfileWorkspaces:
                 raise ProfileUnsafeError("the profile archive names a path outside the profile")
 
 
-def _pack(directory: Path | None) -> bytes:
+def _pack(files: list[tuple[Path, str]]) -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
-        if directory is not None:
-            for path in _profile_files(directory):
-                tar.add(path, arcname=path.relative_to(directory).as_posix(), recursive=False)
+        for path, name in files:
+            tar.add(path, arcname=name, recursive=False)
     packed = buffer.getvalue()
     if len(packed) > MAX_ARCHIVE_BYTES:
         raise ProfileTooLargeError("the profile archive is over the cap")
