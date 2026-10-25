@@ -64,6 +64,31 @@ jobs:
       - name: Tests with coverage floors
         run: uv run just test
 
+  # A real Chromium against pages served on 127.0.0.1 only, never a live site (Phase 8A).
+  browser:
+    name: browser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.13.0"
+          enable-cache: true
+          cache-python: true
+      - name: Install the Chromium build pinned by the locked Playwright
+        run: uv run --package htco-browser-worker playwright install --with-deps chromium
+      - name: Real-Chromium tests
+        env:
+          HTCO_TEST_BROWSER: "1"
+          # Ubuntu 24.04 runners restrict unprivileged user namespaces, which the sandbox needs.
+          HTCO_TEST_BROWSER_SANDBOX: "0"
+        run: uv run pytest -m browser -q tests/browser_worker
+
   security:
     name: security
     runs-on: ubuntu-24.04

@@ -121,13 +121,14 @@ filterwarnings = [
 markers = [
   "ac(id): the acceptance criterion (for example AC-1.2.3) that this test proves",
   "db: needs a running database (HTCO_TEST_DATABASE_URL); run with `just test-db`",
+  "browser: needs Chromium (HTCO_TEST_BROWSER=1); runs against 127.0.0.1 pages only",
 ]
 
 [tool.coverage.run]
 branch = true
 source_pkgs = [
   "htco_domain", "htco_application", "htco_platform", "htco_agent_runtime", "htco_persistence",
-  "htco_integrations", "htco_api", "htco_worker",
+  "htco_integrations", "htco_api", "htco_worker", "htco_browser_worker",
 ]
 
 [tool.coverage.report]
@@ -143,7 +144,7 @@ exclude_also = ["if TYPE_CHECKING:", "@overload", "raise NotImplementedError"]
 [tool.importlinter]
 root_packages = [
   "htco_domain", "htco_application", "htco_platform", "htco_agent_runtime", "htco_persistence",
-  "htco_integrations", "htco_api", "htco_worker",
+  "htco_integrations", "htco_api", "htco_worker", "htco_browser_worker",
 ]
 include_external_packages = true
 
@@ -154,7 +155,7 @@ type = "layers"
 # Adapters (agent runtime, persistence, integrations) sit side by side and never import each other.
 # The API and the worker are composition roots side by side; neither imports the other.
 layers = [
-  "htco_api | htco_worker",
+  "htco_api | htco_worker | htco_browser_worker",
   "htco_agent_runtime | htco_persistence | htco_integrations",
   "htco_application",
   "htco_domain",
@@ -196,6 +197,26 @@ source_modules = [
   "htco_application.order_ingest", "htco_persistence.order_automations",
 ]
 forbidden_modules = ["htco_agent_runtime", "langgraph", "langchain_core"]
+
+[[tool.importlinter.contracts]]
+id = "playwright-only-in-browser-worker"
+name = "Only the browser worker imports Playwright (ADR-0020 §8)"
+type = "forbidden"
+source_modules = [
+  "htco_domain", "htco_application", "htco_platform", "htco_agent_runtime", "htco_persistence",
+  "htco_integrations", "htco_api", "htco_worker",
+]
+forbidden_modules = ["playwright"]
+
+[[tool.importlinter.contracts]]
+id = "browser-worker-holds-no-etsy-tokens"
+name = "The browser worker never reaches Etsy OAuth tokens or the Etsy adapters (ADR-0020 §8)"
+type = "forbidden"
+source_modules = ["htco_browser_worker"]
+forbidden_modules = [
+  "htco_integrations", "htco_persistence.shop_integrations", "htco_application.etsy_tokens",
+  "htco_application.etsy_connect", "htco_api", "htco_worker", "httpx",
+]
 
 [[tool.importlinter.contracts]]
 id = "database-driver-only-in-persistence"
