@@ -1,15 +1,16 @@
 """The office as committed in `registry/`: the organization of ADR-0012, validated."""
 
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from htco_application.workforce.registry import Registry
-from htco_domain.automation import TriggerKind
+from htco_domain.automation import AUTOMATION_SPEC_SECTIONS, TriggerKind
 from htco_domain.routing import ModelTier
 from htco_domain.tooling import SideEffect
-from htco_domain.workforce import Department
+from htco_domain.workforce import Department, Readiness, check_specification
 from tools.registry import load_registry, main
 
 REGISTRY = load_registry(Path(__file__).resolve().parents[2] / "registry")
@@ -88,6 +89,28 @@ def test_nothing__is_production_ready_by_configuration_alone() -> None:
     assert all(p.incomplete_sections() for p in REGISTRY.employees.values())
     assert all(t.readiness.value == "draft" for t in REGISTRY.tools.values())
     assert all(a.readiness.value == "draft" for a in REGISTRY.automations.values())
+
+
+# Every section defined, readiness still draft until the owner approves the activation: the order
+# automations (AC-5.11.1) and the fulfillment ones (AC-6.7.1).
+FULLY_SPECIFIED = {
+    "etsy-order-intake",
+    "order-dedup-verification",
+    "product-sales-counters",
+    "tracking-sync",
+    "incident-detection-escalation",
+}
+
+
+@pytest.mark.parametrize("automation_id", sorted(FULLY_SPECIFIED))
+def test_a_fully_specified_automation__passes_the_readiness_check_but_stays_draft(
+    automation_id: str,
+) -> None:
+    automation = REGISTRY.automations[automation_id]
+
+    assert check_specification(automation.specification, AUTOMATION_SPEC_SECTIONS) == ()
+    assert automation.readiness is Readiness.DRAFT  # the owner's switch, not this file's
+    replace(automation, readiness=Readiness.READY)  # the loader's check would accept it
 
 
 def test_every_employee__has_its_own_routing_policy() -> None:

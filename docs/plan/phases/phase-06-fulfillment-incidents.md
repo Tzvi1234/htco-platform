@@ -17,7 +17,7 @@
 - [x] 6.4 Notifications and email (migration `20261025110000_notifications.sql`, pgTAP `25_notifications`; [feature docs](../../features/notifications/overview.md); Resend built and OFF until the owner's DNS for `office.ht-co.app`)
 - [ ] 6.5 Incident center UI
 - [ ] 6.6 Guarded shipment write
-- [ ] 6.7 Fulfillment automations activated
+- [ ] 6.7 Fulfillment automations activated. Part 1 (#111): both specifications fully defined and true of the code (AC-6.7.1, tested in `tests/tools/test_registry_files.py`), `readiness` still `draft`. Open: AC-6.7.2 (one replay test across the schedule and event paths together), AC-6.7.3 (breach → incident → notification → email replayed end to end), AC-6.7.4 (a dead-lettered execution alerts the owner; today only Admin › Health shows it), AC-6.7.5 (a remediation becomes a person's task), the AC-6.3.4 drift trigger, and a notification on escalation; then the owner's activation
 - [ ] 6.8 Owner-triggered fulfillment writes (receipt and shipment tools)
 - [ ] 6.9 Ship-by SLA, holiday calendar and low-review alerts (deterministic). Ship-by and stock alerts built on the 6.4 notification path (migration `20261025120000_fulfillment_alerts.sql`, pgTAP `26`); the holidays come from the shop's SLA-policy calendar until `etsy.holiday_preferences` is read; low-review alerts (AC-6.9.2) still open
 - [ ] 6.10 AutoVA tracking relay (copy tracking from AutoVA to Etsy)

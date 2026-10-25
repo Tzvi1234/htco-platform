@@ -16,7 +16,7 @@ Both automations are `draft`; the engine refuses them and the worker logs `fulfi
 ## Monitoring
 
 - Logs: `fulfillment.inspections_enqueued` (count), `fulfillment.inspection` (which automations started).
-- Executions: the automation engine's executions and dead letters (slice 5.10); the queue health view arrives with 5.9.
+- Executions: the automation engine's executions and dead letters (slice 5.10); Admin › Health (slice 5.9) shows each automation's executions, success rate, retries, dead letters and latency, and retries a dead letter (audited).
 
 ## Runbook
 
