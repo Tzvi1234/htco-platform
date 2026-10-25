@@ -1,10 +1,20 @@
 """Find where the source calls the Etsy adapter, for the gateway-bypass contract (audit P1-1).
 
-The adapter's public coroutines are its Etsy operations. A call of one of those names anywhere
-else is a call that either goes through the Action Gateway or bypasses it; the contract keeps a
-documented list of each call site. A function of the adapter's module that passes
-`allow_write=True`, or reaches one that does (through `self.` calls or the module's own helpers,
-private ones included), sends a write, and may be called only from the gateway's API channel.
+The adapter's public coroutines are its Etsy operations. A reference to one of those names
+anywhere else (a call, an alias, a callback, `partial`, `getattr` with that name) either goes
+through the Action Gateway or bypasses it; the contract keeps a documented list of each site.
+A `getattr` whose name is not written in the source fails closed (except on `self`, an object's
+own fields).
+
+A function of the adapter's module sends a write when it hands the choke point (`_request`, then
+`_send`) a write flag that is not the literal `False` (`allow_write=…`, `write=…`, or `**` keyword
+arguments), or reaches such a function through `self.` calls or the module's own helpers, private
+ones included. A write may be referenced only from the gateway's API channel.
+
+The scan is static and goes by name: it cannot tell a call through `GatewayReceipts` from one on
+the raw adapter (whoever adds a gateway row checks the object), and dispatch beyond these forms
+(`globals()`, `operator.attrgetter`, a name built at run time and passed to `getattr` on `self`) is
+out of its reach.
 """
 
 import ast
@@ -14,6 +24,11 @@ from pathlib import Path
 
 ADAPTER_CLASS = "EtsyAdapter"
 ADAPTER_MODULE = "htco_integrations.etsy"
+# What a `getattr` with a name the source does not spell is reported as.
+DYNAMIC_GETATTR = "getattr(?)"
+# Every request passes these two; what their callers hand them decides a write (the contract
+# pins that only `_request` calls `_send`).
+CHOKE_POINT = frozenset({"_request", "_send"})
 _FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _Function = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -45,14 +60,24 @@ def etsy_operations(adapter_source: Path) -> frozenset[str]:
     )
 
 
-def _sets_allow_write(function: _Function) -> bool:
-    return any(
-        isinstance(node, ast.keyword)
-        and node.arg == "allow_write"
-        and isinstance(node.value, ast.Constant)
-        and node.value.value is True
-        for node in ast.walk(function)
-    )
+def _not_false(value: ast.expr) -> bool:
+    return not (isinstance(value, ast.Constant) and value.value is False)
+
+
+def _sends_write(function: _Function) -> bool:
+    """It hands the choke point a write flag that is not the literal `False`."""
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _called_name(node)
+        for keyword in node.keywords:
+            if keyword.arg == "allow_write" and _not_false(keyword.value):
+                return True
+            if keyword.arg is None and name in CHOKE_POINT:  # **options: any flag at all
+                return True
+            if keyword.arg == "write" and name == "_send" and _not_false(keyword.value):
+                return True
+    return False
 
 
 def _callees(function: _Function, methods: set[str], helpers: set[str]) -> set[str]:
@@ -80,9 +105,12 @@ def etsy_writes(adapter_source: Path) -> frozenset[str]:
     tree = _parse(adapter_source)
     methods = {n.name: n for n in _adapter(tree).body if isinstance(n, _FUNCTIONS)}
     helpers = {n.name: n for n in tree.body if isinstance(n, _FUNCTIONS)}
-    functions = helpers | methods  # a method shadows a helper of the same name
+    # A method shadows a helper of the same name; the choke point is judged by its callers.
+    functions = {
+        name: node for name, node in (helpers | methods).items() if name not in CHOKE_POINT
+    }
     graph = {name: _callees(node, set(methods), set(helpers)) for name, node in functions.items()}
-    writes = {name for name, node in functions.items() if _sets_allow_write(node)}
+    writes = {name for name, node in functions.items() if _sends_write(node)}
     while True:
         more = {name for name, callees in graph.items() if callees & writes} - writes
         if not more:
@@ -90,13 +118,12 @@ def etsy_writes(adapter_source: Path) -> frozenset[str]:
         writes |= more
 
 
-def _walk(node: ast.AST, scope: tuple[str, ...]) -> Iterator[tuple[ast.Call, tuple[str, ...]]]:
+def _walk(node: ast.AST, scope: tuple[str, ...]) -> Iterator[tuple[ast.AST, tuple[str, ...]]]:
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.ClassDef, *_FUNCTIONS)):
             yield from _walk(child, (*scope, child.name))
             continue
-        if isinstance(child, ast.Call):
-            yield child, scope
+        yield child, scope
         yield from _walk(child, scope)
 
 
@@ -108,18 +135,39 @@ def _called_name(call: ast.Call) -> str | None:
     return None
 
 
+def _referenced(node: ast.AST, methods: frozenset[str]) -> str | None:
+    """The operation `node` refers to, `DYNAMIC_GETATTR` for a name the source does not spell,
+    or None."""
+    if isinstance(node, ast.Attribute) and node.attr in methods:
+        return node.attr
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in methods:
+        return node.id
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2  # getattr(object, name)
+    ):
+        target, name = node.args[0], node.args[1]
+        if isinstance(name, ast.Constant) and isinstance(name.value, str):
+            return name.value if name.value in methods else None
+        if not (isinstance(target, ast.Name) and target.id == "self"):
+            return DYNAMIC_GETATTR
+    return None
+
+
 def calls_of(roots: list[Path], methods: frozenset[str], *, skip: Path) -> list[Call]:
-    """Every call of one of `methods` under `roots` (`x.method(…)` or `method(…)`), with the
-    function it is in, except in `skip` (the adapter itself)."""
+    """Every reference to one of `methods` under `roots` (called or not, `getattr` included),
+    with the function it is in, except in `skip` (the adapter itself)."""
     calls: list[Call] = []
     for root in roots:
         for path in sorted(root.rglob("*.py")):
             if path.resolve() == skip.resolve():
                 continue
             calls.extend(
-                Call(path, call.lineno, name, ".".join(scope) or "<module>")
-                for call, scope in _walk(_parse(path), ())
-                if (name := _called_name(call)) is not None and name in methods
+                Call(path, getattr(node, "lineno", 0), name, ".".join(scope) or "<module>")
+                for node, scope in _walk(_parse(path), ())
+                if (name := _referenced(node, methods)) is not None
             )
     return sorted(calls)
 

@@ -13,6 +13,7 @@ The list is exact: a new direct call fails until it is documented here, and a by
 removed fails until it is struck from the list, so the list never drifts from the code.
 """
 
+import ast
 from enum import StrEnum
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import pytest
 
 from tests.architecture.gateway_bypass import (
     ADAPTER_MODULE,
+    DYNAMIC_GETATTR,
     Call,
     calls_of,
     etsy_operations,
@@ -34,6 +36,7 @@ SOURCE_ROOTS = sorted(
         *REPO_ROOT.glob("packages/*/src"),
         *REPO_ROOT.glob("apps/*/src"),
         *REPO_ROOT.glob("workers/*/src"),
+        REPO_ROOT / "tools",
     ]
 )
 APPLICATION = "packages/application/src/htco_application/"
@@ -171,6 +174,48 @@ def test_no_read_bypass_is_the_api_channel() -> None:
     assert all(reason for _, reason in MODULES.values())
 
 
+def test_the_write_choke_point_is_pinned() -> None:
+    """Only `_request` calls `_send`, and only `_send` and the client hook read the per-request
+    write flag: no other path in the adapter can carry a write past both guards."""
+    tree = ast.parse(ADAPTER.read_text(encoding="utf-8"))
+    send_callers = {where for where, name in _named(tree) if name == "_send"}
+    flag_users = {where for where, name in _named(tree) if name == "_WRITE_ALLOWED"}
+
+    assert send_callers == {"EtsyAdapter._request"}
+    assert flag_users == {"<module>", "EtsyAdapter._send", "_WriteGuard.__call__"}
+
+
+def test_only_the_adapter_names_etsys_shop_api_host() -> None:
+    """A second Etsy client would escape every rule above, which key on the adapter."""
+    naming = {
+        _relative(path)
+        for root in SOURCE_ROOTS
+        for path in root.rglob("*.py")
+        if "openapi.etsy.com" in path.read_text(encoding="utf-8")
+    }
+
+    assert naming == {_relative(ADAPTER)}
+
+
+def _named(tree: ast.AST) -> list[tuple[str, str]]:
+    """(the qualified function, the name) of every name and attribute in `tree`."""
+    found: list[tuple[str, str]] = []
+
+    def visit(node: ast.AST, scope: tuple[str, ...]) -> None:
+        for child in ast.iter_child_nodes(node):
+            inner = scope
+            if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                inner = (*scope, child.name)
+            elif isinstance(child, ast.Name):
+                found.append((".".join(scope) or "<module>", child.id))
+            elif isinstance(child, ast.Attribute):
+                found.append((".".join(scope) or "<module>", child.attr))
+            visit(child, inner)
+
+    visit(tree, ())
+    return found
+
+
 # --- The scanner itself ----------------------------------------------------------------------
 
 
@@ -213,6 +258,66 @@ def test_scanner__reports_a_new_direct_call_and_a_write_call(sources: Path) -> N
     assert calls == [
         Call(module, 2, "get_shop", "run"),
         Call(module, 3, "create_shipment", "run"),
+    ]
+
+
+def test_scanner__any_write_flag_but_a_literal_false__is_a_write(tmp_path: Path) -> None:
+    adapter = tmp_path / "etsy.py"
+    adapter.write_text(
+        "class EtsyAdapter:\n"
+        "    async def by_flag(self, flag):\n"
+        "        return await self._request('POST', 1, allow_write=flag)\n"
+        "    async def by_options(self, **options):\n"
+        "        return await self._request('POST', 1, **options)\n"
+        "    async def by_send(self):\n"
+        "        return await self._send('POST', 1, write=True)\n"
+        "    async def says_no(self):\n"
+        "        return await self._request('GET', 1, allow_write=False)\n"
+        "    async def _request(self, method, shop_id, *, allow_write=False):\n"
+        "        return await self._send(method, shop_id, write=allow_write)\n"
+        "    async def _send(self, method, shop_id, *, write):\n"
+        "        return None\n",
+        encoding="utf-8",
+    )
+
+    # `_request` and `_send` are the choke point every call passes (pinned on the real adapter
+    # by test_the_write_choke_point_is_pinned): what a caller hands them decides a write.
+    assert etsy_writes(adapter) == {"by_flag", "by_options", "by_send"}
+
+
+def test_scanner__every_reference_to_an_operation__is_a_site(sources: Path) -> None:
+    adapter = sources / "etsy.py"
+    module = sources / "app" / "refs.py"
+    module.parent.mkdir()
+    module.write_text(
+        "import functools\n"
+        "async def alias(etsy):\n"
+        "    send = etsy.create_shipment\n"
+        "    await send(1, 'LX')\n"
+        "async def callback(etsy, gateway):\n"
+        "    await gateway.retry(etsy.create_shipment, 1)\n"
+        "async def by_name(etsy):\n"
+        "    await getattr(etsy, 'create_shipment')(1, 'LX')\n"
+        "async def bound(etsy):\n"
+        "    await functools.partial(etsy.create_shipment, 1)('LX')\n"
+        "async def dynamic(etsy, name):\n"
+        "    await getattr(etsy, name)(1)\n"
+        "class Fields:\n"
+        "    def check(self, name):\n"
+        "        return getattr(self, name)\n",
+        encoding="utf-8",
+    )
+
+    calls = calls_of([sources], etsy_writes(adapter), skip=adapter)
+
+    # A getattr with a name not known in the source fails closed; one on `self` reads the
+    # object's own fields and is not an Etsy reference.
+    assert [(c.where, c.method) for c in calls] == [
+        ("alias", "create_shipment"),
+        ("callback", "create_shipment"),
+        ("by_name", "create_shipment"),
+        ("bound", "create_shipment"),
+        ("dynamic", DYNAMIC_GETATTR),
     ]
 
 
