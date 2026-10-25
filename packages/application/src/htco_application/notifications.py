@@ -526,7 +526,12 @@ class EmailDeliverer:
         base = self.office_url.rstrip("/")
         incident = params.get("incident_id")
         if (
-            kind in {NotificationKind.INCIDENT_OPENED, NotificationKind.INCIDENT_RESOLVED}
+            kind
+            in {
+                NotificationKind.INCIDENT_OPENED,
+                NotificationKind.INCIDENT_ESCALATED,
+                NotificationKind.INCIDENT_RESOLVED,
+            }
             and incident
         ):
             return f"{base}/incidents/{incident}"

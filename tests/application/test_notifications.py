@@ -259,11 +259,14 @@ async def test_a_member_who_left_is_skipped_and_recorded() -> None:
     assert directory.records[pending.id] == ("skipped", None, "no_member")
 
 
-async def test_a_sent_email_links_to_the_incident() -> None:
+@pytest.mark.parametrize("kind", ["incident_opened", "incident_escalated", "incident_resolved"])
+async def test_a_sent_email_links_to_the_incident(kind: str) -> None:
+    """Codex review of #119: an escalation email opens its incident, like the others."""
     directory = MemoryEmailDirectory({OWNER: "owner@example.test"})
     email = FakeEmail()
     message = _email_message()
     payload = dict(message.payload)
+    payload["kind"] = kind
     payload["params"] = {"incident_id": str(INCIDENT), "receipt_id": "7",
                          "cause": "sync_drift", "severity": "low"}  # fmt: skip
     pending = delivery(OutboxMessage(ORG, EMAIL_DESTINATION, "email:x", payload))
