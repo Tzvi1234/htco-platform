@@ -97,3 +97,4 @@ On 2026-10-23 the owner chose the honest design below, after reading these reaso
 ## Validation log
 
 - 2026-10-23 — The owner chose the honest design (stable per-shop profile, one fixed egress IP for the browser workers, no anti-detect browser, no proxy per shop).
+- 2026-10-25 — Slice 8A.1 (main's decision): the sealed archives are kept in `app.browser_profile_archives`, a Postgres table that only the browser worker's role reaches, instead of Supabase Storage (Decision §2), because Storage would need a project-wide key in the browser worker. Each archive is capped at 25 MiB; if real profiles outgrow it, S3-scoped keys are reconsidered in a new ADR. The archives are sealed under the browser worker's own key ring, not the Etsy token vault's, so the separation of §8 holds for keys too.
