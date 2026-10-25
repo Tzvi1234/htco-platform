@@ -47,7 +47,7 @@ class Route(StrEnum):
 
 
 # Module → (path, why). Read bypasses name their way out; none of them may write.
-DIRECT_CALLS: dict[str, tuple[Route, str]] = {
+MODULES: dict[str, tuple[Route, str]] = {
     API_CHANNEL: (Route.GATEWAY, "the gateway's API channel itself"),
     APPLICATION + "order_intake.py": (
         Route.GATEWAY,
@@ -76,6 +76,39 @@ DIRECT_CALLS: dict[str, tuple[Route, str]] = {
         "`shop_of_user` while connecting, before the shop exists for the gateway to resolve",
     ),
 }
+# Every call site, exactly: (module, the function it is in, the operation). A new call, even in
+# a module above, fails until it is named here (Codex review of #106).
+CALL_SITES: frozenset[tuple[str, str, str]] = frozenset(
+    (APPLICATION + module, where, operation)
+    for module, where, operation in [
+        ("etsy_connect.py", "complete_connection", "shop_of_user"),
+        ("etsy_webhooks.py", "WebhookProcessor._reread", "get_listing"),
+        ("etsy_webhooks.py", "WebhookProcessor._reread", "get_listing_inventory"),
+        ("execution/channels.py", "EtsyApiChannel._order_history", "get_order_receipt"),
+        ("execution/channels.py", "EtsyApiChannel._order_history", "list_order_receipts"),
+        ("execution/channels.py", "EtsyApiChannel._receipts", "get_receipt"),
+        ("execution/channels.py", "EtsyApiChannel._receipts", "list_receipts"),
+        ("execution/channels.py", "EtsyApiChannel.execute", "get_shop"),
+        ("order_automations.py", "OrderVerification.__call__", "get_order_receipt"),
+        ("order_history.py", "OrderSync._read", "list_order_receipts"),
+        ("order_intake.py", "OrderIntake._count", "list_order_receipts"),
+        ("order_intake.py", "OrderIntake._page", "list_order_receipts"),
+        ("order_intake.py", "OrderIntake._receipt", "get_order_receipt"),
+        ("shop_capabilities.py", "_probe", "check_receipt_addresses"),
+        ("shop_capabilities.py", "_probe", "get_shop"),
+        ("shop_capabilities.py", "_probe", "list_listings"),
+        ("shop_dashboard.py", "_Opened._read_receipts", "list_order_receipts"),
+        ("shop_dashboard.py", "_Opened.listings", "list_listing_details"),
+        ("shop_dashboard.py", "_Opened.listings", "list_sections"),
+        ("shop_dashboard.py", "_Opened.next_receipt.load", "list_order_receipts"),
+        ("shop_dashboard.py", "_Opened.profile", "get_shop_profile"),
+        ("shop_dashboard.py", "_Opened.reviews", "list_reviews"),
+        ("shop_dashboard.py", "_Opened.shipping", "list_production_partners"),
+        ("shop_dashboard.py", "_Opened.shipping", "list_return_policies"),
+        ("shop_dashboard.py", "_Opened.shipping", "list_shipping_profiles"),
+        ("tracking_sync.py", "TrackingSync.__call__", "get_order_receipt"),
+    ]
+)
 # Only these import the adapter: they build it and hand it to the parts above.
 ADAPTER_IMPORTERS = frozenset(
     {
@@ -91,7 +124,13 @@ def _relative(path: Path) -> str:
 
 
 def _describe(calls: list[Call]) -> str:
-    return "\n".join(f"  {_relative(c.path)}:{c.line} calls {c.method}()" for c in calls)
+    return "\n".join(
+        f"  {_relative(c.path)}:{c.line} ({c.where}) calls {c.method}()" for c in calls
+    )
+
+
+def _site(call: Call) -> tuple[str, str, str]:
+    return _relative(call.path), call.where, call.method
 
 
 def test_only_the_composition_roots_import_the_etsy_adapter() -> None:
@@ -105,15 +144,15 @@ def test_every_direct_etsy_call_is_on_the_documented_list() -> None:
     assert {"get_order_receipt", "list_reviews", "shop_of_user"} <= operations  # the scan works
 
     calls = calls_of(SOURCE_ROOTS, operations, skip=ADAPTER)
-    modules = {_relative(call.path) for call in calls}
+    sites = {_site(call) for call in calls}
 
-    undocumented = [call for call in calls if _relative(call.path) not in DIRECT_CALLS]
+    undocumented = [call for call in calls if _site(call) not in CALL_SITES]
     assert undocumented == [], "Etsy called outside the documented list:\n" + _describe(
         undocumented
     )
-    assert modules == set(DIRECT_CALLS), "documented but no longer calling Etsy: " + ", ".join(
-        sorted(set(DIRECT_CALLS) - modules)
-    )
+    gone = sorted(CALL_SITES - sites)
+    assert gone == [], f"documented but no longer calling Etsy: {gone}"
+    assert {module for module, _, _ in CALL_SITES} == set(MODULES)  # each one has its reason
 
 
 def test_an_etsy_write_is_sent_only_from_the_gateway_api_channel() -> None:
@@ -128,8 +167,8 @@ def test_an_etsy_write_is_sent_only_from_the_gateway_api_channel() -> None:
 
 
 def test_no_read_bypass_is_the_api_channel() -> None:
-    assert DIRECT_CALLS[API_CHANNEL][0] is Route.GATEWAY
-    assert all(reason for _, reason in DIRECT_CALLS.values())
+    assert MODULES[API_CHANNEL][0] is Route.GATEWAY
+    assert all(reason for _, reason in MODULES.values())
 
 
 # --- The scanner itself ----------------------------------------------------------------------
@@ -172,8 +211,66 @@ def test_scanner__reports_a_new_direct_call_and_a_write_call(sources: Path) -> N
     calls = calls_of([sources], etsy_operations(adapter), skip=adapter)
 
     assert calls == [
-        Call(module, 2, "get_shop"),
-        Call(module, 3, "create_shipment"),
+        Call(module, 2, "get_shop", "run"),
+        Call(module, 3, "create_shipment", "run"),
+    ]
+
+
+def test_scanner__a_write_delegated_to_a_private_helper__is_a_write(tmp_path: Path) -> None:
+    adapter = tmp_path / "etsy.py"
+    adapter.write_text(
+        "def _form(code):\n"
+        "    return {'tracking_code': code}\n"
+        "async def _module_send(adapter, path):\n"
+        "    return await adapter._request('PUT', path, allow_write=True)\n"
+        "class EtsyAdapter:\n"
+        "    async def create_shipment(self, shop_id, code):\n"
+        "        return await self._write(shop_id, _form(code))\n"
+        "    async def set_vacation(self, shop_id):\n"
+        "        return await _module_send(self, '/shops')\n"
+        "    async def get_shop(self, shop_id):\n"
+        "        return await self._request('GET', shop_id)\n"
+        "    async def _write(self, shop_id, form):\n"
+        "        return await self._post(shop_id, form)\n"
+        "    async def _post(self, shop_id, form):\n"
+        "        return await self._request('POST', shop_id, allow_write=True)\n"
+        "    async def _request(self, method, shop_id, *, allow_write=False):\n"
+        "        return None\n",
+        encoding="utf-8",
+    )
+
+    # Every name that reaches a write, private helpers included: a call of any of them
+    # outside the API channel is a write sent outside the gateway.
+    assert etsy_writes(adapter) == {
+        "create_shipment",
+        "set_vacation",
+        "_write",
+        "_post",
+        "_module_send",
+    }
+
+
+def test_scanner__names_the_function_each_call_is_in(sources: Path) -> None:
+    adapter = sources / "etsy.py"
+    module = sources / "app" / "shop.py"
+    module.parent.mkdir()
+    module.write_text(
+        "class Dashboard:\n"
+        "    async def profile(self, etsy):\n"
+        "        return await etsy.get_shop(1)\n"
+        "    async def extra(self, etsy):\n"
+        "        return await etsy.get_shop(2)\n"
+        "async def loose(etsy):\n"
+        "    return await etsy.get_shop(3)\n",
+        encoding="utf-8",
+    )
+
+    calls = calls_of([sources], etsy_operations(adapter), skip=adapter)
+
+    assert [(c.where, c.method) for c in calls] == [
+        ("Dashboard.profile", "get_shop"),
+        ("Dashboard.extra", "get_shop"),
+        ("loose", "get_shop"),
     ]
 
 
