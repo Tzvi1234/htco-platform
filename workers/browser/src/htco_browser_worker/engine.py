@@ -9,9 +9,15 @@ agent, a proxy, extra command-line switches, a locale, a time zone, a geolocatio
 viewport, and it removes none of Playwright's default switches. Chromium keeps its stock
 fingerprint, and the egress is the worker's own. Downloads are off until a recipe allows them
 (8A.5). The call in `launch` is the complete list of what is passed, and a test pins it.
+
+Starting and stopping Chromium are owned tasks that always run to their end (Codex on #122). A
+cancellation that arrives meanwhile (the session's deadline, a shutdown) waits for them: a
+browser that finished starting is closed again, and only then does the cancellation go on. So
+the controller never re-seals the profile or releases its lock while Chromium is still alive.
 """
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, override
@@ -29,6 +35,9 @@ class PlaywrightHandle:
     playwright: Playwright
 
     async def close(self) -> None:
+        await _to_the_end(self._close())
+
+    async def _close(self) -> None:
         try:
             await self.context.close()
         finally:
@@ -54,6 +63,16 @@ class PlaywrightEngine:
         self._start = start
 
     async def launch(self, profile_directory: Path) -> PlaywrightHandle:
+        opening = asyncio.ensure_future(self._open(profile_directory))
+        try:
+            return await _to_the_end(opening)
+        except asyncio.CancelledError:
+            # Cancelled while Chromium started: it is closed before the cancellation goes on.
+            if not opening.cancelled() and opening.exception() is None:
+                await _to_the_end(opening.result().close())
+            raise
+
+    async def _open(self, profile_directory: Path) -> PlaywrightHandle:
         playwright: Playwright = await self._start().start()
         try:
             context = await playwright.chromium.launch_persistent_context(
@@ -67,3 +86,21 @@ class PlaywrightEngine:
             await playwright.stop()
             raise
         return PlaywrightHandle(context, playwright)
+
+
+async def _to_the_end[T](work: Awaitable[T]) -> T:
+    """Run `work` to its end even if the caller is cancelled meanwhile. A cancellation that
+    arrived is raised once the work is done, and wins over the work's own error."""
+    task = asyncio.ensure_future(work)
+    cancelled = False
+    while not task.done():
+        try:
+            # `asyncio.wait` never cancels the task it waits for, unlike awaiting it.
+            await asyncio.wait({task})
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        if not task.cancelled():  # pragma: no branch - only this module holds the task
+            task.exception()  # retrieved: the cancellation is what goes on
+        raise asyncio.CancelledError
+    return task.result()

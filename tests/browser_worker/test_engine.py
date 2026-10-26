@@ -7,10 +7,12 @@ Controller, and shows that a cookie survives from one sealed session to the next
 `HTCO_TEST_BROWSER=1` and Chromium is installed (`uv run playwright install chromium`).
 """
 
+import asyncio
 import os
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,8 +23,10 @@ import pytest
 
 from htco_application.browser_controller import (
     BrowserController,
+    MemoryLease,
     MemoryProfileLocks,
     MemorySessionLog,
+    SessionTimeoutError,
 )
 from htco_application.browser_profiles import (
     MemoryProfileArchiveStore,
@@ -51,9 +55,15 @@ _DISHONEST = frozenset(
 class FakeContext:
     closed: bool = False
     fail_close: bool = False
+    # Set: closing waits for it, as Chromium's shutdown takes time.
+    gate: asyncio.Event | None = None
+    events: list[str] = field(default_factory=list)
 
     async def close(self) -> None:
+        if self.gate is not None:
+            await self.gate.wait()
         self.closed = True
+        self.events.append("context closed")
         if self.fail_close:
             raise RuntimeError("context close failed")
 
@@ -63,9 +73,15 @@ class FakeChromium:
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     fail: bool = False
     context: FakeContext = field(default_factory=FakeContext)
+    # Set: the launch waits for it, as Chromium takes time to start.
+    gate: asyncio.Event | None = None
+    starting: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def launch_persistent_context(self, user_data_dir: str, **options: Any) -> FakeContext:
         self.calls.append((user_data_dir, options))
+        self.starting.set()
+        if self.gate is not None:
+            await self.gate.wait()
         if self.fail:
             raise RuntimeError("chromium did not start")
         return self.context
@@ -81,6 +97,7 @@ class FakePlaywright:
 
     async def stop(self) -> None:
         self.stopped = True
+        self.chromium.context.events.append("playwright stopped")
 
 
 def engine(fake: FakePlaywright) -> PlaywrightEngine:
@@ -119,6 +136,115 @@ async def test_close__stops_playwright_even_when_the_context_fails_to_close(
     with pytest.raises(RuntimeError, match="close failed"):
         await handle.close()
     assert fake.stopped
+
+
+async def _settle() -> None:
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+async def test_launch__cancelled_while_chromium_starts_closes_it_before_cancelling(
+    tmp_path: Path,
+) -> None:
+    """Codex on #122 (P1): a cancellation (the deadline, a shutdown) never cuts the launch off
+    halfway and leaves a Chromium running. The launch finishes, the new context is closed and
+    Playwright is stopped, and only then does the cancellation go on."""
+    gate = asyncio.Event()
+    fake = FakePlaywright(chromium=FakeChromium(gate=gate))
+    task = asyncio.ensure_future(engine(fake).launch(tmp_path))
+    await fake.chromium.starting.wait()
+    task.cancel()
+    await _settle()
+    assert not task.done()  # still waiting for Chromium to finish starting
+
+    gate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert fake.chromium.context.events == ["context closed", "playwright stopped"]
+
+
+async def test_launch__cancelled_while_a_failing_start_runs_still_stops_playwright(
+    tmp_path: Path,
+) -> None:
+    gate = asyncio.Event()
+    fake = FakePlaywright(chromium=FakeChromium(gate=gate, fail=True))
+    task = asyncio.ensure_future(engine(fake).launch(tmp_path))
+    await fake.chromium.starting.wait()
+    task.cancel()
+    await _settle()
+    gate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert fake.chromium.context.events == ["playwright stopped"]
+
+
+async def test_close__cancelled_midway_still_closes_chromium_and_stops_playwright(
+    tmp_path: Path,
+) -> None:
+    gate = asyncio.Event()
+    fake = FakePlaywright(chromium=FakeChromium(context=FakeContext(gate=gate)))
+    handle = await engine(fake).launch(tmp_path)
+    task = asyncio.ensure_future(handle.close())
+    await _settle()
+    task.cancel()
+    await _settle()
+    assert not task.done()  # Chromium is still shutting down
+
+    gate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert fake.chromium.context.events == ["context closed", "playwright stopped"]
+
+
+async def test_session__a_deadline_during_the_launch_releases_the_lock_after_chromium_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Through the Browser Controller: the deadline fires while Chromium starts. The session
+    fails as a timeout, and the profile lock is released only after Chromium is closed and
+    Playwright stopped, so no next session opens the profile under a live browser."""
+    gate = asyncio.Event()
+    fake = FakePlaywright(chromium=FakeChromium(gate=gate))
+    events = fake.chromium.context.events
+    env = BrowserEnvironment(
+        id=uuid.uuid4(), organization_id=uuid.uuid4(), shop_id=uuid.uuid4(),
+        status=EnvironmentStatus.READY,
+    )  # fmt: skip
+    vault = ProfileVault(
+        EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))),
+        MemoryProfileArchiveStore(),
+        lambda: datetime.now(UTC),
+    )
+    locks = MemoryProfileLocks()
+    hold = locks.hold
+
+    @asynccontextmanager
+    async def recording_hold(
+        environment_id: uuid.UUID, *, until: datetime
+    ) -> AsyncIterator[MemoryLease]:
+        try:
+            async with hold(environment_id, until=until) as lease:
+                yield lease
+        finally:
+            events.append("lock released")
+
+    monkeypatch.setattr(locks, "hold", recording_hold)
+    controller = BrowserController(
+        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(vault, tmp_path),
+        engine(fake), locks, MemorySessionLog(), clock=lambda: datetime.now(UTC),
+    )  # fmt: skip
+
+    async def run() -> None:
+        deadline = datetime.now(UTC) + timedelta(seconds=0.3)
+        async with controller.session(env.id, purpose="test.run", deadline=deadline):
+            pass  # pragma: no cover - the deadline passes during the launch
+
+    task = asyncio.ensure_future(run())
+    await fake.chromium.starting.wait()
+    asyncio.get_running_loop().call_later(0.6, gate.set)  # Chromium starts after the deadline
+    with pytest.raises(SessionTimeoutError):
+        await task
+    assert events == ["context closed", "playwright stopped", "lock released"]
+    assert locks.held == set()
 
 
 # --- A real Chromium against a local page ----------------------------------------------------
