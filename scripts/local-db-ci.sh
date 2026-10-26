@@ -21,6 +21,16 @@ if [ ! -f "$repo/.github/workflows/ci.yml" ] || [ ! -f "$repo/supabase/config.to
     echo "not an htco-platform clone: $repo" >&2
     exit 2
 fi
+# CI's database job installs the linux_amd64 Supabase CLI, and its steps are replayed as they are.
+machine="$(uname -m)"
+case "$machine" in
+    x86_64 | amd64) ;;
+    *)
+        echo "unsupported architecture $machine: CI's database job installs the linux_amd64" \
+            "Supabase CLI, so local runs need an x86_64 machine" >&2
+        exit 2
+        ;;
+esac
 for tool in uv docker git; do
     command -v "$tool" > /dev/null || {
         echo "$tool is missing: run scripts/local-db-setup.sh first" >&2

@@ -82,9 +82,10 @@ wsl -d Ubuntu -u root -- bash /mnt/c/<path to clone>/scripts/local-db-ci.sh /mnt
 scripts) **as root in WSL, with read and write access to the Windows disk under `/mnt/c`**. Run
 it only on team branches of `Tzvi1234/htco-platform` that you would merge. Never run it on a fork,
 a contributor's branch or any clone you have not read: anything such a branch does runs with those
-rights. `local-db-setup.sh` installs the uv archive for the machine (x86_64 or aarch64; any other
-architecture stops with exit code 2) and checks it against the SHA-256 pinned in the script itself,
-not the release's own `.sha256` file. The Supabase CLI is checked against the SHA-256 pinned in
+rights. `local-db-setup.sh` installs uv and checks it against the SHA-256 pinned in the script itself,
+not the release's own `.sha256` file. Both scripts need an **x86_64** machine and stop with exit
+code 2 on any other: CI's database job installs the `linux_amd64` Supabase CLI, and the local run
+replays that step as it is. The Supabase CLI is checked against the SHA-256 pinned in
 `ci.yml`.
 
 ## Timing

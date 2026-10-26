@@ -12,6 +12,7 @@ Run as `python -m tools.local_db_ci [--root DIR] [--job NAME]`; scripts/local-db
 """
 
 import argparse
+import codecs
 import contextlib
 import os
 import signal
@@ -177,16 +178,36 @@ def local_steps(job: Job) -> list[Step]:
     return steps
 
 
-def _stream(process: subprocess.Popen[str], sink: IO[str] | None) -> None:
-    assert process.stdout is not None  # noqa: S101 - Popen was given stdout=PIPE
-    for line in process.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
+_TAIL_INTERVAL_SECONDS = 0.1
+
+
+def _tail(path: Path, done: threading.Event, sink: IO[str] | None) -> None:
+    """Copy the step's output file to the console and the log as it grows, until `done` is set
+    and the file is read to its end. A file read never waits on a writer, so a process that
+    keeps the output open (even outside the step's group) cannot hold the runner."""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    with path.open("rb") as source:
+        while True:
+            finished = done.is_set()  # read once more after it is set: nothing is lost
+            chunk = source.read()
+            if chunk:
+                text = decoder.decode(chunk)
+                sys.stdout.write(text)
+                sys.stdout.flush()
+                if sink is not None:
+                    sink.write(text)
+            elif finished:
+                break
+            else:
+                time.sleep(_TAIL_INTERVAL_SECONDS)
+    rest = decoder.decode(b"", final=True)
+    if rest:
+        sys.stdout.write(rest)
         if sink is not None:
-            sink.write(line)
+            sink.write(rest)
 
 
-def _stop_group(process: subprocess.Popen[str]) -> None:
+def _stop_group(process: subprocess.Popen[bytes]) -> None:
     """End the step and everything it started: SIGTERM to its process group, then SIGKILL."""
     if sys.platform != "win32":
         with contextlib.suppress(ProcessLookupError):
@@ -251,29 +272,30 @@ def run_steps(  # noqa: PLR0913 - the job's steps, env and where to run them
             }
             started = time.monotonic()
             timed_out = False
-            with subprocess.Popen(  # noqa: S603 - runs the repository's own workflow steps
-                ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],  # noqa: S607
-                cwd=cwd,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                # Its own process group, so a timeout ends everything the step started.
-                start_new_session=True,
-            ) as process:
-                # The output is read on a thread: a hung step that prints nothing must still
-                # meet its deadline.
-                reader = threading.Thread(target=_stream, args=(process, sink), daemon=True)
-                reader.start()
-                try:
-                    process.wait(timeout=_step_seconds(step, job_deadline))
-                except subprocess.TimeoutExpired:
-                    timed_out = True
-                    _stop_group(process)
-                # A process that left the group may still hold the pipe: never wait on it.
-                reader.join(timeout=_KILL_GRACE_SECONDS)
+            # The step writes to a file, not a pipe: closing or draining a pipe can block for
+            # as long as any process that inherited it lives (Codex on #99).
+            output = temp / f"step-{number}.out"
+            done = threading.Event()
+            with output.open("wb") as out:
+                tail = threading.Thread(target=_tail, args=(output, done, sink), daemon=True)
+                tail.start()
+                with subprocess.Popen(  # noqa: S603 - runs the repository's own workflow steps
+                    ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],  # noqa: S607
+                    cwd=cwd,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=out,
+                    stderr=subprocess.STDOUT,
+                    # Its own process group, so a timeout ends everything the step started.
+                    start_new_session=True,
+                ) as process:
+                    try:
+                        process.wait(timeout=_step_seconds(step, job_deadline))
+                    except subprocess.TimeoutExpired:
+                        timed_out = True
+                        _stop_group(process)
+                done.set()
+                tail.join()  # bounded: it only reads to the end of the file
             if timed_out:
                 message = f"\n=== {step.name}: timed out, stopped with its processes\n"
                 sys.stdout.write(message)
