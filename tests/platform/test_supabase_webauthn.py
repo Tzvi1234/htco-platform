@@ -100,6 +100,26 @@ async def test_verify__a_refused_passkey(response: httpx.Response) -> None:
             await subject.verify_webauthn("access-1", "pk-1", "ch-1", "request", CREDENTIAL)
 
 
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(500, json={}),
+        httpx.Response(500, json={"msg": "Database error querying schema"}),
+        httpx.Response(500, text="upstream connect error"),
+    ],
+)
+async def test_verify__an_unrelated_server_error_is_an_outage_not_a_refused_passkey(
+    response: httpx.Response,
+) -> None:
+    """Local Codex on #171: only Auth's known WebAuthn-validation 500 is a refusal; any other
+    500 is an outage, which never counts against the user's throttle."""
+    subject, client = auth(lambda _: response)
+    async with client:
+        with pytest.raises(AuthServiceError) as raised:
+            await subject.verify_webauthn("access-1", "pk-1", "ch-1", "request", CREDENTIAL)
+    assert not isinstance(raised.value, InvalidCredentialsError)
+
+
 async def test_challenge__a_server_error_is_not_a_refusal() -> None:
     subject, client = auth(lambda _: httpx.Response(500, json={}))
     async with client:

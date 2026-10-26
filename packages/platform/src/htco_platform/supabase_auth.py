@@ -282,7 +282,12 @@ class SupabaseAuth:
             raise MfaRequiredError("an aal2 session is required")
         if response.is_client_error and code in _WEBAUTHN_DISABLED:
             raise WebAuthnDisabledError("WebAuthn MFA is switched off in Supabase Auth")
-        if server_error_refused and response.status_code == httpx.codes.INTERNAL_SERVER_ERROR:
+        if (
+            server_error_refused
+            and response.status_code == httpx.codes.INTERNAL_SERVER_ERROR
+            and _message(response) == _WEBAUTHN_VALIDATION_FAILED
+        ):
+            # Only Auth's own validation failure; any other 500 is an outage (local Codex on #171).
             raise InvalidCredentialsError("refused")
         if response.status_code == httpx.codes.UNPROCESSABLE_ENTITY and code == "weak_password":
             raise WeakPasswordError("the password is too weak")
@@ -330,6 +335,19 @@ def _tokens(body: dict[str, Any]) -> AuthTokens:
     if not isinstance(access, str) or not isinstance(refresh, str):
         raise TypeError("tokens must be strings")
     return AuthTokens(access_token=access, refresh_token=refresh, expires_at=expires_at)
+
+
+# Auth v2.197.0 answers a WebAuthn assertion that fails validation with a 500 and this message.
+_WEBAUTHN_VALIDATION_FAILED = "Failed to validate WebAuthn MFA response"
+
+
+def _message(response: httpx.Response) -> str | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    message = body.get("msg") or body.get("message") if isinstance(body, dict) else None
+    return message if isinstance(message, str) else None
 
 
 def _error_code(response: httpx.Response) -> str | None:
