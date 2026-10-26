@@ -3,7 +3,7 @@ per recipient and key, its email only with a new row, one delivery record per ou
 
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from htco_application.messaging import OutboxMessage
@@ -15,7 +15,12 @@ from htco_application.notifications import (
     Notification,
     Recipient,
 )
-from htco_domain.notifications import Audience, NotificationKind
+from htco_domain.notifications import (
+    Audience,
+    NotificationKind,
+    NotificationSeverity,
+    Preference,
+)
 
 
 @dataclass
@@ -24,6 +29,9 @@ class Member:
     role: str  # "owner", "admin", "operations", ...
     address: str
     recipient: Recipient | None = None
+    # Slice 7.6: per-severity choices and muted shops, as the Postgres query joins them.
+    severity_preferences: dict[NotificationSeverity, Preference] = field(default_factory=dict)
+    muted_shops: set[uuid.UUID] = field(default_factory=set)
 
 
 @dataclass
@@ -31,23 +39,30 @@ class MemoryNotificationStore:
     members: list[Member] = field(default_factory=list)
     rows: dict[tuple[uuid.UUID, uuid.UUID, str], Notification] = field(default_factory=dict)
     outbox: dict[str, OutboxMessage] = field(default_factory=dict)
+    severities: list[NotificationSeverity] = field(default_factory=list)
 
-    def recipients(
+    def recipients(  # noqa: PLR0913 - as the port
         self,
         organization_id: uuid.UUID,  # noqa: ARG002 - one organization
         audience: Audience,
         kind: NotificationKind,  # noqa: ARG002 - preferences are on the members
         *,
         user_id: uuid.UUID | None,
-        shop_id: uuid.UUID | None,  # noqa: ARG002 - owners and admins see every shop
+        shop_id: uuid.UUID | None,
+        severity: NotificationSeverity,
     ) -> tuple[Recipient, ...]:
+        self.severities.append(severity)
         roles = {
             Audience.THE_USER: None,
             Audience.OWNERS: {"owner"},
             Audience.OWNERS_AND_ADMINS: {"owner", "admin"},
         }[audience]
         return tuple(
-            m.recipient or Recipient(m.user_id)
+            replace(
+                m.recipient or Recipient(m.user_id),
+                severity_preference=m.severity_preferences.get(severity),
+                shop_muted=shop_id is not None and shop_id in m.muted_shops,
+            )
             for m in self.members
             if (roles is None or m.role in roles)
             and (audience is not Audience.THE_USER or m.user_id == user_id)
