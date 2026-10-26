@@ -333,9 +333,11 @@ class BrowserDispatch(Protocol):  # the agent-worker side of the Browser channel
     async def dispatch(
         self, request: ActionRequest, binding: ChannelBinding, *, execution_id: UUID, attempt: int
     ) -> UUID:
-        """In the claim's transaction: the execution moves to DISPATCHED, one browser.run job
-        (key: execution and attempt; concurrency: the profile) and actions.dispatched.v1. The
-        job carries IDs and the recipe's declared parameters only: no secret, token or authority."""
+        """In the claim's transaction: the execution moves to DISPATCHED with its routed binding
+        and the recipe's declared parameters stored on the claim, one browser.run job (key:
+        execution and attempt; concurrency: the profile), the deadline watchdog and
+        actions.dispatched.v1. The job is a locator only, the execution ID and the attempt:
+        any other field is refused, and the browser worker loads the binding from the claim."""
 
     async def outcome_of(self, execution_id: UUID, attempt: int) -> BrowserRunOutcome | None: ...
 
@@ -346,7 +348,7 @@ class BrowserRunOutcome(BaseModel):  # one row per execution and attempt: starte
     attempt: int
     # started, then once: succeeded, failed, challenge, refused, timeout or interrupted
     status: RunStatus
-    # The started marker: committed before a write touches a page.
+    # The started marker: committed before an approval-gated run or a write touches a page.
     started_at: AwareDatetime | None
     # Validated against the recipe's schema; DC1 only where the recipe's output declares it.
     output: dict[str, JsonValue] | None

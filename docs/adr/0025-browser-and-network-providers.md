@@ -294,7 +294,10 @@ The rules:
 3. **Browser Use** is the primary AI engine, for open-ended navigation by **employees**, inside the recipe's allowed actions and URL allowlist. The recipe's schema still validates its result.
    - It drives the provider's pipe connection in process, never a TCP or WebSocket CDP endpoint.
    - 8A.6 adopts a Browser Use version only if it can run that way. If the version needs a CDP URL, 8A.6 stops and comes back to this ADR; it does not open a port.
-   - Every production URL allowlist refuses loopback and private addresses, so a page can never reach the worker's own services. The contract suite's `127.0.0.1` fixture origin is allowed only by a test-only allowlist, which no production configuration can load.
+   - **No browser request ever reaches a private address.** A URL allowlist alone cannot stop that: a public page can redirect, load a subresource, open a WebSocket, use an IPv6 literal, or rebind its DNS name to a private address. So the rule is enforced on the connection, after DNS resolution, in two layers:
+     - **The network.** Chromium runs as its own OS user in the browser worker. Egress rules for that user (nftables) drop every connection to loopback (`127.0.0.0/8`, `::1`), private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `fc00::/7`), link-local (`169.254.0.0/16`, which includes the cloud metadata endpoint, and `fe80::/10`) and multicast. That holds for IPv4 and IPv6, for every navigation, redirect, subresource and WebSocket. Only the browser worker's own process, a different user, reaches its exact internal endpoints: the database, the Live View relay and the model gateway.
+     - **The controller.** Every request and redirect is checked against the recipe's URL allowlist. A request whose host is an IP literal in those ranges is refused, so it is visible as a refusal and not only a dropped packet.
+     - **Tests.** The contract suite's `127.0.0.1` fixture origin runs under a test-only network profile and a test-only allowlist, which no production configuration can load. The production profile is tested separately, with a fixture DNS server.
 
 8A.6 no longer waits for the whole of Phase 9. It needs only the **minimal Model Gateway** below, pulled forward from 9.1 and 9.2.
 
@@ -334,7 +337,8 @@ Each coordination need the existing ports cover today, checked one by one:
 Valkey is **planned, but not needed now**:
 - **Where:** behind the existing `RateLimiter` port, and an optional `Cache` port, once the threshold is reached.
 - **How it runs:** DigitalOcean's managed Valkey, in the same region, with TLS and authentication. Keys are namespaced per organization and expire.
-- **What it never holds:** buyer data, secrets, or any state whose loss would change a result. Losing Valkey may slow HTCO down, but it never breaks it, and the Postgres fallback stays in the code.
+- **What it never holds:** buyer data, secrets, or any state whose loss would change a result.
+- **It fails closed.** If the shared limiter's backend is unavailable to a worker, that worker pauses its Etsy calls: they are `DEFERRED` with a short `retry_at`. It never falls back to a limiter of its own, because workers on two different limiters could together pass Etsy's shared limit. Switching every worker back to the Postgres window is one operator action, recorded as a single backend epoch in Postgres that all workers read, never a per-worker decision.
 
 ### 7. What stays as planned
 
@@ -376,7 +380,7 @@ These are unchanged:
 ## Validation
 
 The acceptance criteria are in Phase 8A:
-- AC-8A.2.4 to AC-8A.2.19: the contract, configuration profiles, dispatch, the started marker and resume;
+- AC-8A.2.4 to AC-8A.2.20: the contract, configuration profiles, dispatch, the started marker, resume, and no private-network access;
 - AC-8A.3.4 to AC-8A.3.7: egress;
 - AC-8A.6.3 to AC-8A.6.9: Browser Use through the gateway;
 - AC-8A.9.3 and AC-8A.9.4: the management screen.

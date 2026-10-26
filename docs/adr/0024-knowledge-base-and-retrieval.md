@@ -74,12 +74,12 @@ There is an allowlist of source kinds. Nothing else is ingested:
 
 Approved replies pass a **deterministic redaction** step before chunking. It removes or replaces names (including the buyer's name from the linked order record), email addresses, phone numbers, postal addresses, tracking numbers and order numbers (replaced with placeholders such as `[order]`). The gateway's PII masking then applies again at embedding time, as a second layer.
 
-**Buyer text quoted inside a reply** is not an identifier, so redaction alone does not remove it. It may come as quoted history (`> …`, "On … wrote:"), as an inline quote, or as a short echo with no quote marks at all. **All of it is stripped before anything is embedded**:
-- **Quoted history is removed.**
-- **Every sentence of the reply that echoes a buyer message of the linked conversation is dropped.** A sentence echoes one when it shares a run of 3 or more consecutive normalized words with it. For a buyer message shorter than 3 words, a sentence echoes it when it contains that whole message.
-- **An ambiguous result is quarantined, never embedded.** That is the case when the stripping removes more than half of the reply, or when it cannot cut the reply into sentences.
+**Buyer text quoted inside a reply** is not an identifier, so redaction alone cannot remove it, and no matcher can find every echo of it. So it is never given the chance to appear:
+- **An approved reply is embedded only from HTCO's own clean copy.** That is the reply text as composed and approved in HTCO, stored when it is approved, before any quoted history or signature is added for sending.
+- **Text that may contain quoted buyer words is never embedded.** That covers the sent email, a mailbox copy, and an imported or legacy reply without a clean copy.
+- **The drafting rule** for Dana's replies is not to quote the buyer. The clean copy still passes the deterministic redaction and the residual check below.
 
-No overlap threshold lets a short buyer phrase through. The fixtures cover inline echoes of 1 to 7 words, a whole short message, and a quoted block.
+There is no overlap matcher. The fixtures show that the sent version of a reply, which carries quoted history and inline echoes, is never what gets embedded, and that a reply with no clean copy is refused.
 
 A chunk in which the residual check still finds PII, or quoted buyer text, is **quarantined**: it is not embedded, and it is reported.
 
@@ -153,4 +153,4 @@ The acceptance criteria are AC-9.10.1 to AC-9.10.12 in Phase 9, with pgTAP for R
 ## Validation log
 
 - 2026-10-26: Decisions approved by the owner (pgvector in Supabase; tools, then hybrid search, then the model; embeddings through the gateway; a shared capability through `knowledge.search`; a new slice 9.10 before Dana).
-- 2026-10-26: The security review of the ADR (PR #130, before any 9.10 code) added eight hardening points, folded into §1, §2, §3, §4 and §5 and into AC-9.10.1, 3, 4, 5 and 9. The decisions above are unchanged. The points: organization-wide rows visible to the whole organization; shop isolation for a worker search resting on the session's scope; approved-reply chunks classified as derived from DC2; quoted buyer text stripped (made stricter the same day after a Codex review of #136: every sentence that echoes a buyer message is dropped, and an ambiguous result is quarantined); `websearch_to_tsquery` or `plainto_tsquery` only, with a length cap; the `knowledge-ingest` system policy; queries masked before embedding; a keyed query hash (HMAC).
+- 2026-10-26: The security review of the ADR (PR #130, before any 9.10 code) added eight hardening points, folded into §1, §2, §3, §4 and §5 and into AC-9.10.1, 3, 4, 5 and 9. The decisions above are unchanged. The points: organization-wide rows visible to the whole organization; shop isolation for a worker search resting on the session's scope; approved-reply chunks classified as derived from DC2; quoted buyer text kept out (made stricter the same day after two local Codex reviews of #136: only HTCO's clean copy of an approved reply, from before any quoting is added, is ever embedded, and there is no matcher); `websearch_to_tsquery` or `plainto_tsquery` only, with a length cap; the `knowledge-ingest` system policy; queries masked before embedding; a keyed query hash (HMAC).
