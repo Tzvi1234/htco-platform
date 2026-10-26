@@ -38,7 +38,7 @@ from typing import Protocol
 
 from htco_application.browser_environments import EnvironmentNotFoundError
 from htco_application.browser_profiles import ProfileRecords, ProfileWorkspaces
-from htco_domain.browser import BrowserEnvironment, EnvironmentStatus
+from htco_domain.browser import BrowserEnvironment, EnvironmentStatus, HealthReport
 
 _PURPOSE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
 _MAX_PURPOSE = 64
@@ -55,6 +55,7 @@ _SESSION_STATUSES = frozenset(
     }
 )
 TIMEOUT = "timeout"
+PREFLIGHT_FAILED = "preflight_failed"
 LOCK_LOST = "lock_lost"
 ERROR = "error"
 
@@ -74,6 +75,18 @@ class SessionTimeoutError(Exception):
     """The session ran past its deadline and was closed."""
 
 
+class PreflightFailedError(Exception):
+    """The preflight found a problem (slice 8A.3); nothing was unpacked and no engine started."""
+
+    def __init__(self, report: HealthReport) -> None:
+        super().__init__(", ".join(report.problems))
+        self.report = report
+
+
+class PreflightTimeoutError(SessionTimeoutError):
+    """The preflight ran past the session's deadline; no engine started."""
+
+
 class SessionLockLostError(Exception):
     """The profile lock was lost during the session (its connection dropped); the profile was
     not written back, because another session may hold it now."""
@@ -81,6 +94,13 @@ class SessionLockLostError(Exception):
 
 class SessionRefusedError(Exception):
     """The environment's status takes no browser session."""
+
+
+_FAILURES: dict[type[Exception], str] = {
+    PreflightFailedError: PREFLIGHT_FAILED,
+    PreflightTimeoutError: TIMEOUT,
+    SessionLockLostError: LOCK_LOST,
+}
 
 
 @dataclass(frozen=True)
@@ -135,6 +155,16 @@ class BrowserEngine(Protocol):
         ...
 
 
+class PreflightCheck(Protocol):
+    async def run(self) -> HealthReport: ...
+
+
+class HealthSink(Protocol):
+    def record(
+        self, environment: BrowserEnvironment, report: HealthReport, *, correlation_id: str
+    ) -> EnvironmentStatus: ...
+
+
 class SessionLog(Protocol):
     def started(self, record: SessionRecord) -> None: ...
 
@@ -172,6 +202,8 @@ class BrowserController:
         *,
         clock: Callable[[], datetime],
         new_id: Callable[[], uuid.UUID] = uuid.uuid7,
+        preflight: PreflightCheck | None = None,
+        health: HealthSink | None = None,
     ) -> None:
         self._records = records
         self._workspaces = workspaces
@@ -180,6 +212,8 @@ class BrowserController:
         self._log = log
         self._clock = clock
         self._new_id = new_id
+        self._preflight = preflight
+        self._health = health
 
     @asynccontextmanager
     async def session(
@@ -212,9 +246,11 @@ class BrowserController:
                 if remaining <= 0:
                     failure = TIMEOUT
                     raise SessionTimeoutError("the deadline passed before the work could start")
-                # The deadline covers the engine and the work. Unpacking and the clean exit's
-                # re-seal are bounded by the archive caps instead, so a session that finished
-                # its work in time and committed its profile is never reported as timed out.
+                # The deadline covers the preflight, the engine and the work. Unpacking and the
+                # clean exit's re-seal are bounded by the archive caps instead, so a session
+                # that finished its work in time and committed its profile is never reported as
+                # timed out. A failed preflight stops before anything is unpacked.
+                await self._check(environment, record, until=limit.when())
                 async with self._profile(environment) as directory, limit:
                     # The unpack may have used up the time: never begin starting a browser
                     # past the deadline.
@@ -229,8 +265,8 @@ class BrowserController:
                     # Write the profile back only while this session's own lock holds.
                     await self._still_ours(lease)
                 outcome, failure = SessionOutcome.SUCCEEDED, None
-            except SessionLockLostError:
-                failure = LOCK_LOST
+            except (PreflightFailedError, PreflightTimeoutError, SessionLockLostError) as error:
+                failure = _FAILURES[type(error)]
                 raise
             except TimeoutError:
                 if not limit.expired():
@@ -250,6 +286,29 @@ class BrowserController:
             if not lease.held:
                 raise SessionDeferredError("the profile is busy until past the deadline")
             await _shielded(asyncio.to_thread(self._workspaces.vault.delete, environment))
+
+    async def _check(
+        self, environment: BrowserEnvironment, record: SessionRecord, *, until: float | None
+    ) -> None:
+        """The preflight, recorded as a health report, by the session's deadline (`until`, on
+        the loop's clock); a failure stops the session here."""
+        if self._preflight is None:
+            return
+        checking = asyncio.timeout_at(until)
+        try:
+            async with checking:
+                report = await self._preflight.run()
+        except TimeoutError:
+            if not checking.expired():
+                raise
+            raise PreflightTimeoutError("the preflight ran past the deadline") from None
+        if self._health is not None:
+            await _blocking(
+                self._health.record, environment, report,
+                correlation_id=f"browser-session:{record.id}",
+            )  # fmt: skip
+        if not report.ok:
+            raise PreflightFailedError(report)
 
     async def _still_ours(self, lease: ProfileLease) -> None:
         if not await self._locks.still_held(lease):

@@ -41,8 +41,8 @@ select ok(not has_table_privilege('htco_browser', 'app.shop_integrations', 'sele
   'AC-8A.1.2: the browser role has no right on shop_integrations');
 select ok(not has_any_column_privilege('htco_browser', 'app.shop_integrations', 'select'),
   'AC-8A.1.2: nor on any of its columns');
-select ok(not has_schema_privilege('htco_browser', 'jobs', 'usage'),
-  'the browser role cannot reach the jobs schema yet (the outbox and queue come with 8A.2)');
+select ok(has_schema_privilege('htco_browser', 'jobs', 'usage'),
+  'the browser role reaches the jobs schema, for its status events only (8A.3, test 31)');
 select ok(not has_schema_privilege('htco_browser', 'private', 'usage'),
   'the browser role cannot reach the private schema');
 select is(
@@ -52,8 +52,9 @@ select is(
       and has_table_privilege('htco_browser', c.oid, 'select, insert, update, delete, truncate, references, trigger')
     order by 1
   ),
-  array['app.browser_profile_archives', 'app.browser_sessions', 'audit.audit_log'],
-  'AC-8A.1.2: the browser role holds table rights on its archives, its sessions (8A.2) and the audit log only'
+  array['app.browser_environment_events', 'app.browser_profile_archives', 'app.browser_sessions',
+        'audit.audit_log', 'jobs.jobs', 'jobs.outbox'],
+  'AC-8A.1.2: the browser role holds table rights on its archives, its sessions (8A.2), the history, the status event (8A.3) and the audit log only'
 );
 select is(
   array(
@@ -62,7 +63,8 @@ select is(
       and has_any_column_privilege('htco_browser', c.oid, 'select, insert, update, references')
     order by 1
   ),
-  array['app.browser_profile_archives', 'app.browser_sessions', 'app.shop_browser_environments', 'audit.audit_log'],
+  array['app.browser_environment_events', 'app.browser_profile_archives', 'app.browser_sessions',
+        'app.shop_browser_environments', 'audit.audit_log', 'jobs.jobs', 'jobs.outbox'],
   'AC-8A.1.2: beyond those, its only column rights are on the browser environments'
 );
 select ok(
@@ -70,8 +72,9 @@ select ok(
   and not has_column_privilege('htco_browser', 'app.shop_browser_environments', 'consent_user_id', 'select'),
   'the browser role never reads the consent record'
 );
-select ok(not has_column_privilege('htco_browser', 'app.shop_browser_environments', 'status', 'update'),
-  'the browser role cannot change a status yet (transitions come with 8A.3)');
+select ok(not has_column_privilege('htco_browser', 'app.shop_browser_environments', 'consent_at', 'update')
+  and not has_column_privilege('htco_browser', 'app.shop_browser_environments', 'consent_ip_hash', 'update'),
+  'the browser role never writes the consent record (its status edges are tested in 31)');
 select is_empty(
   $$ select p.oid::regprocedure::text from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where p.prosecdef and n.nspname in ('app', 'audit', 'public')
