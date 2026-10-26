@@ -55,6 +55,7 @@ _SESSION_STATUSES = frozenset(
 )
 TIMEOUT = "timeout"
 PREFLIGHT_FAILED = "preflight_failed"
+LOCK_LOST = "lock_lost"
 ERROR = "error"
 
 
@@ -79,6 +80,11 @@ class PreflightFailedError(Exception):
     def __init__(self, report: HealthReport) -> None:
         super().__init__(", ".join(report.problems))
         self.report = report
+
+
+class SessionLockLostError(Exception):
+    """The profile lock was lost during the session (its connection dropped); the profile was
+    not written back, because another session may hold it now."""
 
 
 class SessionRefusedError(Exception):
@@ -107,6 +113,10 @@ class ProfileLocks(Protocol):
     ) -> AbstractAsyncContextManager[bool]:
         """Yields True while this process holds the environment's lock, or False when it was
         still held elsewhere at `until`. The lock is released on exit."""
+        ...
+
+    async def still_held(self, environment_id: uuid.UUID) -> bool:
+        """Whether this process still holds the lock it took (its connection is alive)."""
         ...
 
 
@@ -188,11 +198,7 @@ class BrowserController:
             raise ValueError("a session's purpose is a short dotted code")
         if deadline.tzinfo is None or deadline.utcoffset() is None:
             raise ValueError("a session's deadline is in UTC")
-        environment = self._records.by_id(environment_id)
-        if environment is None:
-            raise EnvironmentNotFoundError(str(environment_id))
-        if environment.status not in _SESSION_STATUSES:
-            raise SessionRefusedError(f"the environment is {environment.status.value}")
+        environment = self._takes_sessions(environment_id)
         record = SessionRecord(
             id=self._new_id(), environment_id=environment.id,
             organization_id=environment.organization_id, shop_id=environment.shop_id,
@@ -205,10 +211,7 @@ class BrowserController:
                 self._end(record, SessionOutcome.DEFERRED, None)
                 raise SessionDeferredError("the profile is busy until past the deadline")
             # The status may have changed while this session waited for the lock.
-            current = self._records.by_id(environment.id)
-            if current is None or current.status not in _SESSION_STATUSES:
-                raise SessionRefusedError("the environment changed while the session waited")
-            environment = current
+            environment = self._takes_sessions(environment.id)
             self._log.started(record)
             outcome: SessionOutcome = SessionOutcome.FAILED
             failure: str | None = ERROR
@@ -227,9 +230,11 @@ class BrowserController:
                         yield ControllerSession(record.id, environment, handle)
                     finally:
                         await _shielded(handle.close())
+                    # Write the profile back only while the lock is still ours.
+                    await self._still_ours(environment)
                 outcome, failure = SessionOutcome.SUCCEEDED, None
-            except PreflightFailedError:
-                failure = PREFLIGHT_FAILED
+            except (PreflightFailedError, SessionLockLostError) as error:
+                failure = PREFLIGHT_FAILED if isinstance(error, PreflightFailedError) else LOCK_LOST
                 raise
             except TimeoutError:
                 if not (limit.expired() or preflight_limit.expired()):
@@ -238,6 +243,18 @@ class BrowserController:
                 raise SessionTimeoutError("the session ran past its deadline") from None
             finally:
                 self._end(record, outcome, failure)
+
+    def _takes_sessions(self, environment_id: uuid.UUID) -> BrowserEnvironment:
+        environment = self._records.by_id(environment_id)
+        if environment is None:
+            raise EnvironmentNotFoundError(str(environment_id))
+        if environment.status not in _SESSION_STATUSES:
+            raise SessionRefusedError(f"the environment is {environment.status.value}")
+        return environment
+
+    async def _still_ours(self, environment: BrowserEnvironment) -> None:
+        if not await self._locks.still_held(environment.id):
+            raise SessionLockLostError("the profile lock was lost")
 
     async def _check(self, environment: BrowserEnvironment, record: SessionRecord) -> None:
         """The preflight, recorded as a health report; a failure stops the session here."""
@@ -317,6 +334,9 @@ class MemoryProfileLocks:
                 yield True
             finally:
                 self.held.discard(environment_id)
+
+    async def still_held(self, environment_id: uuid.UUID) -> bool:
+        return environment_id in self.held
 
     async def _wait(self, environment_id: uuid.UUID, until: datetime) -> bool:
         while environment_id in self.held:
