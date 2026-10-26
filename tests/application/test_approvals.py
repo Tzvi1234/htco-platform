@@ -14,13 +14,19 @@ from hypothesis import strategies as st
 from htco_application.access.authentication import AuthContext, Membership
 from htco_application.access.policy import Principal
 from htco_application.approvals import (
+    APPROVAL_DECIDED,
     AlreadyExecutedError,
     ApprovalNotFoundError,
     ApprovalResumer,
     DecisionRefusedError,
     GatewayApprovals,
     MemoryApprovalService,
+    NoApprovals,
     approval_request_for,
+    decision_event,
+)
+from htco_application.approvals import (
+    AlreadyExecutedError as NeverApprovedError,
 )
 from htco_application.automation.durable import (
     Completed,
@@ -32,6 +38,9 @@ from htco_application.automation.durable import (
 from htco_application.automation.engine import TriggerRequest
 from htco_application.execution.gateway import ActionOutcome, ActionRef, ActionRequest, Channel
 from htco_application.execution.service import ActionGatewayService, GatewayParts, request_hash
+from htco_application.kernel import event_payload
+from htco_application.messaging import PendingDelivery
+from htco_application.notifications import EventDeliverer
 from htco_application.workforce.files import read_registry
 from htco_application.workforce.registry import Registry, parse_automation
 from htco_domain.actions import ApprovalPolicy
@@ -40,6 +49,7 @@ from htco_domain.approvals import ApprovalState, Decision
 from htco_domain.automation import ExecutionState, TriggerKind
 from htco_domain.identity import AssuranceLevel, Role
 from tests.automation_fakes import MemoryExecutionStore, engine_document
+from tests.event_contracts import assert_event_contract
 from tests.execution_fakes import (
     REGISTRY,
     Capabilities,
@@ -424,7 +434,16 @@ class Automations:
             jitter=lambda: 1.0,
             gateway=self.world.gateway,
         )
-        self.world.approvals.listeners.append(ApprovalResumer(self.engine))
+        # The worker's `events.publish` with the decision's subscriber (AUD-03).
+        self.events = EventDeliverer({APPROVAL_DECIDED: ApprovalResumer(self.engine)})
+        self.delivered = 0
+
+    async def deliver(self, *, again: bool = False) -> None:
+        """Deliver the decisions written since the last call (`again`: replay them all)."""
+        outbox = self.world.approvals.outbox
+        for message in outbox if again else outbox[self.delivered :]:
+            await self.events.deliver(PendingDelivery(uuid.uuid4(), message, 0, delivered=False))
+        self.delivered = len(outbox)
 
     async def waiting(self) -> uuid.UUID:
         execution = self.engine.trigger(
@@ -455,9 +474,9 @@ async def test_waiting_automation__holds_no_job_and_resumes_once_when_approved()
     jobs_while_waiting = len(automations.store.jobs)
 
     automations.world.approve()
+    await automations.deliver()
     resumed_jobs = len(automations.store.jobs)
-    ApprovalResumer(automations.engine)(automations.world.approvals.status(
-        automations.world.only_approval()))  # a duplicate notice  # fmt: skip
+    await automations.deliver(again=True)  # a duplicate notice
     done = await automations.engine.execute(execution_id, worker=ActorRef(ActorKind.SYSTEM, "w"))
 
     assert jobs_while_waiting == 1  # only the trigger's job: nothing is leased while it waits
@@ -479,6 +498,7 @@ async def test_waiting_automation__rejected__cancelled_with_the_reason() -> None
 
     automations.world.approvals.decide(approval.id, Decision.REJECT, by=person(),
                                        shown_hash=approval.request.request_hash)  # fmt: skip
+    await automations.deliver()
 
     assert automations.state(execution_id) is ExecutionState.CANCELLED
     assert (ExecutionState.CANCELLED, "approval_rejected") in automations.reasons()
@@ -492,6 +512,7 @@ async def test_waiting_automation__expired__cancelled_with_the_reason() -> None:
 
     automations.world.clock.now = NOW + timedelta(days=3)
     automations.world.approvals.status(automations.world.only_approval())
+    await automations.deliver()
 
     assert automations.state(execution_id) is ExecutionState.CANCELLED
     assert (ExecutionState.CANCELLED, "approval_expired") in automations.reasons()
@@ -510,7 +531,7 @@ async def test_resumed_before_the_decision__the_action_still_waits() -> None:
     assert world.channel.calls == []
 
 
-def test_resumer__an_approval_without_a_waiting_execution__does_nothing() -> None:
+async def test_resumer__an_approval_without_a_waiting_execution__does_nothing() -> None:
     class Engine:
         calls = 0
 
@@ -520,9 +541,131 @@ def test_resumer__an_approval_without_a_waiting_execution__does_nothing() -> Non
         def cancel_waiting(self, *_: object, **__: object) -> None:
             Engine.calls += 1
 
-    service = MemoryApprovalService(Clock(), listeners=[ApprovalResumer(Engine())])
+    service = MemoryApprovalService(Clock())
     approval = service.request(approval_of(write()))
     service.decide(approval.id, Decision.APPROVE, by=person(),
                    shown_hash=approval.request.request_hash)  # fmt: skip
+    await ApprovalResumer(Engine()).handle(service.outbox[-1])
 
     assert Engine.calls == 0
+
+
+# --- AUD-03: decisions cross processes as events --------------------------------------------
+
+
+@pytest.mark.ac("AUD-03.2")
+async def test_a_decision__resumes_nothing_by_itself__only_its_event_does() -> None:
+    automations = Automations()
+    execution_id = await automations.waiting()
+
+    automations.world.approve()
+
+    assert automations.state(execution_id) is ExecutionState.WAITING  # no in-process listener
+    [event] = automations.world.approvals.outbox
+    assert event_payload(event)["waiting_execution_id"] == str(execution_id)
+    await automations.deliver()
+    assert automations.state(execution_id) is ExecutionState.RETRY_SCHEDULED
+
+
+@pytest.mark.ac("AUD-03.2")
+async def test_a_decision_through_another_service_instance__resumes_the_held_execution() -> None:
+    """The API's service decides; the worker's engine holds the execution: one shared store
+    (the database), two instances, and the event is the only link between them."""
+    automations = Automations()
+    execution_id = await automations.waiting()
+    api = MemoryApprovalService(
+        automations.world.clock, approvals=automations.world.approvals.approvals
+    )
+    approval = api.status(automations.world.only_approval())
+
+    api.decide(approval.id, Decision.APPROVE, by=person(), shown_hash=approval.request.request_hash)
+
+    assert automations.world.approvals.outbox == []  # the worker's instance heard nothing
+    assert automations.state(execution_id) is ExecutionState.WAITING
+    for message in (*api.outbox, *api.outbox):  # delivered, then replayed
+        await automations.events.deliver(PendingDelivery(uuid.uuid4(), message, 0, delivered=False))
+    done = await automations.engine.execute(execution_id, worker=ActorRef(ActorKind.SYSTEM, "w"))
+    assert done.state is ExecutionState.SUCCEEDED
+    assert [r for _, r in automations.reasons()].count("approval_approved") == 1
+
+
+@pytest.mark.ac("AUD-03.2")
+@pytest.mark.parametrize("decision", [Decision.APPROVE, Decision.REJECT])
+def test_decision_event__ids_and_outcome_only__matches_its_contract(decision: Decision) -> None:
+    service = MemoryApprovalService(Clock())
+    approval = service.request(approval_of(write()))
+
+    decided = service.decide(approval.id, decision, by=person(),
+                             shown_hash=approval.request.request_hash)  # fmt: skip
+
+    [event] = service.outbox
+    assert event == decision_event(decided, at=NOW)
+    assert_event_contract(event)
+    assert event.idempotency_key == f"{APPROVAL_DECIDED}:{approval.id}"
+    assert event_payload(event) == {
+        "approval_id": str(approval.id),
+        "state": decided.state.value,
+        "action": "etsy.inventory.update",
+        "action_version": 1,
+        "waiting_execution_id": None,
+        "decided_by": str(OWNER),
+    }
+    assert "listing_id" not in str(event.payload)  # never the parameters
+
+
+@pytest.mark.ac("AUD-03.2")
+def test_an_expiry__writes_its_decision_event_once() -> None:
+    clock = Clock()
+    service = MemoryApprovalService(clock)
+    approval = service.request(approval_of(write()))
+    clock.now = NOW + timedelta(days=4)
+
+    service.status(approval.id)
+    service.status(approval.id)
+
+    [event] = service.outbox
+    assert_event_contract(event)
+    assert event_payload(event)["state"] == "expired"
+    assert event_payload(event)["decided_by"] is None
+
+
+def test_decision_event__an_open_approval__is_refused() -> None:
+    approval = MemoryApprovalService(Clock()).request(approval_of(write()))
+
+    with pytest.raises(ValueError, match="not decided"):
+        decision_event(approval, at=NOW)
+
+
+@pytest.mark.ac("AUD-03.2")
+def test_the_service__has_no_in_process_listener() -> None:
+    assert "listeners" not in MemoryApprovalService.__dataclass_fields__
+
+
+# --- AUD-03 AC-3: the worker's gate ------------------------------------------------------------
+
+
+@pytest.mark.ac("AUD-03.3")
+async def test_no_approvals__a_write_waits_and_runs_nothing() -> None:
+    world = World()
+    gate = NoApprovals()
+    world.gateway = ActionGatewayService(replace(world.gateway._p, approvals=gate))
+
+    first = await world.gateway.submit(write())
+    again = await world.gateway.submit(write())
+
+    assert first.outcome is ActionOutcome.PENDING_APPROVAL
+    assert again.outcome is ActionOutcome.PENDING_APPROVAL
+    assert world.channel.calls == []
+    [approval_id] = gate.pending
+    assert gate.is_approved(approval_id, request_hash=gate.pending[approval_id]) is False
+
+
+@pytest.mark.ac("AUD-03.3")
+def test_no_approvals__never_approves_and_never_binds_an_execution() -> None:
+    gate = NoApprovals()
+    approval_id = gate.request(write(), request_hash="a" * 64, definition=None)  # type: ignore[arg-type]
+
+    assert gate.request(write(), request_hash="a" * 64, definition=None) == approval_id  # type: ignore[arg-type]
+    assert gate.is_approved(approval_id, request_hash="a" * 64) is False
+    with pytest.raises(NeverApprovedError):
+        gate.executed(approval_id, execution_id=uuid.uuid4())

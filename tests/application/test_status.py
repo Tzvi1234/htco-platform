@@ -68,6 +68,7 @@ async def test_execution__every_state_change_emits_exactly_one_event() -> None:
     automations = Automations()  # an automation whose write waits for an approval
     execution_id = await automations.waiting()
     automations.world.approve()
+    await automations.deliver()  # the decision's event reaches the resumer (AUD-03)
     await automations.engine.execute(execution_id, worker=ActorRef(ActorKind.SYSTEM, "w"))
 
     store = automations.store
@@ -91,6 +92,7 @@ async def test_execution__rejected__the_cancellation_has_its_event() -> None:
         approval.id, Decision.REJECT, by=automations_owner(),
         shown_hash=approval.request.request_hash,
     )  # fmt: skip
+    await automations.deliver()
 
     assert [event_payload(e)["to_state"] for e in automations.store.events][-1] == "cancelled"
     assert len(automations.store.events) == len(automations.store.changes)

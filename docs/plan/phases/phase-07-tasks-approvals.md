@@ -65,11 +65,19 @@ The activation rule of [Phase 5](phase-05-orders-ingest.md) applies: all 18 spec
 
 Task aggregate with the full state set; `task_events`; idempotency key; SLA and owner; assignee as an `ActorRef` (a person, an employee or an automation; FR-TASK-01); API to list and view tasks.
 
+**One shape for "work for a person" (AUD-03).** The domain `BusinessTask`, with its `TaskState`, is the only task model. It has a `kind`, with at least these values:
+- `human_channel`: the Human channel's hand-off of an action (it replaces `HumanTask` and `HumanTaskState` of `execution/channels.py`);
+- `relay`: the 6.10 AutoVA tracking relay item, which becomes a task of this kind instead of keeping its own states;
+- `approval_follow_up`: the work an approval leaves behind.
+
+Every kind uses the same table, states, events and screens. A kind adds data, never states.
+
 | ID | Acceptance criterion |
 |---|---|
 | AC-7.1.1 | Every allowed transition is tested; every illegal one from each state is rejected. |
 | AC-7.1.2 | Creating a task twice with the same idempotency key returns the first task. |
 | AC-7.1.3 | A task reaches `COMPLETED` only through a recorded transition that references its evidence (a resource, an execution or an approval); no message or conversation text can complete a task. |
+| AC-7.1.4 | There is one task model. Its kinds include `human_channel`, `relay` and `approval_follow_up`. A test fails if a second task state enum or task table appears. The Human channel's hand-off and the 6.10 relay item are created as tasks of their kind. |
 
 ### 7.2 — Policy engine v1
 
@@ -168,10 +176,18 @@ Scheduled scan of tasks and automation executions: expired leases, stalled tasks
 
 The Phase 5 in-memory approval and Human-task contracts get their Postgres stores, events (`approvals.requested.v1`, `approvals.decided.v1`, `tasks.state_changed.v1`) and the resume path for `WAITING` executions.
 
+**Across processes (AUD-03).** The API process decides, while the worker holds the waiting execution, so nothing resumes in-process:
+- **(a) The decision is an event.** A decision or an expiry writes `approvals.decided.v1` through the outbox (`decision_event`, the AUD-01 envelope), in the same transaction as the decision itself.
+- **(b) One job resumes the execution.** The worker's `events.publish` delivery job hands the event to `ApprovalResumer`, which resumes or cancels the waiting execution exactly once. A replayed delivery moves nothing twice. A completed or cancelled Human task follows the same path, through `tasks.state_changed.v1`.
+- **(c) One task model.** A Human-channel hand-off is a `BusinessTask` of kind `human_channel` (slice 7.1). It is not a second task shape.
+
+Until this slice ships, the worker's gateway uses the `NoApprovals` gate: a write is recorded as pending and waits, and nothing in the worker can approve it.
+
 | ID | Acceptance criterion |
 |---|---|
 | AC-7.11.1 | The gateway's approval tests from 5.14 pass unchanged against the Postgres implementation. |
 | AC-7.11.2 | A Human task completed by a person resumes the waiting execution exactly once; a cancelled task cancels it, with the reason. |
+| AC-7.11.3 | A decision taken through the API's Postgres approval service writes `approvals.decided.v1` in the decision's transaction. A test shows that the worker resumes an execution only through that event: the delivery is replayed, and the resume happens once. There is no in-process listener in any production wiring. |
 
 ### 7.12 — The owner's first Etsy writes
 

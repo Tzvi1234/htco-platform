@@ -9,7 +9,7 @@ from types import MappingProxyType
 
 import pytest
 
-from htco_application.approvals import GatewayApprovals, MemoryApprovalService
+from htco_application.approvals import APPROVAL_DECIDED, ApprovalResumer, NoApprovals
 from htco_application.execution.channels import EtsyApiChannel
 from htco_application.execution.gateway import (
     ActionOutcome,
@@ -28,7 +28,13 @@ from htco_application.order_intake import ORDER_SYNC_JOB
 from htco_application.workforce.registry import parse_automation
 from htco_domain.actors import ActorKind, ActorRef
 from htco_persistence.database import Database
-from htco_worker.main import NoUsers, order_sync_handlers, worker_engine, worker_gateway
+from htco_worker.main import (
+    NoUsers,
+    approval_event_subscribers,
+    order_sync_handlers,
+    worker_engine,
+    worker_gateway,
+)
 from htco_worker.settings import WorkerSettings
 from tests.application.test_action_gateway import NOW, ORG, SHOP, office
 from tests.application.test_execution_router import EtsyShops, FakeMarketplace
@@ -74,6 +80,14 @@ def test_gateway__on__the_real_gateway_with_the_registry_and_contracts() -> None
     )
     gateway = worker_gateway(settings, Database(DATABASE), FakeMarketplace())  # type: ignore[arg-type]
     assert isinstance(gateway, ActionGatewayService)
+    # AUD-03: the explicit null gate, never an in-memory approval service (nothing approves).
+    assert isinstance(gateway._p.approvals, NoApprovals)
+
+
+@pytest.mark.ac("AUD-03.2")
+def test_engine__decisions_from_any_process__reach_the_resumer() -> None:
+    subscribers = approval_event_subscribers(worker_engine(Database(DATABASE)))
+    assert isinstance(subscribers[APPROVAL_DECIDED], ApprovalResumer)
 
 
 async def test_write__through_the_worker_parts__waits_and_never_reaches_a_channel() -> None:
@@ -97,7 +111,7 @@ async def test_write__through_the_worker_parts__waits_and_never_reaches_a_channe
             store=MemoryActionStore(),
             principals=users,
             shops=users,
-            approvals=GatewayApprovals(MemoryApprovalService(clock=lambda: NOW), clock=lambda: NOW),
+            approvals=NoApprovals(),
             adapters={Channel.API: EtsyApiChannel(marketplace, EtsyShops())},
             capabilities=Capabilities({(SHOP, "receipts_read")}),
             clock=lambda: NOW,

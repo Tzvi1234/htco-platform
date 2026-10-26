@@ -63,7 +63,7 @@ Events are published through the outbox (`jobs.outbox`, slice 5.2); the first pr
 | [`notifications.requested.v1`](../../packages/contracts/events/notifications.requested.v1.json) | Any context | Notification dispatcher (in-app, email) | 6 |
 | `tasks.created.v1`, `tasks.state_changed.v1` | Tasks | Office, metrics, Agent Task Scheduling & Recovery | 7 |
 | `approvals.requested.v1` | Approvals | Notifications, the waiting session | 7 |
-| `approvals.decided.v1` | Approvals | Agent runtime (resume), automation engine (resume), audit | 7 |
+| [`approvals.decided.v1`](../../packages/contracts/events/approvals.decided.v1.json) | Approvals (written with the decision or the expiry, in its transaction; AUD-03: approval, approved/rejected/expired, waiting execution, decider) | `ApprovalResumer` on the worker's `events.publish` (resumes or cancels the waiting execution once), agent runtime (resume, Phase 8), audit | 5 (contract), 7 |
 | `activity.recorded.v1` | Activity records | Monitors, office feed, metrics | 7 |
 | `workforce.profile_version_published.v1` | Registry sync | Agent runtime (reload), audit | 8 |
 | `agents.session_started.v1`, `agents.session_finished.v1` | Agent runtime | Office, cost metrics, Noa's sampling | 8 |
