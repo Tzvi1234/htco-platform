@@ -215,9 +215,12 @@ class IncidentNotifications:
         }
         if payload.get("receipt_id") is not None:
             params["receipt_id"] = payload["receipt_id"]
-        # One notification per escalation, however often its event is delivered (quill, #119).
+        # One notification per escalation, however often its event is delivered (quill, #119),
+        # keyed by the escalation's ID (Codex, #163); an event from before it by its time.
         occurrence = (
-            payload.get("escalated_at") if kind is NotificationKind.INCIDENT_ESCALATED else None
+            payload.get("escalation_id") or payload.get("escalated_at")
+            if kind is NotificationKind.INCIDENT_ESCALATED
+            else None
         )
         await self.service.notify(
             NotificationRequest(

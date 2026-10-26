@@ -448,6 +448,32 @@ async def test_each_escalation_notifies_once() -> None:
     assert len(owners) == 2
 
 
+async def test_two_escalations_in_one_second_notify_twice_and_a_redelivery_never() -> None:
+    """Codex on #163: two escalations of one incident in the same second share escalated_at
+    but each has its own escalation_id: two notifications, and a redelivery of either is none."""
+    store = members()
+    service = NotificationService(store, clock=lambda: NOW)
+    deliverer = EventDeliverer({"incidents.escalated.v1": IncidentNotifications(service)})
+    at = "2026-10-25T09:00:00+00:00"
+
+    def escalated(escalation: uuid.UUID) -> OutboxMessage:
+        return OutboxMessage(
+            organization_id=ORG, shop_id=SHOP, destination=EVENTS,
+            idempotency_key=f"incidents.escalated.v1:{INCIDENT}:{escalation}",
+            payload={"event_type": "incidents.escalated.v1", "incident_id": str(INCIDENT),
+                     "cause": "tracking_missing", "severity": "medium", "receipt_id": 4000000001,
+                     "escalated_from": "detected", "escalated_at": at,
+                     "escalation_id": str(escalation)},
+        )  # fmt: skip
+
+    first, second = uuid.uuid7(), uuid.uuid7()
+    for escalation in (first, first, second, second):
+        await deliverer.deliver(delivery(escalated(escalation)))
+
+    owners = [n for n in store.rows.values() if n.user_id == OWNER]
+    assert len(owners) == 2
+
+
 @pytest.mark.parametrize(
     "kind",
     [NotificationKind.INCIDENT_OPENED, NotificationKind.INCIDENT_ESCALATED,

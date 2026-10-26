@@ -178,7 +178,7 @@ def _event(
         organization_id=incident.organization_id,
         shop_id=incident.shop_id,
         destination=EVENTS,
-        # An event that may happen again for the incident (an escalation) is keyed by when.
+        # An event that may happen again for the incident (an escalation) is keyed by its ID.
         idempotency_key=f"{name}:{incident.id}" + ("" if occurrence is None else f":{occurrence}"),
         payload=payload,
         correlation_id=None if correlation is None else correlation[:200],
@@ -311,13 +311,20 @@ class IncidentService:
             current = target
         events: tuple[OutboxMessage, ...] = ()
         if current is IncidentState.ESCALATED and incident.state is not IncidentState.ESCALATED:
+            # Each escalation has its own ID (Codex, #163): two in one second are still two, and
+            # the event's key and the notification's dedup key both name it.
+            escalation_id = str(self.new_id())
             events = (
                 _event(
                     INCIDENT_ESCALATED,
                     incident,
-                    extra={"escalated_from": incident.state.value, "escalated_at": now.isoformat()},
+                    extra={
+                        "escalated_from": incident.state.value,
+                        "escalated_at": now.isoformat(),
+                        "escalation_id": escalation_id,
+                    },
                     correlation=correlation_id,
-                    occurrence=str(int(now.timestamp())),
+                    occurrence=escalation_id,
                 ),
             )
         if current is IncidentState.RESOLVED and evidence is not None:
