@@ -148,3 +148,16 @@ async def test_lock__a_dropped_lock_connection_is_noticed(admin: Database) -> No
         scalar(admin, "select pg_terminate_backend(%s)", [pid])
         assert not await locks.still_held(environment)
     assert not await locks.still_held(environment)
+
+
+@pytest.mark.ac("AC-8A.2.1")
+async def test_lock__a_deferred_waiter_leaves_the_holder_tracked(admin: Database) -> None:
+    """Codex on #121, on real Postgres: the waiter that gives up does not make the holder's
+    `still_held` false while the holder's connection still owns the lock."""
+    locks = PostgresProfileLocks(admin, poll_seconds=0.05)
+    environment = uuid.uuid4()
+    async with locks.hold(environment, until=soon(2)) as first:
+        assert first
+        async with locks.hold(environment, until=soon(0.2)) as second:
+            assert not second
+        assert await locks.still_held(environment)

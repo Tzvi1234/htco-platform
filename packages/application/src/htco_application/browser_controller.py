@@ -184,12 +184,12 @@ class BrowserController:
         )  # fmt: skip
         async with self._locks.hold(environment.id, until=deadline) as held:
             if not held or deadline <= self._clock():
-                await _blocking(self._log.started, record)
+                await self._start(record)
                 await self._end(record, SessionOutcome.DEFERRED, None)
                 raise SessionDeferredError("the profile is busy until past the deadline")
             # The status may have changed while this session waited for the lock.
             environment = await self._takes_sessions(environment.id)
-            await _blocking(self._log.started, record)
+            await self._start(record)
             outcome: SessionOutcome = SessionOutcome.FAILED
             failure: str | None = ERROR
             # Measured after the setup's database calls, so they count against the deadline.
@@ -236,6 +236,18 @@ class BrowserController:
     async def _still_ours(self, environment: BrowserEnvironment) -> None:
         if not await self._locks.still_held(environment.id):
             raise SessionLockLostError("the profile lock was lost")
+
+    async def _start(self, record: SessionRecord) -> None:
+        """Record the start. The write runs to its end even if the task is cancelled meanwhile,
+        and a record it wrote is then ended (failed) before the cancellation goes on, so no
+        record is left `running`."""
+        write = asyncio.ensure_future(asyncio.to_thread(self._log.started, record))
+        try:
+            await _shielded(write)
+        except asyncio.CancelledError:
+            if not write.cancelled() and write.exception() is None:
+                await self._end(record, SessionOutcome.FAILED, ERROR)
+            raise
 
     async def _takes_sessions(self, environment_id: uuid.UUID) -> BrowserEnvironment:
         environment = await _blocking(self._records.by_id, environment_id)
@@ -291,17 +303,20 @@ async def _blocking[**P, T](function: Callable[P, T], *args: P.args, **kwargs: P
 
 async def _shielded[T](work: Awaitable[T]) -> T:
     """Run cleanup to its end even if the session's task is cancelled meanwhile; a cancellation
-    that arrived is raised once the cleanup is done."""
+    that arrived is raised once the cleanup is done, and wins over the cleanup's own error (the
+    caller asked to stop)."""
     task = asyncio.ensure_future(work)
     cancelled = False
     while not task.done():
         try:
-            await asyncio.shield(task)
+            # `asyncio.wait` never cancels the work it waits for (unlike awaiting it), and
+            # unlike `asyncio.shield` it does not report the work's error as unhandled.
+            await asyncio.wait({task})
         except asyncio.CancelledError:
-            if task.done() and task.cancelled():  # pragma: no cover - only we cancel it
-                raise
             cancelled = True
     if cancelled:
+        if not task.cancelled():  # pragma: no branch - only we hold the work, never cancelled
+            task.exception()  # retrieved: the cancellation is what goes on
         raise asyncio.CancelledError
     return task.result()
 

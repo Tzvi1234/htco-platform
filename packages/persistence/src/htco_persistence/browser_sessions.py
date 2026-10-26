@@ -45,7 +45,9 @@ class PostgresProfileLocks:
             try:
                 yield held
             finally:
-                self._held.pop(environment_id, None)
+                # Only the holder forgets its entry: a waiter that gave up leaves it alone.
+                if held and self._held.get(environment_id) is connection:
+                    del self._held[environment_id]
                 if held:
                     with anyio.CancelScope(shield=True):
                         await anyio.to_thread.run_sync(
