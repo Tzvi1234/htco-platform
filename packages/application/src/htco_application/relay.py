@@ -15,15 +15,16 @@ roles, never in an audit, an event or a log.
 """
 
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import partial
-from typing import Any, Protocol
+from typing import Protocol
 
 from htco_application.access.authentication import AuthContext
 from htco_application.access.policy import Capability, Outcome, Scope, ShopRef, decide
 from htco_application.audit import AuditRecord
+from htco_application.kernel import Offload, run_inline
 from htco_application.notifications import NotificationRequest, NotificationService
 from htco_application.shops import OrganizationRequiredError
 from htco_domain.actors import ActorKind, ActorRef
@@ -35,12 +36,6 @@ LIST_LIMIT = 200
 # A pasted code is kept at most this long (Sage's security review of #159): an item handed off
 # without tracking on Etsy for 30 days closes as expired, and its code goes with it.
 RELAY_CODE_TTL = timedelta(days=30)
-
-type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
-
-
-async def _inline(work: Callable[[], Any]) -> Any:
-    return work()
 
 
 @dataclass(frozen=True)
@@ -166,7 +161,7 @@ async def open_due_relay_items(  # noqa: PLR0913 - the order list and its collab
     now: datetime,
     correlation_id: str | None,
     new_id: Callable[[], uuid.UUID] = uuid.uuid7,
-    offload: Offload = _inline,
+    offload: Offload = run_inline,
     calendar: BusinessCalendar | None = None,
 ) -> int:
     """One relay item per awaiting order strictly past the relay window, counted in the shop's
@@ -213,7 +208,7 @@ async def reconcile_relay_items(  # noqa: PLR0913 - the shop and its collaborato
     shop_id: uuid.UUID,
     now: datetime,
     tracked_orders: Callable[[uuid.UUID, tuple[int, ...]], frozenset[int]],
-    offload: Offload = _inline,
+    offload: Offload = run_inline,
 ) -> tuple[int, int, int]:
     """Close the shop's open items whose order was cancelled or refunded on Etsy (`cancelled`,
     Codex review of #159) and those handed off longer than `RELAY_CODE_TTL` (`expired`, Sage's
