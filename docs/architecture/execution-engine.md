@@ -583,7 +583,7 @@ ROUTED ─► DISPATCHED (Browser channel, ADR-0025 §3) ─► RUNNING (resume:
 VERIFYING ─► FAILED (verification) ─► incident
 ```
 
-A `DISPATCHED` action holds no lease, slot or connection while the browser worker runs it. A resubmission with the same key resumes the stored claim: with no outcome yet it answers `DISPATCHED`, and with one it validates and verifies the output and records one final result. The browser step never runs twice.
+A `DISPATCHED` action holds no lease, slot or connection while the browser worker runs it. A deadline watchdog (`browser.resume` at the deadline plus grace), enqueued at dispatch, makes sure it never waits for ever. A resubmission with the same key resumes the stored claim: with no outcome yet it answers `DISPATCHED`, and with one it validates and verifies the output and records one final result. The browser step never runs twice.
 
 ### Business task (`tasks.state`, Phase 7; existing `htco_domain.tasks.TaskState`)
 

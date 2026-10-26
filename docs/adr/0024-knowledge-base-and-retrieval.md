@@ -74,7 +74,7 @@ There is an allowlist of source kinds. Nothing else is ingested:
 
 Approved replies pass a **deterministic redaction** step before chunking. It removes or replaces names (including the buyer's name from the linked order record), email addresses, phone numbers, postal addresses, tracking numbers and order numbers (replaced with placeholders such as `[order]`). The gateway's PII masking then applies again at embedding time, as a second layer.
 
-**Buyer text quoted inside a reply** is not an identifier, so redaction alone does not remove it. This covers quoted history (`> …`, "On … wrote:") and inline quotes. The step strips quoted history. It also runs an **overlap check** against the linked buyer message: a chunk that shares a run of words with that message above the agreed threshold is quarantined.
+**Buyer text quoted inside a reply** is not an identifier, so redaction alone does not remove it. This covers quoted history (`> …`, "On … wrote:") and inline quotes. The step strips quoted history. It also runs an **overlap check** against the linked buyer message: a chunk that shares a run of words with that message at or above the threshold is quarantined. The default threshold is a run of 8 consecutive normalized words. It is set in the knowledge policy and recorded at the 9.10 kickoff.
 
 A chunk in which the residual check still finds PII, or quoted buyer text, is **quarantined**: it is not embedded, and it is reported.
 

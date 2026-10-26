@@ -169,8 +169,12 @@ Long operations run as browser jobs (§3), never inline in the API.
 
 The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval rule, claim idempotency, route and guard. For a Browser binding, step 7 changes:
 
-1. **Dispatch.** The agent-worker's `BrowserChannel` opens no browser. In one transaction it moves the action execution to `DISPATCHED`, enqueues one `browser.run` job and writes `actions.dispatched.v1` to the outbox.
-   - The job's idempotency key is the action execution and its attempt.
+1. **Dispatch.** The agent-worker's `BrowserChannel` opens no browser. In one transaction it moves the action execution to `DISPATCHED` and writes `actions.dispatched.v1` to the outbox. In that same transaction it enqueues two jobs:
+   - one `browser.run` job;
+   - **a deadline watchdog:** one `browser.resume` job scheduled at the deadline plus a grace period (key: execution, attempt, `deadline`). An execution therefore never waits for ever, even when the run is never claimed or is dead-lettered (step 6).
+
+   About the `browser.run` job:
+   - Its idempotency key is the action execution and its attempt.
    - Its concurrency key is the profile (`browser:{environment_id}`, one run at a time).
    - Its payload is the execution ID and attempt, the environment, the recipe and its version, the scope ID, and only the parameters the recipe declares. It never carries a secret, a token or any authority.
 
@@ -205,10 +209,15 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
 4a. **A revoked approval stops a dispatched write in two ways** (defense in depth). Cancellation and start are serialized on the action execution's row:
    - **(b), in the gateway.** Cancelling or expiring an approval locks the same row. It moves the `DISPATCHED` action to `CANCELLED` in the same transaction **only if the current attempt has no `started` row**. The browser worker's start then refuses the run.
    - **(a), in the browser worker.** The start function re-checks the approval under that lock (step 3), in case a revocation lands between the gateway and the run.
-   - **An attempt that has already started is never cancelled through this path.** Its write may be happening, so the action stays `DISPATCHED`, and its outcome is processed as usual: verification and one final result, or the reconciliation task after a crash (step 6). The revocation is recorded with the action, and the result says that the approval was revoked during the run, so the Owner sees it.
+   - **An attempt that has already started is never cancelled through this path.** Its write may be happening, so the action stays `DISPATCHED`, and its outcome is still processed (step 5). The revocation is recorded with the action, and the run goes to a person: whatever the outcome, the resume records `HANDED_TO_HUMAN`, with one task for the Owner, "the approval was revoked while this write ran: check it and undo it if needed".
+   - **Expiry has no event of its own.** The start function checks it by time, under the lock. The approvals sweep that marks approvals `EXPIRED` applies (b) in its own transaction, under the same rule.
 
    The start function is the last point before the page.
-5. **Resume through `submit`.** A `browser.resume` job in the agent-worker wakes the waiting execution, or resumes the employee's graph. It resubmits the same request with the same idempotency key. `submit` finds the stored claim in `DISPATCHED` and resumes it, as it already resumes a human hand-off:
+5. **Resume through `submit`.** A `browser.resume` job in the agent-worker wakes the waiting execution, or resumes the employee's graph. It comes from one of two places:
+   - the outbox dispatcher, which delivers `browser.run_finished.v1` and enqueues it (idempotent per execution and attempt);
+   - the deadline watchdog of step 1.
+
+   It resubmits the same request with the same idempotency key. `submit` finds the stored claim in `DISPATCHED` and resumes it, as it already resumes a human hand-off:
    - with no outcome yet, it answers `DISPATCHED` again;
    - with an outcome, it validates the output against the action's output schema and runs the action's verification (the schema, or a re-read through the API channel). Then it records exactly one final result: `SUCCEEDED`, `FAILED`, or `HANDED_TO_HUMAN` with one Human task for a challenge.
 
@@ -218,7 +227,11 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
    - **A write is never re-sent blindly.**
      - A write with no `started` row never touched the page. It may be retried within its policy.
      - A write with a `started` row and no final status may have happened. That covers a crash after the marker, and a job the queue redelivers after its lease expired (`release_expired`). Such a run is never executed again: its row is set to `interrupted`, and the resume records `HANDED_TO_HUMAN` with one reconciliation task, "check whether it happened".
-     - The same applies to a write still without an outcome after its deadline and a grace period.
+     - **`interrupted` is set only while the profile lock is held**, by the redelivered job's worker or by the watchdog through `pg_try_advisory_lock` on the profile's key. No live session can then still be acting, so a slow session can never finish a write after a person has redone it. If a session still holds the lock, the watchdog reschedules itself. The controller enforces that session's deadline, and the session publishes its own outcome.
+   - **The deadline watchdog** (step 1) resolves what is left at the deadline plus grace:
+     - an attempt with an outcome takes the normal resume;
+     - an attempt with no `started` row never ran. The start function refuses it from then on, because its deadline has passed. The action fails as `timeout`, and a read may be retried within its policy;
+     - an attempt with a `started` row and no final status is set to `interrupted` under the profile lock, as above, and goes to a person.
 7. **The browser worker decides nothing about authority.** Authorization and approvals stay in the gateway. The browser worker only re-checks what can stop work.
    - **Its role can:**
      - claim `browser.*` jobs;
@@ -236,7 +249,7 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
 
 The rules:
 - **Shared by default.** A new shop **never** needs an allocation. Without one, it uses the **shared browser egress**, the platform's own fixed IP (D-18 (c) today).
-- **An optional dedicated egress.** The plan supports a **fixed, separate egress IP per shop**. It is truthful and HTCO-controlled: a static datacenter IP of our own cloud account, in the shop's region, such as a small droplet that HTCO runs. It is never rotated.
+- **An optional dedicated egress.** The plan supports a **fixed, separate egress IP per shop**. It is truthful and HTCO-controlled: a static datacenter IP of our own cloud account, in the shop's region, such as a small droplet that HTCO runs. The shop's sessions either run on that droplet or leave through HTCO's own gateway there, over HTCO's own private network or tunnel. It is never a third-party proxy service or a commercial VPN, and it is never rotated.
 - **No disguise, ever.** As in ADR-0020: no residential, ISP or rotating proxies, no proxy marketplaces, no third-party proxies and no VPNs. A per-shop egress exists for isolation, stability and allowlisting, **never to hide that shops are related** (D-18). The shops stay declared as related wherever Etsy asks.
 - **No fixed vendor.** The first adapter, `SharedEgress`, returns the shared egress for every shop. A dedicated-egress adapter is added behind the same port when the owner first allocates one.
 
@@ -254,7 +267,7 @@ The rules:
 3. **Browser Use** is the primary AI engine, for open-ended navigation by **employees**, inside the recipe's allowed actions and URL allowlist. The recipe's schema still validates its result.
    - It drives the provider's pipe connection in process, never a TCP or WebSocket CDP endpoint.
    - 8A.6 adopts a Browser Use version only if it can run that way. If the version needs a CDP URL, 8A.6 stops and comes back to this ADR; it does not open a port.
-   - Every URL allowlist refuses loopback and private addresses, so a page can never reach the worker's own services.
+   - Every production URL allowlist refuses loopback and private addresses, so a page can never reach the worker's own services. The contract suite's `127.0.0.1` fixture origin is allowed only by a test-only allowlist, which no production configuration can load.
 
 8A.6 no longer waits for the whole of Phase 9. It needs only the **minimal Model Gateway** below, pulled forward from 9.1 and 9.2.
 
