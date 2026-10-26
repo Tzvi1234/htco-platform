@@ -605,7 +605,12 @@ async def test_purge__deletes_only_the_disconnected_shops_data_and_only_after_it
         purged = await store.purge(target, now=NOW + timedelta(days=31), audit=audit)
         again = await store.purge(target, now=NOW + timedelta(days=32), audit=audit)
 
-    assert purged == {"shop_capabilities": 2, "etsy_orders": 0, "etsy_order_sync_state": 0}
+    assert purged == {
+        "shop_capabilities": 2,
+        "etsy_orders": 0,
+        "etsy_order_sync_state": 0,
+        "relay_items": 0,
+    }
     assert again is None
     assert count_capabilities(admin, leaving) == 0
     assert count_capabilities(admin, staying) == 2
@@ -618,7 +623,14 @@ async def test_purge__deletes_only_the_disconnected_shops_data_and_only_after_it
         admin,
         "select after from audit.audit_log where id = %s",
         [audit.id],
-    ) == {"deleted": {"shop_capabilities": 2, "etsy_orders": 0, "etsy_order_sync_state": 0}}
+    ) == {
+        "deleted": {
+            "shop_capabilities": 2,
+            "etsy_orders": 0,
+            "etsy_order_sync_state": 0,
+            "relay_items": 0,
+        }
+    }
 
 
 @pytest.mark.ac("AC-5.1.6")
