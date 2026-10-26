@@ -8,10 +8,14 @@ profile, so a crash keeps the last good archive.
 
 import asyncio
 import os
+import time
 import uuid
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import override
 
 import anyio
 import pytest
@@ -29,6 +33,7 @@ from htco_application.browser_environments import EnvironmentNotFoundError
 from htco_application.browser_profiles import (
     MemoryProfileArchiveStore,
     MemoryProfileRecords,
+    ProfileUnsafeError,
     ProfileVault,
     ProfileWorkspaces,
 )
@@ -365,5 +370,146 @@ async def test_session__cleanup_finishes_even_when_the_task_is_cancelled_during_
     with pytest.raises(asyncio.CancelledError):
         await task
     assert closed.is_set()
+    assert s.locks.held == set()
+    assert on_disk(tmp_path) == []
+
+
+class SlowWorkspaces(ProfileWorkspaces):
+    """A checkout whose unpack or re-seal takes a while (a large profile, a slow database)."""
+
+    def __init__(
+        self, vault: ProfileVault, root: Path, *, enter: float = 0, leave: float = 0
+    ) -> None:
+        super().__init__(vault, root)
+        self._enter, self._leave = enter, leave
+        self.unpacked = False
+
+    @override
+    @contextmanager
+    def checkout(self, environment: BrowserEnvironment) -> Iterator[Path]:
+        time.sleep(self._enter)
+        with super().checkout(environment) as directory:
+            self.unpacked = True
+            yield directory
+            time.sleep(self._leave)
+
+
+@dataclass
+class WatchedLocks(MemoryProfileLocks):
+    """Notes, at the moment the lock is released, what is still on disk."""
+
+    root: Path | None = None
+    workspaces: SlowWorkspaces | None = None
+    at_release: list[tuple[bool, list[Path]]] = field(default_factory=list)
+
+    @override
+    @asynccontextmanager
+    async def hold(self, environment_id: uuid.UUID, *, until: datetime) -> AsyncIterator[bool]:
+        async with super().hold(environment_id, until=until) as held:
+            try:
+                yield held
+            finally:
+                assert self.root is not None
+                assert self.workspaces is not None
+                self.at_release.append((self.workspaces.unpacked, on_disk(self.root)))
+
+
+def slow_controller(s: Setup, env: BrowserEnvironment, **delays: float) -> BrowserController:
+    return BrowserController(
+        MemoryProfileRecords({env.id: env}), SlowWorkspaces(s.vault, s.root, **delays), s.engine,
+        s.locks, s.log, clock=now,
+    )  # fmt: skip
+
+
+async def test_session__cancelled_during_unpack_cleans_up_before_the_lock_is_released(
+    tmp_path: Path,
+) -> None:
+    """Codex on #121: the checkout thread is awaited and exited before the lock goes."""
+    env = environment()
+    s = setup(tmp_path, env)
+    workspaces = SlowWorkspaces(s.vault, tmp_path, enter=0.3)
+    locks = WatchedLocks(root=tmp_path, workspaces=workspaces)
+    controller = BrowserController(
+        MemoryProfileRecords({env.id: env}), workspaces, s.engine, locks, s.log, clock=now
+    )
+
+    async def run() -> None:
+        async with controller.session(env.id, purpose="test.run", deadline=soon()):
+            pass  # pragma: no cover - cancelled before
+
+    task = asyncio.ensure_future(run())
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # The lock went only after the unpack had finished and the profile was wiped.
+    assert locks.at_release == [(True, [])]
+    assert locks.held == set()
+    assert s.engine.handles == []
+
+
+async def test_session__rechecks_the_status_after_waiting_for_the_lock(tmp_path: Path) -> None:
+    """Codex on #121: an environment suspended while a session waits never starts it."""
+    env = environment()
+    records = MemoryProfileRecords({env.id: env})
+    s = setup(tmp_path, env)
+    controller = BrowserController(
+        records, ProfileWorkspaces(s.vault, tmp_path), s.engine, s.locks, s.log, clock=now
+    )
+    first_in = asyncio.Event()
+    refused: list[Exception] = []
+
+    async def first() -> None:
+        async with controller.session(env.id, purpose="test.first", deadline=soon()):
+            first_in.set()
+            await asyncio.sleep(0.2)  # the second session is waiting for the lock now
+            records.environments[env.id] = env.transition(_E.SUSPENDED)
+
+    async def second() -> None:
+        await first_in.wait()
+        try:
+            async with controller.session(env.id, purpose="test.second", deadline=soon()):
+                pytest.fail("a suspended environment must not start")  # pragma: no cover
+        except SessionRefusedError as error:
+            refused.append(error)
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(first)
+        group.start_soon(second)
+    assert len(refused) == 1
+    assert len(s.engine.handles) == 1
+
+
+async def test_session__a_clean_body_that_seals_past_the_deadline_is_a_success(
+    tmp_path: Path,
+) -> None:
+    """Codex on #121: the outcome and the archive agree. The deadline covers the work; a clean
+    exit's re-seal (bounded by the archive caps) commits the profile and is not a timeout."""
+    env = environment()
+    s = setup(tmp_path, env)
+    controller = slow_controller(s, env, leave=0.4)
+    async with controller.session(env.id, purpose="test.run", deadline=soon(0.2)):
+        (s.engine.handles[0].profile / "Cookies").write_bytes(b"fresh")
+    (record,) = s.log.records.values()
+    assert (record.outcome, record.failure) == (SessionOutcome.SUCCEEDED, None)
+    assert s.log.errors == {}
+    assert on_disk(tmp_path) == []
+
+
+async def test_session__an_archive_that_does_not_unpack_fails_and_releases_the_lock(
+    tmp_path: Path,
+) -> None:
+    env = environment()
+    s = setup(tmp_path, env)
+    s.vault.seal(env, b"not a gzip tar")
+
+    async def run() -> None:
+        async with s.controller.session(env.id, purpose="test.run", deadline=soon()):
+            pass  # pragma: no cover - never entered
+
+    with pytest.raises(ProfileUnsafeError):
+        await run()
+    (record,) = s.log.records.values()
+    assert (record.outcome, record.failure) == (SessionOutcome.FAILED, "error")
     assert s.locks.held == set()
     assert on_disk(tmp_path) == []

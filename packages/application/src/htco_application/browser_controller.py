@@ -181,12 +181,20 @@ class BrowserController:
                 self._log.started(record)
                 self._end(record, SessionOutcome.DEFERRED, None)
                 raise SessionDeferredError("the profile is busy until past the deadline")
+            # The status may have changed while this session waited for the lock.
+            current = self._records.by_id(environment.id)
+            if current is None or current.status not in _SESSION_STATUSES:
+                raise SessionRefusedError("the environment changed while the session waited")
+            environment = current
             self._log.started(record)
             outcome: SessionOutcome = SessionOutcome.FAILED
             failure: str | None = ERROR
             limit = asyncio.timeout(remaining)
             try:
-                async with limit, self._profile(environment) as directory:
+                # The deadline covers the engine and the work. Unpacking and the clean exit's
+                # re-seal are bounded by the archive caps instead, so a session that finished
+                # its work in time and committed its profile is never reported as timed out.
+                async with self._profile(environment) as directory, limit:
                     handle = await self._engine.launch(directory)
                     try:
                         yield ControllerSession(record.id, environment, handle)
@@ -203,10 +211,20 @@ class BrowserController:
 
     @asynccontextmanager
     async def _profile(self, environment: BrowserEnvironment) -> AsyncIterator[Path]:
-        """The workspace's checkout with its blocking work in a thread; its exit (re-seal on
-        success, wipe always) is shielded from the deadline's cancellation."""
+        """The workspace's checkout with its blocking work in threads that always run to
+        their end, even under cancellation: unpack, then re-seal on success and wipe always."""
         checkout = self._workspaces.checkout(environment)
-        directory = await asyncio.to_thread(checkout.__enter__)
+        entering = asyncio.ensure_future(asyncio.to_thread(checkout.__enter__))
+        try:
+            # Cancelled meanwhile: the unpack still finishes, and is exited below, before the
+            # caller releases the lock.
+            directory = await _shielded(entering)
+        except BaseException as error:
+            if entering.done() and not entering.cancelled() and entering.exception() is None:
+                await _shielded(
+                    asyncio.to_thread(checkout.__exit__, type(error), error, error.__traceback__)
+                )
+            raise
         try:
             yield directory
         except BaseException as error:
