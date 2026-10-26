@@ -17,12 +17,8 @@ from psycopg import errors
 
 from htco_application.audit import AuditRecord
 from htco_application.jobs import ClaimedJob, JobSpec
-from htco_application.maintenance import (
-    SCHEDULER,
-    TenantShop,
-    check_refresh_token,
-    probe_shop_daily,
-)
+from htco_application.kernel import TenantShop
+from htco_application.maintenance import SCHEDULER, check_refresh_token, probe_shop_daily
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_domain.automation import RetryPolicy
 from htco_domain.integrations import IntegrationStatus, ShopCapability

@@ -26,6 +26,7 @@ from htco_application.access.policy import (
 from htco_application.automation.durable import DurableAutomationEngine
 from htco_application.automation.engine import TriggerRequest
 from htco_application.automation.records import ExecutionPage
+from htco_application.kernel import ShopOwners
 from htco_application.shops import OrganizationRequiredError, ShopNotFoundError
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import AutomationDefinition, AutomationExecution, TriggerKind
@@ -41,10 +42,6 @@ class AutomationForbiddenError(Exception):
     def __init__(self, outcome: Outcome) -> None:
         super().__init__(f"not allowed ({outcome.value})")
         self.outcome = outcome
-
-
-class ShopOwners(Protocol):
-    def organization_of_shop(self, shop_id: uuid.UUID) -> uuid.UUID | None: ...
 
 
 class ExecutionReader(Protocol):

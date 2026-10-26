@@ -113,7 +113,8 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 - **Destroying a profile.** `BrowserController.destroy_profile` deletes the archive under the same profile lock, so a session that is still running cannot write the profile back afterwards.
 - **`htco_persistence.browser_sessions`.** `PostgresProfileLocks` polls `pg_try_advisory_lock(hashtextextended('htco.browser_profile:<environment>', 0))` on a dedicated connection until the deadline. A killed worker's connection drops, which releases the lock. `PostgresSessionLog` writes `app.browser_sessions` and the environment's `error_count` and `last_session_at` on the browser role.
 - **`app.browser_sessions`.** Purpose and failure are codes, never free text, and an ended session is final. The browser role may insert and end its organization's sessions; the Owner and Admins read theirs. The browser role's only new environment column right is `error_count`; it still cannot change a status.
-- **Still to come in 8A.2:** the Playwright engine adapter (`launch_persistent_context` on the unpacked profile, stock fingerprint), the `browser-worker` image (read-only root, tmpfs), the pinned Playwright dependency and a real-Chromium test against a local page. The Browser Use fallback is 8A.6.
+- **The engine (second PR).** `htco_browser_worker.engine.PlaywrightEngine`, in the new `workers/browser` package, opens `chromium.launch_persistent_context` on the unpacked profile. It passes only headless, the Chromium sandbox, a launch timeout and `accept_downloads=False`, and a test pins that list: no user agent, proxy, switches, locale, time zone or viewport. `playwright==1.64.0` is pinned exactly. Import-linter keeps Playwright inside the browser worker and keeps the browser worker away from the Etsy adapters and token modules. The dependency allowlist test pins the browser worker's whole resolved closure in `uv.lock` to a reviewed list, so any new package (a stealth, proxy or CAPTCHA one included) fails until a reviewer adds it; a denylist checks the whole lock as well. Launching and closing Chromium run to their end even when the session is cancelled, so the lock is never released under a live browser. CI's `browser` job runs a real Chromium against a page on 127.0.0.1: a cookie set in one session survives into the next through the sealed profile.
+- **Still to come:** the `browser-worker` image and its deployment (read-only root, tmpfs, the fixed egress) with the worker's composition root and settings, which logs in as its own role (ADR-0020 log, 2026-10-26). The Browser Use fallback is 8A.6.
 
 **8A.2a — The `BrowserProvider` contract and `ManagedChromiumProvider`** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §1).
 - **The contract** has seven async layers and a capabilities declaration. The layers are Provisioning, Lifecycle, Connection, Execution, Authentication, Networking and Monitoring. The signatures are in [execution-engine.md](../../architecture/execution-engine.md) §3.
@@ -420,7 +421,7 @@ Switch the global browser kill switch on: all `browser.etsy.*` flags go off, and
 
 See [COST_MODEL §6](../../cost/COST_MODEL.md#6-architecture-upgrade-2026-10-23-execution-browser-authenticator):
 
-- `browser-worker` about $12–24/month (Chromium needs 1–2 GB);
-- a fixed egress IP $0 to $25/month, depending on the option;
+- `browser-worker` on a basic HTCO droplet of 2 GB, about $12/month. App Platform cannot apply the egress rules (AC-8A.2.22);
+- the shared browser egress is that droplet's own IP, at no extra cost (D-18 (a)). An optional per-shop egress is about $5/month per shop when enabled;
 - Grafana OSS self-hosted $0, or Grafana Cloud free tier;
 - Browser Use model calls from the employee budgets.

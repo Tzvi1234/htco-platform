@@ -16,7 +16,6 @@ from htco_application.fulfillment_schedule import (
     INCIDENT_DETECTION,
     TRACKING_SYNC,
     FulfillmentInspection,
-    ScheduledShop,
     enqueue_fulfillment_inspections,
 )
 from htco_application.incidents import (
@@ -25,8 +24,8 @@ from htco_application.incidents import (
     SLA_BREACHED,
     IncidentService,
 )
-from htco_application.jobs import ClaimedJob, JobError
-from htco_application.maintenance import TenantShop
+from htco_application.jobs import ClaimedJob
+from htco_application.kernel import JobError, TenantShop
 from htco_application.sla_inspector import AwaitingOrder, IncidentDetection
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import TriggerKind
@@ -193,7 +192,7 @@ async def test_bad_payloads_are_refused() -> None:
 
 
 class Shops:
-    def connected_shops(self) -> list[ScheduledShop]:
+    def connected_shops(self) -> list[TenantShop]:
         return [TenantShop(ORG, SHOP)]
 
 

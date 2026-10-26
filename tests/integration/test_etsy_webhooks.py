@@ -12,7 +12,7 @@ import pytest
 from htco_application.automation.durable import DurableAutomationEngine
 from htco_application.automation.engine import TriggerRequest
 from htco_application.etsy_webhooks import Accepted, EngineOrderIntake, EtsyWebhookIngress
-from htco_application.maintenance import TenantShop
+from htco_application.kernel import TenantShop
 from htco_domain.automation import AutomationExecution
 from htco_persistence.database import Database, tenant_scope
 from htco_persistence.etsy_connect import PostgresShopConnector

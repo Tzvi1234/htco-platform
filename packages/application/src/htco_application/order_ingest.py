@@ -24,14 +24,13 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from itertools import pairwise
 
-from htco_application.jobs import JsonValue
+from htco_application.kernel import EVENTS_DESTINATION, JsonValue
 from htco_application.marketplace import OrderReceipt
 from htco_application.messaging import OutboxMessage
 from htco_application.order_receipts import receipt_to_json
 from htco_domain.orders import Money, OrderFacts, OrderState, ingest_path
 from htco_domain.state_machine import IllegalTransition
 
-EVENTS_DESTINATION = "events.publish"
 INGESTED = "orders.ingested.v1"
 UPDATED = "orders.updated.v1"
 CANCELLED = "orders.cancelled.v1"

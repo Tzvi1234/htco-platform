@@ -45,7 +45,6 @@ from htco_application.execution.gateway import (
 )
 from htco_application.execution.guards import Guards
 from htco_application.execution.service import (
-    EVENT_DESTINATION,
     ActionGatewayService,
     GatewayParts,
 )
@@ -67,7 +66,8 @@ from htco_application.incidents import (
     INCIDENT_RESOLVED,
     IncidentService,
 )
-from htco_application.jobs import ClaimedJob, JobError, JobQueue
+from htco_application.jobs import ClaimedJob, JobQueue
+from htco_application.kernel import EVENTS_DESTINATION, JobError, TenantShop
 from htco_application.maintenance import (
     EXPIRY_JOB,
     EXPIRY_SCHEDULE,
@@ -79,7 +79,6 @@ from htco_application.maintenance import (
     ExpiryVault,
     PurgeStore,
     ShopDirectory,
-    TenantShop,
     check_refresh_token,
     enqueue_capability_probes,
     enqueue_purges,
@@ -305,7 +304,7 @@ def notification_deliverers(
         PostgresNotificationStore(database), clock=_now, offload=anyio.to_thread.run_sync
     )
     return {
-        EVENT_DESTINATION: EventDeliverer(
+        EVENTS_DESTINATION: EventDeliverer(
             {
                 INCIDENT_OPENED: IncidentNotifications(service),
                 INCIDENT_RESOLVED: IncidentNotifications(service),

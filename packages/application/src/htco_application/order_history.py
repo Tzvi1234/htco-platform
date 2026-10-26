@@ -38,11 +38,11 @@ from typing import Protocol
 from htco_application.access.authentication import AuthContext, NoMembershipError
 from htco_application.access.policy import Capability, Outcome, Scope, ShopRef, decide
 from htco_application.audit import AuditRecord
+from htco_application.kernel import Page
 from htco_application.marketplace import (
     AccessTokenProvider,
     MarketplaceRateLimitedError,
     OrderReceipt,
-    Page,
 )
 from htco_application.order_ingest import BACKFILL, SYNC, IngestContext, IngestSource
 from htco_application.shop_capabilities import ShopNotConnectedError, TokenPinning

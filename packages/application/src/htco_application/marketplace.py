@@ -16,6 +16,8 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol, override, runtime_checkable
 
+# Re-exported for the locked `execution/` and integrations `etsy.py` until their follow-ups.
+from htco_application.kernel import Page as Page  # noqa: PLC0414
 from htco_domain.orders import OrderState
 
 _CURRENCY = re.compile(r"^[A-Z]{3}$")
@@ -364,21 +366,6 @@ class ProductionPartner:
     partner_id: int
     name: str
     location: str
-
-
-@dataclass(frozen=True)
-class Page[ItemT]:
-    """One page of an offset-paginated list."""
-
-    items: tuple[ItemT, ...]
-    # How many items match the query in total, on every page.
-    total_count: int
-    offset: int
-
-    @property
-    def next_offset(self) -> int | None:
-        following = self.offset + len(self.items)
-        return following if self.items and following < self.total_count else None
 
 
 @dataclass(frozen=True)

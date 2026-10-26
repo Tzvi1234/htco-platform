@@ -21,7 +21,8 @@ from htco_application.execution.gateway import (
     Channel,
 )
 from htco_application.execution.service import ActionGatewayService, GatewayParts
-from htco_application.jobs import DEFAULT_RETRY, ClaimedJob, JobError
+from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
+from htco_application.kernel import JobError
 from htco_application.marketplace import MarketplaceRateLimitedError
 from htco_application.order_ingest import INGESTED, IngestSource
 from htco_application.order_intake import (

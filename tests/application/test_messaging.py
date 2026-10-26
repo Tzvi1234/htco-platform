@@ -6,7 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from htco_application.jobs import DEFAULT_RETRY, ClaimedJob, JobError
+from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
+from htco_application.kernel import JobError
 from htco_application.messaging import (
     OUTBOX_DELIVERY_JOB,
     InboxEvent,
