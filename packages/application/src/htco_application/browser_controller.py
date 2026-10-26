@@ -250,7 +250,8 @@ class BrowserController:
                 # clean exit's re-seal are bounded by the archive caps instead, so a session
                 # that finished its work in time and committed its profile is never reported as
                 # timed out. A failed preflight stops before anything is unpacked.
-                await self._check(environment, record, until=limit.when())
+                # The session carries the status the preflight's record left (#170).
+                environment = await self._check(environment, record, until=limit.when())
                 async with self._profile(environment) as directory, limit:
                     # The unpack may have used up the time: never begin starting a browser
                     # past the deadline.
@@ -289,11 +290,12 @@ class BrowserController:
 
     async def _check(
         self, environment: BrowserEnvironment, record: SessionRecord, *, until: float | None
-    ) -> None:
+    ) -> BrowserEnvironment:
         """The preflight, recorded as a health report, by the session's deadline (`until`, on
-        the loop's clock); a failure stops the session here."""
+        the loop's clock); a failure stops the session here. Returns the environment with the
+        status the record left, so the session never acts on the status from before it."""
         if self._preflight is None:
-            return
+            return environment
         checking = asyncio.timeout_at(until)
         try:
             async with checking:
@@ -303,12 +305,14 @@ class BrowserController:
                 raise
             raise PreflightTimeoutError("the preflight ran past the deadline") from None
         if self._health is not None:
-            await _blocking(
+            status = await _blocking(
                 self._health.record, environment, report,
                 correlation_id=f"browser-session:{record.id}",
             )  # fmt: skip
+            environment = replace(environment, status=status)
         if not report.ok:
             raise PreflightFailedError(report)
+        return environment
 
     async def _still_ours(self, lease: ProfileLease) -> None:
         if not await self._locks.still_held(lease):

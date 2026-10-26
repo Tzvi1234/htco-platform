@@ -11,7 +11,7 @@
 
 import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -257,6 +257,61 @@ def test_signed_out__a_degraded_environment_keeps_its_status_and_gets_one_task()
     validation.signed_out(env, correlation_id="c-2")
     assert store.environments[env.id].status is _E.DEGRADED
     assert store.changes == []
+    assert len(tasks.tasks) == 1
+
+
+@pytest.mark.ac("AC-8A.3.2")
+def test_signed_out__decides_from_the_stored_status_not_the_callers_copy() -> None:
+    """Codex and quill on #170: the caller still holds DEGRADED, but the environment is READY
+    now. Signed out must still move it to LOGIN_REQUIRED, with one task."""
+    registry, store = a_registry()
+    env = an_environment(store, _E.DEGRADED)
+    store.environments[env.id] = replace(env, status=_E.READY)
+    tasks = MemorySignInTasks()
+    SessionValidation(registry, tasks, WORKER).signed_out(env, correlation_id="c-1")
+    assert store.environments[env.id].status is _E.LOGIN_REQUIRED
+    assert [(c.from_status, c.to_status) for c in store.changes] == [(_E.READY, _E.LOGIN_REQUIRED)]
+    assert len(tasks.tasks) == 1
+
+
+@pytest.mark.ac("AC-8A.3.2")
+async def test_controller__a_degraded_profile_restored_by_its_preflight_then_signed_out_needs_a_sign_in(  # noqa: E501
+    tmp_path: Path,
+) -> None:
+    """Codex and quill on #170: a DEGRADED environment's second passing preflight in this
+    session restores it to READY. The session carries that status, so a signed-out marker found
+    in it moves the environment to LOGIN_REQUIRED with exactly one task."""
+    registry, store = a_registry()
+    env = an_environment(store, _E.DEGRADED)
+    health = EnvironmentHealth(registry, store, WORKER)
+    health.record(env, report(True), correlation_id="c-first-pass")  # one pass: still DEGRADED
+    assert store.environments[env.id].status is _E.DEGRADED
+    vault = ProfileVault(
+        EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), MemoryProfileArchiveStore(), now
+    )
+
+    class Handle:
+        async def close(self) -> None:
+            return None
+
+    class Engine:
+        async def launch(self, profile_directory: Path) -> Handle:  # noqa: ARG002
+            return Handle()
+
+    controller = BrowserController(
+        MemoryProfileRecords({env.id: store.environments[env.id]}),
+        ProfileWorkspaces(vault, tmp_path), Engine(), MemoryProfileLocks(), MemorySessionLog(),
+        clock=now, preflight=preflight(Probes()), health=health,
+    )  # fmt: skip
+    tasks = MemorySignInTasks()
+    validation = SessionValidation(registry, tasks, WORKER)
+    async with controller.session(
+        env.id, purpose="test.run", deadline=now() + timedelta(seconds=5)
+    ) as s:
+        assert s.environment.status is _E.READY  # the preflight's second pass restored it
+        validation.signed_out(s.environment, correlation_id="c-signed-out")
+
+    assert store.environments[env.id].status is _E.LOGIN_REQUIRED
     assert len(tasks.tasks) == 1
 
 

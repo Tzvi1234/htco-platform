@@ -27,7 +27,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
-from htco_application.browser_environments import ShopEnvironmentRegistry
+from htco_application.browser_environments import (
+    ShopEnvironmentRegistry,
+    StaleEnvironmentError,
+)
 from htco_domain.actors import ActorRef
 from htco_domain.browser import (
     HEALTH_WINDOW,
@@ -195,14 +198,25 @@ class SessionValidation:
         self._actor = actor
 
     def signed_out(self, environment: BrowserEnvironment, *, correlation_id: str) -> None:
-        if environment.status in _SIGN_IN_FROM:
-            self._registry.transition(
-                environment.id, EnvironmentStatus.LOGIN_REQUIRED, reason=SIGNED_OUT,
-                by=self._actor, expected=environment.status, correlation_id=correlation_id,
-            )  # fmt: skip
-        elif environment.status not in _TASK_ONLY:
+        """Decided from the **stored** status, never the caller's copy (Codex and quill on
+        #170): a status that moved meanwhile is read again once, through the compare-and-set."""
+        for _ in range(2):
+            current = self._registry.get(environment.shop_id)
+            if current is None or current.id != environment.id:
+                return
+            if current.status in _SIGN_IN_FROM:
+                try:
+                    self._registry.transition(
+                        current.id, EnvironmentStatus.LOGIN_REQUIRED, reason=SIGNED_OUT,
+                        by=self._actor, expected=current.status, correlation_id=correlation_id,
+                    )  # fmt: skip
+                except StaleEnvironmentError:
+                    continue  # it moved between the read and the write: decide again
+            elif current.status not in _TASK_ONLY:
+                return
+            self._tasks.open_sign_in(current, correlation_id=correlation_id)
             return
-        self._tasks.open_sign_in(environment, correlation_id=correlation_id)
+        raise StaleEnvironmentError(EnvironmentStatus.LOGIN_REQUIRED, environment.status)
 
 
 @dataclass
