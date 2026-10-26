@@ -537,3 +537,49 @@ async def test_completed__without_an_output_check__nothing_kept() -> None:
     done = await world.engine.execute(execution.id, worker=WORKER)
 
     assert done.output is None
+
+
+async def test_completed__a_check_that_raises__the_run_still_succeeds_without_output(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Nothing after the handler's work may fail the run (quill on #158)."""
+
+    def check(automation_id: str, output: Any) -> dict[str, Any]:  # noqa: ARG001
+        raise RuntimeError("a bug in the check")
+
+    world = World(output_check=check)
+    execution = world.engine.trigger(paid())
+
+    with caplog.at_level(logging.WARNING):
+        done = await world.engine.execute(execution.id, worker=WORKER)
+
+    assert (done.state, done.output) == (ExecutionState.SUCCEEDED, None)
+    assert any(r.getMessage() == "automation.output_check_failed" for r in caplog.records)
+
+
+class OutputRefusingStore(MemoryExecutionStore):
+    """A store whose database refuses the output (for example its size check)."""
+
+    def advance(self, before: Any, steps: Any, **kwargs: Any) -> bool:
+        after, _ = steps[-1]
+        if after.output is not None:
+            raise ValueError("automation_executions_output_check")
+        return super().advance(before, steps, **kwargs)
+
+
+async def test_completed__an_output_the_store_refuses__the_run_still_succeeds_without_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    world = World(output_check=lambda automation_id, output: dict(output))  # noqa: ARG005
+    world.store = OutputRefusingStore()
+    world.engine._store = world.store
+    execution = world.engine.trigger(paid())
+
+    with caplog.at_level(logging.WARNING):
+        done = await world.engine.execute(execution.id, worker=WORKER)
+
+    stored = world.store.load(execution.id)
+    assert stored is not None
+    assert (done.state, done.output) == (ExecutionState.SUCCEEDED, None)
+    assert stored.execution.state is ExecutionState.SUCCEEDED
+    assert any(r.getMessage() == "automation.output_not_saved" for r in caplog.records)
