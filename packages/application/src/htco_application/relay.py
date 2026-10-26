@@ -98,9 +98,15 @@ class RelayStore(Protocol):
     def item(self, organization_id: uuid.UUID, item_id: uuid.UUID) -> RelayItem | None: ...
 
     def open_items(
-        self, organization_id: uuid.UUID, *, shop_ids: frozenset[uuid.UUID] | None, limit: int
+        self,
+        organization_id: uuid.UUID,
+        *,
+        shop_ids: frozenset[uuid.UUID] | None,
+        limit: int,
+        after: RelayItem | None = None,
     ) -> tuple[RelayItem, ...]:
-        """Oldest first; `shop_ids` (a shop-scoped role's grants) is applied before `limit`."""
+        """Oldest first, by `(opened_at, id)`; `shop_ids` (a shop-scoped role's grants) is
+        applied before `limit`; `after` continues from that item (a keyset page)."""
         ...
 
     def reveal_code(
@@ -210,30 +216,43 @@ async def reconcile_relay_items(  # noqa: PLR0913 - the shop and its collaborato
 ) -> tuple[int, int]:
     """Close the shop's open items whose order was cancelled or refunded on Etsy (`cancelled`,
     Codex review of #159) and those handed off longer than `RELAY_CODE_TTL` (`expired`, Sage's
-    security review). Closing deletes a pasted code. Returns (cancelled, expired)."""
-    items: tuple[RelayItem, ...] = await offload(
-        partial(store.open_items, organization_id, shop_ids=frozenset({shop_id}), limit=LIST_LIMIT)
-    )
-    if not items:
-        return 0, 0
-    done: Mapping[int, datetime] = await offload(
-        partial(closed_orders, shop_id, tuple(i.receipt_id for i in items))
-    )
+    security review). Closing deletes a pasted code. Every open item is reached, page by page
+    (keyset on `(opened_at, id)`), so a full first page never hides a later one (Codex, #159).
+    Returns (cancelled, expired)."""
     cancelled = expired = 0
-    for item in items:
-        reason = (
-            ClosedReason.CANCELLED
-            if item.receipt_id in done
-            else ClosedReason.EXPIRED
-            if item.state is RelayState.HANDED_OFF and now - item.updated_at > RELAY_CODE_TTL
-            else None
+    after: RelayItem | None = None
+    while True:
+        items: tuple[RelayItem, ...] = await offload(
+            partial(
+                store.open_items,
+                organization_id,
+                shop_ids=frozenset({shop_id}),
+                limit=LIST_LIMIT,
+                after=after,
+            )
         )
-        if reason is None:
-            continue
-        moved = await offload(partial(store.close, item.id, reason=reason, now=now))
-        if moved is not None:
-            cancelled += reason is ClosedReason.CANCELLED
-            expired += reason is ClosedReason.EXPIRED
+        if not items:
+            break
+        done: Mapping[int, datetime] = await offload(
+            partial(closed_orders, shop_id, tuple(i.receipt_id for i in items))
+        )
+        for item in items:
+            reason = (
+                ClosedReason.CANCELLED
+                if item.receipt_id in done
+                else ClosedReason.EXPIRED
+                if item.state is RelayState.HANDED_OFF and now - item.updated_at > RELAY_CODE_TTL
+                else None
+            )
+            if reason is None:
+                continue
+            moved = await offload(partial(store.close, item.id, reason=reason, now=now))
+            if moved is not None:
+                cancelled += reason is ClosedReason.CANCELLED
+                expired += reason is ClosedReason.EXPIRED
+        if len(items) < LIST_LIMIT:
+            break
+        after = items[-1]
     return cancelled, expired
 
 

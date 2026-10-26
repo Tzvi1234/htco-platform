@@ -16,8 +16,10 @@ import pytest
 from htco_application.access.authentication import AuthContext, Membership
 from htco_application.notifications import NotificationService
 from htco_application.relay import (
+    LIST_LIMIT,
     RELAY_CODE_TTL,
     DuplicateTrackingError,
+    RelayItem,
     RelayItemMovedError,
     RelayItemNotVisibleError,
     list_relay_items,
@@ -486,6 +488,51 @@ async def test_a_pasted_code_never_outlives_its_ttl_the_item_expires() -> None:
 
     assert (early, late) == ((0, 0), (0, 1))
     assert store.items[item].closed_reason is ClosedReason.EXPIRED
+    assert store.codes == {}
+
+
+async def test_reconcile_reaches_items_beyond_the_first_page() -> None:
+    """Codex on #159: with a full page of older items still waiting, a later handed-off item
+    still expires and a later cancelled one still closes, so no code outlives its purpose."""
+    store = MemoryRelayStore()
+    for receipt in range(1, LIST_LIMIT + 1):  # a full page of older, untouched items
+        store.open_item(
+            RelayItem(
+                id=uuid.uuid7(), organization_id=ORG, shop_id=SHOP, receipt_id=receipt,
+                state=RelayState.AWAITING_TRACKING, paid_at=PAID,
+                opened_at=PAID + timedelta(minutes=receipt), updated_at=PAID,
+            )
+        )  # fmt: skip
+    late = PAID + timedelta(days=1)
+    handed, cancelled = (
+        RelayItem(
+            id=uuid.uuid7(),
+            organization_id=ORG,
+            shop_id=SHOP,
+            receipt_id=receipt,
+            state=RelayState.AWAITING_TRACKING,
+            paid_at=PAID,
+            opened_at=late,
+            updated_at=late,
+        )
+        for receipt in (9001, 9002)
+    )
+    store.open_item(handed)
+    store.open_item(cancelled)
+    submit_tracking(
+        auth(), store, organization_id=ORG, item_id=handed.id, carrier="usps", code=CODE,
+        now=late, correlation_id="req-1",
+    )  # fmt: skip
+    now = late + RELAY_CODE_TTL + timedelta(minutes=1)
+
+    result = await reconcile_relay_items(
+        store, lambda _shop, receipts: {r: now for r in receipts if r == 9002},
+        organization_id=ORG, shop_id=SHOP, now=now,
+    )  # fmt: skip
+
+    assert result == (1, 1)
+    assert store.items[handed.id].closed_reason is ClosedReason.EXPIRED
+    assert store.items[cancelled.id].closed_reason is ClosedReason.CANCELLED
     assert store.codes == {}
 
 

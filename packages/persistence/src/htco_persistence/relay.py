@@ -85,7 +85,12 @@ class PostgresRelayStore:
         return None if row is None else _item(row)
 
     def open_items(
-        self, organization_id: uuid.UUID, *, shop_ids: frozenset[uuid.UUID] | None, limit: int
+        self,
+        organization_id: uuid.UUID,
+        *,
+        shop_ids: frozenset[uuid.UUID] | None,
+        limit: int,
+        after: RelayItem | None = None,
     ) -> tuple[RelayItem, ...]:
         shops = None if shop_ids is None else list(shop_ids)
         with self._database.connection() as connection:
@@ -94,10 +99,18 @@ class PostgresRelayStore:
                 select {_COLUMNS} from app.relay_items
                 where organization_id = %(org)s and state <> 'closed'
                   and (%(shops)s::uuid[] is null or shop_id = any(%(shops)s::uuid[]))
+                  and (%(after_at)s::timestamptz is null
+                       or (opened_at, id) > (%(after_at)s::timestamptz, %(after_id)s::uuid))
                 order by opened_at, id
                 limit %(limit)s
                 """,  # noqa: S608 - a constant column list
-                {"org": organization_id, "shops": shops, "limit": limit},
+                {
+                    "org": organization_id,
+                    "shops": shops,
+                    "limit": limit,
+                    "after_at": None if after is None else after.opened_at,
+                    "after_id": None if after is None else after.id,
+                },
             ).fetchall()
         return tuple(_item(r) for r in rows)
 

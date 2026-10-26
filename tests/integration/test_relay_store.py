@@ -136,3 +136,19 @@ async def test_the_worker_reaches_its_jobs_organization_only(
         .state
         is RelayState.AWAITING_TRACKING
     )
+
+
+async def test_open_items__keyset_pages_reach_every_item(database: Database) -> None:
+    """Codex on #159: reconciliation pages through every open item, oldest first."""
+    tenant, integration = await connected(database)
+    store = PostgresRelayStore(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    with tenant_scope(org):
+        for receipt in (81, 82, 83):
+            store.open_item(item(org, shop, receipt))
+
+    first = store.open_items(org, shop_ids=frozenset({shop}), limit=2)
+    rest = store.open_items(org, shop_ids=frozenset({shop}), limit=2, after=first[-1])
+
+    assert [i.receipt_id for i in (*first, *rest)] == [81, 82, 83]
+    assert store.open_items(org, shop_ids=frozenset({shop}), limit=2, after=rest[-1]) == ()

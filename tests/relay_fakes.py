@@ -44,7 +44,12 @@ class MemoryRelayStore:
         return found if found is not None and found.organization_id == organization_id else None
 
     def open_items(
-        self, organization_id: uuid.UUID, *, shop_ids: frozenset[uuid.UUID] | None, limit: int
+        self,
+        organization_id: uuid.UUID,
+        *,
+        shop_ids: frozenset[uuid.UUID] | None,
+        limit: int,
+        after: RelayItem | None = None,
     ) -> tuple[RelayItem, ...]:
         found = [
             i
@@ -52,8 +57,9 @@ class MemoryRelayStore:
             if i.organization_id == organization_id
             and i.state.is_open
             and (shop_ids is None or i.shop_id in shop_ids)
+            and (after is None or (i.opened_at, i.id) > (after.opened_at, after.id))
         ]
-        return tuple(sorted(found, key=lambda i: i.opened_at)[:limit])
+        return tuple(sorted(found, key=lambda i: (i.opened_at, i.id))[:limit])
 
     def reveal_code(
         self, organization_id: uuid.UUID, item_id: uuid.UUID, *, audit: AuditRecord
