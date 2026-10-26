@@ -47,6 +47,7 @@ Events are published through the outbox (`jobs.outbox`, slice 5.2); the first pr
 | `fulfillment.sla_breached.v1` | Incident Detection & Escalation | Incidents, Eitan (Phase 9) | 6 |
 | `incidents.opened.v1` | Incidents | Notifications, Eitan (Phase 9), Amir (Phase 19) | 6 |
 | `incidents.resolved.v1` | Incidents | Notifications, metrics, Noa's follow-up (Phase 10) | 6 |
+| `incidents.escalated.v1` | Incidents (an incident moved to `escalated`, by the age rule or a person; once per incident) | Notifications (in-app and email to the Owners and Admins) | 6 |
 | `notifications.requested.v1` | Any context | Notification dispatcher (in-app, email) | 6 |
 | `tasks.created.v1`, `tasks.state_changed.v1` | Tasks | Office, metrics, Agent Task Scheduling & Recovery | 7 |
 | `approvals.requested.v1` | Approvals | Notifications, the waiting session | 7 |

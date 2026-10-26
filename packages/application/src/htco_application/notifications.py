@@ -42,6 +42,7 @@ from htco_domain.notifications import (
 EMAIL_DESTINATION = "email.send"
 EVENTS_DESTINATION = "events.publish"
 INCIDENT_RESOLVED_EVENT = "incidents.resolved.v1"
+INCIDENT_ESCALATED_EVENT = "incidents.escalated.v1"
 SENDER = "HTCO Office <noreply@office.ht-co.app>"
 
 _log = logging.getLogger(__name__)
@@ -194,15 +195,18 @@ class EventSubscriber(Protocol):
 
 @dataclass
 class IncidentNotifications:
-    """`incidents.opened.v1` and `incidents.resolved.v1` → one notification per owner and
-    admin (an email too for an opening, by default)."""
+    """`incidents.opened.v1`, `incidents.escalated.v1` and `incidents.resolved.v1` → one
+    notification per owner and admin (an email too for an opening or an escalation, by
+    default)."""
 
     service: NotificationService
 
     async def handle(self, message: OutboxMessage) -> None:
         payload = message.payload
-        resolved = payload.get("event_type") == INCIDENT_RESOLVED_EVENT
-        kind = NotificationKind.INCIDENT_RESOLVED if resolved else NotificationKind.INCIDENT_OPENED
+        kind = {
+            INCIDENT_RESOLVED_EVENT: NotificationKind.INCIDENT_RESOLVED,
+            INCIDENT_ESCALATED_EVENT: NotificationKind.INCIDENT_ESCALATED,
+        }.get(str(payload.get("event_type")), NotificationKind.INCIDENT_OPENED)
         incident_id = uuid.UUID(str(payload["incident_id"]))
         params: dict[str, object] = {
             "incident_id": str(incident_id),
@@ -317,6 +321,16 @@ _TEMPLATES: Mapping[tuple[NotificationKind, Locale], tuple[str, str]] = {
     (NotificationKind.INCIDENT_RESOLVED, Locale.HE): (
         "הזמנה {receipt_id}: נפתר",
         "האירוע של הזמנה {receipt_id} נפתר על סמך ראיה.",
+    ),
+    (NotificationKind.INCIDENT_ESCALATED, Locale.EN): (
+        "Order {receipt_id}: escalated",
+        "The incident for order {receipt_id} ({cause}, severity {severity}) has waited past its"
+        " limit and needs you now.",
+    ),
+    (NotificationKind.INCIDENT_ESCALATED, Locale.HE): (
+        "הזמנה {receipt_id}: הוסלם",
+        "האירוע של הזמנה {receipt_id} ({cause}, חומרה {severity}) חיכה מעבר למותר"
+        " ודורש אתכם עכשיו.",
     ),
     (NotificationKind.ALERT_SHIP_BY, Locale.EN): (
         "Order {receipt_id} ships by {ship_by}",
@@ -512,7 +526,12 @@ class EmailDeliverer:
         base = self.office_url.rstrip("/")
         incident = params.get("incident_id")
         if (
-            kind in {NotificationKind.INCIDENT_OPENED, NotificationKind.INCIDENT_RESOLVED}
+            kind
+            in {
+                NotificationKind.INCIDENT_OPENED,
+                NotificationKind.INCIDENT_ESCALATED,
+                NotificationKind.INCIDENT_RESOLVED,
+            }
             and incident
         ):
             return f"{base}/incidents/{incident}"

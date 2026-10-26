@@ -78,7 +78,7 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 
 ### `uv` refuses to run ("required version")
 1. **Check:** `uv --version`.
-2. **Fix:** `uv self update 0.13.0` (or the version in `pyproject.toml`).
+2. **Fix:** `uv self update 0.13.5` (or the version in `pyproject.toml`).
 
 ### mypy fails to start with "The filename or extension is too long" (Windows)
 1. **Likely cause:** the checkout lives in a very deep folder; compiled mypy modules cannot load from long paths even when long paths are enabled.
