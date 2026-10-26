@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from htco_application.kernel import Page
 from htco_application.marketplace import (
     AccessTokenProvider,
     ListingDetails,
@@ -18,7 +19,6 @@ from htco_application.marketplace import (
     OrderLine,
     OrderReceipt,
     OrderShipment,
-    Page,
     ProductionPartner,
     ReturnPolicy,
     ShippingDestination,

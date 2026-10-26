@@ -10,7 +10,8 @@ from htco_application.alerts import StockAlerts
 from htco_application.automation.durable import Completed, HandlerContext
 from htco_application.execution.gateway import UnavailableGateway
 from htco_application.fulfillment_schedule import INCIDENT_DETECTION
-from htco_application.incidents import EVENTS, IncidentService
+from htco_application.incidents import IncidentService
+from htco_application.kernel import EVENTS_DESTINATION
 from htco_application.messaging import OutboxMessage
 from htco_application.notifications import NotificationService
 from htco_application.sla_inspector import AwaitingOrder, IncidentDetection
@@ -110,7 +111,9 @@ def out_of_stock(listing: int = 777, at: str = "2026-10-25T08:00:00+00:00") -> O
         "event_type": "catalog.out_of_stock.v1", "listing_id": listing, "in_stock": False,
         "etsy_updated_at": at,
     }  # fmt: skip
-    return OutboxMessage(ORG, EVENTS, f"catalog.out_of_stock.v1:{listing}:{at}", payload, SHOP)
+    return OutboxMessage(
+        ORG, EVENTS_DESTINATION, f"catalog.out_of_stock.v1:{listing}:{at}", payload, SHOP
+    )
 
 
 async def test_stock_out_of_stock_alerts_once_per_listing_change() -> None:
@@ -129,7 +132,9 @@ async def test_stock_out_of_stock_alerts_once_per_listing_change() -> None:
 
 async def test_a_stock_event_without_a_listing_is_ignored() -> None:
     notes = MemoryNotificationStore([Member(OWNER, "owner", "owner@example.test")])
-    message = OutboxMessage(ORG, EVENTS, "x", {"event_type": "catalog.out_of_stock.v1"}, SHOP)
+    message = OutboxMessage(
+        ORG, EVENTS_DESTINATION, "x", {"event_type": "catalog.out_of_stock.v1"}, SHOP
+    )
     await StockAlerts(NotificationService(notes, clock=lambda: PAID)).handle(message)
     assert notes.rows == {}
 

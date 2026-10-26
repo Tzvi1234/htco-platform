@@ -18,7 +18,8 @@ from htco_application.automation.durable import (
     StoredExecution,
     Waiting,
 )
-from htco_application.jobs import JobSpec, JsonValue
+from htco_application.jobs import JobSpec
+from htco_application.kernel import JsonValue
 from htco_application.messaging import OutboxMessage
 from htco_application.status import execution_state_event
 from htco_domain.automation import AutomationExecution

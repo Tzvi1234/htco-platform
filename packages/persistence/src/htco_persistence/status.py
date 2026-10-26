@@ -14,8 +14,8 @@ from typing import Any
 
 import psycopg
 
+from htco_application.kernel import EVENTS_DESTINATION
 from htco_application.status import (
-    EVENT_DESTINATION,
     ActionRecord,
     ChainRecords,
     ChangeRecord,
@@ -160,7 +160,7 @@ class PostgresChainReader:
             """,
             [
                 organization_id,
-                EVENT_DESTINATION,
+                EVENTS_DESTINATION,
                 [a.id for a in actions],
                 str(execution.id),
                 _MAX_ROWS,

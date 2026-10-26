@@ -16,7 +16,8 @@ from typing import override
 import anyio
 import pytest
 
-from htco_application.jobs import ClaimedJob, JobError
+from htco_application.jobs import ClaimedJob
+from htco_application.kernel import JobError
 from htco_domain.automation import RetryPolicy
 from htco_domain.jobs import JobState, Schedule
 from htco_worker.runner import JobHandler, Worker, WorkerConfig

@@ -13,7 +13,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from htco_application.jobs import JsonValue
+from htco_application.kernel import JsonValue
 from htco_application.marketplace import (
     MarketplaceMoney,
     OrderLine,
