@@ -90,4 +90,4 @@ text = "None: it reads Etsy and records HTCO's own facts. A tracking write to Et
 
 [specification.metrics]
 status = "defined"
-text = "Admin › Health (slice 5.9): executions, success rate, retries, dead letters and latency p50 and p95 over 7 days; per run, the execution's output counts the new tracking events (recorded)."
+text = "Admin › Health (slice 5.9): executions, success rate, retries, dead letters and latency p50 and p95 over 7 days; the handler's result counts each run's new tracking events (recorded), not yet retained by the engine (https://github.com/Tzvi1234/htco-platform/issues/127)."
