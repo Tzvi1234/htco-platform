@@ -425,6 +425,10 @@ def render_email(
     words = _WORDS[locale]
     values = {name: words.get(value, value) for name, value in checked.items()}
     subject_template, body_template = _TEMPLATES[(kind, locale)]
+    # A review whose order is not in the history names the listing only (local Codex review of
+    # #108): never "order -".
+    if kind is NotificationKind.ALERT_LOW_REVIEW and "receipt_id" not in checked:
+        subject_template, body_template = _LOW_REVIEW_UNLINKED[locale]
     subject = subject_template.format_map(_Missing(values))
     body = body_template.format_map(_Missing(values))
     text = f"{body}\n\n{words['open']}: {link}\n\n{words['footer']}\n"
@@ -438,6 +442,18 @@ def render_email(
         f'<p style="color:#6b6b6b;font-size:12px">{escape(words["footer"])}</p></body></html>'
     )
     return RenderedEmail(subject=subject, text=text, html=html)
+
+
+_LOW_REVIEW_UNLINKED: Mapping[Locale, tuple[str, str]] = {
+    Locale.EN: (
+        "A {rating}-star review",
+        "A new review of {rating} stars arrived for listing {listing_id}.",
+    ),
+    Locale.HE: (
+        "ביקורת של {rating} כוכבים",
+        "התקבלה ביקורת חדשה של {rating} כוכבים למוצר {listing_id}.",
+    ),
+}
 
 
 class _Missing(dict[str, str]):

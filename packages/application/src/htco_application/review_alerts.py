@@ -94,7 +94,10 @@ async def low_review_alerts(  # noqa: PLR0913 - the execution and its collaborat
         found = output.get("reviews")
         items = [r for r in found if isinstance(r, dict)] if isinstance(found, list) else []
         read += len(items)
-        raised += await _alert(ctx, shop_id, items, orders=orders, alerts=alerts, offload=offload)
+        # The page that crosses the window's edge holds older reviews too: only the window's
+        # alert (local Codex review of #108).
+        inside = [r for r in items if not _older_than(r, start)]
+        raised += await _alert(ctx, shop_id, inside, orders=orders, alerts=alerts, offload=offload)
         count = output.get("count")
         if len(items) < PAGE or not isinstance(count, int) or count <= (page + 1) * PAGE:
             break

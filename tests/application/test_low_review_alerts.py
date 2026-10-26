@@ -354,3 +354,38 @@ async def test_a_long_deferral_alerts_what_it_read_before_waiting_for_the_retry(
     assert raised.value.retry_after_seconds == 3600
     [row] = notes.rows.values()
     assert row.params["listing_id"] == "770"
+
+
+async def test_a_low_review_older_than_the_window_on_the_boundary_page_never_alerts() -> None:
+    """Local Codex review of #108: the page that crosses the window's edge is filtered first."""
+    detection, notes = handler()
+    old = (NOW - REVIEW_LOOKBACK - timedelta(hours=1)).isoformat()
+    boundary = [
+        review(80_000, 2, listing=780),
+        {**review(80_001, 1, listing=781), "created_at": old},
+    ]
+    gateway = ScriptedGateway([page_of(boundary, 2)])
+
+    outcome = await detection(context(gateway))
+
+    assert isinstance(outcome, Completed)
+    assert outcome.output["low_review_alerts"] == 1
+    [row] = notes.rows.values()
+    assert row.params["listing_id"] == "780"
+
+
+def test_an_unlinked_reviews_email_names_the_listing_and_no_order() -> None:
+    """Local Codex review of #108: no "order -" when the review's order is not stored."""
+    for locale in (Locale.EN, Locale.HE):
+        email = render_email(
+            NotificationKind.ALERT_LOW_REVIEW, locale, {"rating": "2", "listing_id": "710"},
+            link="https://x.test/",
+        )  # fmt: skip
+        assert "710" in email.text
+        assert " -" not in email.text.split("\n")[0]
+        assert "-." not in email.text.split("\n")[0]
+    linked = render_email(
+        NotificationKind.ALERT_LOW_REVIEW, Locale.EN,
+        {"rating": "2", "listing_id": "710", "receipt_id": "51"}, link="https://x.test/",
+    )  # fmt: skip
+    assert "order 51" in linked.text
