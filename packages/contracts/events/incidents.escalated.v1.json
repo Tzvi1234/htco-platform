@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ht-co.app/contracts/events/incidents.escalated.v1.json",
   "title": "incidents.escalated.v1",
-  "description": "An incident moved to escalated (once per incident). Envelope: SOFTWARE_DESIGN §8.4.",
+  "description": "An incident moved to escalated (once per escalation, keyed by escalation_id). Envelope: SOFTWARE_DESIGN §8.4.",
   "type": "object",
   "properties": {
     "event_id": {
@@ -98,6 +98,11 @@
         },
         "escalated_at": {
           "type": "string"
+        },
+        "escalation_id": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36
         }
       },
       "required": [
@@ -109,7 +114,8 @@
         "resource_id",
         "receipt_id",
         "escalated_from",
-        "escalated_at"
+        "escalated_at",
+        "escalation_id"
       ],
       "additionalProperties": false
     }

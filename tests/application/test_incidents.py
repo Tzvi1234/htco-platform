@@ -14,10 +14,11 @@ from htco_application.incidents import (
     IncidentService,
     ObservedDrift,
     StaleIncident,
+    _event,
     drift_detection,
     order_resource,
 )
-from htco_application.kernel import event_payload
+from htco_application.kernel import event_payload, read_event
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.incidents import (
     Cause,
@@ -183,11 +184,85 @@ async def test_an_escalation_is_announced_once_with_what_it_was() -> None:
     )
 
     [event] = store.events.of(INCIDENT_ESCALATED)
-    assert event.idempotency_key == f"{INCIDENT_ESCALATED}:{incident.id}"
-    assert event_payload(event)["incident_id"] == str(incident.id)
-    assert event_payload(event)["severity"] == "medium"
-    assert event_payload(event)["escalated_from"] == "detected"
-    assert event_payload(event)["receipt_id"] == 51
+    # One per escalation (quill on #119): the key ends with the escalation's own ID (Codex, #163),
+    # in the envelope too (AUD-01): the event's key is the outbox key.
+    facts = event_payload(event)
+    escalation = facts["escalation_id"]
+    assert event.idempotency_key == f"{INCIDENT_ESCALATED}:{incident.id}:{escalation}"
+    assert event.payload["idempotency_key"] == event.idempotency_key
+    assert uuid.UUID(str(escalation)).version == 7
+    assert facts["incident_id"] == str(incident.id)
+    assert facts["severity"] == "medium"
+    assert facts["escalated_from"] == "detected"
+    assert facts["receipt_id"] == 51
+
+
+async def test_a_second_escalation_is_announced_again() -> None:
+    """Quill on #119: an incident moved back and escalated again tells the owner again."""
+    store = MemoryIncidentStore()
+    now = [NOW]
+    incidents = IncidentService(store, clock=lambda: now[0])
+    incident, _ = await incidents.open(detection(), actor=ACTOR)
+
+    await incidents.move(ORG, incident.id, IncidentState.ESCALATED, actor=ACTOR)
+    now[0] += timedelta(hours=1)
+    await incidents.move(ORG, incident.id, IncidentState.TRIAGED, actor=OWNER, note="owner_triage")
+    now[0] += timedelta(days=4)
+    await incidents.move(ORG, incident.id, IncidentState.ESCALATED, actor=ACTOR)
+
+    first, second = store.events.of(INCIDENT_ESCALATED)
+    assert first.idempotency_key != second.idempotency_key
+    assert event_payload(second)["escalated_from"] == "triaged"
+
+
+async def test_two_escalations_in_one_second_are_two_announcements() -> None:
+    """Codex on #163: escalated, moved back and escalated again within one second (one fixed
+    clock) are two escalations, each with its own key."""
+    store = MemoryIncidentStore()
+    incidents = service(store)
+    incident, _ = await incidents.open(detection(), actor=ACTOR)
+
+    await incidents.move(ORG, incident.id, IncidentState.ESCALATED, actor=ACTOR)
+    await incidents.move(ORG, incident.id, IncidentState.TRIAGED, actor=OWNER, note="owner_triage")
+    await incidents.move(ORG, incident.id, IncidentState.ESCALATED, actor=ACTOR)
+
+    first, second = store.events.of(INCIDENT_ESCALATED)
+    assert first.idempotency_key != second.idempotency_key
+    assert event_payload(first)["escalation_id"] != event_payload(second)["escalation_id"]
+    assert event_payload(first)["escalated_at"] == event_payload(second)["escalated_at"]
+
+
+async def test_two_escalations_in_one_second_have_two_event_ids_and_a_replay_keeps_its_id() -> None:
+    """Sage on #174: the per-escalation key (#163) sits in the DomainEvent's idempotency key, so
+    each escalation's event_id is its own, and the same escalation published again (a replay)
+    has the same event_id, which consumers deduplicate on (EVENT_CATALOG rule 5)."""
+    store = MemoryIncidentStore()
+    incidents = service(store)
+    incident, _ = await incidents.open(detection(), actor=ACTOR)
+
+    await incidents.move(ORG, incident.id, IncidentState.ESCALATED, actor=ACTOR)
+    await incidents.move(ORG, incident.id, IncidentState.TRIAGED, actor=OWNER, note="owner_triage")
+    await incidents.move(ORG, incident.id, IncidentState.ESCALATED, actor=ACTOR)
+
+    first, second = store.events.of(INCIDENT_ESCALATED)
+    first_id = read_event(first.payload).event_id
+    second_id = read_event(second.payload).event_id
+    assert first_id is not None
+    assert second_id is not None
+    assert first_id != second_id
+
+    facts = event_payload(first)
+    replay = _event(
+        INCIDENT_ESCALATED,
+        store.incidents[incident.id],
+        extra={k: facts[k] for k in ("escalated_from", "escalated_at", "escalation_id")},
+        correlation=None,
+        actor=ACTOR,
+        at=NOW,
+        occurrence=str(facts["escalation_id"]),
+    )
+    assert replay.idempotency_key == first.idempotency_key
+    assert read_event(replay.payload).event_id == first_id
 
 
 async def test_other_steps_announce_no_escalation() -> None:
