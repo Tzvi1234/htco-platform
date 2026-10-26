@@ -13,12 +13,12 @@ the expiry check reads the stored expiry date and never calls Etsy.
 
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
 from htco_application.audit import AuditRecord
-from htco_application.jobs import JobQueue, JobSpec
+from htco_application.jobs import JobQueue, fan_out_per_shop
+from htco_application.kernel import ConnectedShops, LockKeys, TenantShop
 from htco_application.shop_capabilities import (
     CapabilityChecks,
     ShopNotConnectedError,
@@ -45,16 +45,8 @@ PURGE_JOB = "shops.purge"
 SCHEDULER = ActorRef(ActorKind.SYSTEM, "scheduler")
 
 
-@dataclass(frozen=True)
-class TenantShop:
-    organization_id: uuid.UUID
-    shop_id: uuid.UUID
-
-
-class ShopDirectory(Protocol):
+class ShopDirectory(ConnectedShops, Protocol):
     """Shops across organizations, by ID only: what the daily fan-out needs, nothing more."""
-
-    def connected_shops(self) -> list[TenantShop]: ...
 
     def purgeable_shops(self, *, now: datetime) -> list[TenantShop]: ...
 
@@ -89,19 +81,15 @@ class PurgeStore(Protocol):
 
 def _fan_out(kind: str, shops: Sequence[TenantShop], queue: JobQueue, *, now: datetime) -> int:
     day = now.strftime("%Y-%m-%d")
-    for shop in shops:
-        queue.enqueue(
-            JobSpec(
-                kind=kind,
-                idempotency_key=f"{kind}:{shop.shop_id}:{day}",
-                organization_id=shop.organization_id,
-                shop_id=shop.shop_id,
-                # One Etsy-facing job per shop at a time.
-                lock_key=f"shop:{shop.shop_id}:etsy",
-            ),
-            now=now,
-        )
-    return len(shops)
+    # One Etsy-facing job per shop at a time.
+    return fan_out_per_shop(
+        queue,
+        shops,
+        kind=kind,
+        key=lambda shop: f"{kind}:{shop.shop_id}:{day}",
+        lock=LockKeys.shop_etsy,
+        now=now,
+    )
 
 
 def enqueue_capability_probes(directory: ShopDirectory, queue: JobQueue, *, now: datetime) -> int:

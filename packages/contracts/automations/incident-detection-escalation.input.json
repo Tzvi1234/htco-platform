@@ -11,7 +11,7 @@
       "properties": {
         "shop_id": {"type": "string", "pattern": "^[0-9a-f-]{36}$"},
         "receipt_id": {"type": "integer", "minimum": 1},
-        "kind": {"type": "string", "enum": ["missing", "status", "items", "shipments"]},
+        "kind": {"type": "string", "enum": ["missing", "status", "items", "shipments", "totals"]},
         "detected_at": {"type": "string", "maxLength": 40},
         "drift_id": {"type": "string", "pattern": "^[0-9a-f-]{36}$"}
       },

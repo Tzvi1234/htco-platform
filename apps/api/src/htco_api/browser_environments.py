@@ -20,11 +20,8 @@ from htco_api.auth import CurrentAuth
 from htco_api.identity import problem_responses
 from htco_api.policy_guard import FORBIDDEN
 from htco_api.problems import NOT_FOUND, ProblemError, ProblemType, ValidationProblem
-from htco_application.browser_environments import (
-    EnvironmentReader,
-    ShopOwners,
-    browser_environment_status,
-)
+from htco_application.browser_environments import EnvironmentReader, browser_environment_status
+from htco_application.kernel import ShopOwners
 from htco_application.shops import ShopAccessDeniedError, ShopNotFoundError
 
 BROWSER_ENVIRONMENTS_OFF = ProblemType(

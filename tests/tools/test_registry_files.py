@@ -84,15 +84,25 @@ def test_granted_automations__are_callable_as_agent_tools() -> None:
             assert TriggerKind.AGENT_TOOL in callable_from, (profile.identity.id, automation_id)
 
 
+# The automations the owner approved for activation (ADR-0012 rule 2): the three order
+# automations of slice 5.11 (operations.md, activation checklist step 2). Every other one stays
+# draft until its own approval.
+OWNER_ACTIVATED = {"etsy-order-intake", "order-dedup-verification", "product-sales-counters"}
+
+
 def test_nothing__is_production_ready_by_configuration_alone() -> None:
     assert not any(p.is_production_ready() for p in REGISTRY.employees.values())
     assert all(p.incomplete_sections() for p in REGISTRY.employees.values())
     assert all(t.readiness.value == "draft" for t in REGISTRY.tools.values())
-    assert all(a.readiness.value == "draft" for a in REGISTRY.automations.values())
+    assert {
+        a.id: a.readiness.value
+        for a in REGISTRY.automations.values()
+        if a.readiness.value != "draft"
+    } == dict.fromkeys(OWNER_ACTIVATED, "ready")
 
 
-# Every section defined, readiness still draft until the owner approves the activation: the order
-# automations (AC-5.11.1) and the fulfillment ones (AC-6.7.1).
+# Every section defined: the order automations (AC-5.11.1) and the fulfillment ones (AC-6.7.1).
+# Readiness is draft until the owner approves the activation, ready once he has.
 FULLY_SPECIFIED = {
     "etsy-order-intake",
     "order-dedup-verification",
@@ -103,13 +113,14 @@ FULLY_SPECIFIED = {
 
 
 @pytest.mark.parametrize("automation_id", sorted(FULLY_SPECIFIED))
-def test_a_fully_specified_automation__passes_the_readiness_check_but_stays_draft(
+def test_a_fully_specified_automation__is_ready_only_with_the_owners_approval(
     automation_id: str,
 ) -> None:
     automation = REGISTRY.automations[automation_id]
 
     assert check_specification(automation.specification, AUTOMATION_SPEC_SECTIONS) == ()
-    assert automation.readiness is Readiness.DRAFT  # the owner's switch, not this file's
+    expected = Readiness.READY if automation_id in OWNER_ACTIVATED else Readiness.DRAFT
+    assert automation.readiness is expected  # the owner's switch, not this file's
     replace(automation, readiness=Readiness.READY)  # the loader's check would accept it
 
 

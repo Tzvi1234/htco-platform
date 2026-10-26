@@ -17,12 +17,12 @@ Nothing here holds buyer data: an incident names its order by shop and receipt n
 """
 
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Protocol
 
-from htco_application.jobs import JsonValue
+from htco_application.kernel import EVENTS_DESTINATION, JsonValue, Offload, run_inline
 from htco_application.messaging import OutboxMessage
 from htco_domain.actors import ActorRef
 from htco_domain.incidents import (
@@ -37,7 +37,6 @@ from htco_domain.incidents import (
     resolution_path,
 )
 
-EVENTS = "events.publish"
 INCIDENT_OPENED = "incidents.opened.v1"
 INCIDENT_RESOLVED = "incidents.resolved.v1"
 # An incident moved to escalated (by the inspector's age rule or a person): the owner is told
@@ -148,13 +147,6 @@ class IncidentStore(Protocol):
     ) -> tuple[IncidentRecord, ...]: ...
 
 
-type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
-
-
-async def _inline(work: Callable[[], Any]) -> Any:
-    return work()
-
-
 def _event(
     name: str,
     incident: IncidentRecord,
@@ -177,7 +169,7 @@ def _event(
     return OutboxMessage(
         organization_id=incident.organization_id,
         shop_id=incident.shop_id,
-        destination=EVENTS,
+        destination=EVENTS_DESTINATION,
         # An event that may happen again for the incident (an escalation) is keyed by its ID.
         idempotency_key=f"{name}:{incident.id}" + ("" if occurrence is None else f":{occurrence}"),
         payload=payload,
@@ -190,7 +182,7 @@ class IncidentService:
     store: IncidentStore
     clock: Callable[[], datetime]
     new_id: Callable[[], uuid.UUID] = uuid.uuid7
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def open(self, detection: Detection, *, actor: ActorRef) -> tuple[IncidentRecord, bool]:
         """One open incident per cause and resource (AC-6.3.1): a repeat returns the first."""

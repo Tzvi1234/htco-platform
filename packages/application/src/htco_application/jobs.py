@@ -12,21 +12,25 @@ from a thread, like every other repository.
 """
 
 import uuid
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Protocol
 
+# Re-exported for the locked areas (`execution/`, `automation/durable.py` and persistence
+# `automation.py`) until their follow-up PRs
+# import these from the kernel (#140); every other module already does.
+from htco_application.kernel import JobError as JobError  # noqa: PLC0414
+from htco_application.kernel import JsonValue as JsonValue  # noqa: PLC0414
+from htco_application.kernel import TenantShop
+from htco_application.kernel import describe_error as describe_error  # noqa: PLC0414
 from htco_domain.automation import RetryPolicy
 from htco_domain.jobs import MAX_KEY_LENGTH, FailurePlan, Schedule, check_job_kind
-
-type JsonValue = str | int | float | bool | list[JsonValue] | dict[str, JsonValue] | None
 
 # Three attempts, 10 s then 20 s apart (with jitter): enough for a passing outage.
 DEFAULT_RETRY = RetryPolicy(
     max_attempts=3, initial_backoff=timedelta(seconds=10), max_backoff=timedelta(minutes=5)
 )
-MAX_ERROR_LENGTH = 500
 
 
 @dataclass(frozen=True)
@@ -146,19 +150,6 @@ class WorkerHeartbeats(Protocol):
     ) -> None: ...
 
 
-class JobError(Exception):
-    """A job failure whose message is safe to store and show to admins: no buyer data, no
-    secrets. Any other exception is stored by its type name only."""
-
-
-def describe_error(error: BaseException) -> str:
-    """The `last_error` kept with a failed job."""
-    name = type(error).__name__
-    if isinstance(error, JobError) and str(error):
-        return f"{name}: {error}"[:MAX_ERROR_LENGTH]
-    return name[:MAX_ERROR_LENGTH]
-
-
 def due_schedule_jobs(schedules: Collection[Schedule], now: datetime) -> list[JobSpec]:
     """The current period's job of each schedule; enqueueing them again is a no-op."""
     return [
@@ -169,3 +160,34 @@ def due_schedule_jobs(schedules: Collection[Schedule], now: datetime) -> list[Jo
         )
         for schedule in schedules
     ]
+
+
+def fan_out_per_shop(  # noqa: PLR0913 - the queue, the shops and the job's fields
+    queue: JobQueue,
+    shops: Sequence[TenantShop],
+    *,
+    kind: str,
+    key: Callable[[TenantShop], str],
+    lock: Callable[[uuid.UUID], str] | None,
+    now: datetime,
+    payload: Mapping[str, JsonValue] | None = None,
+    run_at: datetime | None = None,
+    correlation: Callable[[TenantShop], str] | None = None,
+) -> int:
+    """One `kind` job per shop, keyed by `key` (enqueueing it again is a no-op) and, when `lock`
+    is given, under that shop's lock (`LockKeys`). Returns how many shops it covered."""
+    for shop in shops:
+        queue.enqueue(
+            JobSpec(
+                kind=kind,
+                idempotency_key=key(shop),
+                payload=dict(payload or {}),
+                organization_id=shop.organization_id,
+                shop_id=shop.shop_id,
+                lock_key=None if lock is None else lock(shop.shop_id),
+                run_at=run_at,
+                correlation_id=None if correlation is None else correlation(shop),
+            ),
+            now=now,
+        )
+    return len(shops)

@@ -41,17 +41,17 @@ from typing import Any, Protocol
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
 from htco_application.etsy_webhooks import ORDER_INTAKE, TriggersAutomations
-from htco_application.jobs import JobError, JsonValue
+from htco_application.kernel import EVENTS_DESTINATION, JobError, JsonValue, Offload, run_inline
 from htco_application.marketplace import OrderReceipt
 from htco_application.messaging import OutboxMessage, PendingDelivery
 from htco_application.order_ingest import (
     CANCELLED,
     DRIFT_DETECTED,
-    EVENTS_DESTINATION,
     INGESTED,
     REFUNDED,
     UPDATED,
     IngestSource,
+    drift_id,
 )
 from htco_application.order_intake import GatewayReceipts, IntakeShops
 from htco_application.shop_integrations import ShopIntegration
@@ -70,12 +70,6 @@ VERIFIED_EVENTS = frozenset({INGESTED, UPDATED})
 # Sources whose events verification skips: they have just compared the receipt with Etsy.
 COMPARED_SOURCES = frozenset({IngestSource.RECONCILIATION.value})
 COUNTED_EVENTS = frozenset({INGESTED, UPDATED, CANCELLED, REFUNDED})
-
-type Offload = Callable[[Callable[[], Any]], Any]
-
-
-async def _inline(work: Callable[[], Any]) -> Any:
-    return work()
 
 
 # --- Verification ---------------------------------------------------------------------------
@@ -128,7 +122,12 @@ def verify(stored: StoredSnapshot | None, receipt: OrderReceipt) -> tuple[Differ
 
 
 def difference_event(
-    integration: ShopIntegration, receipt: OrderReceipt, difference: Difference, correlation_id: str
+    integration: ShopIntegration,
+    receipt: OrderReceipt,
+    difference: Difference,
+    correlation_id: str,
+    *,
+    detected_at: datetime,
 ) -> OutboxMessage:
     """`orders.drift_detected.v1` for a verification difference (no money, no buyer data)."""
     shop = integration.shop_id
@@ -149,6 +148,10 @@ def difference_event(
             "observed": difference.observed,
             "etsy_updated_at": receipt.updated_at.isoformat(),
             "source": "verification",
+            "drift_id": str(
+                drift_id(shop, receipt.receipt_id, difference.kind, receipt.updated_at)
+            ),
+            "detected_at": detected_at.isoformat(),
         },
         correlation_id=correlation_id[:200],
     )
@@ -328,7 +331,7 @@ class OrderEventTriggers:
     accepted (the outbox keeps it as the record)."""
 
     engine: TriggersAutomations
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def deliver(self, delivery: PendingDelivery) -> None:
         """As an `events.publish` deliverer on its own."""

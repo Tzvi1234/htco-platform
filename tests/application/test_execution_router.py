@@ -32,7 +32,7 @@ from htco_application.execution.service import (
     ChannelAdapter,
     GatewayParts,
 )
-from htco_application.jobs import JsonValue
+from htco_application.kernel import JsonValue, Page
 from htco_application.marketplace import (
     MarketplaceMoney,
     MarketplaceNotFoundError,
@@ -40,7 +40,6 @@ from htco_application.marketplace import (
     MarketplaceShop,
     MarketplaceWriteRefusedError,
     OrderReceipt,
-    Page,
     Receipt,
     ReceiptLine,
     ShopReview,

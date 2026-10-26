@@ -19,6 +19,7 @@ from htco_application.order_automations import (
     desired_counts,
     difference_event,
 )
+from htco_application.order_ingest import drift_id
 from htco_application.shop_integrations import ShopIntegration
 from htco_domain.orders import OrderState
 from htco_persistence.database import Database
@@ -137,7 +138,9 @@ class PostgresOrderAutomationStore:
                 for difference in differences:
                     inserted = c.execute(
                         _INSERT_DRIFT,
-                        [uuid.uuid7(), integration.organization_id, integration.shop_id,
+                        [drift_id(integration.shop_id, receipt.receipt_id, difference.kind,
+                                  receipt.updated_at),
+                         integration.organization_id, integration.shop_id,
                          receipt.receipt_id, difference.kind, Jsonb(difference.stored),
                          Jsonb(difference.observed), receipt.updated_at, now, execution_id,
                          correlation_id[:200]],
@@ -146,7 +149,9 @@ class PostgresOrderAutomationStore:
                         new += 1
                         add_outbox_in(
                             c,
-                            difference_event(integration, receipt, difference, correlation_id),
+                            difference_event(
+                                integration, receipt, difference, correlation_id, detected_at=now
+                            ),
                             now=now,
                         )
             return new

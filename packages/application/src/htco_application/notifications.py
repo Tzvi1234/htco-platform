@@ -20,13 +20,13 @@ destination; `EventDeliverer` hands it to `IncidentNotifications`.
 
 import logging
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape
-from typing import Any, Protocol
+from typing import Protocol
 
-from htco_application.jobs import JsonValue
+from htco_application.kernel import EVENTS_DESTINATION, JsonValue, Offload, run_inline
 from htco_application.messaging import OutboxMessage, PendingDelivery
 from htco_domain.notifications import (
     AUDIENCE,
@@ -40,7 +40,6 @@ from htco_domain.notifications import (
 )
 
 EMAIL_DESTINATION = "email.send"
-EVENTS_DESTINATION = "events.publish"
 INCIDENT_RESOLVED_EVENT = "incidents.resolved.v1"
 INCIDENT_ESCALATED_EVENT = "incidents.escalated.v1"
 SENDER = "HTCO Office <noreply@office.ht-co.app>"
@@ -109,13 +108,6 @@ class NotificationStore(Protocol):
         ...
 
 
-type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
-
-
-async def _inline(work: Callable[[], Any]) -> Any:
-    return work()
-
-
 def email_message(
     notification: Notification, locale: Locale, correlation: str | None
 ) -> OutboxMessage:
@@ -141,7 +133,7 @@ class NotificationService:
     store: NotificationStore
     clock: Callable[[], datetime]
     new_id: Callable[[], uuid.UUID] = uuid.uuid7
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def notify(self, request: NotificationRequest) -> int:
         """Writes the notifications and emails; returns how many notifications were new."""
@@ -523,7 +515,7 @@ class EmailDeliverer:
     clock: Callable[[], datetime]
     reply_to: str
     office_url: str
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def deliver(self, delivery: PendingDelivery) -> None:
         message = delivery.message
@@ -713,7 +705,7 @@ class SecurityNotices:
 
     store: SecurityNoticeStore
     clock: Callable[[], datetime]
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def signed_in(
         self, user_id: uuid.UUID, *, session_id: uuid.UUID, user_agent: str | None

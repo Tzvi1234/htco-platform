@@ -27,4 +27,4 @@ Severity: `low`, `medium`, `high`, `critical`. Defaults: missing tracking `mediu
 | AC-6.3.3 | Every illegal state transition is rejected (state-machine tests). |
 | AC-6.3.4 | A drift recorded by reconciliation (Phase 5) opens one incident linked to the order. |
 
-AC-6.3.4 is built on the incident side (the `drift` payload of Incident Detection & Escalation and `drift_detection`); its trigger from `app.sync_drifts` is wired after slice 5.5 (PR #75) merges.
+AC-6.3.4 is built on the incident side (the `drift` payload of Incident Detection & Escalation and `drift_detection`) and triggered by `DriftIncidents` (6.7, PR #129): every `orders.drift_detected.v1` starts one run keyed `incident-detection-escalation:drift:{drift_id}`, where `drift_id` is the `app.sync_drifts` row's natural key (`order_ingest.drift_id`). The handler refuses a drift whose shop is not the execution's own, and it refuses an execution that names no shop (the guard fails closed).
