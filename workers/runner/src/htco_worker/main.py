@@ -26,7 +26,9 @@ from htco_application.automation.durable import (
     EXECUTION_JOB,
     DurableAutomationEngine,
     Handler,
+    OutputCheck,
 )
+from htco_application.automation.outputs import TypedOutputs
 from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_tokens import VaultAccessTokenProvider
 from htco_application.etsy_webhooks import (
@@ -113,6 +115,7 @@ from htco_application.order_automations import (
     OrderVerification,
     ProductSalesCounters,
 )
+from htco_application.order_ingest import DRIFT_DETECTED
 from htco_application.order_intake import (
     ORDER_SYNC_JOB,
     RECONCILIATION_TICK,
@@ -122,7 +125,7 @@ from htco_application.order_intake import (
     enqueue_reconciliations,
 )
 from htco_application.shop_capabilities import CapabilityChecks
-from htco_application.sla_inspector import IncidentDetection
+from htco_application.sla_inspector import DriftIncidents, IncidentDetection
 from htco_application.tracking_sync import EngineTrackingSync, TrackingRecorder, TrackingSync
 from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_domain.actors import ActorKind, ActorRef
@@ -355,6 +358,7 @@ def worker_engine(
     *,
     gateway: ActionGateway | None = None,
     handlers: Mapping[str, Handler] | None = None,
+    output_check: OutputCheck | None = None,
 ) -> DurableAutomationEngine:
     """The engine on the worker's pool: definitions from the database, the deployed handlers
     (Etsy Order Intake, slice 5.4) and the Action Gateway. A deployed handler still runs only once
@@ -368,6 +372,7 @@ def worker_engine(
         jitter=random.random,
         gateway=gateway or UnavailableGateway(),
         offload=anyio.to_thread.run_sync,
+        output_check=output_check,
     )
 
 
@@ -433,6 +438,12 @@ def order_event_subscribers(engine: DurableAutomationEngine) -> dict[str, EventS
     """The order events that start the order automations (slice 5.11)."""
     triggers = OrderEventTriggers(engine, offload=anyio.to_thread.run_sync)
     return dict.fromkeys(sorted(VERIFIED_EVENTS | COUNTED_EVENTS), triggers)
+
+
+def fulfillment_event_subscribers(engine: DurableAutomationEngine) -> dict[str, EventSubscriber]:
+    """The order events that start the fulfillment automations: a drift starts Incident
+    Detection & Escalation (AC-6.3.4, slice 6.7)."""
+    return {DRIFT_DETECTED: DriftIncidents(engine, offload=anyio.to_thread.run_sync)}
 
 
 def fulfillment_handlers(
@@ -662,11 +673,17 @@ async def _serve(settings: WorkerSettings) -> None:
     gateway = worker_gateway(settings, database, etsy.gateway_adapter)
     deployed = {} if vault is None or adapter is None else intake_handlers(database, vault)
     deployed |= fulfillment_handlers(database, None if adapter is None else vault)
-    engine = worker_engine(database, gateway=gateway, handlers=deployed)
+    # A completed run keeps only what its automation's typed output model allows (#127).
+    engine = worker_engine(
+        database, gateway=gateway, handlers=deployed, output_check=TypedOutputs().check
+    )
     handlers |= outbox_handlers(
         PostgresOutbox(database),
         notification_deliverers(
-            settings, database, http, order_events=order_event_subscribers(engine)
+            settings,
+            database,
+            http,
+            order_events=order_event_subscribers(engine) | fulfillment_event_subscribers(engine),
         ),
     )
     handlers |= automation_handlers(engine, settings.worker_id)
