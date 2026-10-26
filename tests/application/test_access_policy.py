@@ -38,6 +38,7 @@ ROWS = {
     "Open or update incidents": Capability.UPDATE_INCIDENTS,
     "Retry allowlisted sync": Capability.RETRY_SYNC,
     "Confirm a shipment write to Etsy": Capability.CONFIRM_SHIPMENT_WRITE,
+    "Update the shop's settings on Etsy (vacation mode)": Capability.UPDATE_SHOP_SETTINGS,
     "Request a bulk re-sync": Capability.REQUEST_BULK_RESYNC,
     "View tasks and approvals": Capability.VIEW_TASKS,
     "Decide low-risk approvals": Capability.DECIDE_LOW_RISK_APPROVAL,

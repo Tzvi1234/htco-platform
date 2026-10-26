@@ -22,6 +22,7 @@ Owner and Admin have organization-wide access to every shop; all other roles see
 | Open or update incidents | ✓ | ✓ | S | — | S | S | — |
 | Retry allowlisted sync | ✓ | ✓ | S | — | — | S | — |
 | Confirm a shipment write to Etsy | ✓ MFA RA | ✓ MFA RA | S A | — | — | — | — |
+| Update the shop's settings on Etsy (vacation mode) | ✓ MFA RA | — | — | — | — | — | — |
 | Request a bulk re-sync | ✓ | ✓ | S A | — | — | S A | — |
 | View tasks and approvals | ✓ | ✓ | S | S | S | S | S |
 | Decide low-risk approvals | ✓ MFA | ✓ MFA | S MFA | S MFA | — | — | — |
