@@ -287,4 +287,7 @@ The acceptance criteria are AC-8A.11.1 to AC-8A.11.21 in Phase 8A.
   - control is bound to the session's organization and shop;
   - validation never echoes input;
   - revocation takes effect at once;
-  - one immutable deadline per takeover episode. A retake after Return Control, in the same run, is a new episode with its own deadline, and a run has at most 3 episodes, after which it goes to `HANDED_TO_HUMAN` or fails (main's decision). This settles the maximum duration in §2: "another step-up" never extends an episode.
+  - one immutable deadline per takeover episode. A retake after Return Control, in the same run, is a new episode with its own deadline, and a run has at most 3 episodes. A request for a fourth is refused, and the run moves to `HANDED_TO_HUMAN` at the moment of the request (main's decision). This settles the maximum duration in §2: "another step-up" never extends an episode.
+- 2026-10-27: The review of #178 (quill) tightens two rules without changing the decision:
+  - **§6's per-session cleanup** also removes every service-worker registration, with its sync and push registrations, at seal and at restore, for every origin, the allowlisted ones included. Sessions before 8A.11 may already have stored one, and blocking new registrations would not remove it (AC-8A.11.22, AC-8A.11.11).
+  - **§1's relay rule holds on every path:** TLS and a per-session worker token, inside the VPC too, because the VPC is a path, not an identity (AC-8A.2.29).
