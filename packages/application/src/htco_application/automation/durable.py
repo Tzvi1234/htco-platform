@@ -124,6 +124,7 @@ class StateChange:
     correlation_id: str
     at: datetime
     reason: str | None = None
+    automation_id: str | None = None  # which automation (6.7: a dead letter names it)
 
 
 @dataclass(frozen=True)
@@ -481,6 +482,13 @@ class DurableAutomationEngine:
         if failed.attempts >= definition.retry.max_attempts:
             dead = failed.transition(ExecutionState.DEAD_LETTERED)
             steps.append((dead, self._change(failed, failed.state, dead.state, worker, now)))
+            # The Phase 1 alert rules see errors (Sentry); the type name only, never the text.
+            _log.error(
+                "automation.dead_lettered: %s execution=%s error=%s",
+                running.automation_id,
+                running.id,
+                error,
+            )
             return steps, None
         retry = failed.transition(ExecutionState.RETRY_SCHEDULED)
         steps.append((retry, self._change(failed, failed.state, retry.state, worker, now)))
@@ -531,6 +539,7 @@ class DurableAutomationEngine:
             correlation_id=execution.correlation_id,
             at=at,
             reason=reason,
+            automation_id=execution.automation_id,
         )
 
 
