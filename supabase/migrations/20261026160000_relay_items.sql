@@ -40,8 +40,6 @@ create table app.relay_items (
   constraint relay_items_order_key unique (shop_id, receipt_id),
   -- The code table's tenant columns are tied to their item's (local Codex on #159).
   constraint relay_items_tenant_key unique (id, organization_id, shop_id),
-  -- The code table's tenant columns are tied to their item's (local Codex on #159).
-  constraint relay_items_tenant_key unique (id, organization_id, shop_id),
   -- A closed item says why; an open one does not.
   constraint relay_items_closed_check check (
     (state = 'closed') = (closed_reason is not null and closed_at is not null)

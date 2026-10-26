@@ -79,12 +79,6 @@ select throws_ok(
             '27c10000-0000-0000-0000-000000000001', '9400100000000000005678')$$,
   '23503', null, 'a code carries its item''s organization and shop, never another'
 );
-select throws_ok(
-  $$insert into app.relay_item_codes (relay_item_id, organization_id, shop_id, code)
-    values ('27d20000-0000-0000-0000-000000000001', '27b10000-0000-0000-0000-000000000000',
-            '27c10000-0000-0000-0000-000000000001', '9400100000000000005678')$$,
-  '23503', null, 'a code carries its item''s organization and shop, never another'
-);
 
 -- Members ------------------------------------------------------------------------------------
 select set_config('request.jwt.claims', '{"sub":"27a10000-0000-0000-0000-000000000001","role":"authenticated","aal":"aal2"}', true);
