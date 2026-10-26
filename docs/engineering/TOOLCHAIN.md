@@ -55,7 +55,7 @@
 | Contract diff | oasdiff 1.33.0 (release binary, SHA-256 pinned in `ci.yml`) | | `oasdiff breaking` against the pull request's base; any error-level change fails the `contract` job |
 | YAML | PyYAML 6.0.3 (with `types-pyyaml`) | | Renders the contract without anchors or aliases |
 | HTTP mocks | respx | Planned 0.23.x | |
-| Database | Supabase CLI | 2.120.0 (CI downloads the release and checks its SHA-256; locally from the GitHub release) | Local Postgres (Docker), migrations, pgTAP (`supabase test db`); the owner-started `migrate.yml` workflow for deployed projects |
+| Database | Supabase CLI | 2.120.0 (CI downloads the release and checks its SHA-256; `scripts/local-db-ci.sh` runs the same step locally, [LOCAL_DB_TESTS.md](LOCAL_DB_TESTS.md)) | Local Postgres (Docker), migrations, pgTAP (`supabase test db`); the owner-started `migrate.yml` workflow for deployed projects |
 
 ## Security and supply chain
 

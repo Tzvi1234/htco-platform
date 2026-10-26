@@ -638,3 +638,68 @@ async def test_session__a_lost_lock_never_writes_the_profile_back(tmp_path: Path
     assert on_disk(tmp_path) == []
     lost = [r for r in s.log.records.values() if r.purpose == "test.lost"]
     assert [(r.outcome, r.failure) for r in lost] == [(SessionOutcome.FAILED, "lock_lost")]
+
+
+async def test_session__cancelled_while_recording_its_start_still_ends_the_record(
+    tmp_path: Path,
+) -> None:
+    """Codex on #121: the start write finishes in its thread even if the task is cancelled
+    meanwhile; the record it wrote is then ended (failed) before the lock is released, never
+    left `running`."""
+    env = environment()
+    s = setup(tmp_path, env)
+    log = SlowLog(delay=0.3)
+    controller = BrowserController(
+        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(s.vault, tmp_path), s.engine,
+        s.locks, log, clock=now,
+    )  # fmt: skip
+
+    async def run() -> None:
+        async with controller.session(env.id, purpose="test.run", deadline=soon()):
+            pass  # pragma: no cover - cancelled before
+
+    task = asyncio.ensure_future(run())
+    await asyncio.sleep(0.1)  # inside the start write
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    (record,) = log.records.values()
+    assert record.outcome is SessionOutcome.FAILED
+    assert record.ended_at is not None
+    assert s.locks.held == set()
+    assert s.engine.handles == []
+
+
+@dataclass
+class BrokenSlowLog(MemorySessionLog):
+    """A start write that fails after a while (the database refused it)."""
+
+    @override
+    def started(self, record: SessionRecord) -> None:
+        time.sleep(0.3)
+        raise OSError("the database refused the write")
+
+
+async def test_session__cancelled_while_a_failing_start_write_runs_ends_nothing(
+    tmp_path: Path,
+) -> None:
+    """The failed write left no record, so nothing is ended; the cancellation goes on."""
+    env = environment()
+    s = setup(tmp_path, env)
+    log = BrokenSlowLog()
+    controller = BrowserController(
+        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(s.vault, tmp_path), s.engine,
+        s.locks, log, clock=now,
+    )  # fmt: skip
+
+    async def run() -> None:
+        async with controller.session(env.id, purpose="test.run", deadline=soon()):
+            pass  # pragma: no cover - cancelled before
+
+    task = asyncio.ensure_future(run())
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert log.records == {}
+    assert s.locks.held == set()
