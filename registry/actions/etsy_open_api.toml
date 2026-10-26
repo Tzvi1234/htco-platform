@@ -1,8 +1,8 @@
 # Execution contracts of Etsy Open API tools (slice 5.12, ADR-0019, ADR-0022): the approval
 # policy (equal to the tool's description), verification, channel bindings in order of preference,
 # limits keys and the JSON Schemas in packages/contracts/actions/. Reviewed data like the tools.
-# Writes stay off until their write flag is named (HTCO_ETSY_WRITE_ACTIONS); the first two, the
-# tracking upload and vacation mode (slices 6.6, 6.8, 7.12), run only on the Owner's own trigger.
+# Writes stay off until their write flag is named (HTCO_ETSY_WRITE_ACTIONS), checked again when the
+# write runs; the first two, the tracking upload and vacation mode (slices 6.6, 6.8, 7.12), are W3.
 
 [[actions]]
 tool = "etsy.shop.read"
@@ -49,11 +49,12 @@ channel = "api"
 recipe = "update_listing_inventory"
 breaker_key = "etsy:api"
 
-# The tracking upload (slices 6.6 and 6.8): the Owner, stepped up, by hand, each time (the owner's
-# decision of 2026-10-23). The channel re-reads the receipt and sends nothing when the code is there.
+# The tracking upload (slices 6.6 and 6.8), W3 (the owner's policy of 2026-10-26): the Owner's own
+# press runs after a step-up; an agent's or an automation's request waits for the Owner's approval,
+# each time. The channel re-reads the receipt and sends nothing when the code is there.
 [[actions]]
 tool = "etsy.shipments.create"
-approval_policy = "W2"
+approval_policy = "W3"
 verify = "reread"
 timeout_seconds = 60
 input_schema = "etsy.shipments.create.input.json"
@@ -61,7 +62,6 @@ output_schema = "etsy.shipments.create.output.json"
 rate_limit_key = "etsy:app"
 concurrency_key = "shop:{shop_id}:writes"
 user_capability = "confirm_shipment_write"
-owner_trigger_only = true
 [[actions.bindings]]
 channel = "api"
 recipe = "create_receipt_shipment"
@@ -71,7 +71,7 @@ breaker_key = "etsy:api"
 # Vacation mode (7.12, pulled forward by the owner): the only field of updateShop sent for now.
 [[actions]]
 tool = "etsy.shop.update"
-approval_policy = "W2"
+approval_policy = "W3"
 verify = "reread"
 timeout_seconds = 60
 input_schema = "etsy.shop.update.input.json"
@@ -79,7 +79,6 @@ output_schema = "etsy.shop.update.output.json"
 rate_limit_key = "etsy:app"
 concurrency_key = "shop:{shop_id}:writes"
 user_capability = "update_shop_settings"
-owner_trigger_only = true
 [[actions.bindings]]
 channel = "api"
 recipe = "update_shop_vacation"

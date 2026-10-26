@@ -12,11 +12,16 @@ floor, routine calls are deferred with a warning and a metric; urgent calls stil
 older than `quota_snapshot_ttl` no longer defers, so one routine call can refresh it after Etsy's
 window has moved on.
 
-Read only (the owner's rule: connected shops are live, with real buyers). Every call goes through
-one choke point, `_request`, which refuses any method but GET before a token is fetched unless
-the caller sets the `allow_write` flag for that call; no code path does. As a second, independent
-guard the adapter installs a request hook on its HTTP client that stops any non-GET request to
-any Etsy host (`etsy.com` and every `*.etsy.com`: the shop API on openapi.etsy.com and
+Read only, but for two writes (the owner's rule: connected shops are live, with real buyers).
+Every call goes through one choke point, `_request`, which refuses any method but GET before a
+token is fetched unless the caller sets the `allow_write` flag for that call. Only the two W3
+writes set it: `create_receipt_shipment` and `update_shop_vacation` (slices 6.6 and 6.8, the
+owner's decision of 2026-10-26: built with every write flag off, never sent by a test, a script
+or an agent). Only the Action Gateway's API channel calls them
+(`tests/architecture/test_gateway_bypass.py`), on the Owner's own press after a step-up or on a
+request the Owner approved, once the granted scope and the write flag are checked. As a second,
+independent guard the adapter installs a request hook on its HTTP client that stops any non-GET
+request to any Etsy host (`etsy.com` and every `*.etsy.com`: the shop API on openapi.etsy.com and
 api.etsy.com, the website) and to the configured base URL, before it leaves the process, even if
 some code used the client directly. The one exception is the OAuth token exchange, a POST to
 exactly `api.etsy.com/v3/public/oauth/token`, which changes no shop. Etsy's `tokenScopes` is a
@@ -484,6 +489,36 @@ class EtsyAdapter:
         )  # fmt: skip
         return _parse("get_order_receipt", _order_receipt, body)
 
+    # --- The owner-triggered writes (slices 6.6 and 6.8) -------------------------------------
+
+    async def create_receipt_shipment(
+        self, shop_id: int, receipt_id: int, *, tracking_code: str, carrier_name: str
+    ) -> None:
+        """Add tracking to a receipt (`createReceiptShipment`, a POST): Etsy emails the buyer, so
+        it is sent once, never retried. The form never reaches a log line or an error."""
+        if receipt_id < 1:
+            raise ValueError("receipt_id must be a positive Etsy receipt ID")
+        if not tracking_code.strip() or not carrier_name.strip():
+            raise ValueError("an Etsy shipment needs a tracking code and a carrier")
+        await self._request(
+            "POST", "create_receipt_shipment", shop_id,
+            f"/shops/{shop_id}/receipts/{receipt_id}/tracking", {}, urgent=True,
+            allow_write=True,
+            form={"tracking_code": tracking_code, "carrier_name": carrier_name},
+        )  # fmt: skip
+
+    async def update_shop_vacation(
+        self, shop_id: int, *, is_vacation: bool, vacation_message: str | None
+    ) -> None:
+        """Turn vacation mode on or off (`updateShop`, a PUT): only the vacation fields."""
+        fields = {"is_vacation": "true" if is_vacation else "false"}
+        if is_vacation and vacation_message:
+            fields["vacation_message"] = vacation_message
+        await self._request(
+            "PUT", "update_shop_vacation", shop_id, f"/shops/{shop_id}", {}, urgent=True,
+            allow_write=True, form=fields,
+        )  # fmt: skip
+
     async def list_reviews(
         self,
         shop_id: int,
@@ -569,6 +604,7 @@ class EtsyAdapter:
         access_token: str | None = None,
         tokens: AccessTokenProvider | None = None,
         allow_write: bool = False,
+        form: Mapping[str, str] | None = None,
     ) -> Any:
         """The only way the adapter calls Etsy. A method other than GET is refused here, before
         the budget or a token is touched, unless `allow_write` is set for this one call."""
@@ -587,6 +623,7 @@ class EtsyAdapter:
                 access_token=access_token,
                 tokens=tokens or self._tokens,
                 write=write,
+                form=form,
             )
         finally:
             if refreshing:
@@ -603,6 +640,7 @@ class EtsyAdapter:
         access_token: str | None,
         tokens: AccessTokenProvider,
         write: bool,
+        form: Mapping[str, str] | None = None,
     ) -> Any:
         url = self._config.base_url.rstrip("/") + path
         # Writes are not idempotent at Etsy: one attempt, never the retry loop.
@@ -626,6 +664,7 @@ class EtsyAdapter:
                     method,
                     url,
                     params=params,
+                    data=form,
                     headers=headers,
                     timeout=self._timeout,
                     extensions=extensions,
@@ -786,8 +825,8 @@ class _WriteGuard:
         if method in READ_ONLY_METHODS or request.extensions.get(_WRITE_ALLOWED) is True:
             return
         host = (request.url.host or "").lower().rstrip(".")
-        if (method, host, request.url.path) == _TOKEN_EXCHANGE:
-            return
+        if request.url.scheme == "https" and (method, host, request.url.path) == _TOKEN_EXCHANGE:
+            return  # https only (sage's hardening, #126)
         url = str(request.url)
         if (
             host == "etsy.com"

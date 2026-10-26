@@ -215,6 +215,8 @@ class Office:
                 browser=browser or Browser(),
                 human=self.human,
                 guards=guards,
+                # The inventory write runs here to show its refusal: its write flag is on.
+                write_flags=frozenset({"etsy.inventory.update"}),
             )
         )
 
@@ -560,7 +562,7 @@ async def test_api__a_write__refused_before_any_call() -> None:
     )
     binding = real_catalog(office()).actions["etsy.inventory.update"].bindings[0]
 
-    with pytest.raises(MarketplaceWriteRefusedError, match="writes stay disabled"):
+    with pytest.raises(MarketplaceWriteRefusedError, match="not deployed"):
         await adapter.execute(request, binding)
 
     assert marketplace.calls == []

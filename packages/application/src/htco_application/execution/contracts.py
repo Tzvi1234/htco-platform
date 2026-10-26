@@ -67,9 +67,6 @@ class ActionDefinition:
     concurrency_key: str | None = None
     # The policy capability a user needs to submit it (deny by default).
     user_capability: Capability | None = None
-    # Only the Owner's own trigger runs it, every time (ADR-0022 §3; the owner's decision of
-    # 2026-10-23 for the first Etsy writes): any other request is `owner_trigger_required`.
-    owner_trigger_only: bool = False
 
     @property
     def name(self) -> str:
@@ -184,18 +181,17 @@ def _parse(
         raise ValueError(
             f"the output could carry a secret or a code: {', '.join(leaks) or tool.name}"
         )
-    capability = None if document.get("user_capability") is None else Capability(
-        str(document["user_capability"])
+    capability = (
+        None
+        if document.get("user_capability") is None
+        else Capability(str(document["user_capability"]))
     )
-    owner_trigger_only = bool(document.get("owner_trigger_only", False))
-    if owner_trigger_only:
-        if not policy.is_write:
-            raise ValueError("only a write is owner-trigger only")
+    if policy is ApprovalPolicy.W3:
         grant = None if capability is None else PERMISSIONS[capability].get(Role.OWNER)
         if grant is None or not grant.step_up:
-            # W2 and W3 need a step-up (ADR-0022 §2): the Owner's trigger is checked through the
+            # W3 needs a step-up (ADR-0022 §2): the Owner's own press is checked through the
             # action's capability, so it must ask for one.
-            raise ValueError("an owner-trigger-only write needs a capability with the Owner's step-up")
+            raise ValueError("a W3 write needs a capability with the Owner's step-up")
     return ActionDefinition(
         tool=tool,
         input_schema=input_schema,
@@ -207,5 +203,4 @@ def _parse(
         rate_limit_key=document.get("rate_limit_key"),
         concurrency_key=document.get("concurrency_key"),
         user_capability=capability,
-        owner_trigger_only=owner_trigger_only,
     )

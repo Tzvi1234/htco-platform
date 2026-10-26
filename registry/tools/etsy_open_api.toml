@@ -254,7 +254,7 @@ risk = "high"
 data_scope = "internal"
 audit_required = true
 readiness = "draft"
-description = "Update the shop: title, announcement, sale messages, vacation mode and message (updateShop). Changes what every buyer sees. Endpoints: updateShop. Approval policy W2."
+description = "Update the shop: title, announcement, sale messages, vacation mode and message (updateShop). Changes what every buyer sees. Endpoints: updateShop. Approval policy W3."
 
 [[tools]]
 name = "etsy.holiday_preferences.update"
@@ -458,4 +458,4 @@ risk = "high"
 data_scope = "confidential"
 audit_required = true
 readiness = "draft"
-description = "Add tracking to a receipt and notify the buyer (createReceiptShipment). Restricted for new Israeli keys; gated by the capability probe. Endpoints: createReceiptShipment. Approval policy W2."
+description = "Add tracking to a receipt and notify the buyer (createReceiptShipment). Restricted for new Israeli keys; gated by the capability probe. Endpoints: createReceiptShipment. Approval policy W3."

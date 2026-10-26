@@ -16,9 +16,9 @@
 - [x] 6.3 Incidents ([feature docs](../../features/incidents/overview.md); AC-6.3.4's trigger from `sync_drifts` is wired after 5.5 merges)
 - [x] 6.4 Notifications and email (migration `20261025110000_notifications.sql`, pgTAP `25_notifications`; [feature docs](../../features/notifications/overview.md); Resend built and OFF until the owner's DNS for `office.ht-co.app`)
 - [ ] 6.5 Incident center UI
-- [ ] 6.6 Guarded shipment write
+- [ ] 6.6 Guarded shipment write: the gateway, adapter and channel part is built (W3, every write flag off, the kill switch re-checked at execution, scope `transactions_w`, re-read before and after; fakes only). Open: the API route with the confirm sheet and the re-consent (part B), the 6.8 UI (lyra), merge after #147
 - [ ] 6.7 Fulfillment automations activated
-- [ ] 6.8 Owner-triggered fulfillment writes (receipt and shipment tools)
+- [ ] 6.8 Owner-triggered fulfillment writes (receipt and shipment tools), plus vacation mode (pulled forward from 7.12): the tracking upload and vacation mode are built with 6.6 (W3: the Owner's press after a step-up, or an agent's request the Owner approves each time). `etsy.receipts.update` waits for the owner
 - [ ] 6.9 Ship-by SLA, holiday calendar and low-review alerts (deterministic). Ship-by and stock alerts built on the 6.4 notification path (migration `20261025120000_fulfillment_alerts.sql`, pgTAP `26`); the holidays come from the shop's SLA-policy calendar until `etsy.holiday_preferences` is read; low-review alerts (AC-6.9.2) still open
 - [ ] 6.10 AutoVA tracking relay (copy tracking from AutoVA to Etsy)
 

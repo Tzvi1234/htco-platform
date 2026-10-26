@@ -1,10 +1,14 @@
 """The owner's Etsy writes on the Action Gateway (slices 6.6 and 6.8, vacation mode from 7.12).
 
-The owner's decision of 2026-10-23: the first Etsy writes are the tracking upload
+The owner's policy of 2026-10-26: the first Etsy writes are the tracking upload
 (`etsy.shipments.create`, scope `transactions_w`) and vacation mode (`etsy.shop.update`, scope
-`shops_w`), triggered only by the Owner and approved each time. Everything here runs against an
-in-memory Etsy: no test reaches Etsy (AC-6.8.3).
+`shops_w`), both W3. The Owner's own press runs after a step-up; an agent's or an automation's
+request waits for the Owner's approval, each time, and never runs before it. Every write flag is
+off by default and checked again when the write runs. Everything here runs against an in-memory
+Etsy: no test reaches Etsy (AC-6.8.3).
 """
+
+# ruff: noqa: ARG002 - the fake Etsy keeps the read port's signatures it never reads
 
 import json
 import tomllib
@@ -33,11 +37,16 @@ from htco_application.marketplace import (
     MarketplaceShop,
     OrderReceipt,
     OrderShipment,
+    Page,
+    Receipt,
 )
 from htco_application.workforce.files import read_registry
 from htco_application.workforce.registry import Registry, parse_automation, parse_employee
+from htco_domain.actions import ApprovalPolicy
 from htco_domain.actors import ActorKind, ActorRef
+from htco_domain.approvals import decider_roles
 from htco_domain.identity import AssuranceLevel, Role
+from htco_domain.workforce import Readiness
 from tests.application.workforce_fixtures import employee_document
 from tests.automation_fakes import engine_document
 from tests.execution_fakes import (
@@ -127,6 +136,36 @@ class FakeEtsy:
             raise self.refuse
         self.on_vacation = is_vacation
 
+    # The rest of the read port: these writes never use them.
+    async def list_receipts(  # noqa: PLR0913 - the port's signature
+        self,
+        shop_id: int,
+        *,
+        min_last_modified: datetime | None = None,
+        max_last_modified: datetime | None = None,
+        limit: int = 25,
+        offset: int = 0,
+        urgent: bool = False,
+    ) -> Page[Receipt]:
+        raise AssertionError("not read by the writes")
+
+    async def get_receipt(self, shop_id: int, receipt_id: int) -> Receipt:
+        raise AssertionError("not read by the writes")
+
+    async def list_order_receipts(  # noqa: PLR0913 - the port's signature
+        self,
+        shop_id: int,
+        *,
+        min_created: datetime | None,
+        min_last_modified: datetime | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        urgent: bool = False,
+        was_paid: bool | None = None,
+        was_shipped: bool | None = None,
+    ) -> Page[OrderReceipt]:
+        raise AssertionError("not read by the writes")
+
     def writes(self) -> list[tuple[str, dict[str, Any]]]:
         return [call for call in self.calls if call[0].startswith(("create_", "update_"))]
 
@@ -152,9 +191,14 @@ def office() -> Registry:
     automation = parse_automation(
         engine_document("tracking-synchronization", allowed_actions=sorted(WRITES))
     )
+    # The employee may use the two tools (made active here); its call still waits for the Owner.
+    tools = {
+        **real.tools,
+        **{n: replace(real.tools[n], readiness=Readiness.ACTIVE) for n in WRITES},
+    }
     return Registry(
         employees=MappingProxyType({"eitan": employee}),
-        tools=real.tools,
+        tools=MappingProxyType(tools),
         automations=MappingProxyType({"tracking-synchronization": automation}),
         advisors=MappingProxyType({}),
     )
@@ -170,11 +214,21 @@ def principal(role: Role, *, reauthenticated: timedelta | None = timedelta(minut
     )
 
 
+@dataclass
+class Switch:
+    """The owner's kill switch, changed while a request waits."""
+
+    on: set[str] = field(default_factory=lambda: set(WRITES))
+
+    def is_on(self, action_name: str) -> bool:
+        return action_name in self.on
+
+
 class World:
     def __init__(
         self,
         *,
-        flags: frozenset[str] = WRITES,
+        flags: frozenset[str] | Switch = WRITES,
         scopes: frozenset[str] = GRANTED,
         owner: Principal | None = None,
     ) -> None:
@@ -216,7 +270,7 @@ def tracking(**changes: Any) -> ActionRequest:
     return ActionRequest(**values)
 
 
-def vacation(on: bool = True, **changes: Any) -> ActionRequest:  # noqa: FBT001, FBT002 - the switch
+def vacation(on: bool = True, **changes: Any) -> ActionRequest:
     values: dict[str, Any] = {
         "action": ActionRef(SHOP_UPDATE, 1),
         "actor": ActorRef(ActorKind.USER, str(OWNER)),
@@ -279,27 +333,95 @@ async def test_the_tracking_code_never_leaves_the_channel() -> None:
     assert TRACKING not in logs.raw()
 
 
+REQUESTERS = [
+    (ActorRef(ActorKind.AUTOMATION, "tracking-synchronization"), False),
+    (ActorRef(ActorKind.EMPLOYEE, "eitan"), False),
+    (ActorRef(ActorKind.USER, str(OWNER)), False),  # the Owner, but not by hand
+    (ActorRef(ActorKind.USER, str(ADMIN)), False),  # an Admin asks; the Owner decides
+    (ActorRef(ActorKind.AUTOMATION, "tracking-synchronization"), True),  # a claimed trigger
+]
+REQUESTER_IDS = ["automation", "employee", "owner-without-trigger", "admin", "automation-trigger"]
+
+
 @pytest.mark.ac("AC-6.8.1")
-@pytest.mark.parametrize(
-    ("actor", "trigger"),
-    [
-        (ActorRef(ActorKind.AUTOMATION, "tracking-synchronization"), False),
-        (ActorRef(ActorKind.EMPLOYEE, "eitan"), False),
-        (ActorRef(ActorKind.USER, str(OWNER)), False),  # the Owner, but not by hand
-        (ActorRef(ActorKind.AUTOMATION, "tracking-synchronization"), True),
-    ],
-    ids=["automation", "employee", "owner-without-trigger", "automation-claiming-a-trigger"],
-)
-async def test_anything_but_the_owners_trigger__owner_trigger_required(
-    actor: ActorRef, trigger: bool,  # noqa: FBT001
+@pytest.mark.parametrize(("actor", "trigger"), REQUESTERS, ids=REQUESTER_IDS)
+async def test_anything_but_the_owners_press__waits_for_the_owners_approval_and_sends_nothing(
+    actor: ActorRef, trigger: bool,
 ) -> None:  # fmt: skip
     world = World()
 
-    result = await world.gateway.submit(tracking(actor=actor, owner_trigger=trigger))
+    first = await world.gateway.submit(tracking(actor=actor, owner_trigger=trigger))
+    again = await world.gateway.submit(tracking(actor=actor, owner_trigger=trigger))
 
-    assert denied(result) == (ActionOutcome.DENIED, "owner_trigger_required")
+    assert first.outcome is ActionOutcome.PENDING_APPROVAL
+    assert again.outcome is ActionOutcome.PENDING_APPROVAL
+    assert len(world.approvals.requested) == 1  # one approval, however often it asks
     assert world.etsy.calls == []
-    assert world.approvals.requested == []  # no approval to wait for: it never opens
+
+
+@pytest.mark.parametrize(("actor", "trigger"), REQUESTERS[:2], ids=REQUESTER_IDS[:2])
+async def test_an_agents_request__runs_once_after_the_owners_approval(
+    actor: ActorRef, trigger: bool,
+) -> None:  # fmt: skip
+    world = World()
+    request = tracking(actor=actor, owner_trigger=trigger)
+    await world.gateway.submit(request)
+    approval = world.approvals.approve_last()
+
+    done = await world.gateway.submit(replace(request, approval_id=approval))
+    again = await world.gateway.submit(replace(request, approval_id=approval))
+
+    assert done.outcome is ActionOutcome.SUCCEEDED
+    assert done.verified
+    assert again == done
+    assert [name for name, _ in world.etsy.writes()] == ["create_receipt_shipment"]
+
+
+def test_only_the_owner_decides_these_writes() -> None:
+    """W3: an Admin cannot approve them, whoever asked (PERMISSION_MATRIX §1a)."""
+    catalog = real_catalog(office())
+
+    for name in WRITES:
+        policy = catalog.actions[name].approval_policy
+        assert policy is ApprovalPolicy.W3
+        assert decider_roles(policy) == {Role.OWNER}
+
+
+@pytest.mark.ac("AC-6.6.3")
+async def test_the_kill_switch__stops_an_approved_write_that_waited() -> None:
+    """Sage, #126: the flag is read again when the write runs, not only when it was asked."""
+    switch = Switch()
+    world = World(flags=switch)
+    request = tracking(actor=ActorRef(ActorKind.AUTOMATION, "tracking-synchronization"))
+    await world.gateway.submit(request)
+    approval = world.approvals.approve_last()
+    switch.on.discard(SHIPMENTS)  # the owner pulls the switch while it waits
+
+    result = await world.gateway.submit(replace(request, approval_id=approval))
+
+    assert denied(result) == (ActionOutcome.DENIED, "flag_off")
+    assert world.etsy.writes() == []
+
+
+async def test_a_draft_automations_queued_write__stops_when_it_runs() -> None:
+    """Sage, #126: a run queued before its automation went back to draft reaches the gateway
+    again when it executes, and its write stops."""
+    world = World()
+    automation = world.registry.automations["tracking-synchronization"]
+    world.registry = replace(
+        world.registry,
+        automations=MappingProxyType(
+            {"tracking-synchronization": replace(automation, readiness=Readiness.DRAFT)}
+        ),
+    )
+
+    result = await world.gateway.submit(
+        tracking(actor=ActorRef(ActorKind.AUTOMATION, "tracking-synchronization"))
+    )
+
+    assert denied(result) == (ActionOutcome.DENIED, "automation_not_ready")
+    assert world.etsy.calls == []
+    assert world.approvals.requested == []
 
 
 async def test_an_admins_trigger__forbidden() -> None:
@@ -313,7 +435,9 @@ async def test_an_admins_trigger__forbidden() -> None:
 
 @pytest.mark.ac("AC-6.6.3")
 @pytest.mark.parametrize("since", [None, timedelta(minutes=11)], ids=["never", "stale"])
-async def test_the_owner_without_a_recent_step_up__step_up_required(since: timedelta | None) -> None:
+async def test_the_owner_without_a_recent_step_up__step_up_required(
+    since: timedelta | None,
+) -> None:
     world = World(owner=principal(Role.OWNER, reauthenticated=since))
 
     result = await world.gateway.submit(tracking())
@@ -404,32 +528,30 @@ async def test_vacation_mode__refused_before_any_etsy_call(world: Any, code: str
     assert built.etsy.calls == []
 
 
-async def test_vacation_mode__only_the_owner_by_hand() -> None:
+async def test_vacation_mode__an_agents_request_waits_for_the_owner() -> None:
     world = World()
 
     result = await world.gateway.submit(
         vacation(actor=ActorRef(ActorKind.AUTOMATION, "tracking-synchronization"))
     )
 
-    assert denied(result) == (ActionOutcome.DENIED, "owner_trigger_required")
+    assert result.outcome is ActionOutcome.PENDING_APPROVAL
     assert world.etsy.calls == []
 
 
 # --- Every write tool (ADR-0022 validation) --------------------------------------------------
 
 
-def test_every_owner_trigger_only_write__needs_the_owners_step_up() -> None:
+def test_both_writes__need_their_scope() -> None:
     catalog = real_catalog(office())
-    owner_only = {name for name, d in catalog.actions.items() if d.owner_trigger_only}
 
-    assert owner_only >= WRITES
-    assert all(catalog.actions[name].approval_policy.is_write for name in owner_only)
-    assert {
-        name: catalog.actions[name].bindings[0].requires_scope for name in sorted(WRITES)
-    } == {SHIPMENTS: "transactions_w", SHOP_UPDATE: "shops_w"}
+    assert {name: catalog.actions[name].bindings[0].requires_scope for name in sorted(WRITES)} == {
+        SHIPMENTS: "transactions_w",
+        SHOP_UPDATE: "shops_w",
+    }
 
 
-def test_the_catalog_refuses_an_owner_trigger_only_write_without_a_step_up() -> None:
+def test_the_catalog_refuses_a_w3_write_without_the_owners_step_up() -> None:
     family = tomllib.loads((REGISTRY / "actions" / "etsy_open_api.toml").read_text("utf-8"))
     rate_limits = family["rate_limits"]
     loosened = [

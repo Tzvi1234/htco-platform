@@ -96,6 +96,13 @@ CALL_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ("execution/channels.py", "EtsyApiChannel._receipts", "get_receipt"),
         ("execution/channels.py", "EtsyApiChannel._receipts", "list_receipts"),
         ("execution/channels.py", "EtsyApiChannel.execute", "get_shop"),
+        # The owner's writes (6.6, 6.8): re-read before, send once, re-read to verify.
+        ("execution/channels.py", "EtsyApiChannel._write", "get_order_receipt"),
+        ("execution/channels.py", "EtsyApiChannel._write", "create_receipt_shipment"),
+        ("execution/channels.py", "EtsyApiChannel._write", "get_shop"),
+        ("execution/channels.py", "EtsyApiChannel._write", "update_shop_vacation"),
+        ("execution/channels.py", "EtsyApiChannel.verify", "get_order_receipt"),
+        ("execution/channels.py", "EtsyApiChannel.verify", "get_shop"),
         ("order_automations.py", "OrderVerification.__call__", "get_order_receipt"),
         ("order_history.py", "OrderSync._read", "list_order_receipts"),
         ("order_intake.py", "OrderIntake._count", "list_order_receipts"),

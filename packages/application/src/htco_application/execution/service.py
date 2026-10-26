@@ -66,6 +66,7 @@ from htco_application.execution.router import (
     NoBrowser,
     NoRoute,
     ShopScopes,
+    WriteSwitch,
 )
 from htco_application.execution.schema import validate
 from htco_application.jobs import JsonValue, describe_error
@@ -81,6 +82,7 @@ from htco_domain.actions import ActionState, ApprovalPolicy, VerifyMode, action_
 from htco_domain.actors import ActorKind
 from htco_domain.guards import day_window
 from htco_domain.identity import Role
+from htco_domain.workforce import PRODUCTION_READINESS
 
 EVENT_DESTINATION = "events.publish"
 EXECUTED_EVENT = "actions.executed.v1"
@@ -247,7 +249,8 @@ class GatewayParts:
     browser: BrowserGate = field(default_factory=NoBrowser)  # environments, flags, scopes (5.13)
     human: HumanTasks | None = None  # hand-offs to a person (slice 5.13; Postgres in Phase 7)
     scopes: ShopScopes | None = None  # the shops' granted Etsy scopes (ADR-0022 §4)
-    write_flags: frozenset[str] = frozenset()  # the writes switched on, by action (W2's flag)
+    # The writes switched on, by action (W2's flag): a set, or a switch read at every check.
+    write_flags: frozenset[str] | WriteSwitch = frozenset()
 
 
 class Refusal(Exception):  # noqa: N818 - a refusal is the result, not a failure of the gateway
@@ -348,11 +351,6 @@ class ActionGatewayService:
         kind = request.actor.kind
         if kind is ActorKind.ADVISOR:
             raise Refusal("forbidden", "advisors never act")
-        if definition.owner_trigger_only and not (kind is ActorKind.USER and request.owner_trigger):
-            # No approval opens it either: the Owner runs it by hand, each time (ADR-0022 §3).
-            raise Refusal(
-                "owner_trigger_required", f"only the Owner runs {definition.name}, by hand"
-            )
         if kind is ActorKind.SYSTEM:
             if definition.approval_policy is not ApprovalPolicy.R0:
                 raise Refusal("forbidden", "the platform runs R0 reads only")
@@ -363,6 +361,12 @@ class ActionGatewayService:
                 raise Refusal(
                     "forbidden", f"{definition.name} is outside {request.actor.id}'s permissions"
                 )
+            if definition.approval_policy.is_write and (
+                automation.readiness not in PRODUCTION_READINESS
+            ):
+                # The kill switch at execution time (sage, #126): a draft automation's queued or
+                # retried run reaches here again, and its write stops.
+                raise Refusal("automation_not_ready", f"{request.actor.id} is not ready")
             return False
         if kind is ActorKind.EMPLOYEE:
             access = decide_tool_access(self._p.registry(), request.actor.id, definition.name)
@@ -482,6 +486,13 @@ class ActionGatewayService:
         deferral = self._admit(definition, binding)
         if deferral is not None:
             return self._defer(claim, request, definition, path, *deferral)
+        if definition.approval_policy.is_write and not self._router.write_enabled(definition.name):
+            # Checked again right before the send (sage, #126): a flag turned off while the action
+            # waited for its approval or its turn stops it.
+            return self._deny(
+                claim, request, Refusal("flag_off", f"the write flag of {definition.name} is off"),
+                path, self._p.clock(),
+            )  # fmt: skip
         slot = self._slot_key(request, definition) if guards is not None else None
         if guards is not None and slot is not None:
             now = self._p.clock()
@@ -636,9 +647,9 @@ class ActionGatewayService:
                          error=code or describe_error(error)[:64]),
             attempts=attempts,
         )  # fmt: skip
-        if definition.owner_trigger_only:
-            # One press of the Owner's, one send at most: the failure is final for this key, and
-            # the next press is a new request (with its own key) that runs every check again.
+        if definition.approval_policy is ApprovalPolicy.W3:
+            # One press or one approval, one send at most: the failure is final for this key, and
+            # the next request (with its own key) runs every check again.
             self._record(claim.execution_id, [*path, _S.FAILED, _S.DEAD_LETTERED], result,
                          request, definition, reason=describe_error(error),
                          now=self._p.clock())  # fmt: skip

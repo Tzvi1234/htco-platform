@@ -63,6 +63,22 @@ class ShopScopes(Protocol):
     def scopes_of(self, shop_id: uuid.UUID) -> frozenset[str]: ...
 
 
+class WriteSwitch(Protocol):
+    """Whether an action's write flag is on now (W2's per-action flag, the owner's kill switch)."""
+
+    def is_on(self, action_name: str) -> bool: ...
+
+
+@dataclass(frozen=True)
+class StaticWriteSwitch:
+    """The flags named at start (`HTCO_ETSY_WRITE_ACTIONS`): every write off by default."""
+
+    on: frozenset[str] = frozenset()
+
+    def is_on(self, action_name: str) -> bool:
+        return action_name in self.on
+
+
 class NoScopes:
     """No grant is known: every binding that needs a scope is refused."""
 
@@ -90,14 +106,19 @@ class ExecutionRouter:
         browser: BrowserGate,
         *,
         scopes: ShopScopes | None = None,
-        write_flags: frozenset[str] = frozenset(),
+        write_flags: frozenset[str] | WriteSwitch = frozenset(),
     ) -> None:
         self._adapters = adapters
         self._capabilities = capabilities
         self._browser = browser
         self._scopes = scopes or NoScopes()
         # The API writes switched on, by action name (W2's per-action flag): off unless named.
-        self._write_flags = write_flags
+        self._write_flags = (
+            StaticWriteSwitch(write_flags) if isinstance(write_flags, frozenset) else write_flags
+        )
+
+    def write_enabled(self, action_name: str) -> bool:
+        return self._write_flags.is_on(action_name)
 
     def choose(self, definition: ActionDefinition, request: ActionRequest) -> Route | NoRoute:
         bindings = sorted(
@@ -138,7 +159,7 @@ class ExecutionRouter:
         if (
             definition.approval_policy.is_write
             and binding.channel is not Channel.BROWSER
-            and definition.name not in self._write_flags
+            and not self._write_flags.is_on(definition.name)
         ):
             return NoRoute("flag_off", f"the write flag of {definition.name} is off")
         if binding.channel is Channel.BROWSER:
