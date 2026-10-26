@@ -12,12 +12,12 @@ from decimal import Decimal
 
 import pytest
 
+from htco_application.kernel import Page
 from htco_application.marketplace import (
     AccessTokenProvider,
     MarketplaceRateLimitedError,
     OrderReceipt,
     OrderRefund,
-    Page,
     ShippingAddress,
 )
 from htco_application.order_history import (

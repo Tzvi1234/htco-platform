@@ -7,7 +7,8 @@ from typing import override
 
 import pytest
 
-from htco_application.incidents import EVENTS, INCIDENT_OPENED
+from htco_application.incidents import INCIDENT_OPENED
+from htco_application.kernel import EVENTS_DESTINATION
 from htco_application.messaging import OutboxMessage, PendingDelivery
 from htco_application.notifications import (
     EMAIL_DESTINATION,
@@ -68,7 +69,7 @@ def opened_event(receipt_id: int = 4000000001) -> OutboxMessage:
     return OutboxMessage(
         organization_id=ORG,
         shop_id=SHOP,
-        destination=EVENTS,
+        destination=EVENTS_DESTINATION,
         idempotency_key=f"{INCIDENT_OPENED}:{INCIDENT}",
         payload={
             "event_type": INCIDENT_OPENED, "incident_id": str(INCIDENT),
@@ -163,7 +164,9 @@ async def test_preferences_and_unrelated_events() -> None:
 
     await deliverer.deliver(delivery(opened_event()))
     await deliverer.deliver(
-        delivery(OutboxMessage(ORG, EVENTS, "other:1", {"event_type": "orders.ingested.v1"}))
+        delivery(
+            OutboxMessage(ORG, EVENTS_DESTINATION, "other:1", {"event_type": "orders.ingested.v1"})
+        )
     )
 
     assert len(store.rows) == 2
@@ -401,7 +404,7 @@ async def test_an_escalated_incident_notifies_once_with_an_email() -> None:
     store = members()
     service = NotificationService(store, clock=lambda: NOW)
     escalated = OutboxMessage(
-        organization_id=ORG, shop_id=SHOP, destination=EVENTS,
+        organization_id=ORG, shop_id=SHOP, destination=EVENTS_DESTINATION,
         idempotency_key=f"incidents.escalated.v1:{INCIDENT}",
         payload={"event_type": "incidents.escalated.v1", "incident_id": str(INCIDENT),
                  "cause": "tracking_missing", "severity": "medium", "receipt_id": 4000000001,
@@ -425,7 +428,7 @@ async def test_a_resolved_incident_notifies_once() -> None:
     store = members()
     service = NotificationService(store, clock=lambda: NOW)
     resolved = OutboxMessage(
-        organization_id=ORG, shop_id=SHOP, destination=EVENTS,
+        organization_id=ORG, shop_id=SHOP, destination=EVENTS_DESTINATION,
         idempotency_key=f"incidents.resolved.v1:{INCIDENT}",
         payload={"event_type": "incidents.resolved.v1", "incident_id": str(INCIDENT),
                  "cause": "tracking_missing", "severity": "medium", "receipt_id": 4000000001},

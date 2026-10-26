@@ -13,7 +13,7 @@ from hypothesis import strategies as st
 
 from htco_application.automation.durable import Completed, HandlerContext
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
-from htco_application.jobs import JobError
+from htco_application.kernel import JobError
 from htco_application.messaging import OutboxMessage, PendingDelivery
 from htco_application.order_automations import (
     ORDER_DEDUP,

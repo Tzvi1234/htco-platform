@@ -13,11 +13,11 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Any, Protocol
+from typing import Protocol
 
 from htco_application.automation.durable import HandlerContext
 from htco_application.execution.gateway import ActionOutcome, ActionRef, ActionRequest
-from htco_application.jobs import JobError, JsonValue
+from htco_application.kernel import JobError, JsonValue, Offload
 from htco_application.marketplace import MarketplaceRateLimitedError
 from htco_application.notifications import NotificationRequest, NotificationService
 from htco_domain.actors import ActorKind, ActorRef
@@ -36,8 +36,6 @@ MAX_PAGES = 50
 # A deferral this short (the per-second budget) is waited out inside the scan, a few times.
 MAX_INLINE_WAIT = 10.0
 MAX_INLINE_WAITS = 10
-
-type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
 
 
 class _DeferredError(Exception):

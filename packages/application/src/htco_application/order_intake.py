@@ -24,19 +24,26 @@ import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta, tzinfo
-from typing import Any, Protocol
+from typing import Protocol
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
 from htco_application.etsy_webhooks import ORDER_INTAKE, TriggersAutomations
 from htco_application.execution.gateway import ActionOutcome, ActionRef, ActionRequest
-from htco_application.jobs import ClaimedJob, JobError, JobQueue, JobSpec, JsonValue
-from htco_application.maintenance import TenantShop
+from htco_application.jobs import ClaimedJob, JobQueue, JobSpec, fan_out_per_shop
+from htco_application.kernel import (
+    ConnectedShops,
+    JobError,
+    JsonValue,
+    LockKeys,
+    Offload,
+    Page,
+    run_inline,
+)
 from htco_application.marketplace import (
     AccessTokenProvider,
     MarketplaceRateLimitedError,
     OrderReceipt,
-    Page,
 )
 from htco_application.order_history import (
     INCREMENTAL_DAYS,
@@ -398,19 +405,13 @@ class OrderIntake:
 
 # --- Asking for a history run (the API process) and starting it (the worker) -----------------
 
-type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
-
-
-async def _inline(work: Callable[[], Any]) -> Any:
-    return work()
-
 
 @dataclass
 class QueuedSyncRequests:
     """`SyncRequests` on the job queue: the API process enqueues, never runs, the sync."""
 
     queue: JobQueue
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def request(self, integration: ShopIntegration, *, now: datetime, force: bool) -> bool:
         period = MANUAL_PERIOD if force else SYNC_PERIOD
@@ -422,7 +423,7 @@ class QueuedSyncRequests:
             payload={"reason": reason},
             organization_id=integration.organization_id,
             shop_id=integration.shop_id,
-            lock_key=f"shop:{integration.shop_id}:orders",
+            lock_key=LockKeys.shop_orders(integration.shop_id),
             correlation_id=f"order-sync:{integration.shop_id}"[:200],
         )
         await self.offload(lambda: self.queue.enqueue(spec, now=now))
@@ -446,7 +447,7 @@ class QueuedSyncRequests:
                 payload={"reason": "resync", "receipt_id": receipt_id},
                 organization_id=integration.organization_id,
                 shop_id=integration.shop_id,
-                lock_key=f"shop:{integration.shop_id}:orders",
+                lock_key=LockKeys.shop_orders(integration.shop_id),
                 correlation_id=correlation_id[:200],
             )
             for receipt_id in receipt_ids
@@ -465,7 +466,7 @@ class EngineSyncTrigger:
     """The `etsy.order_sync` job: starts Etsy Order Intake's history run for the shop."""
 
     engine: TriggersAutomations
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def run(self, job: ClaimedJob) -> bool:
         if job.organization_id is None or job.shop_id is None:
@@ -516,10 +517,6 @@ class EngineSyncTrigger:
             _log.warning("etsy.order_resync_not_started: shop=%s", job.shop_id)
             return False
         return True
-
-
-class ConnectedShops(Protocol):
-    def connected_shops(self) -> list[TenantShop]: ...
 
 
 def parse_reconciliation_times(text: str) -> tuple[time, ...]:
@@ -578,22 +575,17 @@ def enqueue_reconciliations(  # noqa: PLR0913 - the shops, the queue and the run
 ) -> int:
     """One run's fan-out: one `etsy.order_sync` job per connected shop and slot, under the
     shop's orders lock (`shop:{shop_id}:orders`)."""
-    connected = shops.connected_shops()
-    for shop in connected:
-        queue.enqueue(
-            JobSpec(
-                kind=ORDER_SYNC_JOB,
-                idempotency_key=f"{ORDER_SYNC_JOB}:{shop.shop_id}:{reason}:{slot}",
-                payload={"reason": reason},
-                organization_id=shop.organization_id,
-                shop_id=shop.shop_id,
-                lock_key=f"shop:{shop.shop_id}:orders",
-                run_at=run_at,
-                correlation_id=f"order-{reason}:{shop.shop_id}:{slot}"[:200],
-            ),
-            now=now,
-        )
-    return len(connected)
+    return fan_out_per_shop(
+        queue,
+        shops.connected_shops(),
+        kind=ORDER_SYNC_JOB,
+        key=lambda shop: f"{ORDER_SYNC_JOB}:{shop.shop_id}:{reason}:{slot}",
+        lock=LockKeys.shop_orders,
+        payload={"reason": reason},
+        run_at=run_at,
+        correlation=lambda shop: f"order-{reason}:{shop.shop_id}:{slot}"[:200],
+        now=now,
+    )
 
 
 def daily_etsy_calls(

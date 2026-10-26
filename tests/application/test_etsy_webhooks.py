@@ -29,7 +29,8 @@ from htco_application.etsy_webhooks import (
     parse_event,
     verify_signature,
 )
-from htco_application.jobs import DEFAULT_RETRY, ClaimedJob, JobError
+from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
+from htco_application.kernel import JobError
 from htco_application.marketplace import (
     InventorySnapshot,
     ListingSnapshot,
