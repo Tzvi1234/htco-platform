@@ -18,6 +18,7 @@ import pytest
 
 from htco_application.automation.durable import Completed
 from htco_application.execution.schema import validate
+from htco_application.jobs import JobError
 from htco_application.messaging import OutboxMessage
 from htco_application.order_automations import Difference, difference_event
 from htco_application.order_ingest import (
@@ -184,3 +185,30 @@ async def test_an_event_without_its_drift_starts_nothing(payload: dict[str, Any]
     await DriftIncidents(engine).handle(drift_message(**payload))
 
     assert engine.requests == []
+
+
+@pytest.mark.parametrize(
+    "execution_shop",
+    [uuid.UUID("00000000-0000-0000-0000-00000000d0ff"), None],
+    ids=["another shop", "no shop"],
+)
+async def test_a_drift_for_another_shop__is_refused_and_opens_nothing(
+    execution_shop: uuid.UUID | None,
+) -> None:
+    """Quill on #129: the payload's shop must be the execution's own, and an execution that
+    names no shop is refused too (the guard fails closed)."""
+    engine = Engine()
+    await DriftIncidents(engine).handle(drift_message())
+    inspector = Inspector(NOW)
+    context = replace(inspector.context(dict(engine.requests[0].payload)), shop_id=execution_shop)
+
+    with pytest.raises(JobError, match="the execution's shop"):
+        await inspector.handler(context)
+
+    assert inspector.incident_store.incidents == {}
+
+
+def test_a_drift_id_needs_a_moment_in_time() -> None:
+    """Quill on #129: a naive time would depend on the host's time zone."""
+    with pytest.raises(ValueError, match="time zone"):
+        drift_id(SHOP, RECEIPT, "status", datetime(2026, 10, 25, 9, 0))  # noqa: DTZ001 - the case

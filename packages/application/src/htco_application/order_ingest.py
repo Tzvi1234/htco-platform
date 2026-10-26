@@ -252,6 +252,8 @@ def drift_id(
     shop_id: uuid.UUID, receipt_id: int, kind: str, etsy_updated_at: datetime
 ) -> uuid.UUID:
     """The ID of the drift recorded for this receipt, kind and Etsy update time."""
+    if etsy_updated_at.tzinfo is None:
+        raise ValueError("a drift's Etsy update time needs a time zone")
     at = etsy_updated_at.astimezone(UTC).isoformat()
     return uuid.uuid5(_DRIFT_IDS, f"{shop_id}:{receipt_id}:{kind}:{at}")
 

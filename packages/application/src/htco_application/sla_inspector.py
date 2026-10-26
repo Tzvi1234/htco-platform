@@ -305,7 +305,7 @@ class IncidentDetection:
             )
         except KeyError, ValueError:
             raise JobError("a drift names its shop, receipt, kind, time and ID") from None
-        if ctx.shop_id is not None and drift.shop_id != ctx.shop_id:
+        if ctx.shop_id is None or drift.shop_id != ctx.shop_id:  # fails closed (quill, #129)
             raise JobError("a drift belongs to the execution's shop")
         incident, created = await self.incidents.open(drift_detection(drift), actor=DETECTOR)
         return Completed({"incident_id": str(incident.id), "opened": int(created)})
