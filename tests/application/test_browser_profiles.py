@@ -9,14 +9,16 @@ and wiped afterwards, whatever happens (AC-8A.1.3).
 import contextlib
 import io
 import os
+import shutil
 import tarfile
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+import htco_application.browser_profiles as browser_profiles_module
 from htco_application.browser_environments import (
     EnvironmentNotFoundError,
     ProvisioningResult,
@@ -428,39 +430,80 @@ def test_workspace__hard_linked_files_are_sealed_as_regular_files(tmp_path: Path
     assert everything_under(root) == []
 
 
-def test_workspace__a_file_swapped_for_a_symlink_while_packing_is_never_followed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def _swap_test(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, swap: str, write: Callable[[Path], object]
 ) -> None:
-    """quill on #116: between listing and reading, a file replaced by a symlink to a secret
-    outside the profile is refused, never read, and the last good archive stays."""
+    """Between listing a directory and reading the entry `swap`, that entry is replaced by a
+    symlink to a directory outside the profile. Nothing outside may be read: the session is
+    refused and the last good archive stays."""
     import htco_application.browser_profiles as module  # noqa: PLC0415
 
     profiles = vault()
     env = environment()
     root = tmp_path / "tmpfs"
     root.mkdir()
-    secret = tmp_path / "outside-secret"
-    secret.write_bytes(b"never in an archive")
+    outside = tmp_path / "outside"
+    (outside / "Default").mkdir(parents=True)
+    for secret in (outside / "Cookies", outside / "Default" / "Cookies", outside / "Preferences"):
+        secret.write_bytes(b"never in an archive")
     workspaces = ProfileWorkspaces(profiles, root)
     workspaces.create(env)
     good = profiles.open(env)
-    listed = module._profile_files
+    listed = module._entries
+    swapped = False
 
-    def swap_after_listing(directory: Path) -> Iterator[Path]:
-        paths = list(listed(directory))
-        target = directory / "Cookies"
-        target.unlink()
-        try:
-            target.symlink_to(secret)
-        except OSError:  # pragma: no cover - Windows without the symlink privilege
-            pytest.skip("symlinks need a privilege on this machine")
-        return iter(paths)
+    def swap_after_listing(directory: int | Path) -> list[os.DirEntry[str]]:
+        nonlocal swapped
+        entries = listed(directory)
+        victim = next((e for e in entries if e.name == swap), None)
+        if victim is not None and not swapped:
+            swapped = True
+            base = (
+                Path(f"/proc/self/fd/{directory}").readlink()
+                if isinstance(directory, int)
+                else Path(directory)
+            )
+            path = base / victim.name
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            target = outside / "Default" if swap == "Default" else outside / swap
+            try:
+                path.symlink_to(target, target_is_directory=target.is_dir())
+            except OSError:  # pragma: no cover - Windows without the symlink privilege
+                pytest.skip("symlinks need a privilege on this machine")
+        return entries
 
-    monkeypatch.setattr(module, "_profile_files", swap_after_listing)
+    monkeypatch.setattr(module, "_entries", swap_after_listing)
     with pytest.raises(ProfileUnsafeError), workspaces.checkout(env) as directory:
-        (directory / "Cookies").write_bytes(COOKIE)
+        write(directory)
+    assert swapped
     assert profiles.open(env) == good
     assert everything_under(root) == []
+
+
+def test_workspace__a_file_swapped_for_a_symlink_while_packing_is_never_followed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """quill on #116: a file replaced by a symlink after the listing is refused."""
+    _swap_test(
+        tmp_path, monkeypatch, swap="Cookies",
+        write=lambda d: (d / "Cookies").write_bytes(COOKIE),
+    )  # fmt: skip
+
+
+def test_workspace__a_directory_swapped_for_a_symlink_is_never_followed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex on #125: a listed subdirectory replaced by a symlink before its children are read
+    must not let files from outside the profile into the archive."""
+
+    def write(directory: Path) -> None:
+        (directory / "Default").mkdir()
+        (directory / "Default" / "Cookies").write_bytes(COOKIE)
+
+    _swap_test(tmp_path, monkeypatch, swap="Default", write=write)
 
 
 def test_vault__the_record_follows_every_seal_including_a_key_rotation() -> None:
@@ -490,3 +533,40 @@ def test_vault__an_environment_row_that_is_gone_stores_nothing() -> None:
         profiles.delete(env)
     assert store.archives == {}
     assert store.profiles == {}
+
+
+_LINUX_WALK = pytest.mark.skipif(
+    not browser_profiles_module._FD_WALK,
+    reason="the descriptor walk needs dir_fd and O_NOFOLLOW (Linux, the browser worker)",
+)
+
+
+@_LINUX_WALK
+def test_open_at__an_entry_replaced_or_removed_after_its_stat_is_refused(tmp_path: Path) -> None:
+    """The last two guards of the descriptor walk: the opened entry must be the one listed."""
+    open_at = browser_profiles_module._open_at
+    (tmp_path / "Cookies").write_bytes(COOKIE)
+    (tmp_path / "other").write_bytes(b"other")
+    parent = os.open(tmp_path, os.O_RDONLY)
+    try:
+        listed = os.stat("Cookies", dir_fd=parent, follow_symlinks=False)
+        (tmp_path / "other").replace(tmp_path / "Cookies")  # a different inode now
+        with pytest.raises(ProfileUnsafeError):
+            open_at("Cookies", os.O_RDONLY, parent, listed)
+        (tmp_path / "Cookies").unlink()
+        with pytest.raises(ProfileUnsafeError):
+            open_at("Cookies", os.O_RDONLY, parent, listed)
+    finally:
+        os.close(parent)
+
+
+@_LINUX_WALK
+def test_workspace__a_socket_or_pipe_in_the_profile_is_not_sealed(tmp_path: Path) -> None:
+    profiles = vault()
+    env = environment()
+    workspaces = ProfileWorkspaces(profiles, tmp_path)
+    with workspaces.checkout(env) as directory:
+        (directory / "Preferences").write_bytes(b"{}")
+        getattr(os, "mkfifo")(directory / "pipe")  # noqa: B009 - POSIX only, the test is skipped elsewhere
+    with tarfile.open(fileobj=io.BytesIO(profiles.open(env) or b""), mode="r:*") as archive:
+        assert archive.getnames() == ["Preferences"]
