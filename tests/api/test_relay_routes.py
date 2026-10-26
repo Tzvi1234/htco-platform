@@ -122,6 +122,15 @@ async def test_list__a_page_of_exactly_200_has_no_next_cursor() -> None:
     assert page.json()["next_cursor"] is None
 
 
+@pytest.mark.parametrize("cursor", ["%%%", "\u00e9", "AAAA", "x" * 256, "AAAAAAAAAAAAAAAAAAAAAA"])
+async def test_list__a_malformed_cursor_is_a_validation_problem_never_a_500(cursor: str) -> None:
+    """Local Codex on #159: like every cursor route (decode_cursor), a 422 validation problem."""
+    async with client(MemoryRelayStore()) as http:
+        answer = await http.get("/v1/relay-items", params={"cursor": cursor})
+    assert answer.status_code == 422
+    assert answer.headers["content-type"].startswith("application/problem+json")
+
+
 async def test_unwired__503_relay_unavailable() -> None:
     async with client(None) as http:
         answer = await http.get("/v1/relay-items")

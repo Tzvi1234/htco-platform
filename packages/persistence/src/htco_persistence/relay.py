@@ -13,7 +13,12 @@ import psycopg
 from psycopg import errors
 
 from htco_application.audit import AuditRecord
-from htco_application.relay import DuplicateTrackingError, RelayItem, RelayItemMovedError
+from htco_application.relay import (
+    RELAY_CODE_TTL,
+    DuplicateTrackingError,
+    RelayItem,
+    RelayItemMovedError,
+)
 from htco_domain.relay import ClosedReason, RelayState
 from htco_persistence.audit import append_audit
 from htco_persistence.database import Database
@@ -115,31 +120,48 @@ class PostgresRelayStore:
         return tuple(_item(r) for r in rows)
 
     def reveal_code(
-        self, organization_id: uuid.UUID, item_id: uuid.UUID, *, audit: AuditRecord
+        self,
+        organization_id: uuid.UUID,
+        item_id: uuid.UUID,
+        *,
+        audit: AuditRecord,
+        now: datetime,
     ) -> str | None:
         with self._database.connection() as connection, connection.transaction():
+            # The item is locked while the code is read and the reveal audited: a close that
+            # runs at the same time waits, or wins and the reveal finds nothing.
             row = connection.execute(
                 """
-                select code from app.relay_item_codes
-                where organization_id = %s and relay_item_id = %s
+                select c.code from app.relay_items i
+                join app.relay_item_codes c on c.relay_item_id = i.id
+                where i.organization_id = %s and i.id = %s
+                  and i.state = 'handed_off' and i.updated_at > %s
+                for update of i
                 """,
-                [organization_id, item_id],
+                [organization_id, item_id, now - RELAY_CODE_TTL],
             ).fetchone()
             if row is None:
                 return None
             append_audit(connection, audit)
         return str(row[0])
 
-    def tracking_on_receipt(self, shop_id: uuid.UUID, receipt_id: int, fingerprint: bytes) -> bool:
-        with self._database.connection() as connection:
-            row = connection.execute(
+    def expire_codes(self, shop_id: uuid.UUID, *, now: datetime) -> int:
+        with self._database.connection() as connection, connection.transaction():
+            rows = connection.execute(
                 """
-                select 1 from app.tracking_events
-                where shop_id = %s and receipt_id = %s and fingerprint = %s
+                update app.relay_items
+                set state = 'closed', closed_reason = 'expired', closed_at = %s, updated_at = %s
+                where shop_id = %s and state = 'handed_off' and updated_at <= %s
+                returning id
                 """,
-                [shop_id, receipt_id, fingerprint],
-            ).fetchone()
-        return row is not None
+                [now, now, shop_id, now - RELAY_CODE_TTL],
+            ).fetchall()
+            ids = [r[0] for r in rows]
+            if ids:
+                connection.execute(
+                    "delete from app.relay_item_codes where relay_item_id = any(%s)", [ids]
+                )
+        return len(ids)
 
     def hand_off(  # noqa: PLR0913 - the item, the tracking and the audit
         self,
@@ -151,9 +173,46 @@ class PostgresRelayStore:
         code: str,
         now: datetime,
         audit: AuditRecord,
+        on_receipt_audit: AuditRecord | None = None,
     ) -> RelayItem:
         try:
             with self._database.connection() as connection, connection.transaction():
+                locked = connection.execute(
+                    "select state, shop_id, receipt_id from app.relay_items where id = %s"
+                    " for update",
+                    [item_id],
+                ).fetchone()
+                if locked is None or locked[0] != RelayState.AWAITING_TRACKING.value:
+                    raise RelayItemMovedError(
+                        RelayState(locked[0]) if locked else RelayState.CLOSED
+                    )
+                on_etsy = (
+                    on_receipt_audit is not None
+                    and connection.execute(
+                        """
+                    select 1 from app.tracking_events
+                    where shop_id = %s and receipt_id = %s and fingerprint = %s
+                      and source = 'etsy'
+                    """,
+                        [locked[1], locked[2], fingerprint],
+                    ).fetchone()
+                    is not None
+                )
+                if on_etsy and on_receipt_audit is not None:
+                    closed = connection.execute(
+                        f"""
+                        update app.relay_items
+                        set state = 'closed', closed_reason = 'tracking_on_etsy',
+                            closed_at = %s, updated_at = %s
+                        where id = %s
+                        returning {_COLUMNS}
+                        """,  # noqa: S608 - a constant column list
+                        [now, now, item_id],
+                    ).fetchone()
+                    if closed is None:  # pragma: no cover - the row is locked and open
+                        raise RelayItemMovedError(RelayState.CLOSED)
+                    append_audit(connection, on_receipt_audit)
+                    return _item(closed)
                 row = connection.execute(
                     f"""
                     update app.relay_items

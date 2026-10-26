@@ -4,12 +4,19 @@ organization."""
 
 import uuid
 from collections.abc import AsyncIterator
-from datetime import timedelta
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
+import anyio
 import pytest
 
 from htco_application.audit import AuditRecord
-from htco_application.relay import DuplicateTrackingError, RelayItem, RelayItemMovedError
+from htco_application.relay import (
+    RELAY_CODE_TTL,
+    DuplicateTrackingError,
+    RelayItem,
+    RelayItemMovedError,
+)
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.fulfillment import tracking_fingerprint
 from htco_domain.relay import ClosedReason, RelayState
@@ -152,3 +159,108 @@ async def test_open_items__keyset_pages_reach_every_item(database: Database) -> 
 
     assert [i.receipt_id for i in (*first, *rest)] == [81, 82, 83]
     assert store.open_items(org, shop_ids=frozenset({shop}), limit=2, after=rest[-1]) == ()
+
+
+def _handed_off(  # noqa: PLR0913 - the item and when it was pasted
+    database: Database,
+    worker_db: Database,
+    org: uuid.UUID,
+    shop: uuid.UUID,
+    receipt: int,
+    *,
+    at: datetime = NOW,
+) -> RelayItem:
+    opened = item(org, shop, receipt)
+    with tenant_scope(org):
+        PostgresRelayStore(worker_db).open_item(opened)
+    return PostgresRelayStore(database).hand_off(
+        opened.id, carrier="usps", fingerprint=tracking_fingerprint(shop, f"{CODE}{receipt}"),
+        last4="1234", code=f"{CODE[:-4]}{receipt:04d}", now=at, audit=audit(org, opened.id),
+    )  # fmt: skip
+
+
+async def test_a_reveal_waits_for_a_close_and_then_finds_nothing(
+    database: Database, worker_db: Database
+) -> None:
+    """Local Codex on #159: the reveal locks the item, so a close in progress decides first."""
+    tenant, integration = await connected(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    pasted = _handed_off(database, worker_db, org, shop, 91)
+    api = PostgresRelayStore(database)
+
+    with ThreadPoolExecutor(1) as pool:
+        with database.connection() as closing, closing.transaction():
+            closing.execute(
+                "update app.relay_items set state = 'closed', closed_reason = 'expired',"
+                " closed_at = %s, updated_at = %s where id = %s",
+                [NOW, NOW, pasted.id],
+            )
+            closing.execute(
+                "delete from app.relay_item_codes where relay_item_id = %s", [pasted.id]
+            )
+            reveal = pool.submit(
+                lambda: api.reveal_code(org, pasted.id, audit=audit(org, pasted.id), now=NOW)
+            )
+            await anyio.sleep(0.5)
+            assert not reveal.done()  # it waits for the close's lock
+        assert reveal.result(timeout=10) is None
+
+    revealed = "select count(*) from audit.audit_log where entity_id = %s"
+    assert scalar(database, revealed, [str(pasted.id)]) == 1  # the paste only, no reveal
+
+
+async def test_a_paste_waits_for_etsys_tracking_and_then_sees_the_item_closed(
+    database: Database, worker_db: Database
+) -> None:
+    """Local Codex on #159: the paste locks the item, so Etsy's close and the hand-off never
+    interleave."""
+    tenant, integration = await connected(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    waiting = item(org, shop, 92)
+    with tenant_scope(org):
+        PostgresRelayStore(worker_db).open_item(waiting)
+    api = PostgresRelayStore(database)
+
+    with ThreadPoolExecutor(1) as pool:
+        with database.connection() as closing, closing.transaction():
+            closing.execute(
+                "update app.relay_items set state = 'closed', closed_reason = 'tracking_on_etsy',"
+                " closed_at = %s, updated_at = %s where id = %s",
+                [NOW, NOW, waiting.id],
+            )
+            paste = pool.submit(
+                lambda: api.hand_off(
+                    waiting.id, carrier="usps", fingerprint=tracking_fingerprint(shop, CODE),
+                    last4="1234", code=CODE, now=NOW, audit=audit(org, waiting.id),
+                    on_receipt_audit=audit(org, waiting.id),
+                )
+            )  # fmt: skip
+            await anyio.sleep(0.5)
+            assert not paste.done()
+        with pytest.raises(RelayItemMovedError):
+            paste.result(timeout=10)
+
+    codes = "select count(*) from app.relay_item_codes where relay_item_id = %s"
+    assert scalar(database, codes, [waiting.id]) == 0
+
+
+async def test_the_retention_job_expires_old_codes_only(
+    database: Database, worker_db: Database
+) -> None:
+    """Local Codex on #159: the retention runs as its own job, as the worker in its organization."""
+    tenant, integration = await connected(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    old = _handed_off(
+        database, worker_db, org, shop, 93, at=NOW - RELAY_CODE_TTL - timedelta(minutes=1)
+    )
+    fresh = _handed_off(database, worker_db, org, shop, 94)
+
+    with tenant_scope(org):
+        expired = PostgresRelayStore(worker_db).expire_codes(shop, now=NOW)
+
+    api = PostgresRelayStore(database)
+    assert expired == 1
+    assert api.item(org, old.id).closed_reason is ClosedReason.EXPIRED  # type: ignore[union-attr]
+    assert api.item(org, fresh.id).state is RelayState.HANDED_OFF  # type: ignore[union-attr]
+    codes = "select count(*) from app.relay_item_codes where relay_item_id = %s"
+    assert (scalar(database, codes, [old.id]), scalar(database, codes, [fresh.id])) == (0, 1)

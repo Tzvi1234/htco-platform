@@ -105,14 +105,21 @@ class RelayStore(Protocol):
         ...
 
     def reveal_code(
-        self, organization_id: uuid.UUID, item_id: uuid.UUID, *, audit: AuditRecord
+        self,
+        organization_id: uuid.UUID,
+        item_id: uuid.UUID,
+        *,
+        audit: AuditRecord,
+        now: datetime,
     ) -> str | None:
-        """The pasted code while the item waits for its upload, with the reveal's audit in the
-        same transaction; None (and no audit) once it closed."""
+        """The pasted code while its item is handed off and within `RELAY_CODE_TTL`, read with
+        the item locked and the reveal's audit in the same transaction, so a concurrent close
+        either waits for it or wins; None (and no audit) otherwise."""
         ...
 
-    def tracking_on_receipt(self, shop_id: uuid.UUID, receipt_id: int, fingerprint: bytes) -> bool:
-        """Has Tracking Synchronization seen this number on the order's Etsy receipt?"""
+    def expire_codes(self, shop_id: uuid.UUID, *, now: datetime) -> int:
+        """Close the shop's handed-off items older than `RELAY_CODE_TTL` as `expired` and delete
+        their codes (the retention job, independent of any inspection). Returns how many."""
         ...
 
     def hand_off(  # noqa: PLR0913 - the item, the tracking and the audit
@@ -125,9 +132,13 @@ class RelayStore(Protocol):
         code: str,
         now: datetime,
         audit: AuditRecord,
+        on_receipt_audit: AuditRecord | None = None,
     ) -> RelayItem:
         """Record the pasted tracking and hand the item off, with its audit, in one
-        transaction. Raises `RelayItemMovedError` or `DuplicateTrackingError`."""
+        transaction with the item locked. With `on_receipt_audit`, a number Etsy's receipt
+        already carries (an Etsy tracking event with this fingerprint) closes the item as
+        `tracking_on_etsy` instead, in the same transaction. Raises `RelayItemMovedError` or
+        `DuplicateTrackingError`."""
         ...
 
     def close(
@@ -257,6 +268,15 @@ async def reconcile_relay_items(  # noqa: PLR0913 - the shop and its collaborato
     return cancelled, expired, tracked
 
 
+async def expire_relay_codes(
+    store: RelayStore, *, shop_id: uuid.UUID, now: datetime, offload: Offload = run_inline
+) -> int:
+    """The relay's code retention for one shop, as its own scheduled job (local Codex on #159):
+    a pasted code never outlives `RELAY_CODE_TTL`, whatever Incident Detection does."""
+    expired: int = await offload(partial(store.expire_codes, shop_id, now=now))
+    return expired
+
+
 def _organization(auth: AuthContext, organization_id: uuid.UUID | None) -> uuid.UUID:
     organization = organization_id or auth.default_organization()
     if organization is None:
@@ -347,25 +367,19 @@ def submit_tracking(  # noqa: PLR0913 - the caller, the item and the pasted trac
     if item.state is not RelayState.AWAITING_TRACKING:
         raise RelayItemMovedError(item.state)
     actor = ActorRef(ActorKind.USER, str(auth.user_id))
-    fingerprint = tracking.fingerprint(item.shop_id)
-    if store.tracking_on_receipt(item.shop_id, item.receipt_id, fingerprint):
-        closed = store.close(
-            item.id,
-            reason=ClosedReason.TRACKING_ON_ETSY,
-            now=now,
-            audit=_audit(item, actor, "relay.closed_on_etsy_tracking", tracking, correlation_id),
-        )
-        if closed is None:
-            raise RelayItemMovedError(RelayState.CLOSED)
-        return closed
+    # One transaction with the item locked (local Codex on #159): the check for the number on
+    # Etsy's receipt and the hand-off can no longer interleave with Tracking Synchronization.
     return store.hand_off(
         item.id,
         carrier=tracking.carrier.value,
-        fingerprint=fingerprint,
+        fingerprint=tracking.fingerprint(item.shop_id),
         last4=tracking.last4,
         code=tracking.code,
         now=now,
         audit=_audit(item, actor, "relay.tracking_pasted", tracking, correlation_id),
+        on_receipt_audit=_audit(
+            item, actor, "relay.closed_on_etsy_tracking", tracking, correlation_id
+        ),
     )
 
 
@@ -405,7 +419,7 @@ def relay_code(  # noqa: PLR0913 - the caller, the item and the request
         after={"carrier": item.carrier, "last4": item.last4, "receipt_id": item.receipt_id},
         correlation_id=correlation_id,
     )
-    code = store.reveal_code(organization_id, item_id, audit=reveal)
+    code = store.reveal_code(organization_id, item_id, audit=reveal, now=now)
     if code is None:
         raise RelayItemNotVisibleError("no such relay item")
     return code

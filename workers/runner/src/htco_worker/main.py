@@ -52,12 +52,15 @@ from htco_application.fulfillment_schedule import (
     FULFILLMENT_SCHEDULE,
     FULFILLMENT_SHOP_JOB,
     INCIDENT_DETECTION,
+    RELAY_RETENTION_SCHEDULE,
+    RELAY_RETENTION_SHOP_JOB,
     REVIEW_SCHEDULE,
     REVIEW_SHOP_JOB,
     TRACKING_SYNC,
     FulfillmentInspection,
     ReviewCheck,
     enqueue_fulfillment_inspections,
+    enqueue_relay_retention,
     enqueue_review_checks,
 )
 from htco_application.incidents import (
@@ -123,6 +126,7 @@ from htco_application.order_intake import (
     due_reconciliations,
     enqueue_reconciliations,
 )
+from htco_application.relay import expire_relay_codes
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.sla_inspector import DriftIncidents, IncidentDetection
 from htco_application.tracking_sync import EngineTrackingSync, TrackingRecorder, TrackingSync
@@ -484,6 +488,7 @@ def fulfillment_schedule_handlers(
     engine: DurableAutomationEngine,
     queue: JobQueue,
     directory: ShopDirectory,
+    database: Database | None = None,
 ) -> dict[str, JobHandler]:
     """The 15-minute fulfillment inspection (slices 6.1, 6.2) and the hourly low-review read
     (6.9), each only when named in `HTCO_WORKER_SCHEDULES`: off by default, the rollback flags
@@ -513,6 +518,20 @@ def fulfillment_schedule_handlers(
             "fulfillment.review_checks_enqueued",
         )
         handlers[REVIEW_SHOP_JOB] = reviews_per_shop
+    if RELAY_RETENTION_SCHEDULE.kind in enabled and database is not None:
+        relay = PostgresRelayStore(database)
+
+        async def retention_per_shop(job: ClaimedJob) -> None:
+            expired = await expire_relay_codes(
+                relay, shop_id=_shop(job).shop_id, now=_now(), offload=anyio.to_thread.run_sync
+            )
+            _log.info("relay.codes_expired", expired=expired, job_id=str(job.id))
+
+        handlers[RELAY_RETENTION_SCHEDULE.kind] = _in_thread(
+            lambda: enqueue_relay_retention(directory, queue, now=_now()),
+            "relay.retention_enqueued",
+        )
+        handlers[RELAY_RETENTION_SHOP_JOB] = retention_per_shop
     return handlers
 
 
@@ -687,7 +706,11 @@ async def _serve(settings: WorkerSettings) -> None:
     )
     handlers |= automation_handlers(engine, settings.worker_id)
     handlers |= fulfillment_schedule_handlers(
-        settings.schedules, engine=engine, queue=queue, directory=PostgresShopDirectory(database)
+        settings.schedules,
+        engine=engine,
+        queue=queue,
+        directory=PostgresShopDirectory(database),
+        database=database,
     )
     if adapter is not None:  # webhook and sync jobs wait in the queue until Etsy is configured
         handlers |= webhook_handlers(webhook_processor(database, engine, adapter))

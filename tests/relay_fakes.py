@@ -7,6 +7,7 @@ from datetime import datetime
 
 from htco_application.audit import AuditRecord
 from htco_application.relay import (
+    RELAY_CODE_TTL,
     DuplicateTrackingError,
     RelayItem,
     RelayItemMovedError,
@@ -62,13 +63,35 @@ class MemoryRelayStore:
         return tuple(sorted(found, key=lambda i: (i.opened_at, i.id))[:limit])
 
     def reveal_code(
-        self, organization_id: uuid.UUID, item_id: uuid.UUID, *, audit: AuditRecord
+        self,
+        organization_id: uuid.UUID,
+        item_id: uuid.UUID,
+        *,
+        audit: AuditRecord,
+        now: datetime,
     ) -> str | None:
-        found = self.item(organization_id, item_id)
-        code = None if found is None else self.codes.get(item_id)
-        if code is not None:
-            self.audits.append(audit)
-        return code
+        with self._lock:
+            found = self.item(organization_id, item_id)
+            if (
+                found is None
+                or found.state is not RelayState.HANDED_OFF
+                or now - found.updated_at >= RELAY_CODE_TTL
+            ):
+                return None
+            code = self.codes.get(item_id)
+            if code is not None:
+                self.audits.append(audit)
+            return code
+
+    def expire_codes(self, shop_id: uuid.UUID, *, now: datetime) -> int:
+        due = [
+            i.id
+            for i in self.items.values()
+            if i.shop_id == shop_id
+            and i.state is RelayState.HANDED_OFF
+            and now - i.updated_at >= RELAY_CODE_TTL
+        ]
+        return sum(self.close(i, reason=ClosedReason.EXPIRED, now=now) is not None for i in due)
 
     def tracking_on_receipt(self, shop_id: uuid.UUID, receipt_id: int, fingerprint: bytes) -> bool:
         return (shop_id, receipt_id, fingerprint) in self.on_etsy
@@ -83,11 +106,22 @@ class MemoryRelayStore:
         code: str,
         now: datetime,
         audit: AuditRecord,
+        on_receipt_audit: AuditRecord | None = None,
     ) -> RelayItem:
         with self._lock:
             item = self.items[item_id]
             if item.state is not RelayState.AWAITING_TRACKING:
                 raise RelayItemMovedError(item.state)
+            if on_receipt_audit is not None and self.tracking_on_receipt(
+                item.shop_id, item.receipt_id, fingerprint
+            ):
+                closed = replace(
+                    item, state=RelayState.CLOSED, closed_reason=ClosedReason.TRACKING_ON_ETSY,
+                    closed_at=now, updated_at=now,
+                )  # fmt: skip
+                self.items[item_id] = closed
+                self.audits.append(on_receipt_audit)
+                return closed
             if any(
                 other.shop_id == item.shop_id and self.fingerprints.get(other.id) == fingerprint
                 for other in self.items.values()

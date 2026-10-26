@@ -26,6 +26,7 @@ from htco_application.relay import (
     RelayItem,
     RelayItemMovedError,
     RelayItemNotVisibleError,
+    expire_relay_codes,
     list_relay_items,
     open_due_relay_items,
     reconcile_relay_items,
@@ -688,6 +689,40 @@ async def test_a_code_past_its_ttl_is_never_revealed_and_goes() -> None:
     assert store.items[item].closed_reason is ClosedReason.EXPIRED
     assert item not in store.codes
     assert len(store.audits) == audits  # nothing revealed, so no reveal is audited
+
+
+async def test_the_retention_job_expires_a_code_past_its_ttl_only() -> None:
+    """Local Codex on #159: the retention is its own job, whatever Incident Detection does."""
+    store = MemoryRelayStore()
+    item = await an_item(store)
+    submit_tracking(
+        auth(), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE, now=PAID,
+        correlation_id="req-1",
+    )  # fmt: skip
+
+    early = await expire_relay_codes(
+        store, shop_id=SHOP, now=PAID + RELAY_CODE_TTL - timedelta(minutes=1)
+    )
+    late = await expire_relay_codes(store, shop_id=SHOP, now=PAID + RELAY_CODE_TTL)
+
+    assert (early, late) == (0, 1)
+    assert store.items[item].closed_reason is ClosedReason.EXPIRED
+    assert item not in store.codes
+
+
+async def test_a_number_already_on_etsy_closes_the_item_in_the_paste_itself() -> None:
+    store = MemoryRelayStore()
+    item = await an_item(store)
+    store.on_etsy.add((SHOP, 51, tracking_fingerprint(SHOP, CODE)))
+
+    closed = submit_tracking(
+        auth(), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE, now=PAID,
+        correlation_id="req-1",
+    )  # fmt: skip
+
+    assert closed.closed_reason is ClosedReason.TRACKING_ON_ETSY
+    assert item not in store.codes
+    assert [a.action for a in store.audits] == ["relay.closed_on_etsy_tracking"]
 
 
 async def test_every_reveal_of_a_code_is_audited_without_the_code() -> None:
