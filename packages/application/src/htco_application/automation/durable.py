@@ -370,7 +370,23 @@ class DurableAutomationEngine:
         change = self._change(
             execution, execution.state, cancelled.state, worker, now, f"stopped:{readiness}"
         )
-        if not await self._offload(lambda: self._store.advance(execution, [(cancelled, change)])):
+        # Audited in the same write (sage on #180, THREAT_MODEL T15): the Owner sees which
+        # queued runs a readiness change stopped.
+        if execution.organization_id is None:  # pragma: no cover - refused at the trigger
+            raise ValueError("a durable execution belongs to an organization")
+        audit = AuditRecord.new(
+            organization_id=execution.organization_id,
+            actor=worker,
+            action="automation.execution_stopped",
+            entity_type="automation_execution",
+            entity_id=str(execution.id),
+            before={"state": execution.state.value},
+            after={"state": cancelled.state.value, "reason": f"stopped:{readiness}"},
+            correlation_id=execution.correlation_id,
+        )
+        if not await self._offload(
+            lambda: self._store.advance(execution, [(cancelled, change)], audit=audit)
+        ):
             return await self._reload(execution.id)
         return cancelled
 

@@ -403,3 +403,11 @@ async def test_kill_switch__an_automation_set_to_draft_cancels_its_queued_execut
     assert stopped.state is ExecutionState.CANCELLED
     assert book.calls == 0
     assert events(admin, execution.id)[-1][:2] == ("pending", "cancelled")
+    assert (
+        scalar(
+            admin,
+            "select count(*) from audit.audit_log where entity_id = %s and action = %s",
+            [str(execution.id), "automation.execution_stopped"],
+        )
+        == 1
+    )

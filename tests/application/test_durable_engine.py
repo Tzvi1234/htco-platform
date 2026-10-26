@@ -623,6 +623,19 @@ async def test_kill_switch__a_queued_execution_is_cancelled_when_its_job_runs(
     assert [job.kind for job in world.store.jobs] == [EXECUTION_JOB]  # no new job
     record = next(r for r in caplog.records if r.getMessage() == "automation.stopped")
     assert record.__dict__["reason"] == "draft"
+    # Audited in the same write as the cancellation (sage on #180, THREAT_MODEL T15).
+    [audit] = world.store.audits
+    assert (audit.action, audit.actor, audit.entity_type, audit.entity_id) == (
+        "automation.execution_stopped",
+        WORKER,
+        "automation_execution",
+        str(execution.id),
+    )
+    assert (audit.before, audit.after) == (
+        {"state": "pending"},
+        {"state": "cancelled", "reason": "stopped:draft"},
+    )
+    assert audit.correlation_id == execution.correlation_id
 
 
 @pytest.mark.ac("AC-126.1")
