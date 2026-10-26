@@ -176,7 +176,7 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
    About the `browser.run` job:
    - Its idempotency key is the action execution and its attempt.
    - Its concurrency key is the profile (`browser:{environment_id}`, one run at a time).
-   - Its payload is the execution ID and attempt, the environment, the recipe and its version, the scope ID, and only the parameters the recipe declares. It never carries a secret, a token or any authority.
+   - **Its payload is a locator only: the execution ID and the attempt.** It carries no recipe, scope, environment or parameter. A forged or edited job therefore cannot change what runs. The dispatch transaction stores the routed binding with the claim: the environment, the recipe and its version, the scope ID, and the parameters the recipe declares. The browser worker loads that binding and the request from the database, never from the job. It never carries a secret, a token or any authority.
 
    `submit` returns `DISPATCHED`. It is a waiting outcome: `StatusKind.waiting`, with the reason `waiting_for_browser`.
 2. **Nothing is held while the browser runs.**
@@ -189,21 +189,28 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
    - the environment is `READY`;
    - the recipe's flag is on and its scope row is recorded;
    - no kill switch is on: global, the shop's, or the action's (the execution-time switch of #126);
-   - **for a write, its approval is still valid.** It must still be `APPROVED`, for this request hash, and not expired. This is a read-only check, and the browser worker never writes an approval.
+   - **its approval is still valid, whenever the action needs one.** It must still be `APPROVED`, for this request hash, and not expired. That covers every Etsy browser action, reads included: D-16 needs the Owner's approval each time any of them runs. This is a read-only check, and the browser worker never writes an approval.
 
    If any check fails, the run ends `refused` with its code (`approval_revoked` for the approval), and no page is touched.
 
-   **The started marker.** Before a write touches a page, the browser worker starts the attempt through one database function, `private.start_browser_run(execution, attempt, request_hash)`. In one transaction it:
+   **The started marker.** Before any approval-gated run touches a page, the browser worker starts the attempt through one database function, `private.start_browser_run(job_id, lease_token)`. Every Etsy browser run counts, read or write, and so does every write. In one transaction the function:
+   - finds the `browser.run` job that this caller holds now: the given ID, leased with this lease token, lease not expired. The queue returns the unguessable lease token only to the worker that claimed the job;
+   - takes the execution, the attempt and the organization **from that job row**. It never takes them from its arguments or from a session setting, and it refuses an execution whose organization differs from the job's;
    - locks the action execution's row;
-   - checks again that the action is `DISPATCHED` with this request hash, before its deadline, with its approval still `APPROVED` for this hash and not expired;
-   - inserts the run's row with the status `started` and `started_at` (`on conflict do nothing`), and commits.
+   - checks again that the action is `DISPATCHED` with its stored request hash, before its deadline, and that its approval is still `APPROVED` for that hash and not expired;
+   - inserts the run's row with the status `started` and `started_at` (`on conflict do nothing`), and commits;
+   - returns the stored request and binding the run is allowed to execute.
 
-   That commit happens before any side effect, and only one worker can ever start an attempt. A job redelivered for an attempt that already has a `started` row exits without touching the page or the row (step 6).
+   That commit happens before any side effect, and only one worker can ever start an attempt. A job redelivered for an attempt that already has a `started` row exits without touching the page or the row (step 6). A read that needs no approval does not need the marker: its row is inserted directly with its final status.
 
    The function is `security definer`, so the browser role needs no right to lock or write `action_executions` itself. Because it runs with its owner's rights, RLS does not protect it, so it is hardened:
-   - it checks the execution's organization itself against the browser worker's own organization (`htco.organization_id`), and refuses an execution of any other organization;
+   - **it never trusts `htco.organization_id`** or any other setting the caller can choose. The organization comes from the leased job row, and so does the execution;
    - it sets `search_path = ''` and schema-qualifies every name;
    - `EXECUTE` is revoked from `PUBLIC` and granted only to `htco_browser`.
+
+   The same binding to a leased job covers everything else the browser role does with a run. It goes through two functions of the same kind: reading the claim and the approval, and `private.finish_browser_run(job_id, lease_token, outcome)` for the final status. None of it goes through RLS keyed on the session setting.
+
+   What this does not change: a process that holds the browser role can still claim any queued `browser.*` job, because one shared browser worker is one trust boundary. Per-shop container isolation stays the later hardening option. This binding stops such a process from acting on an execution it has not claimed, and from choosing an organization by setting a value.
 
    Then the browser worker runs the recipe through `BrowserController.session` and validates the result against the recipe's schema. Browser Use runs only for employee bindings with `deterministic = False`.
 4. **It publishes the outcome** in one transaction, idempotent per execution and attempt:
@@ -211,7 +218,7 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
    - `browser.run_finished.v1` in the outbox.
 
    The row never holds a secret, and holds DC1 only when the recipe's output model declares it.
-4a. **A revoked approval stops a dispatched write in two ways** (defense in depth). Cancellation and start are serialized on the action execution's row:
+4a. **A revoked approval stops a dispatched run in two ways** (defense in depth). This covers every approval-gated run, reads included (D-16). Cancellation and start are serialized on the action execution's row:
    - **(b), in the gateway.** Cancelling or expiring an approval locks the same row. It moves the `DISPATCHED` action to `CANCELLED` in the same transaction **only if the current attempt has no `started` row**. The browser worker's start then refuses the run.
    - **(a), in the browser worker.** The start function re-checks the approval under that lock (step 3), in case a revocation lands between the gateway and the run.
    - **An attempt that has already started is never cancelled through this path.** Its write may be happening, so the action stays `DISPATCHED`, and its outcome is still processed (step 5). The revocation is recorded with the action, and the run goes to a person: whatever the outcome, the resume records `HANDED_TO_HUMAN`, with one task for the Owner, "the approval was revoked while this write ran: check it and undo it if needed".
@@ -250,10 +257,15 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
 7. **The browser worker decides nothing about authority.** Authorization and approvals stay in the gateway. The browser worker only re-checks what can stop work.
    - **Its role can:**
      - claim `browser.*` jobs;
-     - read a claim's state, request hash and deadline, and an approval's state, request hash and expiry, in its own organization;
-     - start an attempt only through `private.start_browser_run` (`security definer`: the lock, the checks and the `started` row in one transaction), insert a read's row, and set a run's final status once.
+     - start an attempt only through `private.start_browser_run(job_id, lease_token)` (`security definer`: the leased job, the lock, the checks and the `started` row in one transaction), which returns the stored request and binding;
+     - set a run's final status once, and insert an unapproved read's row, only through `private.finish_browser_run(job_id, lease_token, outcome)`.
+
+     Both functions derive the execution and the organization from the job row leased with that token, never from a session setting.
    - It cannot write `action_executions` or approvals.
-   - A forged or replayed job is refused: one for an execution that is not `DISPATCHED`, or that carries another request hash.
+   - A forged or replayed job is refused, because a job is only a locator:
+     - a job the caller has not leased is refused;
+     - so is one whose execution is not `DISPATCHED`;
+     - nothing in a job can change the recipe, the scope, the environment or the parameters, which are loaded from the stored claim.
 
 ### 4. `NetworkProvider`: an optional per-shop egress, no fixed vendor
 
@@ -297,7 +309,9 @@ The rules:
   - Each run has a cap on cost, tokens and steps, and each shop has a daily cap.
   - Budgets are reserved before the call and settled after it, on a minimal Postgres ledger. 9.4's full ledger later absorbs it unchanged.
   - The run's deadline stays the controller's.
-- **PII masking before anything leaves.** DOM and accessibility-tree text is masked for DC1 (buyer names and addresses). Screenshots are sent only for pages whose recipe declares no buyer data; otherwise the model gets the masked text only.
+- **PII masking before anything leaves.** DOM and accessibility-tree text is masked for DC1 (buyer names and addresses).
+  - **No screenshot of a signed-in page ever goes to a model by default.** A recipe's declaration cannot guarantee what a signed-in page shows: a redirect, a challenge, a notification or a layout change can bring buyer data onto it. So the model gets the masked text only.
+  - Sending screenshots would need local, fail-closed redaction of every image before it leaves the worker, tested on an unexpected buyer-data page and not just the declared route, and an amendment of this ADR.
 - **Recording.** Every call writes one routing decision and one usage row, with the execution, the employee, the shop, the alias and the cost (AC-8A.6.1).
 - **Kill switches.** There are five: global, per shop, per employee, per alias, and the provider kill switch (AC-9.1.4).
 - **Prompt injection.** Page content is data (8A.7): it is quoted and schema-validated, and it never changes the task, the allowlist or the grants. There is no Pay click, and CAPTCHAs and challenges go to a person.
