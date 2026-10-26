@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
@@ -26,7 +26,6 @@ from htco_application.automation.engine import AutomationRefused, TriggerRequest
 from htco_application.etsy_webhooks import TriggersAutomations
 from htco_application.fulfillment_schedule import INCIDENT_DETECTION
 from htco_application.incidents import (
-    EVENTS,
     SLA_BREACHED,
     Detection,
     IncidentService,
@@ -34,7 +33,7 @@ from htco_application.incidents import (
     drift_detection,
     order_resource,
 )
-from htco_application.jobs import JobError, JsonValue
+from htco_application.kernel import EVENTS_DESTINATION, JobError, JsonValue, Offload, run_inline
 from htco_application.messaging import OutboxMessage
 from htco_application.notifications import NotificationRequest, NotificationService
 from htco_application.review_alerts import low_review_alerts
@@ -95,13 +94,6 @@ class SlaStore(Protocol):
         ...
 
 
-type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
-
-
-async def _inline(work: Callable[[], Any]) -> Any:
-    return work()
-
-
 def breach_event(  # noqa: PLR0913 - one breach's facts
     *,
     organization_id: uuid.UUID,
@@ -124,7 +116,7 @@ def breach_event(  # noqa: PLR0913 - one breach's facts
     return OutboxMessage(
         organization_id=organization_id,
         shop_id=shop_id,
-        destination=EVENTS,
+        destination=EVENTS_DESTINATION,
         idempotency_key=f"{SLA_BREACHED}:{shop_id}:{order.receipt_id}:{policy.id}:{policy.version}",
         payload=payload,
         correlation_id=None if correlation_id is None else correlation_id[:200],
@@ -138,7 +130,7 @@ class IncidentDetection:
     store: SlaStore
     incidents: IncidentService
     clock: Callable[[], datetime]
-    offload: Offload = _inline
+    offload: Offload = run_inline
     # Ship-by alerts (slice 6.9) through the notification path of 6.4; None: none raised.
     alerts: NotificationService | None = None
     ship_by_warning_days: int = SHIP_BY_WARNING_DAYS
@@ -288,7 +280,11 @@ class IncidentDetection:
         )
         resolved = escalated = 0
         for incident in incidents:
-            if incident.cause is Cause.TRACKING_MISSING and incident.receipt_id in closed_orders:
+            if (
+                incident.cause is Cause.TRACKING_MISSING
+                and incident.receipt_id is not None
+                and incident.receipt_id in closed_orders
+            ):
                 await self.incidents.resolve_on_evidence(
                     ctx.organization_id,
                     incident.dedup_key,
@@ -342,7 +338,7 @@ class DriftIncidents:
     activates it; an event that names no drift (one from before slice 6.7) starts nothing."""
 
     engine: TriggersAutomations
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     @staticmethod
     def request_for(message: OutboxMessage) -> TriggerRequest | None:

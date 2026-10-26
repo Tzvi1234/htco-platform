@@ -13,7 +13,7 @@ from datetime import datetime
 import anyio
 from psycopg.types.json import Jsonb
 
-from htco_application.maintenance import TenantShop
+from htco_application.kernel import TenantShop
 from htco_application.messaging import InboxEvent, payload_hash
 from htco_persistence.database import Database
 from htco_persistence.messaging import PostgresInbox

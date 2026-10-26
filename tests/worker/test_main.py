@@ -15,13 +15,8 @@ import pytest
 
 from htco_application.audit import AuditRecord
 from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
-from htco_application.maintenance import (
-    EXPIRY_JOB,
-    PROBE_JOB,
-    PURGE_JOB,
-    SCHEDULES,
-    TenantShop,
-)
+from htco_application.kernel import TenantShop
+from htco_application.maintenance import EXPIRY_JOB, PROBE_JOB, PURGE_JOB, SCHEDULES
 from htco_application.messaging import OUTBOX_DELIVERY_JOB
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_integrations import EtsyConnection, OAuthTokens

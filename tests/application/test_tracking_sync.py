@@ -22,8 +22,7 @@ from htco_application.incidents import (
     IncidentService,
     order_resource,
 )
-from htco_application.jobs import JobError
-from htco_application.maintenance import TenantShop
+from htco_application.kernel import JobError, TenantShop
 from htco_application.marketplace import OrderShipment
 from htco_application.tracking_sync import (
     TRACKING_DETECTED,

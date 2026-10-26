@@ -24,13 +24,13 @@ from htco_application.etsy_connect import (
     ShopConnectionRequest,
     TokenGrant,
 )
+from htco_application.kernel import Page
 from htco_application.marketplace import (
     Listing,
     ListingState,
     MarketplaceError,
     MarketplaceNotFoundError,
     MarketplaceShop,
-    Page,
     ReceiptAddressCheck,
 )
 from htco_application.shop_capabilities import ProbeSupersededError

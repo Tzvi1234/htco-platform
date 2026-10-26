@@ -5,7 +5,8 @@ from decimal import Decimal
 
 import pytest
 
-from htco_application.marketplace import MarketplaceMoney, Page, QuotaSnapshot
+from htco_application.kernel import Page
+from htco_application.marketplace import MarketplaceMoney, QuotaSnapshot
 
 
 @pytest.mark.parametrize(
