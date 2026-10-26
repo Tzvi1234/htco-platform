@@ -75,11 +75,12 @@ select ok(
 select ok(not has_column_privilege('htco_browser', 'app.shop_browser_environments', 'consent_at', 'update')
   and not has_column_privilege('htco_browser', 'app.shop_browser_environments', 'consent_ip_hash', 'update'),
   'the browser role never writes the consent record (its status edges are tested in 31)');
-select is_empty(
+select results_eq(
   $$ select p.oid::regprocedure::text from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where p.prosecdef and n.nspname in ('app', 'audit', 'public')
-       and has_function_privilege('htco_browser', p.oid, 'execute') $$,
-  'the browser role can call no security-definer function in the schemas it reaches'
+       and has_function_privilege('htco_browser', p.oid, 'execute') order by 1 $$,
+  $$ values ('app.browser_publish_status_change(uuid)') $$,
+  'the only security-definer function the browser role can call is its status-event writer (sage on #170)'
 );
 
 -- No client role sees the archives.

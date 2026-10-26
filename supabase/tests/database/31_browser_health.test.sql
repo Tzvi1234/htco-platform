@@ -273,7 +273,8 @@ insert into jobs.jobs (id, kind, idempotency_key, organization_id, payload, max_
 values ('b8c50000-0000-0000-0000-000000000003', 'outbox.deliver', 'test:cross:1',
         'b8c00000-0000-0000-0000-000000000000',
         '{"outbox_id": "b8d40000-0000-0000-0000-000000000001"}'::jsonb, 1, 1000, 60000, now());
-update jobs.jobs set state = 'dead' where id = 'b8c50000-0000-0000-0000-000000000003';
+update jobs.jobs set state = 'dead', finished_at = now(), attempts = 1
+  where id = 'b8c50000-0000-0000-0000-000000000003';
 select is(
   (select status from jobs.outbox where id = 'b8d40000-0000-0000-0000-000000000001'),
   'pending', 'another organization''s job never marks a message dead'
