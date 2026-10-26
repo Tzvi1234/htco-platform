@@ -13,6 +13,7 @@
   per order, linked to the drift (AC-6.3.4).
 """
 
+import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -21,6 +22,8 @@ from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
+from htco_application.automation.engine import AutomationRefused, TriggerRequest
+from htco_application.etsy_webhooks import TriggersAutomations
 from htco_application.fulfillment_schedule import INCIDENT_DETECTION
 from htco_application.incidents import (
     EVENTS,
@@ -35,6 +38,7 @@ from htco_application.jobs import JobError, JsonValue
 from htco_application.messaging import OutboxMessage
 from htco_application.notifications import NotificationRequest, NotificationService
 from htco_domain.actors import ActorKind, ActorRef
+from htco_domain.automation import TriggerKind
 from htco_domain.fulfillment import SlaPolicy, select_policy, ship_by_at_risk
 from htco_domain.incidents import (
     Cause,
@@ -46,7 +50,12 @@ from htco_domain.incidents import (
 )
 from htco_domain.notifications import NotificationKind
 
+_log = logging.getLogger(__name__)
+
 DETECTOR = ActorRef(ActorKind.AUTOMATION, INCIDENT_DETECTION)
+# Who starts it for a drift event (the platform, on the outbox's behalf).
+DRIFT_TRIGGER_ACTOR = ActorRef(ActorKind.SYSTEM, "drift-events")
+_DRIFT_FIELDS = ("shop_id", "receipt_id", "kind", "detected_at", "drift_id")
 # Generous until the owner tunes it: one business day before the ship-by date.
 SHIP_BY_WARNING_DAYS = 1
 
@@ -300,3 +309,45 @@ class IncidentDetection:
             raise JobError("a drift belongs to the execution's shop")
         incident, created = await self.incidents.open(drift_detection(drift), actor=DETECTOR)
         return Completed({"incident_id": str(incident.id), "opened": int(created)})
+
+
+@dataclass
+class DriftIncidents:
+    """`orders.drift_detected.v1` → one Incident Detection & Escalation run per drift (AC-6.3.4),
+    which opens one `sync_drift` incident per order. Refused (and logged) until the owner
+    activates it; an event that names no drift (one from before slice 6.7) starts nothing."""
+
+    engine: TriggersAutomations
+    offload: Offload = _inline
+
+    @staticmethod
+    def request_for(message: OutboxMessage) -> TriggerRequest | None:
+        payload = message.payload
+        drift = {name: payload.get(name) for name in _DRIFT_FIELDS}
+        if (
+            message.shop_id is None
+            or not isinstance(drift["receipt_id"], int)
+            or not all(isinstance(drift[name], str) for name in ("kind", "detected_at", "drift_id"))
+        ):
+            return None
+        cause = f"outbox:{message.idempotency_key}"[:200]
+        return TriggerRequest(
+            automation_id=INCIDENT_DETECTION,
+            trigger=TriggerKind.EVENT,
+            actor=DRIFT_TRIGGER_ACTOR,
+            idempotency_key=f"{INCIDENT_DETECTION}:drift:{drift['drift_id']}"[:200],
+            payload={"drift": drift},
+            correlation_id=message.correlation_id or cause,
+            organization_id=message.organization_id,
+            shop_id=message.shop_id,
+            causation_id=cause,
+        )
+
+    async def handle(self, message: OutboxMessage) -> None:
+        request = self.request_for(message)
+        if request is None:
+            return
+        try:
+            await self.offload(lambda: self.engine.trigger(request))
+        except AutomationRefused:
+            _log.warning("fulfillment.drift_not_started: shop=%s", message.shop_id)

@@ -52,6 +52,7 @@ from htco_application.order_ingest import (
     REFUNDED,
     UPDATED,
     IngestSource,
+    drift_id,
 )
 from htco_application.order_intake import GatewayReceipts, IntakeShops
 from htco_application.shop_integrations import ShopIntegration
@@ -128,7 +129,12 @@ def verify(stored: StoredSnapshot | None, receipt: OrderReceipt) -> tuple[Differ
 
 
 def difference_event(
-    integration: ShopIntegration, receipt: OrderReceipt, difference: Difference, correlation_id: str
+    integration: ShopIntegration,
+    receipt: OrderReceipt,
+    difference: Difference,
+    correlation_id: str,
+    *,
+    detected_at: datetime,
 ) -> OutboxMessage:
     """`orders.drift_detected.v1` for a verification difference (no money, no buyer data)."""
     shop = integration.shop_id
@@ -149,6 +155,10 @@ def difference_event(
             "observed": difference.observed,
             "etsy_updated_at": receipt.updated_at.isoformat(),
             "source": "verification",
+            "drift_id": str(
+                drift_id(shop, receipt.receipt_id, difference.kind, receipt.updated_at)
+            ),
+            "detected_at": detected_at.isoformat(),
         },
         correlation_id=correlation_id[:200],
     )

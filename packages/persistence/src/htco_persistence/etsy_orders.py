@@ -35,6 +35,7 @@ from htco_application.order_ingest import (
     IngestSource,
     StoredFacts,
     StoredOrder,
+    drift_id,
     plan_ingest,
 )
 from htco_application.shop_integrations import ShopIntegration
@@ -373,7 +374,7 @@ def _record_drifts(  # noqa: PLR0913, PLR0917 - the order, what differed and the
         connection.execute(
             _INSERT_DRIFT,
             [
-                uuid.uuid7(),
+                drift_id(integration.shop_id, r.receipt_id, drift.kind.value, r.updated_at),
                 integration.organization_id,
                 integration.shop_id,
                 r.receipt_id,
