@@ -171,7 +171,7 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
 
 1. **Dispatch.** The agent-worker's `BrowserChannel` opens no browser. In one transaction it moves the action execution to `DISPATCHED` and writes `actions.dispatched.v1` to the outbox. In that same transaction it enqueues two jobs:
    - one `browser.run` job;
-   - **a deadline watchdog:** one `browser.resume` job scheduled at the deadline plus a grace period (key: execution, attempt, `deadline`). An execution therefore never waits for ever, even when the run is never claimed or is dead-lettered (step 6).
+   - **a deadline watchdog:** one `browser.resume` job scheduled at the deadline plus a grace period (key: execution, attempt, `deadline`). An execution therefore never waits for ever, even when the run is never claimed or is dead-lettered (step 6). The grace is at least the session's maximum duration, so a run is never declared lost while a session could still be finishing it.
 
    About the `browser.run` job:
    - Its idempotency key is the action execution and its attempt.
@@ -198,7 +198,12 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
    - checks again that the action is `DISPATCHED` with this request hash, before its deadline, with its approval still `APPROVED` for this hash and not expired;
    - inserts the run's row with the status `started` and `started_at` (`on conflict do nothing`), and commits.
 
-   That commit happens before any side effect, and only one worker can ever start an attempt. A job redelivered for an attempt that already has a `started` row never touches the page again (step 6). The function is `security definer`, so the browser role needs no right to lock or write `action_executions` itself.
+   That commit happens before any side effect, and only one worker can ever start an attempt. A job redelivered for an attempt that already has a `started` row never touches the page again (step 6).
+
+   The function is `security definer`, so the browser role needs no right to lock or write `action_executions` itself. Because it runs with its owner's rights, RLS does not protect it, so it is hardened:
+   - it checks the execution's organization itself against the browser worker's own organization (`htco.organization_id`), and refuses an execution of any other organization;
+   - it sets `search_path = ''` and schema-qualifies every name;
+   - `EXECUTE` is revoked from `PUBLIC` and granted only to `htco_browser`.
 
    Then the browser worker runs the recipe through `BrowserController.session` and validates the result against the recipe's schema. Browser Use runs only for employee bindings with `deterministic = False`.
 4. **It publishes the outcome** in one transaction, idempotent per execution and attempt:
