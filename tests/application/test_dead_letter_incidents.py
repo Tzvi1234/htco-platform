@@ -119,8 +119,12 @@ async def test_another_automations_dead_letter__is_another_incident() -> None:
         lambda: execution_state_event(change(ExecutionState.DEAD_LETTERED, automation_id=None)),
         lambda: OutboxMessage(ORG, "events.publish", "k", {"event_type": EXECUTION_STATE_CHANGED,
                                                           "to_state": "dead_lettered"}),
+        lambda: OutboxMessage(ORG, "events.publish", "k", {"event_type": EXECUTION_STATE_CHANGED,
+                                                          "to_state": "dead_lettered",
+                                                          "automation_id": "a", "execution_id": "e",
+                                                          "occurred_at": "yesterday"}),
     ],
-    ids=["succeeded", "retry-scheduled", "no-automation-named", "malformed"],
+    ids=["succeeded", "retry-scheduled", "no-automation-named", "malformed", "not-a-time"],
 )  # fmt: skip
 async def test_anything_else__opens_nothing(event: Any) -> None:
     incidents, store = subscriber()

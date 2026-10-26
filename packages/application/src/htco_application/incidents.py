@@ -405,13 +405,17 @@ class DeadLetterIncidents:
             or not isinstance(occurred, str)
         ):
             return
+        try:
+            detected_at = datetime.fromisoformat(occurred)
+        except ValueError:
+            return  # malformed: a retry would never parse it either (quill on #173)
         await self.incidents.open(
             Detection(
                 organization_id=message.organization_id,
                 cause=Cause.AUTOMATION_DEAD_LETTERED,
                 resource_kind=ResourceKind.AUTOMATION,
                 resource_id=automation_id[:120],
-                detected_at=datetime.fromisoformat(occurred),
+                detected_at=detected_at,
                 source="automation_engine",
                 details={"execution_id": execution_id},
                 correlation_id=message.correlation_id,
