@@ -261,3 +261,34 @@ def importers_of(roots: list[Path], module: str) -> list[Path]:
                     found.append(path)
                     break
     return found
+
+
+# What only the adapter may name: its choke point, its write flag and that flag's request extension.
+_PRIVATE_TO_THE_ADAPTER = frozenset({*CHOKE_POINT, "_WRITE_ALLOWED"})
+_WRITE_EXTENSION = "htco.etsy.write_allowed"
+
+
+def choke_point_uses(tree: ast.AST) -> list[tuple[str, str]]:
+    """(the qualified function, what) for every way `tree` could reach the adapter's choke point
+    or forge its write flag: a reference to `_request`, `_send` or `_WRITE_ALLOWED` (a name, an
+    attribute or a `getattr` with a written name), an `allow_write=` keyword, or the flag's
+    request extension spelled out."""
+    uses: list[tuple[str, str]] = []
+    for node, scope in _walk(tree, ()):
+        where = ".".join(scope) or "<module>"
+        if isinstance(node, ast.Attribute) and node.attr in _PRIVATE_TO_THE_ADAPTER:
+            uses.append((where, node.attr))
+        elif isinstance(node, ast.Name) and node.id in _PRIVATE_TO_THE_ADAPTER:
+            uses.append((where, node.id))
+        elif isinstance(node, ast.Call):
+            literal = _getattr_name(node)
+            if literal in _PRIVATE_TO_THE_ADAPTER:
+                uses.append((where, literal))
+            uses.extend((where, "allow_write=") for k in node.keywords if k.arg == "allow_write")
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and _WRITE_EXTENSION in node.value
+        ):
+            uses.append((where, _WRITE_EXTENSION))
+    return uses

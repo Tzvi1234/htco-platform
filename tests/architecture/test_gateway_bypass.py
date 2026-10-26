@@ -25,6 +25,7 @@ from tests.architecture.gateway_bypass import (
     Call,
     calls_of,
     channel_runs,
+    choke_point_uses,
     etsy_operations,
     etsy_urls,
     etsy_writes,
@@ -231,6 +232,43 @@ def test_scanner__finds_every_etsy_host() -> None:
         "openapi.etsy.com/v3/application",
         ".etsy.com/x",
         "etsy.com/x",
+    ]
+
+
+def test_nothing_outside_the_adapter_reaches_its_choke_point() -> None:
+    """Sage and Codex on #106: outside etsy.py, nothing names `_request`, `_send` or the write
+    flag, passes `allow_write=`, or spells the flag's request extension; a call such as
+    `adapter._request('POST', ..., allow_write=bool(1))` would pass the runtime guard."""
+    uses = [
+        (_relative(path), where, what)
+        for root in SOURCE_ROOTS
+        for path in root.rglob("*.py")
+        if path.resolve() != ADAPTER.resolve()
+        for where, what in choke_point_uses(_parse(path))
+    ]
+
+    assert uses == []
+
+
+def test_scanner__finds_every_way_to_the_choke_point_from_outside(tmp_path: Path) -> None:
+    module = tmp_path / "sneaky.py"
+    module.write_text(
+        "async def by_flag(adapter):\n"
+        "    await adapter._request('POST', 'op', 1, '/shops/1', {}, allow_write=bool(1))\n"
+        "async def by_name(adapter):\n"
+        "    await getattr(adapter, '_request')('POST', 'op', 1, '/shops/1', {})\n"
+        "async def by_extension(http, base):\n"
+        "    await http.post(base + '/shops/1', extensions={'htco.etsy.write_allowed': True})\n"
+        "async def fine(store):\n"
+        "    await store.request(1)\n",
+        encoding="utf-8",
+    )
+
+    assert sorted(choke_point_uses(_parse(module))) == [
+        ("by_extension", "htco.etsy.write_allowed"),
+        ("by_flag", "_request"),
+        ("by_flag", "allow_write="),
+        ("by_name", "_request"),
     ]
 
 
