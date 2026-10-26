@@ -17,9 +17,9 @@
 - [x] 6.4 Notifications and email (migration `20261025110000_notifications.sql`, pgTAP `25_notifications`; [feature docs](../../features/notifications/overview.md); Resend built and OFF until the owner's DNS for `office.ht-co.app`)
 - [ ] 6.5 Incident center UI
 - [ ] 6.6 Guarded shipment write: the gateway, adapter and channel part is built (W3, every write flag off, the kill switch re-checked at execution, scope `transactions_w`, re-read before and after; fakes only). Open: the API route with the confirm sheet and the re-consent (part B), the 6.8 UI (lyra), merge after #147
-- [ ] 6.7 Fulfillment automations activated
+- [ ] 6.7 Fulfillment automations activated. Part 1 (#111): both specifications fully defined and true of the code (AC-6.7.1, tested in `tests/tools/test_registry_files.py`), `readiness` still `draft`. Open: AC-6.7.2 (one replay test across the schedule and event paths together), AC-6.7.3 (breach → incident → notification → email replayed end to end), AC-6.7.4 (a dead-lettered execution alerts the owner; today only Admin › Health shows it), AC-6.7.5 (a remediation becomes a person's task), the AC-6.3.4 drift trigger, and a notification on escalation; then the owner's activation
 - [ ] 6.8 Owner-triggered fulfillment writes (receipt and shipment tools), plus vacation mode (pulled forward from 7.12): the tracking upload and vacation mode are built with 6.6 (W3: the Owner's press after a step-up, or an agent's request the Owner approves each time). `etsy.receipts.update` waits for the owner
-- [ ] 6.9 Ship-by SLA, holiday calendar and low-review alerts (deterministic). Ship-by and stock alerts built on the 6.4 notification path (migration `20261025120000_fulfillment_alerts.sql`, pgTAP `26`); the holidays come from the shop's SLA-policy calendar until `etsy.holiday_preferences` is read; low-review alerts (AC-6.9.2) still open
+- [ ] 6.9 Ship-by SLA, holiday calendar and low-review alerts (deterministic). Ship-by and stock alerts built on the 6.4 notification path (migration `20261025120000_fulfillment_alerts.sql`, pgTAP `26`); the holidays come from the shop's SLA-policy calendar until `etsy.holiday_preferences` is read; low-review alerts (AC-6.9.2, #108): Incident Detection's hourly `reviews` mode reads `etsy.reviews.read` (R0, GET) through the gateway and alerts each review of 3 stars or fewer once, with its listing and order; no migration
 - [ ] 6.10 AutoVA tracking relay (copy tracking from AutoVA to Etsy)
 
 Slices 6.1 to 6.4 are built as two automations on the engine of [Phase 5](phase-05-orders-ingest.md): **Tracking Synchronization** (slice 6.1) and **Incident Detection & Escalation** (slices 6.2 to 6.4). Slice 6.7 completes their specifications and activates them.
@@ -217,7 +217,7 @@ Create a synthetic late order in a test shop; watch the incident and email arriv
 
 ## Rollback
 
-Disable the inspector schedule by flag; incidents remain for review.
+Set Tracking Synchronization's and Incident Detection & Escalation's `readiness` back to `draft` (a registry change, merged, then the Migrate workflow's `htco registry sync --automations --apply`, because the worker reads the definitions from the database): the engine refuses every new trigger, the schedule and the `order.shipped` webhook alike; executions already queued still run, so stop the agent-worker deployment as well to stop them at once. Removing `fulfillment.inspect` from `HTCO_WORKER_SCHEDULES` stops the schedule only. Incidents remain for review.
 
 ## Risks
 

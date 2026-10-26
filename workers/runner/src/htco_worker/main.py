@@ -51,9 +51,13 @@ from htco_application.fulfillment_schedule import (
     FULFILLMENT_SCHEDULE,
     FULFILLMENT_SHOP_JOB,
     INCIDENT_DETECTION,
+    REVIEW_SCHEDULE,
+    REVIEW_SHOP_JOB,
     TRACKING_SYNC,
     FulfillmentInspection,
+    ReviewCheck,
     enqueue_fulfillment_inspections,
+    enqueue_review_checks,
 )
 from htco_application.incidents import (
     INCIDENT_ESCALATED,
@@ -434,8 +438,8 @@ def fulfillment_handlers(
     database: Database, vault: PostgresTokenVault | None
 ) -> dict[str, Handler]:
     """Tracking Synchronization (slice 6.1; it reads receipts, so it needs the Etsy shop vault)
-    and Incident Detection & Escalation (slices 6.2, 6.3; no Etsy call). Both run only once the
-    owner activates them (slice 6.7)."""
+    and Incident Detection & Escalation (slices 6.2, 6.3, 6.9; its only Etsy call is the reviews
+    read through the Action Gateway). Both run only once the owner activates them (slice 6.7)."""
     incidents = IncidentService(
         PostgresIncidentStore(database), clock=_now, offload=anyio.to_thread.run_sync
     )
@@ -468,23 +472,35 @@ def fulfillment_schedule_handlers(
     queue: JobQueue,
     directory: ShopDirectory,
 ) -> dict[str, JobHandler]:
-    """The 15-minute fulfillment inspection (slices 6.1, 6.2), only when named in
-    `HTCO_WORKER_SCHEDULES`: off by default, the rollback flag of Phase 6."""
-    if FULFILLMENT_SCHEDULE.kind not in enabled:
-        return {}
-    inspection = FulfillmentInspection(engine)
+    """The 15-minute fulfillment inspection (slices 6.1, 6.2) and the hourly low-review read
+    (6.9), each only when named in `HTCO_WORKER_SCHEDULES`: off by default, the rollback flags
+    of Phase 6."""
+    handlers: dict[str, JobHandler] = {}
+    if FULFILLMENT_SCHEDULE.kind in enabled:
+        inspection = FulfillmentInspection(engine)
 
-    async def per_shop(job: ClaimedJob) -> None:
-        started = await anyio.to_thread.run_sync(lambda: inspection.run(job))
-        _log.info("fulfillment.inspection", started=started, job_id=str(job.id))
+        async def per_shop(job: ClaimedJob) -> None:
+            started = await anyio.to_thread.run_sync(lambda: inspection.run(job))
+            _log.info("fulfillment.inspection", started=started, job_id=str(job.id))
 
-    return {
-        FULFILLMENT_SCHEDULE.kind: _in_thread(
+        handlers[FULFILLMENT_SCHEDULE.kind] = _in_thread(
             lambda: enqueue_fulfillment_inspections(directory, queue, now=_now()),
             "fulfillment.inspections_enqueued",
-        ),
-        FULFILLMENT_SHOP_JOB: per_shop,
-    }
+        )
+        handlers[FULFILLMENT_SHOP_JOB] = per_shop
+    if REVIEW_SCHEDULE.kind in enabled:
+        check = ReviewCheck(engine)
+
+        async def reviews_per_shop(job: ClaimedJob) -> None:
+            started = await anyio.to_thread.run_sync(lambda: check.run(job))
+            _log.info("fulfillment.review_check", started=started, job_id=str(job.id))
+
+        handlers[REVIEW_SCHEDULE.kind] = _in_thread(
+            lambda: enqueue_review_checks(directory, queue, now=_now()),
+            "fulfillment.review_checks_enqueued",
+        )
+        handlers[REVIEW_SHOP_JOB] = reviews_per_shop
+    return handlers
 
 
 def reconciliation_handlers(  # noqa: PLR0913 - the tick and its collaborators

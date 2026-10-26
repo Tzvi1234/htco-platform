@@ -1,4 +1,5 @@
-# Tracking Synchronization. Automation specification (ADR-0013). DRAFT: not production-ready.
+# Tracking Synchronization. Automation specification (ADR-0013). All sections defined (slice
+# 6.7); readiness stays "draft" until the owner approves the activation.
 id = "tracking-sync"
 name = "Tracking Synchronization"
 version = 1
@@ -20,73 +21,73 @@ initial_backoff_seconds = 5
 max_backoff_seconds = 900
 
 [specification.identity]
-status = "draft"
-text = "Tracking Synchronization (tracking-sync), version 1. Deterministic: no model calls."
+status = "defined"
+text = "Tracking Synchronization (tracking-sync), version 1. Deterministic: no model calls, no browser, no Etsy write."
 
 [specification.business_owner]
-status = "draft"
-text = "eitan: accountable for the outcome; Engineering maintains the code."
+status = "defined"
+text = "eitan: accountable for the outcome (the owner until Eitan is active in Phase 9); Engineering maintains the code."
 
 [specification.trigger]
-status = "draft"
-text = "Primary: schedule. Also callable from: schedule, event, workflow, agent_tool, each through the API and authorization checks."
+status = "defined"
+text = "Primary: schedule. The fulfillment.inspect schedule (every 15 minutes, off until HTCO_WORKER_SCHEDULES names it) enqueues one fulfillment.inspect_shop job per shop and period, which starts this automation with the key tracking-sync:{shop_id}:{period} (mode schedule). Also event: an order.shipped webhook starts it with the key tracking:{shop_id}:{receipt_id}:{event_type}:{correlation_id} (htco_application/tracking_sync.py EngineTrackingSync). Workflow and agent_tool go through the engine's authorization. The worker deploys it only when Etsy is configured."
 
 [specification.input_schema]
-status = "draft"
-text = "DRAFT: JSON Schema in packages/contracts/automations/tracking-sync.json, written in Phase 6."
+status = "defined"
+text = "packages/contracts/automations/tracking-sync.input.json: a receipt_id with its event_type (the webhook path), or mode schedule. No buyer data."
 
 [specification.preconditions]
-status = "draft"
-text = "DRAFT: shop connected and capability verified where external systems are involved."
+status = "defined"
+text = "The shop exists in the execution's organization and is connected; otherwise (an unknown or foreign shop included) the run completes as skipped: not_connected, with no Etsy read. A job that names no shop, or a malformed payload, is a job error."
 
 [specification.steps]
-status = "draft"
-text = "Read shipment records from Etsy (AutoVA writes tracking there); record tracking codes; move orders to SHIPPED with the source of proof. Never writes a second shipment."
+status = "defined"
+text = "Choose the receipts: the webhook's receipt, or up to 25 paid, shipped receipts without recorded tracking (the schedule). Re-read each through the Action Gateway (etsy.receipts.read, GET-only). For each shipment with a code, record one tracking_events row (source etsy, how it was observed, first observed time, carrier and the code's last four characters only) and, only for a new row, fulfillment.tracking_detected.v1 through the outbox; then resolve the receipt's open tracking_missing incident with the TRACKING_PRESENT evidence, and mark the receipt checked (tracking_checks). It never changes the order's state (Order Intake's state machine records SHIPPED) and never writes a shipment to Etsy: tracking reaches Etsy through the relay of slice 6.10."
 
 [specification.output_schema]
-status = "draft"
-text = "DRAFT: defined with the input schema in Phase 6."
+status = "defined"
+text = "packages/contracts/automations/tracking-sync.output.json: how many receipts were read, how many tracking events were new, the path (schedule or event) and why a run was skipped. No tracking code."
 
 [specification.dependencies]
-status = "draft"
-text = "Etsy Open API v3"
+status = "defined"
+text = "Etsy Open API v3 through the Action Gateway (reads); the order history store (app.etsy_orders); app.tracking_events, app.tracking_checks, the incidents of slice 6.3 and the outbox."
 
 [specification.error_handling]
-status = "draft"
-text = "Typed errors per dependency; a capability blocked by the marketplace is recorded, never retried in a loop."
+status = "defined"
+text = "A deferred read (429 or the daily floor) or a refused read raises into the retry policy; nothing is recorded for that receipt in that attempt. Errors are recorded as their type name only (a job error also keeps its safe message). A receipt whose read fails stays due for the next run."
 
 [specification.retry_policy]
-status = "draft"
-text = "Exponential backoff from the retry table; then dead-letter and an incident."
+status = "defined"
+text = "Five attempts, exponential backoff from 5 s to 15 min with jitter; then dead-lettered, visible in Admin › Health and recoverable by an audited Owner or Admin retry of the execution (POST /v1/automations/{automation_id}/executions/{execution_id}/retry; the queue's dead-letter retry refuses an execution's job with 409 retry-through-execution)."
 
 [specification.idempotency]
-status = "draft"
-text = "Key tracking:{shop_id}:{receipt_id}:{shipment_id}; unique per automation; a replay returns the existing execution."
+status = "defined"
+text = "The engine's unique (automation_id, idempotency_key) absorbs a repeated trigger. A parcel is unique per (shop_id, receipt_id, fingerprint) in app.tracking_events (insert … on conflict do nothing), and its event is written only with a new row (outbox key fulfillment.tracking_detected.v1:{shop}:{receipt}:{fingerprint}), so a replay of the schedule or of a webhook records nothing new."
 
 [specification.timeouts_and_sla]
-status = "draft"
-text = "Every 15 minutes per shop"
+status = "defined"
+text = "120 s per attempt; every 15 minutes per shop once the schedule is on, or, as a target not yet measured, within a minute of an order.shipped webhook at p95."
 
 [specification.permissions]
-status = "draft"
-text = "Runs under its own service identity with least-privilege database grants; employees trigger it only when it is in their allowed_automations."
+status = "defined"
+text = "Runs as the htco_worker role inside its job's organization: select and insert on tracking_events, select, insert and update on tracking_checks, the incident updates of slice 6.3, the outbox, and the etsy_orders columns it needs. Its only action is etsy.receipts.read; it has no Etsy write. It receives the shipments' tracking codes in that action's order history form (TRACKING_CODE_AUTOMATIONS) because recording them is its job; never the buyer's name or address (AUD-06)."
 
 [specification.audit]
-status = "draft"
-text = "One activity record per execution and per external side effect, with correlation and causation IDs."
+status = "defined"
+text = "Execution state changes with actor and correlation ID; one action_executions row per Etsy read; each tracking event and incident change carries the execution and correlation IDs."
 
 [specification.tests]
-status = "draft"
-text = "DRAFT: replay, failure and recovery tests in Phase 6 (Scenario G pattern)."
+status = "defined"
+text = "tests/application/test_tracking_sync.py (each shipment once however often it is observed, AC-6.1.1 and 6.1.2; the schedule batch; a disconnected shop skipped without a read; the webhook key per receipt and event; a draft automation refused); tests/application/test_tracking_webhooks.py; tests/integration/test_fulfillment_store.py (each parcel once and its event once, against Postgres); pgTAP 19_fulfillment_incidents."
 
 [specification.recovery]
-status = "draft"
-text = "DRAFT: compensation or manual recovery runbook written in Phase 6."
+status = "defined"
+text = "Runbook: docs/features/fulfillment-monitoring/operations.md (Runbook: tracking not recorded). To stop new runs, set readiness back to draft in this file and run the registry sync, the Migrate workflow's htco registry sync --automations --apply, because the worker reads the definitions from the database (then the engine refuses every trigger of a draft automation, the schedule and the order.shipped webhook alike); taking fulfillment.inspect out of HTCO_WORKER_SCHEDULES stops only the schedule. Setting readiness back to draft stops new triggers only: executions already pending or retry-scheduled still run, because the engine checks readiness when it is triggered, not when it executes. To stop those at once, stop the agent-worker deployment (all queue work pauses and resumes when it starts again). Everything it records is rebuilt by reading Etsy again: retry a dead-lettered execution (see the retry policy), and the next run reads the due receipts again."
 
 [specification.approvals]
-status = "draft"
-text = "None for internal effects; external effects go through the outbox."
+status = "defined"
+text = "None: it reads Etsy and records HTCO's own facts. A tracking write to Etsy is the owner-triggered tool of slices 6.6 and 6.8, never this automation."
 
 [specification.metrics]
-status = "draft"
-text = "Executions, success rate, retries, dead letters, latency p50/p95, cost per execution."
+status = "defined"
+text = "Admin › Health (slice 5.9): executions, success rate, retries, dead letters and latency p50 and p95 over 7 days; the handler's result counts each run's new tracking events (recorded), not yet retained by the engine (https://github.com/Tzvi1234/htco-platform/issues/127)."

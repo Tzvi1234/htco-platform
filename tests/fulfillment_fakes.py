@@ -67,6 +67,8 @@ class MemorySlaStore:
     awaiting: dict[uuid.UUID, list[AwaitingOrder]] = field(default_factory=dict)
     policy_rows: list[SlaPolicy] = field(default_factory=list)
     closed: dict[uuid.UUID, dict[int, datetime]] = field(default_factory=dict)
+    # shop -> transaction -> receipt: the stored order items (low-review alerts, 6.9).
+    transactions: dict[uuid.UUID, dict[int, int]] = field(default_factory=dict)
 
     def policies(self, organization_id: uuid.UUID) -> tuple[SlaPolicy, ...]:  # noqa: ARG002 - one organization
         return tuple(self.policy_rows)
@@ -85,6 +87,12 @@ class MemorySlaStore:
     ) -> Mapping[int, datetime]:
         closed = self.closed.get(shop_id, {})
         return {r: closed[r] for r in receipt_ids if r in closed}
+
+    def receipts_for_transactions(
+        self, shop_id: uuid.UUID, transaction_ids: tuple[int, ...]
+    ) -> Mapping[int, int]:
+        known = self.transactions.get(shop_id, {})
+        return {t: known[t] for t in transaction_ids if t in known}
 
 
 @dataclass

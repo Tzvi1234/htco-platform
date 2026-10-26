@@ -153,6 +153,24 @@ async def test_list_listing_details__active_with_images_views_and_tags(
     assert request.url.params["limit"] == "100"
 
 
+async def test_list_reviews__the_transaction_and_a_created_since_filter(
+    make: Callable[..., Harness],
+) -> None:
+    """Slice 6.9 (AC-6.9.2): the transaction links a review to its order; `min_created` asks
+    only for the newest reviews."""
+    etsy = StrictEtsy(ok(fixture("reviews_page.json")))
+    harness = make(etsy)
+    since = datetime(2026, 10, 23, 9, 0, tzinfo=UTC)
+
+    async with harness.client:
+        page = await harness.adapter.list_reviews(SHOP_ID, min_created=since, tokens=Pinned())
+
+    assert [r.transaction_id for r in page.items] == [8000000001, None, 8000000003]
+    [request] = etsy.requests
+    assert request.method == "GET"
+    assert request.url.params["min_created"] == str(int(since.timestamp()))
+
+
 async def test_list_sections__titles_and_counts(make: Callable[..., Harness]) -> None:
     etsy = StrictEtsy(ok(fixture("sections.json")))
     harness = make(etsy)

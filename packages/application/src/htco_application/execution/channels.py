@@ -34,9 +34,11 @@ from htco_application.marketplace import (
     OrderReceipt,
     Page,
     Receipt,
+    ShopReview,
 )
-from htco_application.order_receipts import receipt_to_json
+from htco_application.order_receipts import for_automation, receipt_to_json
 from htco_domain.actors import ActorKind
+from htco_domain.fulfillment import normalize_tracking_code
 
 SECURITY_CHALLENGE = "security_challenge"
 HUMAN_CHANNEL = "human_channel"
@@ -78,6 +80,15 @@ class EtsyReads(Protocol):
 
     async def get_order_receipt(self, shop_id: int, receipt_id: int) -> OrderReceipt: ...
 
+    async def list_reviews(
+        self,
+        shop_id: int,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        min_created: datetime | None = None,
+    ) -> Page[ShopReview]: ...
+
 
 class EtsyShopIds(Protocol):
     def etsy_shop_id(self, shop_id: uuid.UUID) -> int | None: ...
@@ -110,6 +121,19 @@ def _receipt(receipt: Receipt) -> dict[str, JsonValue]:
     }
 
 
+def _review(review: ShopReview) -> dict[str, JsonValue]:
+    """Identifiers, stars and time: an R0 output may be stored, so never the buyer's words.
+    A review without its transaction (Etsy's null) leaves the key out."""
+    mapped: dict[str, JsonValue] = {
+        "listing_id": review.listing_id,
+        "rating": review.rating,
+        "created_at": review.created_at.isoformat(),
+    }
+    if review.transaction_id is not None:
+        mapped["transaction_id"] = review.transaction_id
+    return mapped
+
+
 class EtsyWrites(Protocol):
     """The Etsy writes the owner triggers (ADR-0022); only this channel calls them (the
     gateway-bypass contract, tests/architecture/test_gateway_bypass.py)."""
@@ -123,7 +147,7 @@ class EtsyWrites(Protocol):
     ) -> None: ...
 
 
-_READ_RECIPES = frozenset({"get_shop", "list_receipts"})
+_READ_RECIPES = frozenset({"get_shop", "list_receipts", "list_reviews"})
 _WRITE_RECIPES = frozenset({"create_receipt_shipment", "update_shop_vacation"})
 
 
@@ -156,24 +180,35 @@ class EtsyApiChannel:
             return ChannelOutcome(
                 output={"shop_id": shop.shop_id, "name": shop.name, "currency": shop.currency_code}
             )
+        if binding.recipe == "list_reviews":
+            return ChannelOutcome(output=await self._reviews(etsy_shop, request.input))
         if request.input.get("order_history") is True:
             if request.actor.kind is not ActorKind.AUTOMATION:
-                # The whole receipt, buyer data included, is Etsy Order Intake's alone (ADR-0018).
                 raise MarketplacePermissionError(
-                    "the order history form is for the order intake automation", status=403
+                    "the order history form is for automations", status=403
                 )
-            return ChannelOutcome(output=await self._order_history(etsy_shop, request.input))
+            # The buyer's name and address are Etsy Order Intake's alone, and tracking codes
+            # Intake's and Tracking Sync's (ADR-0018, AUD-06): every other automation gets the
+            # same receipts without them.
+            return ChannelOutcome(
+                output=await self._order_history(etsy_shop, request.input, request.actor.id)
+            )
         return ChannelOutcome(output=await self._receipts(etsy_shop, request.input))
 
     async def _order_history(
-        self, etsy_shop: int, values: Mapping[str, JsonValue]
+        self, etsy_shop: int, values: Mapping[str, JsonValue], automation_id: str
     ) -> dict[str, JsonValue]:
-        """Receipts as the order history stores them (`order_receipts`): an R1 output the
-        gateway returns and never stores."""
+        """Receipts as the order history stores them (`order_receipts`), in the form this
+        automation may receive (`for_automation`): an R1 output the gateway returns and never
+        stores."""
+
+        def shape(receipt: OrderReceipt) -> dict[str, JsonValue]:
+            return receipt_to_json(for_automation(receipt, automation_id))
+
         receipt_id = values.get("receipt_id")
         if isinstance(receipt_id, int):
             one = await self._etsy.get_order_receipt(etsy_shop, receipt_id)
-            return {"receipts": [receipt_to_json(one)], "count": 1}
+            return {"receipts": [shape(one)], "count": 1}
         since = values.get("min_last_modified")
         page = await self._etsy.list_order_receipts(
             etsy_shop,
@@ -186,7 +221,7 @@ class EtsyApiChannel:
             was_paid=_flag(values.get("was_paid")),
             was_shipped=_flag(values.get("was_shipped")),
         )
-        return {"receipts": [receipt_to_json(r) for r in page.items], "count": page.total_count}
+        return {"receipts": [shape(r) for r in page.items], "count": page.total_count}
 
     async def _receipts(
         self, etsy_shop: int, values: Mapping[str, JsonValue]
@@ -239,6 +274,18 @@ class EtsyApiChannel:
             )
         return ChannelOutcome(output={"is_vacation": wanted, "sent": not already})
 
+    async def _reviews(
+        self, etsy_shop: int, values: Mapping[str, JsonValue]
+    ) -> dict[str, JsonValue]:
+        since = values.get("min_created")
+        page = await self._etsy.list_reviews(
+            etsy_shop,
+            limit=int(str(values.get("limit", 100))),
+            offset=int(str(values.get("offset", 0))),
+            min_created=None if not isinstance(since, int) else datetime.fromtimestamp(since, UTC),
+        )
+        return {"reviews": [_review(r) for r in page.items], "count": page.total_count}
+
     async def verify(self, request: ActionRequest, outcome: ChannelOutcome) -> bool:  # noqa: ARG002
         """Re-read Etsy after a write: the tracking code is on the receipt, or the shop is in the
         vacation state asked for. Reads verify nothing."""
@@ -255,8 +302,10 @@ class EtsyApiChannel:
 
 
 def _has_tracking(receipt: OrderReceipt, code: str) -> bool:
-    wanted = code.replace(" ", "").upper()
-    return any(s.tracking_code.replace(" ", "").upper() == wanted for s in receipt.shipments)
+    """The shared normaliser (separators and case): a code written differently is the same
+    parcel, never a second shipment and a second email to the buyer (sage on #161)."""
+    wanted = normalize_tracking_code(code)
+    return any(normalize_tracking_code(s.tracking_code) == wanted for s in receipt.shipments)
 
 
 def _flag(value: JsonValue) -> bool | None:

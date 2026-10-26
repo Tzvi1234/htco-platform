@@ -48,6 +48,9 @@
 | **AutoVA quotes for a new product** | Every quote email parsed at once (no model) and shown under its product on a "New product quotes" screen, with a notification; the owner picks one (approval every time); then the quote is approved in AutoVA (Human task, then recipe A-02) and the supplier mapping is recorded | Quote mailbox (D-23), `supplier_quotes` | D | 7 (7.13–7.17), 8A (A-02) |
 | **AutoVA order monitor** | Every AutoVA order's status, paid flag, carrier and tracking from the Export (screen read as fallback); an Unpaid order past its window alerts the owner (payment stays AutoVA's Auto Pay; HTCO never pays) | Recipe A-01 | D | 8A |
 | **AutoVA tracking to Etsy** | The relay copies AutoVA's carrier and tracking number to Etsy (API first; B-12 or a Human task) | A-01, `etsy.shipments.create` | D | 6 (6.10, Human task until 8A), 8A (A-01) |
+| **Model mode per employee** | The Owner chooses, per employee, "routed" (the model follows the task's difficulty, up to the employee's cap) or "pinned" (one fixed model by catalog alias, for example `default-advanced`, with an explicit fallback, or a stop). Each change is audited and makes a new profile version ([ADR-0023](../adr/0023-routing-modes-and-difficulty-assessment.md)) | `model_catalog_aliases`, `employee_routing_settings`, routing decisions | D | 9 (9.2, 9.3, 9.8) |
+| **Automatic task difficulty** | A task that declares no difficulty is judged by rules, then by Jev "Ultrafast" (simple, normal, complex) once its benchmark passes. It can only raise the model tier within the employee's cap, so cheap tasks stay cheap | Task features (no buyer PII), decision records | D+AI | 9 (9.3, 9.6, 9.9) |
+| **Shop knowledge base** | Any employee can search the shop's own policies, FAQ, listings, products and past approved replies (redacted). Structured tools answer first; then one hybrid full-text and vector search, filtered by organization and shop; then the model. Never a raw buyer message ([ADR-0024](../adr/0024-knowledge-base-and-retrieval.md)) | pgvector in Supabase, `knowledge_sources`, `knowledge_chunks` | D+AI | 9 (9.10), 14 (Dana, first consumer) |
 
 ## 3. More from the Etsy docs
 
@@ -76,7 +79,7 @@
 | 6 | Ship-by SLA, holiday calendar, country map and ship times, low-review and out-of-stock alerts, owner-triggered shipment writes | — |
 | 7 | Morning summary (email and in-app), vacation switch, sections, holiday writes, AutoVA quotes from email to the owner's choice | — |
 | 8A | AutoVA recipes A-01 (orders, tracking, profit; Export first) and A-02 (approve the chosen quote); stats and ads exports (B-02, B-03) where scoped | — |
-| 9 | — | Eitan's refund and cancellation reasons |
+| 9 | Model mode per employee (routed or pinned); the shop knowledge base's store, ingestion and hybrid search | Eitan's refund and cancellation reasons; automatic task difficulty (Jev, after its benchmark) |
 | 10 | Repeat customers, refund-pattern improvement tasks | Noa's review of findings |
 | 11 | Health checks, expiring listings, unintended edits, attribute, shipping and translation coverage, stats and ads uploads | Daniel's audits, Noam's fixes |
 | 12 | Return policy governance, production partner and digital file checks | Shon's research, Noam's translations, Nika's media |

@@ -9,7 +9,7 @@
 | **Depends on** | [Phase 5](phase-05-orders-ingest.md) (gateway, router, Browser interface, Environment Registry), [Phase 7](phase-07-tasks-approvals.md) (Human channel: tasks and approvals). **Starts right after Phase 6, in parallel with Phase 7** (owner, 2026-10-23): until Phase 7's task store lands, Human hand-offs use the relay item of slice 6.10, which Phase 7 then absorbs. The AutoVA recipes (8A.10) are built first, right after the worker, controller, preflight and challenge handler (8A.1 to 8A.4). Slice 8A.6 (Browser Use) also needs [Phase 9](phase-09-router-advisor.md) (model gateway, budgets). The secret-injection part of 8A.4 needs [Phase 8B](phase-08b-authenticator.md); until then, login is a Human task. |
 | **Parallel with** | Phase 8 and Phase 8B |
 | **Decisions** | [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md), [ADR-0020](../../adr/0020-per-shop-browser-environment.md), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md), [Etsy automation approval](../../architecture/etsy-automation-approval.md) |
-| **Status** | PLANNED |
+| **Status** | IN PROGRESS (8A.1 and the 8A.2 controller built) |
 
 ## Goal
 
@@ -60,7 +60,7 @@ Phases 5 and 7 provided the contracts and the Human channel. Listing Health (11)
 ### 8A.1 — Browser worker and sealed profiles
 
 - **The `browser-worker` component:** its own image layer with Chromium and Playwright, its own database role (`htco_browser`: environments, its own jobs, browser artifacts), no Etsy OAuth tokens, and a read-only root file system apart from a tmpfs for unpacked profiles.
-- **Profiles:** sealed archives in Supabase Storage (`browser-profiles/{org}/{shop}/`), encrypted with the vault's envelope keys, with associated data `org|shop|environment`.
+- **Profiles:** sealed archives (`browser-profiles/{org}/{shop}/{environment}`), encrypted with envelope keys, with associated data `org|shop|environment`. Updated 2026-10-25 (main's decision): the archives live in a Postgres table that only `htco_browser` reaches, not in Supabase Storage, so the browser worker never holds a project-wide Storage key; each archive is capped at 25 MiB.
 - **The `EnvironmentProvisioner` implementation:** create the profile, then a first health check.
 
 | ID | Acceptance criterion |
@@ -68,6 +68,15 @@ Phases 5 and 7 provided the contracts and the Human channel. Listing Health (11)
 | AC-8A.1.1 | A profile archive read straight from storage is ciphertext; a copy moved to another shop's path fails to open. |
 | AC-8A.1.2 | The browser worker's role cannot read `shop_integrations`, tokens or another organization's environments (pgTAP). |
 | AC-8A.1.3 | After a session, nothing of the profile remains on disk outside the sealed archive (file system test). |
+
+**As built (slice 8A.1):** migration `20261025170000_browser_worker_role.sql`, pgTAP `28_browser_worker_role`.
+
+- **The role.** `htco_browser` (no login, no inherit) reaches one organization at a time through `htco.organization_id`. It reads its environments' status and profile columns (never the consent record), writes their profile columns and its archives, and inserts audit rows. It has no right on any other table: no `shop_integrations`, no tokens, no queue, no outbox (the pgTAP test lists every table it can touch). Status transitions, the queue and browser artifacts are granted with the slices that use them (8A.2 to 8A.4).
+- **The archives.** `app.browser_profile_archives`: one row per environment, bound to the environment, shop and organization by a composite foreign key, sealed bytes only, 1 byte to 25 MiB. RLS on; no client role and not the agent-worker can read it.
+- **Sealing.** `EnvelopeSealer.seal_blob` and `open_blob` (`htco_platform.crypto`): one self-describing blob of version, key ID, wrapped data key and ciphertext. The browser worker has its **own key ring**, separate from the Etsy token vault's (ADR-0020 §8); its setting arrives with the browser worker's composition root (8A.2).
+- **The workspace.** `htco_application.browser_profiles.ProfileWorkspaces.checkout` unpacks the archive into a fresh `0700` directory under the worker's tmpfs root, re-seals it on a clean exit, and always wipes it. A failed session keeps the last good archive. Packing keeps regular files and directories only, without Chromium's caches, links, sockets and `Singleton*` lock files; unpacking refuses links, devices, absolute or `..` paths, more than 20,000 entries and more than 256 MiB unpacked.
+- **The provisioner.** `SealedProfileProvisioner` seals an empty profile for a `PROVISIONING` environment, records its storage key and key ID, then runs the first health check. Until 8A.3 provides that check, a new profile ends `LOGIN_REQUIRED` (`new_profile_signed_out`), which is true: a new profile is signed out.
+- **Not yet.** The `browser-worker` image (Chromium and Playwright, read-only root, tmpfs) comes with the controller in 8A.2, which adds the Playwright dependency.
 
 ### 8A.2 — Browser Controller and profile locks
 
@@ -85,6 +94,16 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.2.1 | Two concurrent sessions for one environment never both start: the second waits up to its deadline or is `DEFERRED`. Sessions for two shops run in parallel. |
 | AC-8A.2.2 | Killing the worker mid-session releases the lock (the connection drops), and the next session re-seals from the last good archive. |
 | AC-8A.2.3 | A session past its deadline is closed and recorded as `FAILED (timeout)`; the environment's error counter increments. |
+
+**As built (slice 8A.2, the controller):** migration `20261025190000_browser_sessions.sql`, pgTAP `30_browser_sessions`.
+
+- **`htco_application.browser_controller.BrowserController.session`.** It refuses a suspended, failed or deleted environment (`SessionRefusedError`) and takes the profile lock (`ProfileLocks`). It then unpacks the profile through 8A.1's workspace, starts one engine (`BrowserEngine`) and enforces the deadline with `asyncio.timeout`. The application layer imports the standard library only. Cleanup always runs to its end, even under cancellation: the engine closes, the profile is re-sealed on a clean exit only and wiped always, and the lock is released.
+- **Session outcomes.** `succeeded`; `failed` with the code `timeout`, `error` or `lock_lost`, which also increments the environment's error counter; or `deferred` when another session held the profile past the deadline (`SessionDeferredError`). A `TimeoutError` raised by the work itself is an `error`, not the deadline. The deadline is checked again right before the engine starts, so a slow unpack never begins a launch past it.
+- **The lease fence.** `ProfileLocks.hold()` yields a `ProfileLease` bound to its own lock; in Postgres that is the dedicated connection that took the advisory lock. Before the clean exit re-seals the profile, the controller asks `still_held(lease)` about its **own** lease. A session whose lock connection dropped therefore fails as `lock_lost` and never writes back, even after another session has taken the environment's lock. Leaving a lease never releases a later holder's lock. Closing the remaining window between the check and the write (writing the archive on the lock's own connection, or a generation compare-and-set) is the fenced `save_session` of ADR-0025 (proposed).
+- **Destroying a profile.** `BrowserController.destroy_profile` deletes the archive under the same profile lock, so a session that is still running cannot write the profile back afterwards.
+- **`htco_persistence.browser_sessions`.** `PostgresProfileLocks` polls `pg_try_advisory_lock(hashtextextended('htco.browser_profile:<environment>', 0))` on a dedicated connection until the deadline. A killed worker's connection drops, which releases the lock. `PostgresSessionLog` writes `app.browser_sessions` and the environment's `error_count` and `last_session_at` on the browser role.
+- **`app.browser_sessions`.** Purpose and failure are codes, never free text, and an ended session is final. The browser role may insert and end its organization's sessions; the Owner and Admins read theirs. The browser role's only new environment column right is `error_count`; it still cannot change a status.
+- **Still to come in 8A.2:** the Playwright engine adapter (`launch_persistent_context` on the unpacked profile, stock fingerprint), the `browser-worker` image (read-only root, tmpfs), the pinned Playwright dependency and a real-Chromium test against a local page. The Browser Use fallback is 8A.6.
 
 ### 8A.3 — Preflight, session validation and network health
 

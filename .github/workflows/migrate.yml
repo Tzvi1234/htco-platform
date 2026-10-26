@@ -69,6 +69,7 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           version: "0.13.5"
+          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
       # Slice 5.10: the reviewed automation definitions of registry/automations/ (dry run first).
       - name: Automation definitions (dry run)
         if: ${{ !cancelled() }}

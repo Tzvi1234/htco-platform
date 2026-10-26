@@ -39,6 +39,7 @@ from htco_application.marketplace import (
     OrderShipment,
     Page,
     Receipt,
+    ShopReview,
 )
 from htco_application.workforce.files import read_registry
 from htco_application.workforce.registry import Registry, parse_automation, parse_employee
@@ -164,6 +165,16 @@ class FakeEtsy:
         was_paid: bool | None = None,
         was_shipped: bool | None = None,
     ) -> Page[OrderReceipt]:
+        raise AssertionError("not read by the writes")
+
+    async def list_reviews(
+        self,
+        shop_id: int,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        min_created: datetime | None = None,
+    ) -> Page[ShopReview]:
         raise AssertionError("not read by the writes")
 
     def writes(self) -> list[tuple[str, dict[str, Any]]]:
@@ -317,6 +328,23 @@ async def test_a_tracking_code_already_on_the_receipt__sends_nothing_to_etsy() -
     result = await world.gateway.submit(tracking())
 
     assert result.outcome is ActionOutcome.SUCCEEDED
+    assert result.output == {"receipt_id": RECEIPT, "sent": False, "already_present": True}
+    assert world.etsy.writes() == []
+
+
+@pytest.mark.ac("AC-6.6.2")
+@pytest.mark.parametrize("pressed", ["LX-123456789-IL", "lx 123456789 il", "LX123456789IL"])
+async def test_the_same_code_written_differently__is_already_present(pressed: str) -> None:
+    """Sage on #161: dashes, spaces and case don't make a second shipment (and a second email
+    to the buyer): the code is compared as the shared normaliser reads it."""
+    world = World()
+    shipment = OrderShipment(carrier="israel-post", tracking_code=TRACKING, notified_at=NOW)
+    world.etsy.receipts[RECEIPT] = replace(paid_receipt(RECEIPT), shipments=(shipment,))
+    request = tracking(input={"receipt_id": RECEIPT, "tracking_code": pressed,
+                              "carrier_name": "israel-post"})  # fmt: skip
+
+    result = await world.gateway.submit(replace(request, idempotency_key=f"shipment:{pressed}"))
+
     assert result.output == {"receipt_id": RECEIPT, "sent": False, "already_present": True}
     assert world.etsy.writes() == []
 
