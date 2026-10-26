@@ -115,7 +115,8 @@ Live View and Takeover must keep every one of these.
 - No raw CDP command ever comes from a client: no `Runtime.evaluate`, no navigation command and no file access.
 - **A path scope per purpose, deny by default.** A takeover can reach only what its purpose needs, through the same request interception as the payment block:
   - **sign-in, MFA and challenge:** only the site's sign-in, verification and challenge flows, listed in the environment's recorded **path scope** (for Etsy, the sign-in and two-step verification pages and the challenge pages; ADR-0022's scope table owns the list);
-  - **stuck step:** only the URL allowlist of that run's own recipe;
+  - **stuck step:** only the current step's URL patterns, wherever the recipe declares pages per step. Otherwise it is that run's recipe allowlist;
+  - **the Owner's "other" purpose:** an explicit deny-by-default scope, never open-ended. It covers the shop's Shop Manager paths that the environment records, minus every blocked page below;
   - **anything else**, a page outside the purpose's scope, is blocked and shown as blocked.
 - **Pages blocked for every Controller, the Owner included.** These are the Owner-only W3 pages, the money pages and the account pages: refunds (B-09), coupons and sales (B-08), Etsy Ads (B-10), deleting or deactivating listings, payments, payouts and bank details, billing, the password, two-factor settings, connected apps and shop closure. A person who needs them uses Etsy directly, outside HTCO.
 - **Navigation** stays inside that scope, and the person's clicks run under the same rules as the agent's:
@@ -144,6 +145,7 @@ Live View and Takeover must keep every one of these.
 - **The takeover happens inside the attempt that has already started.** The browser worker keeps the attempt's run token, the job's lease heartbeat and the profile lock, so the same attempt resumes after the return. No new attempt starts, and no other worker can be handed the binding.
 - **A write step that was in progress, or whose effect is uncertain, is not run again after the return**, unless a re-read shows that it did not happen. If there is any doubt, the run goes to `HANDED_TO_HUMAN` for reconciliation.
 - **A write the person did by hand** during the takeover is found by the action's verification. It is recorded once, with the person as the actor, and the gateway records exactly one final result.
+- **Other edits the person made in scope** are flagged for review, beyond the run's own intended write, which is verified once. The audited hosts and paths, with their counts, show where the person acted, and the Owner sees them listed with the run.
 - **A takeover is not an approval.** Once control returns, every approval-gated action still needs its approval under the normal rules (D-16).
 - **What the person does is the person's own, inside the purpose's scope.** During a takeover the person acts in the shop's signed-in session as themselves. That session never gives a Controller more than its purpose's path scope, and never the blocked pages above. Every navigation is audited under their name. Nothing they do there becomes an agent's or an automation's action.
 
@@ -237,7 +239,7 @@ Brave is not adopted (owner, 2026-10-26: not approved).
 
 ## Validation
 
-The acceptance criteria are AC-8A.11.1 to AC-8A.11.16 in Phase 8A.
+The acceptance criteria are AC-8A.11.1 to AC-8A.11.17 in Phase 8A.
 
 ## Validation log
 
