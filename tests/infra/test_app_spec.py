@@ -332,3 +332,9 @@ def test_order_automations_active__the_api_stops_syncing_and_webhooks_stay_off()
     envs = _envs()
     assert envs["HTCO_ORDER_SYNC_IN_API"]["value"] == "false"
     assert envs["HTCO_ETSY_WEBHOOKS_ENABLED"]["value"] == "false"
+
+
+def test_api__starts_automation_executions_for_the_worker() -> None:
+    """Activation step 2b and the audited admin retry (5.10, 5.11): the API's engine creates
+    executions and jobs, and never runs a handler."""
+    assert _envs()["HTCO_AUTOMATIONS_ENABLED"]["value"] == "true"
