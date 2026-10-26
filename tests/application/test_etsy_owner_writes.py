@@ -86,6 +86,8 @@ class FakeEtsy:
     receipts: dict[int, OrderReceipt] = field(default_factory=dict)
     on_vacation: bool = False
     refuse: Exception | None = None
+    # Etsy answers 200 to the POST but the shipment never appears on a re-read.
+    loses_the_shipment: bool = False
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
     async def get_order_receipt(self, shop_id: int, receipt_id: int) -> OrderReceipt:
@@ -118,6 +120,8 @@ class FakeEtsy:
         )  # fmt: skip
         if self.refuse is not None:
             raise self.refuse
+        if self.loses_the_shipment:
+            return
         receipt = self.receipts[receipt_id]
         shipment = OrderShipment(carrier=carrier_name, tracking_code=tracking_code, notified_at=NOW)
         self.receipts[receipt_id] = replace(
@@ -492,6 +496,45 @@ async def test_with_the_write_flag_off__flag_off_before_any_etsy_call() -> None:
 
     assert denied(result) == (ActionOutcome.DENIED, "flag_off")
     assert world.etsy.calls == []
+
+
+@dataclass
+class FlipsAtTheSend:
+    """On when the action is routed, off by the time it is sent (the owner pulled the switch
+    while it waited for its slot)."""
+
+    asked: int = 0
+
+    def is_on(self, action_name: str) -> bool:
+        self.asked += 1
+        return self.asked == 1
+
+
+async def test_the_kill_switch__is_read_again_right_before_the_send() -> None:
+    """Quill on #161 (mutant G4): the second check, not the router's, stops it."""
+    switch = FlipsAtTheSend()
+    world = World(flags=switch)  # type: ignore[arg-type]  # a WriteSwitch
+
+    result = await world.gateway.submit(tracking())
+
+    assert switch.asked == 2  # routed, then checked again before the send
+    assert denied(result) == (ActionOutcome.DENIED, "flag_off")
+    assert world.etsy.writes() == []
+
+
+@pytest.mark.ac("AC-6.6.2")
+async def test_a_write_the_re_read_cannot_find__is_not_verified_and_never_resent() -> None:
+    """Quill on #161 (mutant G12): Etsy accepts the POST, but the re-read lacks the code."""
+    world = World()
+    world.etsy.loses_the_shipment = True
+
+    result = await world.gateway.submit(tracking())
+    again = await world.gateway.submit(tracking())
+
+    assert result.outcome is ActionOutcome.FAILED
+    assert not result.verified
+    assert again == result  # final for its key: nothing is resent
+    assert len(world.etsy.writes()) == 1
 
 
 async def test_etsys_refusal__is_recorded_once_and_never_resent() -> None:

@@ -693,6 +693,12 @@ class ActionGatewayService:
                              error="verification"),
                 attempts=attempts,
             )  # fmt: skip
+            if definition.approval_policy is ApprovalPolicy.W3:
+                # The write may have reached Etsy (quill on #161): never resent under this key.
+                self._record(claim.execution_id, [*path, _S.FAILED, _S.DEAD_LETTERED], result,
+                             request, definition, reason="verification failed",
+                             now=now)  # fmt: skip
+                return result
             self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
                          reason="verification failed", now=now, final=False)  # fmt: skip
             return result
