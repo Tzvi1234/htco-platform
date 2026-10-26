@@ -82,7 +82,10 @@ Live View and Takeover must keep every one of these.
 ### 2. Takeover
 
 **Two permissions and one Controller:**
-- **The permissions.** `CONTROL_BROWSER_SESSION` is separate from viewing. The Owner and Admins have it, with `aal2` and a step-up at each takeover. Agents and automations never have it.
+- **The permissions.** `CONTROL_BROWSER_SESSION` is separate from viewing, and needs `aal2` and a step-up at each takeover.
+  - **By default only the Owner has it** (D-25, recommended).
+  - The Owner may grant it to an Admin, and only for the **sign-in, MFA and challenge** purposes, never for a stuck step. The grant is audited and the Owner can revoke it.
+  - Agents and automations never have it.
 - **The lease.** A session has **at most one Controller at a time**, through a lease: one active row per session in `browser_control_leases`, taken by compare-and-set.
   - It holds a short timeout, for example 90 seconds.
   - Only the holder can renew it, while connected, through its heartbeat.
@@ -108,7 +111,12 @@ Live View and Takeover must keep every one of these.
 - For every event, the API checks the schema, that the sender holds the lease, and the rate and size limits. It then relays the event to the browser worker.
 - The `BrowserController` maps each event to `Input.dispatchMouseEvent`, `Input.dispatchKeyEvent` or `Input.insertText` on the pipe.
 - No raw CDP command ever comes from a client: no `Runtime.evaluate`, no navigation command and no file access.
-- **Navigation** stays within the environment's site allowlist, and the person's clicks run under the same rules as the agent's:
+- **A path scope per purpose, deny by default.** A takeover can reach only what its purpose needs, through the same request interception as the payment block:
+  - **sign-in, MFA and challenge:** only the site's sign-in, verification and challenge flows, listed in the environment's recorded **path scope** (for Etsy, the sign-in and two-step verification pages and the challenge pages; ADR-0022's scope table owns the list);
+  - **stuck step:** only the URL allowlist of that run's own recipe;
+  - **anything else**, a page outside the purpose's scope, is blocked and shown as blocked.
+- **Pages blocked for every Controller, the Owner included.** These are the Owner-only W3 pages, the money pages and the account pages: refunds (B-09), coupons and sales (B-08), Etsy Ads (B-10), deleting or deactivating listings, payments, payouts and bank details, billing, the password, two-factor settings, connected apps and shop closure. A person who needs them uses Etsy directly, outside HTCO.
+- **Navigation** stays inside that scope, and the person's clicks run under the same rules as the agent's:
   - the egress rules for Chromium's OS user still drop every private, loopback and link-local address (ADR-0025 §5, AC-8A.2.20);
   - during a takeover, payment pages stay blocked (D-24: HTCO never pays and never clicks Pay);
   - downloads, file choosers and clipboard reads are off.
@@ -135,7 +143,7 @@ Live View and Takeover must keep every one of these.
 - **A write step that was in progress, or whose effect is uncertain, is not run again after the return**, unless a re-read shows that it did not happen. If there is any doubt, the run goes to `HANDED_TO_HUMAN` for reconciliation.
 - **A write the person did by hand** during the takeover is found by the action's verification. It is recorded once, with the person as the actor, and the gateway records exactly one final result.
 - **A takeover is not an approval.** Once control returns, every approval-gated action still needs its approval under the normal rules (D-16).
-- **What the person does is the person's own.** During a takeover the person acts in the shop's signed-in session as themselves. Every navigation is audited under their name, and HTCO's payment block still holds. Nothing they do there becomes an agent's or an automation's action.
+- **What the person does is the person's own, inside the purpose's scope.** During a takeover the person acts in the shop's signed-in session as themselves. That session never gives a Controller more than its purpose's path scope, and never the blocked pages above. Every navigation is audited under their name. Nothing they do there becomes an agent's or an automation's action.
 
 **Audit.** Every takeover writes audit records for these events:
 - the request, with its purpose: sign-in, MFA, challenge, stuck step or other;
@@ -205,7 +213,7 @@ ADR-0025 already covers background networking, component updates, field trials, 
 - **Fail closed.** At startup and before each session, the browser worker reads the effective policies (`chrome://policy`) and compares them with the pinned file. A missing or changed policy starts no session and reports `policies_missing`. This mirrors the egress-rule check of ADR-0025 (AC-8A.2.22).
 - **Per-session cleanup.** At the end of a session, before the fenced re-seal, everything that does not need to persist is cleared:
   - cache, history, downloads, crash dumps and temporary files;
-  - the storage and service workers of origins outside the environment's site allowlist.
+  - the storage and service workers of origins outside the environment's recorded site origins (the origins of its path scope and its recipes' allowlists).
 
   The archive keeps only the allowlisted origins' cookies and storage, which hold the sign-in.
 
@@ -227,8 +235,9 @@ Brave is not adopted (owner, 2026-10-26: not approved).
 
 ## Validation
 
-The acceptance criteria are AC-8A.11.1 to AC-8A.11.12 in Phase 8A.
+The acceptance criteria are AC-8A.11.1 to AC-8A.11.15 in Phase 8A.
 
 ## Validation log
 
 - 2026-10-26: The owner approved the direction: Live View and Takeover over CDP screencast, a single leased Controller, no frames stored, headless confirmed by a spike, noVNC documented only, and the privacy pack without Brave. Written after ADR-0025's last review round, so it adopts that round's fail-closed rules from the start: frames of signed-in pages only for buyer-data viewers, no frame to a model, the private-network rule, D-16 approvals for every browser action, and the run token.
+- 2026-10-26: The security review of #166 (sage-arch) narrowed the takeover. There is now a deny-by-default path scope per purpose. The Owner-only W3, money and account pages are blocked for every Controller. Control is Owner-only by default (D-25), and an Admin can be granted only sign-in, MFA and challenge. The undefined "site allowlist" is replaced by the environment's recorded path scope and its recipes' allowlists.
