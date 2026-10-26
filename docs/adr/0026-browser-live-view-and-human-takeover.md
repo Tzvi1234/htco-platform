@@ -282,3 +282,9 @@ The acceptance criteria are AC-8A.11.1 to AC-8A.11.21 in Phase 8A.
   - **Native WebAuthn and passkey prompts are out of scope** for a takeover (AC-8A.11.6).
 
   The later notes of quill and sage-arch are folded in too: one status vocabulary, the watchdog's extension on the claim, new pages covered, and the spike's WebSocket checks (AC-8A.11.12, 11.15, 11.16 and 11.18 to 11.21).
+- 2026-10-27: Codex's review of `c12502b` (local, posted by harbor) raised four P1s and a P2. Under the last-rewrite rule (main), each was answered on #166 with a rationale. None changes this decision: each tightens how a rule above is enforced. They became implementation criteria AC-8A.11.22 to 11.26 in Phase 8A, which extend this ADR's list:
+  - the write block covers every channel: service workers, sockets opened earlier, beacons, and anything it cannot see turned off;
+  - control is bound to the session's organization and shop;
+  - validation never echoes input;
+  - revocation takes effect at once;
+  - one immutable deadline per takeover episode.
