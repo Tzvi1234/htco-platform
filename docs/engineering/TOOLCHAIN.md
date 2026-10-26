@@ -65,7 +65,7 @@
 
 | Area | Choice | Notes |
 |---|---|---|
-| Secrets | gitleaks v8.30.1 (feature-frozen; Betterleaks is the successor to evaluate) | Pre-commit hook pinned by commit SHA (built with Go by prek); CI downloads the release binary and checks its SHA-256, then scans the full history |
+| Secrets | gitleaks v8.30.1 (feature-frozen; Betterleaks is the successor to evaluate) | Pre-commit hook pinned by commit SHA (built with Go by prek); CI downloads the release binary and checks its SHA-256. The required `security` job scans a pull request's own commits (base..head) and, on a push, main's whole history. The daily `Secrets history` workflow scans every branch and tag. A false positive is listed by fingerprint, with its reason, in `.gitleaksignore` |
 | Dependencies | osv-scanner 2.6.0 (reads `uv.lock`), `uv audit` when stable | Every pull request; release binary checked by SHA-256 in CI. Binary versions and checksums in `ci.yml` are updated by hand (Renovate cannot update the checksum). |
 | Static analysis | Ruff `S` rules on every pull request; Semgrep CE weekly | Semgrep registry rules are licensed for internal use |
 | Container | Grype v0.120.1 through `anchore/scan-action` v7.4.2 (pinned by SHA) | Fails on fixable high or critical findings (`only-fixed`); unfixable base-image findings are reviewed when Renovate updates the base. Trivy's GitHub Action tags were compromised in March 2026. |
