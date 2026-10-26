@@ -10,7 +10,7 @@ bytes only; this adapter never opens them.
 import uuid
 from typing import Any
 
-from htco_application.browser_profiles import SealedArchive
+from htco_application.browser_profiles import ProfileRecordError, SealedArchive
 from htco_domain.browser import BrowserEnvironment, EnvironmentStatus
 from htco_persistence.database import Database
 
@@ -23,7 +23,8 @@ def _environment(row: tuple[Any, ...]) -> BrowserEnvironment:
 
 
 class PostgresBrowserProfiles:
-    """`ProfileArchiveStore` and `ProfileRecords` for the browser worker."""
+    """`ProfileArchiveStore` and `ProfileRecords` for the browser worker; an archive and its
+    record on the environment row are always written together."""
 
     def __init__(self, database: Database) -> None:
         self._database = database
@@ -39,19 +40,6 @@ class PostgresBrowserProfiles:
                 [environment_id],
             ).fetchone()
         return None if row is None else _environment(row)
-
-    def record_profile(
-        self, environment_id: uuid.UUID, *, storage_key: str | None, key_id: str | None
-    ) -> None:
-        with self._database.connection() as connection, connection.transaction():
-            connection.execute(
-                """
-                update app.shop_browser_environments
-                set profile_storage_key = %s, profile_key_id = %s
-                where id = %s
-                """,
-                [storage_key, key_id, environment_id],
-            )
 
     def get(self, environment_id: uuid.UUID) -> SealedArchive | None:
         with self._database.connection() as connection:
@@ -70,7 +58,24 @@ class PostgresBrowserProfiles:
         )  # fmt: skip
 
     def put(self, archive: SealedArchive) -> None:
+        """The archive and the environment's record of it, in one transaction."""
         with self._database.connection() as connection, connection.transaction():
+            recorded = connection.execute(
+                """
+                update app.shop_browser_environments
+                set profile_storage_key = %s, profile_key_id = %s
+                where id = %s and organization_id = %s and shop_id = %s
+                """,
+                [
+                    archive.storage_key,
+                    archive.key_id,
+                    archive.environment_id,
+                    archive.organization_id,
+                    archive.shop_id,
+                ],
+            )
+            if recorded.rowcount != 1:
+                raise ProfileRecordError("no environment row to record the archive on")
             connection.execute(
                 """
                 insert into app.browser_profile_archives
@@ -91,7 +96,18 @@ class PostgresBrowserProfiles:
             )
 
     def delete(self, environment_id: uuid.UUID) -> None:
+        """The archive and the record of it, cleared in one transaction."""
         with self._database.connection() as connection, connection.transaction():
+            cleared = connection.execute(
+                """
+                update app.shop_browser_environments
+                set profile_storage_key = null, profile_key_id = null
+                where id = %s
+                """,
+                [environment_id],
+            )
+            if cleared.rowcount != 1:
+                raise ProfileRecordError("no environment row to clear")
             connection.execute(
                 "delete from app.browser_profile_archives where environment_id = %s",
                 [environment_id],

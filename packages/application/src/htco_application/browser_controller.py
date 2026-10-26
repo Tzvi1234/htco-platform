@@ -32,6 +32,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
 from typing import Protocol
 
@@ -54,6 +55,7 @@ _SESSION_STATUSES = frozenset(
     }
 )
 TIMEOUT = "timeout"
+LOCK_LOST = "lock_lost"
 ERROR = "error"
 
 
@@ -70,6 +72,11 @@ class SessionDeferredError(Exception):
 
 class SessionTimeoutError(Exception):
     """The session ran past its deadline and was closed."""
+
+
+class SessionLockLostError(Exception):
+    """The profile lock was lost during the session (its connection dropped); the profile was
+    not written back, because another session may hold it now."""
 
 
 class SessionRefusedError(Exception):
@@ -98,6 +105,10 @@ class ProfileLocks(Protocol):
     ) -> AbstractAsyncContextManager[bool]:
         """Yields True while this process holds the environment's lock, or False when it was
         still held elsewhere at `until`. The lock is released on exit."""
+        ...
+
+    async def still_held(self, environment_id: uuid.UUID) -> bool:
+        """Whether this process still holds the lock it took (its connection is alive)."""
         ...
 
 
@@ -165,32 +176,29 @@ class BrowserController:
             raise ValueError("a session's purpose is a short dotted code")
         if deadline.tzinfo is None or deadline.utcoffset() is None:
             raise ValueError("a session's deadline is in UTC")
-        environment = self._records.by_id(environment_id)
-        if environment is None:
-            raise EnvironmentNotFoundError(str(environment_id))
-        if environment.status not in _SESSION_STATUSES:
-            raise SessionRefusedError(f"the environment is {environment.status.value}")
+        environment = await self._takes_sessions(environment_id)
         record = SessionRecord(
             id=self._new_id(), environment_id=environment.id,
             organization_id=environment.organization_id, shop_id=environment.shop_id,
             purpose=purpose, started_at=self._clock(),
         )  # fmt: skip
         async with self._locks.hold(environment.id, until=deadline) as held:
-            remaining = (deadline - self._clock()).total_seconds()
-            if not held or remaining <= 0:
-                self._log.started(record)
-                self._end(record, SessionOutcome.DEFERRED, None)
+            if not held or deadline <= self._clock():
+                await _blocking(self._log.started, record)
+                await self._end(record, SessionOutcome.DEFERRED, None)
                 raise SessionDeferredError("the profile is busy until past the deadline")
             # The status may have changed while this session waited for the lock.
-            current = self._records.by_id(environment.id)
-            if current is None or current.status not in _SESSION_STATUSES:
-                raise SessionRefusedError("the environment changed while the session waited")
-            environment = current
-            self._log.started(record)
+            environment = await self._takes_sessions(environment.id)
+            await _blocking(self._log.started, record)
             outcome: SessionOutcome = SessionOutcome.FAILED
             failure: str | None = ERROR
+            # Measured after the setup's database calls, so they count against the deadline.
+            remaining = (deadline - self._clock()).total_seconds()
             limit = asyncio.timeout(remaining)
             try:
+                if remaining <= 0:
+                    failure = TIMEOUT
+                    raise SessionTimeoutError("the deadline passed before the work could start")
                 # The deadline covers the engine and the work. Unpacking and the clean exit's
                 # re-seal are bounded by the archive caps instead, so a session that finished
                 # its work in time and committed its profile is never reported as timed out.
@@ -200,14 +208,42 @@ class BrowserController:
                         yield ControllerSession(record.id, environment, handle)
                     finally:
                         await _shielded(handle.close())
+                    # Write the profile back only while the lock is still ours.
+                    await self._still_ours(environment)
                 outcome, failure = SessionOutcome.SUCCEEDED, None
+            except SessionLockLostError:
+                failure = LOCK_LOST
+                raise
             except TimeoutError:
                 if not limit.expired():
                     raise
                 failure = TIMEOUT
                 raise SessionTimeoutError("the session ran past its deadline") from None
             finally:
-                self._end(record, outcome, failure)
+                await self._end(record, outcome, failure)
+
+    async def destroy_profile(self, environment_id: uuid.UUID, *, deadline: datetime) -> None:
+        """Delete the sealed profile under the profile lock, so no session that is still
+        running can write it back afterwards (the environment is being deleted)."""
+        environment = await _blocking(self._records.by_id, environment_id)
+        if environment is None:
+            raise EnvironmentNotFoundError(str(environment_id))
+        async with self._locks.hold(environment.id, until=deadline) as held:
+            if not held:
+                raise SessionDeferredError("the profile is busy until past the deadline")
+            await _shielded(asyncio.to_thread(self._workspaces.vault.delete, environment))
+
+    async def _still_ours(self, environment: BrowserEnvironment) -> None:
+        if not await self._locks.still_held(environment.id):
+            raise SessionLockLostError("the profile lock was lost")
+
+    async def _takes_sessions(self, environment_id: uuid.UUID) -> BrowserEnvironment:
+        environment = await _blocking(self._records.by_id, environment_id)
+        if environment is None:
+            raise EnvironmentNotFoundError(str(environment_id))
+        if environment.status not in _SESSION_STATUSES:
+            raise SessionRefusedError(f"the environment is {environment.status.value}")
+        return environment
 
     @asynccontextmanager
     async def _profile(self, environment: BrowserEnvironment) -> AsyncIterator[Path]:
@@ -234,11 +270,23 @@ class BrowserController:
             raise
         await _shielded(asyncio.to_thread(checkout.__exit__, None, None, None))
 
-    def _end(self, record: SessionRecord, outcome: SessionOutcome, failure: str | None) -> None:
-        self._log.ended(
-            record, outcome=outcome, failure=failure, at=self._clock(),
-            count_error=outcome is SessionOutcome.FAILED,
+    async def _end(
+        self, record: SessionRecord, outcome: SessionOutcome, failure: str | None
+    ) -> None:
+        await _shielded(
+            asyncio.to_thread(
+                partial(
+                    self._log.ended, record, outcome=outcome, failure=failure, at=self._clock(),
+                    count_error=outcome is SessionOutcome.FAILED,
+                )
+            )
         )  # fmt: skip
+
+
+async def _blocking[**P, T](function: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    """A synchronous port call (a database adapter) off the event loop, so one slow query never
+    stops other shops' sessions, timers or cleanup."""
+    return await asyncio.to_thread(function, *args, **kwargs)
 
 
 async def _shielded[T](work: Awaitable[T]) -> T:
@@ -277,6 +325,9 @@ class MemoryProfileLocks:
                 yield True
             finally:
                 self.held.discard(environment_id)
+
+    async def still_held(self, environment_id: uuid.UUID) -> bool:
+        return environment_id in self.held
 
     async def _wait(self, environment_id: uuid.UUID, until: datetime) -> bool:
         while environment_id in self.held:

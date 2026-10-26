@@ -12,8 +12,10 @@ import psycopg
 import pytest
 
 from htco_application.browser_profiles import (
+    ProfileRecordError,
     ProfileVault,
     ProfileWorkspaces,
+    SealedArchive,
     SealedProfileProvisioner,
     profile_storage_key,
 )
@@ -128,3 +130,72 @@ async def test_profiles__sealed_in_postgres_bound_to_their_shop_and_organization
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             connection.execute("select 1 from app.shop_integrations")
         connection.rollback()
+
+
+async def test_profiles__the_recorded_key_id_follows_every_re_seal(
+    admin: Database, browser: Database, tmp_path: Path
+) -> None:
+    """CODEX (local) on #116: after a key rotation the next session re-seals under the new key,
+    and the environment's `profile_key_id` says so, in the archive's own transaction."""
+    tenant = Tenant(admin)
+    _, environment_id = an_environment(admin, tenant)
+    old_key, new_key = os.urandom(32), os.urandom(32)
+    profiles = PostgresBrowserProfiles(browser)
+
+    def workspaces(ring: KeyRing) -> ProfileWorkspaces:
+        vault = ProfileVault(EnvelopeSealer(ring), profiles, lambda: datetime.now(UTC))
+        return ProfileWorkspaces(vault, tmp_path)
+
+    with tenant_scope(tenant.organization_id):
+        await SealedProfileProvisioner(
+            profiles, workspaces(KeyRing(("browser-1", old_key)))
+        ).provision(environment_id)
+        environment = profiles.by_id(environment_id)
+        assert environment is not None
+        rotated = workspaces(KeyRing(("browser-2", new_key), [("browser-1", old_key)]))
+        with rotated.checkout(environment):
+            pass
+
+    with admin.connection() as connection:
+        row = connection.execute(
+            "select e.profile_key_id, a.key_id from app.shop_browser_environments e "
+            "join app.browser_profile_archives a on a.environment_id = e.id where e.id = %s",
+            [environment_id],
+        ).fetchone()
+    assert row == ("browser-2", "browser-2")
+
+
+async def test_profiles__no_archive_without_its_record_and_no_record_without_its_archive(
+    admin: Database, browser: Database
+) -> None:
+    """CODEX (local) on #116: a put or delete whose environment row is not there (another
+    organization's, or gone) writes nothing at all."""
+    tenant, other = Tenant(admin), Tenant(admin)
+    shop, environment_id = an_environment(admin, tenant)
+    profiles = PostgresBrowserProfiles(browser)
+    archive = SealedArchive(
+        environment_id=environment_id, organization_id=tenant.organization_id, shop_id=shop,
+        key_id="browser-1", blob=b"\x01sealed", sealed_at=datetime.now(UTC),
+        storage_key="browser-profiles/x",
+    )  # fmt: skip
+    with tenant_scope(other.organization_id):  # RLS hides the row: zero rows updated
+        with pytest.raises(ProfileRecordError):
+            profiles.put(archive)
+        with pytest.raises(ProfileRecordError):
+            profiles.delete(environment_id)
+    assert scalar(
+        admin, "select count(*) from app.browser_profile_archives where environment_id = %s",
+        [environment_id],
+    ) == 0  # fmt: skip
+
+    with tenant_scope(tenant.organization_id):
+        profiles.put(archive)
+        profiles.delete(environment_id)
+    with admin.connection() as connection:
+        row = connection.execute(
+            "select profile_storage_key, profile_key_id, (select count(*) from "
+            "app.browser_profile_archives where environment_id = e.id) "
+            "from app.shop_browser_environments e where id = %s",
+            [environment_id],
+        ).fetchone()
+    assert row == (None, None, 0)

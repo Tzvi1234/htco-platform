@@ -128,3 +128,23 @@ async def test_session__a_timeout_is_recorded_and_counted(
         admin, "select error_count from app.shop_browser_environments where id = %s",
         [environment_id],
     ) == 1  # fmt: skip
+
+
+@pytest.mark.ac("AC-8A.2.2")
+async def test_lock__a_dropped_lock_connection_is_noticed(admin: Database) -> None:
+    """quill on #121: before writing the profile back, the controller asks; a holder whose
+    connection was killed no longer holds the lock."""
+    locks = PostgresProfileLocks(admin, poll_seconds=0.05)
+    environment = uuid.uuid4()
+    async with locks.hold(environment, until=soon(1)) as held:
+        assert held
+        assert await locks.still_held(environment)
+        pid = scalar(
+            admin,
+            "select pid from pg_locks where locktype = 'advisory' and granted "
+            "and objid = (hashtextextended(%s, 0) & 4294967295)::oid",
+            [lock_key(environment)],
+        )
+        scalar(admin, "select pg_terminate_backend(%s)", [pid])
+        assert not await locks.still_held(environment)
+    assert not await locks.still_held(environment)

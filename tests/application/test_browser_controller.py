@@ -7,6 +7,7 @@ profile, so a crash keeps the last good archive.
 """
 
 import asyncio
+import itertools
 import os
 import time
 import uuid
@@ -25,7 +26,9 @@ from htco_application.browser_controller import (
     MemoryProfileLocks,
     MemorySessionLog,
     SessionDeferredError,
+    SessionLockLostError,
     SessionOutcome,
+    SessionRecord,
     SessionRefusedError,
     SessionTimeoutError,
 )
@@ -42,6 +45,7 @@ from htco_platform.crypto import EnvelopeSealer, KeyRing
 
 pytestmark = pytest.mark.anyio
 
+COOKIE = b"controller-cookie"
 ORG = uuid.UUID("0a000000-0000-0000-0000-000000000002")
 _E = EnvironmentStatus
 
@@ -513,3 +517,124 @@ async def test_session__an_archive_that_does_not_unpack_fails_and_releases_the_l
     assert (record.outcome, record.failure) == (SessionOutcome.FAILED, "error")
     assert s.locks.held == set()
     assert on_disk(tmp_path) == []
+
+
+@pytest.mark.ac("AC-8A.2.1")
+async def test_destroy__waits_for_the_running_session_so_nothing_is_written_back(
+    tmp_path: Path,
+) -> None:
+    """Codex on #121: destroying a profile takes the same lock, so a session that was running
+    cannot seal its directory back after the archive is gone."""
+    env = environment()
+    s = setup(tmp_path, env)
+    inside = asyncio.Event()
+
+    async def session() -> None:
+        async with s.controller.session(env.id, purpose="test.run", deadline=soon()):
+            inside.set()
+            (s.engine.handles[0].profile / "Cookies").write_bytes(COOKIE)
+            await asyncio.sleep(0.3)
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(session)
+        await inside.wait()
+        await s.controller.destroy_profile(env.id, deadline=soon())
+
+    assert s.vault.open(env) is None
+    assert s.locks.held == set()
+
+
+async def test_destroy__past_its_deadline_is_deferred(tmp_path: Path) -> None:
+    env = environment()
+    s = setup(tmp_path, env)
+    s.locks.held.add(env.id)  # a session elsewhere holds the profile
+    with pytest.raises(SessionDeferredError):
+        await s.controller.destroy_profile(env.id, deadline=soon(0.1))
+
+
+@dataclass
+class SlowLog(MemorySessionLog):
+    """A session log on a slow database: each write blocks its thread."""
+
+    delay: float = 0.3
+
+    @override
+    def started(self, record: SessionRecord) -> None:
+        time.sleep(self.delay)
+        super().started(record)
+
+
+async def test_session__slow_storage_never_blocks_the_event_loop(tmp_path: Path) -> None:
+    """Codex on #121: the controller's database calls run in threads, so one slow write does
+    not stop other shops' sessions, timers or cleanup."""
+    env = environment()
+    s = setup(tmp_path, env)
+    controller = BrowserController(
+        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(s.vault, tmp_path), s.engine,
+        s.locks, SlowLog(), clock=now,
+    )  # fmt: skip
+    beats: list[float] = []
+
+    async def ticker() -> None:
+        for _ in range(20):
+            beats.append(time.monotonic())
+            await asyncio.sleep(0.02)
+
+    async def run() -> None:
+        async with controller.session(env.id, purpose="test.run", deadline=soon()):
+            pass
+
+    await asyncio.gather(ticker(), run())
+    longest = max(later - earlier for earlier, later in itertools.pairwise(beats))
+    assert longest < 0.2  # the 0.3 s write ran in a thread, not on the loop
+
+
+async def test_session__setup_time_counts_against_the_deadline(tmp_path: Path) -> None:
+    """Codex on #121: time spent recording the start is inside the deadline; past it, no
+    engine starts and the session is a timeout."""
+    env = environment()
+    s = setup(tmp_path, env)
+    log = SlowLog(delay=0.3)
+    controller = BrowserController(
+        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(s.vault, tmp_path), s.engine,
+        s.locks, log, clock=now,
+    )  # fmt: skip
+
+    async def run() -> None:
+        async with controller.session(env.id, purpose="test.run", deadline=soon(0.1)):
+            pytest.fail("the work must not start past the deadline")  # pragma: no cover
+
+    with pytest.raises(SessionTimeoutError):
+        await run()
+    assert s.engine.handles == []
+    (record,) = log.records.values()
+    assert (record.outcome, record.failure) == (SessionOutcome.FAILED, "timeout")
+
+
+async def test_destroy__an_unknown_environment_is_not_found(tmp_path: Path) -> None:
+    s = setup(tmp_path, environment())
+    with pytest.raises(EnvironmentNotFoundError):
+        await s.controller.destroy_profile(uuid.uuid4(), deadline=soon())
+
+
+async def test_session__a_lost_lock_never_writes_the_profile_back(tmp_path: Path) -> None:
+    """quill on #121: if the lock's connection dropped during the session, another session may
+    hold the profile now, so this one must not re-seal; it fails as `lock_lost`."""
+    env = environment()
+    s = setup(tmp_path, env)
+    async with s.controller.session(env.id, purpose="test.good", deadline=soon()):
+        (s.engine.handles[0].profile / "Cookies").write_bytes(b"good")
+    good = s.vault.open(env)
+
+    async def run() -> None:
+        async with s.controller.session(env.id, purpose="test.lost", deadline=soon()):
+            (s.engine.handles[1].profile / "Cookies").write_bytes(b"stale")
+            s.locks.held.discard(env.id)  # the lock's connection dropped
+
+    with pytest.raises(SessionLockLostError):
+        await run()
+    assert s.vault.open(env) == good
+    assert s.engine.handles[1].closed
+    assert on_disk(tmp_path) == []
+    lost = [r for r in s.log.records.values() if r.purpose == "test.lost"]
+    assert [(r.outcome, r.failure) for r in lost] == [(SessionOutcome.FAILED, "lock_lost")]

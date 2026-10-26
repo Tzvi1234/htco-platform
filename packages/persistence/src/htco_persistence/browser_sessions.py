@@ -9,6 +9,7 @@ If the worker dies, the connection drops and Postgres releases the lock (AC-8A.2
 `last_session_at`, on the browser worker's role inside `tenant_scope(organization_id)`.
 """
 
+import contextlib
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -32,15 +33,19 @@ class PostgresProfileLocks:
     def __init__(self, database: Database, *, poll_seconds: float = POLL_SECONDS) -> None:
         self._database = database
         self._poll = poll_seconds
+        self._held: dict[uuid.UUID, psycopg.Connection[Any]] = {}
 
     @asynccontextmanager
     async def hold(self, environment_id: uuid.UUID, *, until: datetime) -> AsyncIterator[bool]:
         connection = await anyio.to_thread.run_sync(self._database.dedicated_connection)
         try:
             held = await self._wait(connection, lock_key(environment_id), until)
+            if held:
+                self._held[environment_id] = connection
             try:
                 yield held
             finally:
+                self._held.pop(environment_id, None)
                 if held:
                     with anyio.CancelScope(shield=True):
                         await anyio.to_thread.run_sync(
@@ -49,6 +54,16 @@ class PostgresProfileLocks:
         finally:
             with anyio.CancelScope(shield=True):
                 await anyio.to_thread.run_sync(connection.close)
+
+    async def still_held(self, environment_id: uuid.UUID) -> bool:
+        """Asked on the lock's own connection: a dropped connection has lost the lock."""
+        connection = self._held.get(environment_id)
+        if connection is None:
+            return False
+        try:
+            return await anyio.to_thread.run_sync(_holds, connection, lock_key(environment_id))
+        except psycopg.Error:
+            return False
 
     async def _wait(self, connection: psycopg.Connection[Any], key: str, until: datetime) -> bool:
         while True:
@@ -68,7 +83,25 @@ def _try_lock(connection: psycopg.Connection[Any], key: str) -> bool:
 
 
 def _unlock(connection: psycopg.Connection[Any], key: str) -> None:
-    connection.execute("select pg_advisory_unlock(hashtextextended(%s, 0))", [key])
+    with contextlib.suppress(psycopg.OperationalError):  # gone, and its lock with it
+        connection.execute("select pg_advisory_unlock(hashtextextended(%s, 0))", [key])
+
+
+def _holds(connection: psycopg.Connection[Any], key: str) -> bool:
+    # A bigint advisory key is stored as two 32-bit halves (classid high, objid low).
+    row = connection.execute(
+        """
+        with k as (select hashtextextended(%s, 0) as key)
+        select exists (
+          select from pg_locks, k
+          where locktype = 'advisory' and granted and objsubid = 1 and pid = pg_backend_pid()
+            and classid = ((k.key >> 32) & 4294967295)::oid
+            and objid = (k.key & 4294967295)::oid
+        )
+        """,
+        [key],
+    ).fetchone()
+    return bool(row and row[0])
 
 
 class PostgresSessionLog:
