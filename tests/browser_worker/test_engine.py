@@ -163,6 +163,29 @@ async def test_launch__cancelled_while_chromium_starts_closes_it_before_cancelli
     assert fake.chromium.context.events == ["context closed", "playwright stopped"]
 
 
+async def test_launch__cancelled_then_a_failing_close_still_raises_the_cancellation(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Codex on #122 (local, 937369d): the cleanup's own error never replaces the cancellation,
+    so a controller deadline still surfaces as a timeout. The close failure is logged instead."""
+    gate = asyncio.Event()
+    fake = FakePlaywright(chromium=FakeChromium(gate=gate, context=FakeContext(fail_close=True)))
+    task = asyncio.ensure_future(engine(fake).launch(tmp_path))
+    await fake.chromium.starting.wait()
+    task.cancel()
+    await _settle()
+    gate.set()
+    with (
+        caplog.at_level("WARNING", logger="htco_browser_worker.engine"),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await task
+    assert fake.chromium.context.events == ["context closed", "playwright stopped"]
+    assert [r.getMessage() for r in caplog.records] == [
+        "browser.close_failed_after_cancel: RuntimeError"
+    ]
+
+
 async def test_launch__cancelled_while_a_failing_start_runs_still_stops_playwright(
     tmp_path: Path,
 ) -> None:

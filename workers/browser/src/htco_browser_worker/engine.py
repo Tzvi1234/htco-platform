@@ -17,6 +17,7 @@ the controller never re-seals the profile or releases its lock while Chromium is
 """
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,8 @@ from typing import Any, override
 from playwright.async_api import BrowserContext, Playwright, async_playwright
 
 LAUNCH_TIMEOUT_MS = 30_000
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -69,7 +72,12 @@ class PlaywrightEngine:
         except asyncio.CancelledError:
             # Cancelled while Chromium started: it is closed before the cancellation goes on.
             if not opening.cancelled() and opening.exception() is None:
-                await _to_the_end(opening.result().close())
+                try:
+                    await _to_the_end(opening.result().close())
+                except Exception as error:
+                    # Never in place of the cancellation: the caller's deadline or shutdown is
+                    # what goes on. Only the error's type is logged, never its text.
+                    _log.warning("browser.close_failed_after_cancel: %s", type(error).__name__)
             raise
 
     async def _open(self, profile_directory: Path) -> PlaywrightHandle:
