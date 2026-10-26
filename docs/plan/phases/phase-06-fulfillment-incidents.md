@@ -12,7 +12,7 @@
 ## Progress
 
 - [x] 6.1 Tracking detection (migration `20261025100000_fulfillment_incidents.sql`, pgTAP `19_fulfillment_incidents`; [feature docs](../../features/fulfillment-monitoring/overview.md); inactive until 6.7)
-- [x] 6.2 SLA policies and inspector (default window 10 business days until the owner agrees the windows; schedule `fulfillment.inspect`, off by flag)
+- [x] 6.2 SLA policies and inspector (default window 7 business days, the owner's decision of 2026-10-23, replacing 10; schedule `fulfillment.inspect`, off by flag)
 - [x] 6.3 Incidents ([feature docs](../../features/incidents/overview.md); AC-6.3.4's trigger from `sync_drifts` is wired after 5.5 merges)
 - [x] 6.4 Notifications and email (migration `20261025110000_notifications.sql`, pgTAP `25_notifications`; [feature docs](../../features/notifications/overview.md); Resend built and OFF until the owner's DNS for `office.ht-co.app`)
 - [ ] 6.5 Incident center UI
@@ -37,7 +37,7 @@ Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gatew
 
 - **One alert model, one path (P2-2).** Incidents (6.3), alerts (6.9) and security notices all reach people through the one notification path of 6.4: a `NotificationRequest` (in the worker) or a `notifications.requested.v1` / `incidents.opened.v1` event through the outbox, then `notifications` rows and `email.send` messages. 6.9 adds no alert table of its own. Phase 10's monitors later emit into the same path. The incident's `incident_events` is that aggregate's own state history (like `automation_execution_events`), not a second activity trail; the audit and `order_status_events` stay as they are.
 - **Status vocabulary (P2-2).** `IncidentState` maps to `htco_domain.status.StatusKind`, covered by the status tests.
-- **Gateway bypass (P1-1).** Before any write tool lands (6.6, 6.8), an architecture test asserts that every Etsy write goes through the Action Gateway, with a documented allow-list of the existing read bypasses. Phase 6's own Etsy reads (Tracking Synchronization) already go through `etsy.receipts.read`.
+- **Gateway bypass (P1-1).** Before any write tool lands (6.6, 6.8), an architecture test asserts that every Etsy write goes through the Action Gateway, with a documented allow-list of the existing read bypasses. Done: `tests/architecture/test_gateway_bypass.py` (#105); the webhook re-reads stay on its list as a read bypass until they move onto read actions. Phase 6's own Etsy reads (Tracking Synchronization) already go through `etsy.receipts.read`.
 - **Phase 6 → 7 direction (P1-4).** Phase 6 does not depend on Phase 7. The 6.10 relay keeps its own minimal relay item (owned by Phase 6); Phase 7's task store later **extends** it (a relay item becomes a kind of task), not the other way round. AC-6.7.5's "task for a person" is the relay item / Human-channel contract of 5.13 until then.
 
 ## Goal
@@ -72,7 +72,7 @@ The activation rule of Phase 5 applies: all 18 specification sections defined, s
 
 - DNS for `office.ht-co.app`: SPF, DKIM and DMARC records for Resend (no MX yet).
 - Resend account; sending domain verified.
-- Agreement on initial SLA windows (from the Phase 0 data).
+- Agreement on initial SLA windows (from the Phase 0 data). The default is agreed: 7 business days (the owner's decision of 2026-10-23); per-shop, supplier and shipping-method windows remain open.
 
 ## Slices
 

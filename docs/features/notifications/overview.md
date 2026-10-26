@@ -10,7 +10,7 @@
 
 ## What and why
 
-People hear about what needs them once, in the office and by email: an incident opened, an alert (6.9), a tracking number to copy (6.10), and security events. Every notification carries a kind and identifiers only (the receipt number, never a buyer's name, address or tracking code); the words are rendered in the reader's language, Hebrew or English.
+People hear about what needs them once, in the office and by email: an incident opened or escalated (6.7), an alert (6.9), a tracking number to copy (6.10), and security events. Every notification carries a kind and identifiers only (the receipt number, never a buyer's name, address or tracking code); the words are rendered in the reader's language, Hebrew or English.
 
 **One path (architecture audit P2-2).** Every source reaches people the same way: incidents (`incidents.opened.v1`), alerts and security notices (`notifications.requested.v1`, or a `NotificationRequest` in the worker) become `notifications` rows and `email.send` outbox messages. There is no second alert table.
 

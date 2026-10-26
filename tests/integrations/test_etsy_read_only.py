@@ -124,6 +124,44 @@ async def test_http_client_hook__non_get_to_the_shop_api__never_leaves_the_proce
     assert etsy.requests == []
 
 
+@pytest.mark.parametrize("method", WRITE_METHODS)
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://api.etsy.com/v3/application/shops/10000001",  # the API's other host
+        "https://www.etsy.com/your/shops/me/tools/listings",
+        "https://etsy.com/x",
+        "https://openapi.etsy.com/v2/shops/10000001",  # another version, outside the base URL
+    ],
+)
+async def test_http_client_hook__non_get_to_any_etsy_host__never_leaves_the_process(
+    make: Callable[..., Harness], method: str, url: str
+) -> None:
+    """The live shop is guarded on every Etsy host, not only under the adapter's base URL."""
+    etsy = StrictEtsy()
+    harness = make(etsy)
+
+    async with harness.client:
+        with pytest.raises(MarketplaceWriteRefusedError):
+            await harness.client.request(method, url, data={"x": "1"})
+
+    assert etsy.requests == []
+
+
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+async def test_http_client_hook__the_token_endpoint_takes_a_post_only(
+    make: Callable[..., Harness], method: str
+) -> None:
+    etsy = StrictEtsy()
+    harness = make(etsy)
+
+    async with harness.client:
+        with pytest.raises(MarketplaceWriteRefusedError):
+            await harness.client.request(method, "https://api.etsy.com/v3/public/oauth/token")
+
+    assert etsy.requests == []
+
+
 async def test_http_client_hook__leaves_other_hosts_alone(make: Callable[..., Harness]) -> None:
     """The OAuth token endpoint (a POST on another path) and other services still work."""
     seen: list[str] = []
