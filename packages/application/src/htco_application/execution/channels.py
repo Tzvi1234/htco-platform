@@ -34,11 +34,7 @@ from htco_application.marketplace import (
     Receipt,
     ShopReview,
 )
-from htco_application.order_receipts import (
-    BUYER_DATA_AUTOMATIONS,
-    receipt_to_json,
-    without_buyer_data,
-)
+from htco_application.order_receipts import for_automation, receipt_to_json
 from htco_domain.actors import ActorKind
 
 SECURITY_CHALLENGE = "security_challenge"
@@ -165,22 +161,23 @@ class EtsyApiChannel:
                 raise MarketplacePermissionError(
                     "the order history form is for automations", status=403
                 )
-            # The buyer's name and address are Etsy Order Intake's alone (ADR-0018, AUD-06):
-            # every other automation gets the same receipts without them.
-            buyer_data = request.actor.id in BUYER_DATA_AUTOMATIONS
+            # The buyer's name and address are Etsy Order Intake's alone, and tracking codes
+            # Intake's and Tracking Sync's (ADR-0018, AUD-06): every other automation gets the
+            # same receipts without them.
             return ChannelOutcome(
-                output=await self._order_history(etsy_shop, request.input, buyer_data=buyer_data)
+                output=await self._order_history(etsy_shop, request.input, request.actor.id)
             )
         return ChannelOutcome(output=await self._receipts(etsy_shop, request.input))
 
     async def _order_history(
-        self, etsy_shop: int, values: Mapping[str, JsonValue], *, buyer_data: bool
+        self, etsy_shop: int, values: Mapping[str, JsonValue], automation_id: str
     ) -> dict[str, JsonValue]:
-        """Receipts as the order history stores them (`order_receipts`): an R1 output the
-        gateway returns and never stores; without buyer data unless `buyer_data`."""
+        """Receipts as the order history stores them (`order_receipts`), in the form this
+        automation may receive (`for_automation`): an R1 output the gateway returns and never
+        stores."""
 
         def shape(receipt: OrderReceipt) -> dict[str, JsonValue]:
-            return receipt_to_json(receipt if buyer_data else without_buyer_data(receipt))
+            return receipt_to_json(for_automation(receipt, automation_id))
 
         receipt_id = values.get("receipt_id")
         if isinstance(receipt_id, int):

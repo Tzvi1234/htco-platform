@@ -27,12 +27,41 @@ from htco_application.marketplace import (
 # The automations that receive the buyer's name and shipping address in the order history form
 # (ADR-0018). Every other caller of the form gets the same receipts without them (AUD-06).
 BUYER_DATA_AUTOMATIONS = frozenset({"etsy-order-intake"})
+# The automations that receive shipments' tracking codes, which can locate the parcel and so the
+# buyer (ADR-0018): Intake stores them, Tracking Sync records them. Others get the shipments
+# without them.
+TRACKING_CODE_AUTOMATIONS = frozenset({"etsy-order-intake", "tracking-sync"})
 
 
 def without_buyer_data(receipt: OrderReceipt) -> OrderReceipt:
-    """The same receipt without the buyer's name, display name and shipping address: the order
-    history form for every automation outside `BUYER_DATA_AUTOMATIONS`."""
-    return replace(receipt, buyer_name=None, buyer_display_name=None, shipping_address=None)
+    """The same receipt without the buyer's name, display name, shipping address and the
+    seller's refund notes (shown only to buyer-data roles): the order history form for every
+    automation outside `BUYER_DATA_AUTOMATIONS`."""
+    return replace(
+        receipt,
+        buyer_name=None,
+        buyer_display_name=None,
+        shipping_address=None,
+        refunds=tuple(replace(r, note_from_issuer=None) for r in receipt.refunds),
+    )
+
+
+def without_tracking_codes(receipt: OrderReceipt) -> OrderReceipt:
+    """The same receipt with each shipment's carrier and time but an empty tracking code: the
+    order history form for every automation outside `TRACKING_CODE_AUTOMATIONS`."""
+    return replace(
+        receipt, shipments=tuple(replace(s, tracking_code="") for s in receipt.shipments)
+    )
+
+
+def for_automation(receipt: OrderReceipt, automation_id: str) -> OrderReceipt:
+    """The order history form an automation may receive (ADR-0018, AUD-06): buyer data and
+    tracking codes only for the automations listed for them."""
+    if automation_id not in BUYER_DATA_AUTOMATIONS:
+        receipt = without_buyer_data(receipt)
+    if automation_id not in TRACKING_CODE_AUTOMATIONS:
+        receipt = without_tracking_codes(receipt)
+    return receipt
 
 
 def _money(money: MarketplaceMoney) -> dict[str, JsonValue]:
