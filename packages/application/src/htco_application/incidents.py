@@ -17,12 +17,12 @@ Nothing here holds buyer data: an incident names its order by shop and receipt n
 """
 
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Protocol
 
-from htco_application.jobs import JsonValue
+from htco_application.kernel import EVENTS_DESTINATION, JsonValue, Offload, run_inline
 from htco_application.messaging import OutboxMessage
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.incidents import (
@@ -37,7 +37,6 @@ from htco_domain.incidents import (
     resolution_path,
 )
 
-EVENTS = "events.publish"
 INCIDENT_OPENED = "incidents.opened.v1"
 # Who opens a dead-letter incident: the platform, on the engine's state-change event.
 ENGINE_ACTOR = ActorRef(ActorKind.SYSTEM, "automation-engine")
@@ -150,15 +149,13 @@ class IncidentStore(Protocol):
     ) -> tuple[IncidentRecord, ...]: ...
 
 
-type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
-
-
-async def _inline(work: Callable[[], Any]) -> Any:
-    return work()
-
-
 def _event(
-    name: str, incident: IncidentRecord, *, extra: Mapping[str, JsonValue], correlation: str | None
+    name: str,
+    incident: IncidentRecord,
+    *,
+    extra: Mapping[str, JsonValue],
+    correlation: str | None,
+    occurrence: str | None = None,
 ) -> OutboxMessage:
     payload: dict[str, JsonValue] = {
         "event_type": name,
@@ -174,8 +171,9 @@ def _event(
     return OutboxMessage(
         organization_id=incident.organization_id,
         shop_id=incident.shop_id,
-        destination=EVENTS,
-        idempotency_key=f"{name}:{incident.id}",
+        destination=EVENTS_DESTINATION,
+        # An event that may happen again for the incident (an escalation) is keyed by its ID.
+        idempotency_key=f"{name}:{incident.id}" + ("" if occurrence is None else f":{occurrence}"),
         payload=payload,
         correlation_id=None if correlation is None else correlation[:200],
     )
@@ -186,7 +184,7 @@ class IncidentService:
     store: IncidentStore
     clock: Callable[[], datetime]
     new_id: Callable[[], uuid.UUID] = uuid.uuid7
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def open(self, detection: Detection, *, actor: ActorRef) -> tuple[IncidentRecord, bool]:
         """One open incident per cause and resource (AC-6.3.1): a repeat returns the first."""
@@ -307,12 +305,20 @@ class IncidentService:
             current = target
         events: tuple[OutboxMessage, ...] = ()
         if current is IncidentState.ESCALATED and incident.state is not IncidentState.ESCALATED:
+            # Each escalation has its own ID (Codex, #163): two in one second are still two, and
+            # the event's key and the notification's dedup key both name it.
+            escalation_id = str(self.new_id())
             events = (
                 _event(
                     INCIDENT_ESCALATED,
                     incident,
-                    extra={"escalated_from": incident.state.value, "escalated_at": now.isoformat()},
+                    extra={
+                        "escalated_from": incident.state.value,
+                        "escalated_at": now.isoformat(),
+                        "escalation_id": escalation_id,
+                    },
                     correlation=correlation_id,
+                    occurrence=escalation_id,
                 ),
             )
         if current is IncidentState.RESOLVED and evidence is not None:

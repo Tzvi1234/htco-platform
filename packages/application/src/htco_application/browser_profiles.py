@@ -72,6 +72,11 @@ class ProfileUnsafeError(Exception):
     """The archive's row or contents are not this environment's profile; nothing was unpacked."""
 
 
+class ProfileFenceLostError(Exception):
+    """A fenced write found that its session's lease no longer holds the profile lock; nothing
+    was written (#169, ADR-0025's fenced `save_session`)."""
+
+
 def profile_context(environment: BrowserEnvironment) -> bytes:
     """The associated data that binds a sealed archive to one organization, shop, environment."""
     return f"{environment.organization_id}|{environment.shop_id}|{environment.id}".encode("ascii")
@@ -112,10 +117,16 @@ class ProfileArchiveStore(Protocol):
 
     def get(self, environment_id: uuid.UUID) -> SealedArchive | None: ...
 
-    def put(self, archive: SealedArchive) -> None:
+    def put(self, archive: SealedArchive, *, fence: object | None = None) -> None:
         """In one transaction: insert or replace the archive, and record its storage key and key
         ID on the environment's row. Raises `ProfileRecordError` (and writes nothing) unless
-        exactly that one row was updated."""
+        exactly that one row was updated.
+
+        `fence` is the writing session's own profile lease. With a fence, the lease's hold on
+        the profile lock is checked **inside the same write** (not before it), so a session
+        whose lock was lost can never replace a newer archive: the store raises
+        `ProfileFenceLostError` and writes nothing. Only a new profile (provisioning, before
+        any session exists) is written without a fence."""
         ...
 
     def delete(self, environment_id: uuid.UUID) -> None:
@@ -147,8 +158,11 @@ class ProfileVault:
         self._store = store
         self._clock = clock
 
-    def seal(self, environment: BrowserEnvironment, archive: bytes) -> SealedArchive:
-        """Seal and store the archive as the environment's last good profile."""
+    def seal(
+        self, environment: BrowserEnvironment, archive: bytes, *, fence: object | None = None
+    ) -> SealedArchive:
+        """Seal and store the archive as the environment's last good profile; with `fence`,
+        only while that session's lease still holds the profile lock (`ProfileArchiveStore`)."""
         if len(archive) > MAX_ARCHIVE_BYTES:
             raise ProfileTooLargeError("the profile archive is over the cap")
         key_id = self._sealer.current_key_id
@@ -160,7 +174,7 @@ class ProfileVault:
             shop_id=environment.shop_id, key_id=key_id, blob=blob, sealed_at=self._clock(),
             storage_key=profile_storage_key(environment),
         )  # fmt: skip
-        self._store.put(sealed)
+        self._store.put(sealed, fence=fence)
         return sealed
 
     def open(self, environment: BrowserEnvironment) -> bytes | None:
@@ -207,7 +221,11 @@ class ProfileWorkspaces:
         return self._vault.seal(environment, _empty_archive())
 
     @contextmanager
-    def checkout(self, environment: BrowserEnvironment) -> Iterator[Path]:
+    def checkout(
+        self, environment: BrowserEnvironment, *, fence: object | None = None
+    ) -> Iterator[Path]:
+        """One session's unpacked profile; the clean exit's re-seal is written under `fence`,
+        the session's own lease (#169)."""
         # mkdtemp creates the directory readable by this user only (0o700).
         directory = Path(tempfile.mkdtemp(prefix="profile-", dir=self._root))
         try:
@@ -215,7 +233,7 @@ class ProfileWorkspaces:
             if archive is not None:
                 self._unpack(archive, directory)
             yield directory
-            self._vault.seal(environment, self._packed(directory))
+            self._vault.seal(environment, self._packed(directory), fence=fence)
         finally:
             _wipe(directory)
 
@@ -441,19 +459,28 @@ class SealedProfileProvisioner:
 @dataclass
 class MemoryProfileArchiveStore:
     """The archives and the environments' profile columns; `missing` names environments
-    whose row is gone (failure injection)."""
+    whose row is gone (failure injection). `fenced` answers whether a fence (a lease) still
+    holds its profile lock (`MemoryProfileLocks.owns`); it is asked under the store's lock, in
+    the same step as the write."""
 
     archives: dict[uuid.UUID, SealedArchive] = field(default_factory=dict)
     profiles: dict[uuid.UUID, tuple[str | None, str | None]] = field(default_factory=dict)
     missing: set[uuid.UUID] = field(default_factory=set)
+    fenced: Callable[[object, uuid.UUID], bool] | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def get(self, environment_id: uuid.UUID) -> SealedArchive | None:
         with self._lock:
             return self.archives.get(environment_id)
 
-    def put(self, archive: SealedArchive) -> None:
+    def put(self, archive: SealedArchive, *, fence: object | None = None) -> None:
         with self._lock:
+            if (
+                fence is not None
+                and self.fenced is not None
+                and not self.fenced(fence, archive.environment_id)
+            ):
+                raise ProfileFenceLostError("the session's lease no longer holds the profile")
             if archive.environment_id in self.missing:
                 raise ProfileRecordError("no environment row to record the archive on")
             self.archives[archive.environment_id] = archive

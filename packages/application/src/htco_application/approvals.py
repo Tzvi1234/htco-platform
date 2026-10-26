@@ -35,7 +35,7 @@ from htco_application.access.policy import STEP_UP_WINDOW
 from htco_application.automation.durable import ExecutionNotFoundError, NotWaitingError
 from htco_application.execution.contracts import ActionDefinition, Evidence
 from htco_application.execution.gateway import ActionRef, ActionRequest
-from htco_application.jobs import JsonValue
+from htco_application.kernel import JsonValue
 from htco_domain.actions import ApprovalPolicy
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.approvals import (

@@ -14,7 +14,7 @@ from typing import Any
 
 from htco_application.etsy_webhooks import WebhookSecret
 from htco_application.jobs import JobSpec
-from htco_application.maintenance import TenantShop
+from htco_application.kernel import TenantShop
 from htco_application.messaging import InboxEvent, OutboxMessage, RecordedEvent
 from tests.job_fakes import MemoryJobQueue
 

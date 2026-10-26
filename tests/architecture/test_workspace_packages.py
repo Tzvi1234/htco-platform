@@ -15,6 +15,7 @@ WORKSPACE_PACKAGES = {
     "htco_integrations": "packages/integrations/src",
     "htco_api": "apps/api/src",
     "htco_worker": "workers/runner/src",
+    "htco_browser_worker": "workers/browser/src",
 }
 
 

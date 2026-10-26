@@ -36,7 +36,7 @@ from htco_persistence.messaging import add_outbox_in
 _EXECUTION_COLUMNS = """
 id, automation_id, automation_version, idempotency_key, trigger, actor_kind, actor_id, state,
 attempts, correlation_id, organization_id, shop_id, causation_id, last_error, payload,
-created_at, updated_at
+created_at, updated_at, output
 """
 
 
@@ -55,6 +55,7 @@ def _execution(row: Sequence[Any]) -> AutomationExecution:
         shop_id=row[11],
         causation_id=row[12],
         last_error=row[13],
+        output=row[17],
     )
 
 
@@ -161,7 +162,7 @@ class PostgresExecutionStore:
             row = connection.execute(
                 """
                 update app.automation_executions
-                set state = %s, attempts = %s, last_error = %s
+                set state = %s, attempts = %s, last_error = %s, output = %s
                 where id = %s and organization_id = %s and state = %s and attempts = %s
                 returning id
                 """,
@@ -169,6 +170,7 @@ class PostgresExecutionStore:
                     after.state.value,
                     after.attempts,
                     after.last_error,
+                    None if after.output is None else Jsonb(dict(after.output)),
                     before.id,
                     before.organization_id,
                     before.state.value,

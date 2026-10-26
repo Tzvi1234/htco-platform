@@ -172,6 +172,9 @@ class AutomationExecution:
     causation_id: str | None = None
     # The last failure: an exception type, or a message marked safe to show.
     last_error: str | None = None
+    # A succeeded run's handler output, as far as its typed model allows (#127): per-run IDs,
+    # counts and codes, never buyer data. None otherwise.
+    output: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not self.idempotency_key.strip():

@@ -12,14 +12,13 @@ and the job succeeds, so nothing retries in a loop. The inspector schedule is al
 """
 
 import logging
-import uuid
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
-from htco_application.jobs import ClaimedJob, JobError, JobQueue, JobSpec
+from htco_application.jobs import ClaimedJob, JobQueue, fan_out_per_shop
+from htco_application.kernel import ConnectedShops, JobError
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import AutomationExecution, TriggerKind
 from htco_domain.jobs import Schedule
@@ -34,20 +33,6 @@ REVIEW_SHOP_JOB = "fulfillment.reviews_shop"
 SCHEDULER = ActorRef(ActorKind.SYSTEM, "scheduler")
 
 _log = logging.getLogger(__name__)
-
-
-class ScheduledShop(Protocol):
-    @property
-    def organization_id(self) -> uuid.UUID: ...
-
-    @property
-    def shop_id(self) -> uuid.UUID: ...
-
-
-class ConnectedShops(Protocol):
-    """The maintenance `ShopDirectory`: connected shops by ID only, across organizations."""
-
-    def connected_shops(self) -> Sequence[ScheduledShop]: ...
 
 
 class Triggers(Protocol):
@@ -68,19 +53,15 @@ def _enqueue_per_shop(
     shops: ConnectedShops, queue: JobQueue, schedule: Schedule, kind: str, *, now: datetime
 ) -> int:
     period = schedule.key_for(now).rsplit("@", 1)[-1]
-    listed = shops.connected_shops()
-    for shop in listed:
-        queue.enqueue(
-            JobSpec(
-                kind=kind,
-                idempotency_key=f"{kind}:{shop.shop_id}:{period}",
-                organization_id=shop.organization_id,
-                shop_id=shop.shop_id,
-                payload={"period": period},
-            ),
-            now=now,
-        )
-    return len(listed)
+    return fan_out_per_shop(
+        queue,
+        shops.connected_shops(),
+        kind=kind,
+        key=lambda shop: f"{kind}:{shop.shop_id}:{period}",
+        lock=None,
+        payload={"period": period},
+        now=now,
+    )
 
 
 @dataclass

@@ -5,6 +5,7 @@ environment (AC-5.18.2), and the chain view of one order's execution in causal o
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -168,14 +169,16 @@ def at(seconds: int) -> datetime:
     return T0 + timedelta(seconds=seconds)
 
 
-def order_records(*, shop: uuid.UUID | None = SHOP) -> ChainRecords:
+def order_records(
+    *, shop: uuid.UUID | None = SHOP, output: dict[str, Any] | None = None
+) -> ChainRecords:
     """One paid order: the webhook, the intake execution, two actions, their events."""
     execution_id, read_id, write_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     approval_id = uuid.uuid4()
     x = ExecutionState
     return ChainRecords(
         execution=ExecutionRecord(execution_id, ORG, shop, "etsy-order-intake", x.SUCCEEDED,
-                                  "corr-order", at(1)),
+                                  "corr-order", at(1), output=output),
         trigger=TriggerRecord("inbox-1", "event", at(0), "etsy:receipt.paid"),
         changes=[
             ChangeRecord(None, x.PENDING, "system:etsy-webhook", None, at(1)),
@@ -275,3 +278,18 @@ def test_execution_chain__refusals(
 ) -> None:
     with pytest.raises(error):
         execution_chain(auth, Reader(records), uuid.uuid4(), organization_id=None, now=NOW)
+
+
+@pytest.mark.parametrize(
+    ("role", "shown"), [(Role.OWNER, True), (Role.ADMIN, True), (Role.OPERATIONS, False)]
+)
+def test_execution_chain__the_run_output_is_for_the_owner_and_admins(
+    role: Role, *, shown: bool
+) -> None:
+    """Per-run counts (#127): the Owner and Admins see them; a shop-scoped role does not."""
+    records = order_records(output={"receipts": 2, "recorded": 1})
+
+    chain = execution_chain(caller(role), Reader(records), uuid.uuid4(),
+                            organization_id=None, now=NOW)  # fmt: skip
+
+    assert chain.execution.output == ({"receipts": 2, "recorded": 1} if shown else None)

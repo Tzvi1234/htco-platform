@@ -16,7 +16,7 @@ import pytest
 from htco_application.execution.channels import EtsyApiChannel
 from htco_application.execution.contracts import ChannelBinding
 from htco_application.execution.gateway import ActionRequest, Channel
-from htco_application.jobs import JsonValue
+from htco_application.kernel import JsonValue
 from htco_application.marketplace import MarketplacePermissionError
 from htco_application.order_intake import RECEIPTS_READ
 from htco_application.order_receipts import (

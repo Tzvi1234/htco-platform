@@ -70,7 +70,7 @@ class PostgresProfileLocks:
             return False
         try:
             return await anyio.to_thread.run_sync(
-                _holds, lease.connection, lock_key(lease.environment_id)
+                holds_lock, lease.connection, lock_key(lease.environment_id)
             )
         except psycopg.Error:
             return False
@@ -97,7 +97,7 @@ def _unlock(connection: psycopg.Connection[Any], key: str) -> None:
         connection.execute("select pg_advisory_unlock(hashtextextended(%s, 0))", [key])
 
 
-def _holds(connection: psycopg.Connection[Any], key: str) -> bool:
+def holds_lock(connection: psycopg.Connection[Any], key: str) -> bool:
     # A bigint advisory key is stored as two 32-bit halves (classid high, objid low).
     row = connection.execute(
         """

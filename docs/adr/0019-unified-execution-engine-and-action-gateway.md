@@ -97,3 +97,11 @@ Option 3.
 - 2026-10-23 — Accepted. Slice 5.0 is complete:
   - AC-5.0.1: `tools/migration_order.py`, run by CI's `migration-order` job, fails a pull request whose new migration sorts before or with the newest on main, renames a merged migration or reuses a pgTAP prefix (ER-DATA-10). The duplicate pgTAP prefix 14 is gone (`14_worker_order_purge` became `20_worker_order_purge`).
   - AC-5.0.2: `tests/integration/test_correlation_trace.py` follows one correlation ID through the execution, its job, the action execution, the outbox events and the execution's state changes, against Postgres. The execution job now carries the correlation ID, with the execution as its cause (it carried neither before).
+- 2026-10-26 — Amended by [ADR-0025](0025-browser-and-network-providers.md) §3 (architecture audit AUD-04). The Browser channel no longer awaits the browser inline:
+  - **Dispatch.** It moves the action to `DISPATCHED`, a waiting outcome, and enqueues one `browser.run` job for the browser worker. The waiting execution then holds no lease, slot or connection.
+  - **Execution-time re-checks.** Before acting, the browser worker checks the claim, the deadline, the status, the flag, the scope and every kill switch.
+  - **Outcome.** It publishes one outcome.
+  - **Resume.** A resume resubmits the same request, and `submit` continues the stored claim, as it already does for a human hand-off.
+  - **Lost writes.** A write is never re-sent blindly.
+
+  Decision §3's Browser row and the action state machine in [execution-engine.md](../architecture/execution-engine.md) §7 follow this.

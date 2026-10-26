@@ -19,7 +19,7 @@ puts them in order.
 
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
@@ -27,7 +27,7 @@ from typing import Protocol
 from htco_application.access.authentication import AuthContext
 from htco_application.access.policy import Capability, Outcome, Scope, ShopRef, decide
 from htco_application.automation.durable import StateChange
-from htco_application.jobs import JsonValue
+from htco_application.kernel import EVENTS_DESTINATION, JsonValue
 from htco_application.messaging import OutboxMessage
 from htco_application.shops import OrganizationRequiredError
 from htco_domain.actions import ActionState
@@ -35,7 +35,6 @@ from htco_domain.automation import ExecutionState
 from htco_domain.status import StatusKind, WaitingReason, status_kind, waiting_reason
 
 EXECUTION_STATE_CHANGED = "automations.execution_state_changed.v1"
-EVENT_DESTINATION = "events.publish"
 
 
 def execution_state_event(change: StateChange) -> OutboxMessage:
@@ -52,7 +51,7 @@ def execution_state_event(change: StateChange) -> OutboxMessage:
     }
     return OutboxMessage(
         organization_id=change.organization_id,
-        destination=EVENT_DESTINATION,
+        destination=EVENTS_DESTINATION,
         # One message per recorded change: the same state can be reached twice at one instant
         # (a retry), so the key names the change itself rather than the state and the time.
         idempotency_key=f"{EXECUTION_STATE_CHANGED}:{change.execution_id}:{uuid.uuid7()}",
@@ -90,6 +89,8 @@ class ExecutionRecord:
     state: ExecutionState
     correlation_id: str
     created_at: datetime
+    # A succeeded run's checked handler output (#127): for the Owner and Admins only.
+    output: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -263,4 +264,7 @@ def execution_chain(
         is not Outcome.ALLOW
     ):  # fmt: skip
         raise ExecutionNotVisibleError(str(execution_id))
+    if office.scope is not Scope.ORGANIZATION and records.execution.output is not None:
+        # Per-run counts are the office's view (#127): a shop-scoped role sees the run without.
+        records = replace(records, execution=replace(records.execution, output=None))
     return build_chain(records)
