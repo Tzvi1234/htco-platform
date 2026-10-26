@@ -9,7 +9,7 @@
 | **Depends on** | [Phase 5](phase-05-orders-ingest.md) (gateway, router, Browser interface, Environment Registry), [Phase 7](phase-07-tasks-approvals.md) (Human channel: tasks and approvals). **Starts right after Phase 6, in parallel with Phase 7** (owner, 2026-10-23): until Phase 7's task store lands, Human hand-offs use the relay item of slice 6.10, which Phase 7 then absorbs. The AutoVA recipes (8A.10) are built first, right after the worker, controller, preflight and challenge handler (8A.1 to 8A.4). Slice 8A.6 (Browser Use) also needs [Phase 9](phase-09-router-advisor.md) (model gateway, budgets). The secret-injection part of 8A.4 needs [Phase 8B](phase-08b-authenticator.md); until then, login is a Human task. |
 | **Parallel with** | Phase 8 and Phase 8B |
 | **Decisions** | [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md), [ADR-0020](../../adr/0020-per-shop-browser-environment.md), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md), [Etsy automation approval](../../architecture/etsy-automation-approval.md) |
-| **Status** | PLANNED |
+| **Status** | IN PROGRESS (8A.1 built) |
 
 ## Goal
 
@@ -60,7 +60,7 @@ Phases 5 and 7 provided the contracts and the Human channel. Listing Health (11)
 ### 8A.1 — Browser worker and sealed profiles
 
 - **The `browser-worker` component:** its own image layer with Chromium and Playwright, its own database role (`htco_browser`: environments, its own jobs, browser artifacts), no Etsy OAuth tokens, and a read-only root file system apart from a tmpfs for unpacked profiles.
-- **Profiles:** sealed archives in Supabase Storage (`browser-profiles/{org}/{shop}/`), encrypted with the vault's envelope keys, with associated data `org|shop|environment`.
+- **Profiles:** sealed archives (`browser-profiles/{org}/{shop}/{environment}`), encrypted with envelope keys, with associated data `org|shop|environment`. Updated 2026-10-25 (main's decision): the archives live in a Postgres table that only `htco_browser` reaches, not in Supabase Storage, so the browser worker never holds a project-wide Storage key; each archive is capped at 25 MiB.
 - **The `EnvironmentProvisioner` implementation:** create the profile, then a first health check.
 
 | ID | Acceptance criterion |
@@ -68,6 +68,15 @@ Phases 5 and 7 provided the contracts and the Human channel. Listing Health (11)
 | AC-8A.1.1 | A profile archive read straight from storage is ciphertext; a copy moved to another shop's path fails to open. |
 | AC-8A.1.2 | The browser worker's role cannot read `shop_integrations`, tokens or another organization's environments (pgTAP). |
 | AC-8A.1.3 | After a session, nothing of the profile remains on disk outside the sealed archive (file system test). |
+
+**As built (slice 8A.1):** migration `20261025170000_browser_worker_role.sql`, pgTAP `28_browser_worker_role`.
+
+- **The role.** `htco_browser` (no login, no inherit) reaches one organization at a time through `htco.organization_id`. It reads its environments' status and profile columns (never the consent record), writes their profile columns and its archives, and inserts audit rows. It has no right on any other table: no `shop_integrations`, no tokens, no queue, no outbox (the pgTAP test lists every table it can touch). Status transitions, the queue and browser artifacts are granted with the slices that use them (8A.2 to 8A.4).
+- **The archives.** `app.browser_profile_archives`: one row per environment, bound to the environment, shop and organization by a composite foreign key, sealed bytes only, 1 byte to 25 MiB. RLS on; no client role and not the agent-worker can read it.
+- **Sealing.** `EnvelopeSealer.seal_blob` and `open_blob` (`htco_platform.crypto`): one self-describing blob of version, key ID, wrapped data key and ciphertext. The browser worker has its **own key ring**, separate from the Etsy token vault's (ADR-0020 §8); its setting arrives with the browser worker's composition root (8A.2).
+- **The workspace.** `htco_application.browser_profiles.ProfileWorkspaces.checkout` unpacks the archive into a fresh `0700` directory under the worker's tmpfs root, re-seals it on a clean exit, and always wipes it. A failed session keeps the last good archive. Packing keeps regular files and directories only, without Chromium's caches, links, sockets and `Singleton*` lock files; unpacking refuses links, devices, absolute or `..` paths, more than 20,000 entries and more than 256 MiB unpacked.
+- **The provisioner.** `SealedProfileProvisioner` seals an empty profile for a `PROVISIONING` environment, records its storage key and key ID, then runs the first health check. Until 8A.3 provides that check, a new profile ends `LOGIN_REQUIRED` (`new_profile_signed_out`), which is true: a new profile is signed out.
+- **Not yet.** The `browser-worker` image (Chromium and Playwright, read-only root, tmpfs) comes with the controller in 8A.2, which adds the Playwright dependency.
 
 ### 8A.2 — Browser Controller and profile locks
 

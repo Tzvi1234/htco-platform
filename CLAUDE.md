@@ -79,6 +79,7 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 | `docker build -t htco-api .` | The production API image (CI also runs it read-only and scans it) | Slice 1.5 |
 | `just db-start`, `just db-stop`, `just db-reset`, `just db-test` | Local Postgres from the Supabase CLI (needs Docker), all migrations applied, pgTAP tests | Slice 2.1 |
 | `just test-db` | Integration tests (`-m db`, `tests/integration`) against the local database; CI runs them in the `database` job | Slice 2.1 |
+| `wsl -d Ubuntu -u root -- bash <clone>/scripts/local-db-ci.sh [REPO]` | CI's whole `database` job locally (steps read from `ci.yml`), with a pass/fail summary; one-time setup `scripts/local-db-setup.sh` ([LOCAL_DB_TESTS.md](docs/engineering/LOCAL_DB_TESTS.md)) | Dev environment (forge) |
 | `just seed` | Two organizations, their shops, one user per role | Slice 2.2 |
 | `uv run htco admin bootstrap --email … --organization … --display-name …` | Create the owner's organization and owner membership after the owner signs up (idempotent; needs `HTCO_DATABASE_URL`) | Slice 2.5 |
 | `uv run python -m htco_worker` | The `agent-worker`: job queue consumer, schedules and maintenance jobs (needs `HTCO_DATABASE_URL`; schedules only when named in `HTCO_WORKER_SCHEDULES`) | Slice 5.1 |

@@ -192,6 +192,26 @@ class EnvelopeSealer:
         data_key = self._unwrap(envelope, context)
         return Envelope(self.current_key_id, self._wrap(data_key, context), envelope.ciphertexts)
 
+    def seal_blob(self, plaintext: bytes, *, context: bytes) -> bytes:
+        """One binary value (slice 8A.1: a browser profile archive) as one self-describing blob:
+        version, key ID, wrapped data key, sealed value. The context binds both layers."""
+        data_key = AESGCM.generate_key(bit_length=256)
+        sealed = _seal(AESGCM(data_key), plaintext, _blob_associated(context))
+        key_id = self.current_key_id.encode("ascii")
+        wrapped = self._wrap(data_key, context)
+        header = bytes([_VERSION, len(key_id)]) + key_id + len(wrapped).to_bytes(2, "big")
+        return header + wrapped + sealed
+
+    def open_blob(self, blob: bytes, *, context: bytes) -> bytes:
+        key_id, wrapped, sealed = _split_blob(blob)
+        data_key = self._unwrap(Envelope(key_id, wrapped, ()), context)
+        return _open(AESGCM(data_key), sealed, _blob_associated(context))
+
+    @staticmethod
+    def blob_key_id(blob: bytes) -> str:
+        """The ID of the key that wraps the blob's data key (stored next to the record)."""
+        return _split_blob(blob)[0]
+
     def _wrap(self, data_key: bytes, context: bytes) -> bytes:
         key_id = self.current_key_id
         return _seal(self._keys.aead(key_id), data_key, _key_associated(key_id, context))
@@ -227,6 +247,26 @@ def _framed(*parts: bytes) -> bytes:
 
 def _key_associated(key_id: str, context: bytes) -> bytes:
     return _framed(b"htco-envelope-key", bytes([_VERSION]), key_id.encode("ascii"), context)
+
+
+def _blob_associated(context: bytes) -> bytes:
+    return _framed(b"htco-envelope-blob", bytes([_VERSION]), context)
+
+
+def _split_blob(blob: bytes) -> tuple[str, bytes, bytes]:
+    if len(blob) < 2 or blob[0] != _VERSION:  # noqa: PLR2004 - version and key ID length
+        raise SealingError("not a sealed blob")
+    key_end = 2 + blob[1]
+    wrapped_end = key_end + 2 + int.from_bytes(blob[key_end : key_end + 2], "big")
+    if len(blob) < wrapped_end + 1 + _NONCE_BYTES + _TAG_BYTES:
+        raise SealingError("not a sealed blob")
+    try:
+        key_id = blob[2:key_end].decode("ascii")
+    except UnicodeDecodeError:
+        raise SealingError("not a sealed blob") from None
+    if not _KEY_ID.match(key_id):
+        raise SealingError("not a sealed blob")
+    return key_id, blob[key_end + 2 : wrapped_end], blob[wrapped_end:]
 
 
 def _data_associated(context: bytes, index: int) -> bytes:
