@@ -156,7 +156,12 @@ async def _inline(work: Callable[[], Any]) -> Any:
 
 
 def _event(
-    name: str, incident: IncidentRecord, *, extra: Mapping[str, JsonValue], correlation: str | None
+    name: str,
+    incident: IncidentRecord,
+    *,
+    extra: Mapping[str, JsonValue],
+    correlation: str | None,
+    occurrence: str | None = None,
 ) -> OutboxMessage:
     payload: dict[str, JsonValue] = {
         "event_type": name,
@@ -173,7 +178,8 @@ def _event(
         organization_id=incident.organization_id,
         shop_id=incident.shop_id,
         destination=EVENTS,
-        idempotency_key=f"{name}:{incident.id}",
+        # An event that may happen again for the incident (an escalation) is keyed by when.
+        idempotency_key=f"{name}:{incident.id}" + ("" if occurrence is None else f":{occurrence}"),
         payload=payload,
         correlation_id=None if correlation is None else correlation[:200],
     )
@@ -311,6 +317,7 @@ class IncidentService:
                     incident,
                     extra={"escalated_from": incident.state.value, "escalated_at": now.isoformat()},
                     correlation=correlation_id,
+                    occurrence=str(int(now.timestamp())),
                 ),
             )
         if current is IncidentState.RESOLVED and evidence is not None:

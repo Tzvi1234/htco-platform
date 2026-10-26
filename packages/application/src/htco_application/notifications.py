@@ -215,11 +215,16 @@ class IncidentNotifications:
         }
         if payload.get("receipt_id") is not None:
             params["receipt_id"] = payload["receipt_id"]
+        # One notification per escalation, however often its event is delivered (quill, #119).
+        occurrence = (
+            payload.get("escalated_at") if kind is NotificationKind.INCIDENT_ESCALATED else None
+        )
         await self.service.notify(
             NotificationRequest(
                 organization_id=message.organization_id,
                 kind=kind,
-                dedup_key=f"{kind.value}:{incident_id}",
+                dedup_key=f"{kind.value}:{incident_id}"
+                + ("" if occurrence is None else f":{occurrence}"),
                 params=params,
                 shop_id=message.shop_id,
                 incident_id=incident_id,
@@ -443,6 +448,9 @@ def render_email(
     # #108): never "order -".
     if kind is NotificationKind.ALERT_LOW_REVIEW and "receipt_id" not in checked:
         subject_template, body_template = _LOW_REVIEW_UNLINKED[locale]
+    # An incident about no order (an automation that stopped) names its cause (quill, #119).
+    if (kind, locale) in _INCIDENT_WITHOUT_ORDER and "receipt_id" not in checked:
+        subject_template, body_template = _INCIDENT_WITHOUT_ORDER[(kind, locale)]
     subject = subject_template.format_map(_Missing(values))
     body = body_template.format_map(_Missing(values))
     text = f"{body}\n\n{words['open']}: {link}\n\n{words['footer']}\n"
@@ -466,6 +474,34 @@ _LOW_REVIEW_UNLINKED: Mapping[Locale, tuple[str, str]] = {
     Locale.HE: (
         "ביקורת של {rating} כוכבים",
         "התקבלה ביקורת חדשה של {rating} כוכבים למוצר {listing_id}.",
+    ),
+}
+
+
+_INCIDENT_WITHOUT_ORDER: Mapping[tuple[NotificationKind, Locale], tuple[str, str]] = {
+    (NotificationKind.INCIDENT_OPENED, Locale.EN): (
+        "Needs attention: {cause}",
+        "An incident was opened ({cause}, severity {severity}).",
+    ),
+    (NotificationKind.INCIDENT_OPENED, Locale.HE): (
+        "דורש טיפול: {cause}",
+        "נפתח אירוע ({cause}, חומרה {severity}).",
+    ),
+    (NotificationKind.INCIDENT_ESCALATED, Locale.EN): (
+        "Escalated: {cause}",
+        "An incident ({cause}, severity {severity}) has waited past its limit and needs you now.",
+    ),
+    (NotificationKind.INCIDENT_ESCALATED, Locale.HE): (
+        "הוסלם: {cause}",
+        "אירוע ({cause}, חומרה {severity}) חיכה מעבר למותר ודורש אתכם עכשיו.",
+    ),
+    (NotificationKind.INCIDENT_RESOLVED, Locale.EN): (
+        "Resolved: {cause}",
+        "The incident ({cause}) was resolved on evidence.",
+    ),
+    (NotificationKind.INCIDENT_RESOLVED, Locale.HE): (
+        "נפתר: {cause}",
+        "האירוע ({cause}) נפתר על סמך ראיה.",
     ),
 }
 
@@ -506,7 +542,8 @@ class EmailDeliverer:
                 error="no_member",
             )
             return
-        rendered = render_email(kind, locale, params, link=self._link(kind, params))
+        link = self._link(kind, params, organization_id)
+        rendered = render_email(kind, locale, params, link=link)
         try:
             receipt = await self.email.send(
                 EmailMessage(
@@ -538,7 +575,9 @@ class EmailDeliverer:
             error=None,
         )
 
-    def _link(self, kind: NotificationKind, params: Mapping[str, str]) -> str:
+    def _link(
+        self, kind: NotificationKind, params: Mapping[str, str], organization_id: uuid.UUID
+    ) -> str:
         base = self.office_url.rstrip("/")
         incident = params.get("incident_id")
         if (
@@ -550,7 +589,8 @@ class EmailDeliverer:
             }
             and incident
         ):
-            return f"{base}/incidents/{incident}"
+            # The address owns the workspace (clients #48): a member of several lands on it.
+            return f"{base}/incidents/{incident}?workspace={organization_id}"
         if kind.is_security:
             return f"{base}/settings/security"
         return f"{base}/notifications"

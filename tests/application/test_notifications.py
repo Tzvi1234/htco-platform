@@ -274,7 +274,8 @@ async def test_a_sent_email_links_to_the_incident(kind: str) -> None:
     await _deliverer(email, directory).deliver(pending)
 
     [sent] = email.sent.values()
-    assert f"https://office.example.test/incidents/{INCIDENT}" in sent.text
+    # Quill on #119: the link names its workspace, so a member of several lands on it.
+    assert f"https://office.example.test/incidents/{INCIDENT}?workspace={ORG}" in sent.text
     assert directory.records[pending.id][0] == "sent"
     assert "owner@example.test" not in repr(sent)
 
@@ -418,6 +419,53 @@ async def test_an_escalated_incident_notifies_once_with_an_email() -> None:
         for user in (OWNER, ADMIN)
     }
     assert len(store.outbox) == 2  # one email each: an escalation is urgent
+
+
+async def test_each_escalation_notifies_once() -> None:
+    """Quill on #119: two escalations of one incident are two notifications; a redelivery of
+    either is none."""
+    store = members()
+    service = NotificationService(store, clock=lambda: NOW)
+    deliverer = EventDeliverer({"incidents.escalated.v1": IncidentNotifications(service)})
+
+    def escalated(at: str) -> OutboxMessage:
+        return OutboxMessage(
+            organization_id=ORG, shop_id=SHOP, destination=EVENTS,
+            idempotency_key=f"incidents.escalated.v1:{INCIDENT}:{at}",
+            payload={"event_type": "incidents.escalated.v1", "incident_id": str(INCIDENT),
+                     "cause": "tracking_missing", "severity": "medium", "receipt_id": 4000000001,
+                     "escalated_from": "detected", "escalated_at": at},
+        )  # fmt: skip
+
+    for at in (
+        "2026-10-25T09:00:00+00:00",
+        "2026-10-25T09:00:00+00:00",
+        "2026-10-29T10:00:00+00:00",
+    ):
+        await deliverer.deliver(delivery(escalated(at)))
+
+    owners = [n for n in store.rows.values() if n.user_id == OWNER]
+    assert len(owners) == 2
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [NotificationKind.INCIDENT_OPENED, NotificationKind.INCIDENT_ESCALATED,
+     NotificationKind.INCIDENT_RESOLVED],
+)  # fmt: skip
+@pytest.mark.parametrize("locale", list(Locale))
+def test_an_incident_without_an_order_never_reads_order_dash(
+    kind: NotificationKind, locale: Locale
+) -> None:
+    """Quill on #119: an automation that stopped has no order; its email names no "order -"."""
+    params = {"incident_id": str(INCIDENT), "cause": "automation_dead_lettered",
+              "severity": "critical"}  # fmt: skip
+
+    rendered = render_email(kind, locale, params, link="https://office.example.test/x")
+
+    for text in (rendered.subject, rendered.text):
+        assert " -" not in text.replace(" - ", "")  # no empty order number
+        assert "{receipt_id}" not in text
 
 
 async def test_a_resolved_incident_notifies_once() -> None:
