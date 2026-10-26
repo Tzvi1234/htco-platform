@@ -194,7 +194,7 @@ It is not adopted. It would need its own ADR and the same gates, and there would
 
 ADR-0025 already covers background networking, component updates, field trials, domain reliability, pings, and Safe Browsing off. This section adds the rest, through **managed enterprise policies**. They live in one policy file pinned in the browser-worker image, which a page or a session cannot change:
 
-- **DNS over HTTPS with a resolver HTCO chooses:** `DnsOverHttpsMode = secure`, and `DnsOverHttpsTemplates` set to one resolver recorded in TOOLCHAIN. There is no fallback to plain DNS.
+- **DNS over HTTPS with a resolver HTCO chooses:** `DnsOverHttpsMode = secure`, and `DnsOverHttpsTemplates` set to one resolver recorded in TOOLCHAIN, written as an IP literal so that no system resolver is needed to reach it. There is no fallback to plain DNS. Chromium's OS user has no plain DNS at all, so the egress rules of ADR-0025 §5 never break name resolution (AC-8A.2.27).
 - **No extensions:** `ExtensionInstallBlocklist = ["*"]`.
 - **Trackers:**
   - `BlockThirdPartyCookies`, unless a recorded recipe needs a third party;
