@@ -23,6 +23,7 @@ import pytest
 
 from htco_application.browser_controller import (
     BrowserController,
+    MemoryLease,
     MemoryProfileLocks,
     MemorySessionLog,
     SessionDeferredError,
@@ -408,10 +409,12 @@ class WatchedLocks(MemoryProfileLocks):
 
     @override
     @asynccontextmanager
-    async def hold(self, environment_id: uuid.UUID, *, until: datetime) -> AsyncIterator[bool]:
-        async with super().hold(environment_id, until=until) as held:
+    async def hold(
+        self, environment_id: uuid.UUID, *, until: datetime
+    ) -> AsyncIterator[MemoryLease]:
+        async with super().hold(environment_id, until=until) as lease:
             try:
-                yield held
+                yield lease
             finally:
                 assert self.root is not None
                 assert self.workspaces is not None
@@ -703,3 +706,85 @@ async def test_session__cancelled_while_a_failing_start_write_runs_ends_nothing(
         await task
     assert log.records == {}
     assert s.locks.held == set()
+
+
+@pytest.mark.ac("AC-8A.2.2")
+async def test_session__a_lost_lock_taken_by_another_session_never_writes_back(
+    tmp_path: Path,
+) -> None:
+    """sage and Codex on #121/#122: S1's lock drops and S2 takes the profile. S1's fence asks
+    about S1's own lease, not about whoever holds the environment now, so S1 never seals its
+    stale profile while S2 runs, and S1's exit leaves S2's lock alone."""
+    env = environment()
+    s = setup(tmp_path, env)
+    async with s.controller.session(env.id, purpose="test.good", deadline=soon()):
+        (s.engine.handles[0].profile / "Cookies").write_bytes(b"good")
+    good = s.vault.open(env)
+    s1_lost, s2_in, s1_done = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    results: list[str] = []
+
+    async def first() -> None:
+        try:
+            async with s.controller.session(env.id, purpose="test.stale", deadline=soon(3)):
+                (s.engine.handles[1].profile / "Cookies").write_bytes(b"stale")
+                s.locks.held.discard(env.id)  # S1's lock connection drops
+                s1_lost.set()
+                await s2_in.wait()
+        except SessionLockLostError:
+            results.append("s1 lost its lock")
+        finally:
+            s1_done.set()
+
+    async def second() -> None:
+        await s1_lost.wait()
+        async with s.controller.session(env.id, purpose="test.fresh", deadline=soon(3)):
+            s2_in.set()
+            await s1_done.wait()  # S1 finishes while S2 holds the profile
+            assert s.vault.open(env) == good  # S1 did not write back
+            assert s.locks.held == {env.id}  # and S1's exit did not release S2's lock
+        results.append("s2 done")
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(first)
+        group.start_soon(second)
+    assert results == ["s1 lost its lock", "s2 done"]
+    assert s.vault.open(env) == good
+
+
+async def test_session__an_unpack_that_eats_the_deadline_never_starts_the_engine(
+    tmp_path: Path,
+) -> None:
+    """sage and Codex on #122: the deadline is checked again right before the launch, so a slow
+    unpack that used up the time never begins starting Chromium."""
+    env = environment()
+    s = setup(tmp_path, env)
+    controller = slow_controller(s, env, enter=0.3)
+
+    async def run() -> None:
+        async with controller.session(env.id, purpose="test.run", deadline=soon(0.2)):
+            pytest.fail("the work must not start past the deadline")  # pragma: no cover
+
+    with pytest.raises(SessionTimeoutError):
+        await run()
+    assert s.engine.handles == []
+    (record,) = s.log.records.values()
+    assert (record.outcome, record.failure) == (SessionOutcome.FAILED, "timeout")
+    assert on_disk(tmp_path) == []
+
+
+async def test_memory_locks__a_lease_answers_for_itself_only() -> None:
+    """The in-memory locks keep the Postgres rule: a lease is held only while it is the
+    environment's own holder, and leaving it never releases a later holder's lock."""
+    locks = MemoryProfileLocks()
+    environment_id = uuid.uuid4()
+    async with locks.hold(environment_id, until=soon()) as first:
+        assert await locks.still_held(first)
+        async with locks.hold(environment_id, until=soon(0.05)) as waiter:
+            assert not waiter.held
+            assert not await locks.still_held(waiter)
+        locks.held.discard(environment_id)  # the first lease's connection drops
+        async with locks.hold(environment_id, until=soon()) as second:
+            assert not await locks.still_held(first)
+            assert await locks.still_held(second)
+        assert locks.held == set()
+    assert locks.held == set()
