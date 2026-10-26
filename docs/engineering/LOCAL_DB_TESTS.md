@@ -69,6 +69,8 @@ wsl -d Ubuntu -u root -- bash /mnt/c/<path to clone>/scripts/local-db-ci.sh /mnt
   `just db-start` uses. The script stops only a stack it started itself (it records that in
   `~/.cache/htco-local-db-ci/stack-started`). If another stack of the project is running, it stops
   with exit code 2 and leaves that stack alone: stop it yourself (`supabase stop`) and run again.
+  The same goes for the saved volumes of a stopped stack (`just db-stop` keeps its data): the run
+  refuses until you remove them yourself (`supabase stop --no-backup`), so it never resets them.
 - **The cache.** `HTCO_LOCAL_CI_CACHE` (default `~/.cache/htco-local-db-ci`) must be a directory of
   its own: the script refuses `/`, a home directory, a `/mnt` drive, anything that contains or is
   inside the clone under test, and a non-empty directory without its `.htco-local-db-ci` marker,

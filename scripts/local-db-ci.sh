@@ -107,6 +107,16 @@ if stack_running; then
         "(just db-start, or another clone): stop it yourself (supabase stop), then run again" >&2
     exit 2
 fi
+# A stopped stack keeps its data: `just db-stop` (a plain `supabase stop`) leaves the project's
+# volumes. Claiming the project would reset them, so they must be gone first (ours already are).
+saved_volumes="$(docker volume ls -q --filter "label=com.supabase.cli.project=$project_id" \
+    2> /dev/null | tr '\n' ' ')"
+if [ -n "${saved_volumes// /}" ]; then
+    echo "saved Supabase volumes of project $project_id that this script did not create:" \
+        "$saved_volumes(a stopped stack's data, kept by just db-stop). Remove them yourself if" \
+        "the data can go (supabase stop --no-backup), then run again" >&2
+    exit 2
+fi
 rm -f -- "$stack_marker"
 rm -rf -- "$runner_temp"
 # From here the runner's steps start the stack: mark it as ours before they do.
