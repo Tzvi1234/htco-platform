@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from htco_application.incidents import (
+    INCIDENT_ESCALATED,
     INCIDENT_OPENED,
     INCIDENT_RESOLVED,
     Detection,
@@ -168,6 +169,35 @@ async def test_a_person_moves_an_incident_along_the_machine() -> None:
     assert moved.state is IncidentState.TRIAGED
     assert store.steps[-1].actor == OWNER
     assert await incidents.move(ORG, uuid.uuid4(), IncidentState.TRIAGED, actor=OWNER) is None
+
+
+async def test_an_escalation_is_announced_once_with_what_it_was() -> None:
+    """6.7: an escalated incident tells the owner, like an opened or resolved one."""
+    store = MemoryIncidentStore()
+    incidents = service(store)
+    incident, _ = await incidents.open(detection(), actor=ACTOR)
+
+    await incidents.move(
+        ORG, incident.id, IncidentState.ESCALATED, actor=ACTOR, note="age_over_severity_limit"
+    )
+
+    [event] = store.events.of(INCIDENT_ESCALATED)
+    assert event.idempotency_key == f"{INCIDENT_ESCALATED}:{incident.id}"
+    assert event.payload["incident_id"] == str(incident.id)
+    assert event.payload["severity"] == "medium"
+    assert event.payload["escalated_from"] == "detected"
+    assert event.payload["receipt_id"] == 51
+
+
+async def test_other_steps_announce_no_escalation() -> None:
+    store = MemoryIncidentStore()
+    incidents = service(store)
+    incident, _ = await incidents.open(detection(), actor=ACTOR)
+
+    await incidents.move(ORG, incident.id, IncidentState.TRIAGED, actor=OWNER, note="owner_triage")
+    await incidents.resolve_on_evidence(ORG, incident.dedup_key, EVIDENCE, actor=ACTOR)
+
+    assert store.events.of(INCIDENT_ESCALATED) == []
 
 
 async def test_a_stale_incident_is_refused() -> None:

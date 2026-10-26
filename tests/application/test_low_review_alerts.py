@@ -389,3 +389,19 @@ def test_an_unlinked_reviews_email_names_the_listing_and_no_order() -> None:
         {"rating": "2", "listing_id": "710", "receipt_id": "51"}, link="https://x.test/",
     )  # fmt: skip
     assert "order 51" in linked.text
+
+
+async def test_two_unlinked_reviews_of_one_listing_in_one_second_both_alert() -> None:
+    """Local Codex review of #108 (P3): a review without its transaction is keyed by its listing,
+    time and stars, so two of them in the same second each alert."""
+    detection, notes = handler()
+    same = (NOW - timedelta(hours=2)).isoformat()
+    one: dict[str, JsonValue] = {"listing_id": 790, "rating": 1, "created_at": same}
+    two: dict[str, JsonValue] = {"listing_id": 790, "rating": 2, "created_at": same}
+    gateway = ScriptedGateway([page_of([one, two], 2)])
+
+    outcome = await detection(context(gateway))
+
+    assert isinstance(outcome, Completed)
+    assert outcome.output["low_review_alerts"] == 2
+    assert len(notes.rows) == 2

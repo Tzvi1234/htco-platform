@@ -259,11 +259,14 @@ async def test_a_member_who_left_is_skipped_and_recorded() -> None:
     assert directory.records[pending.id] == ("skipped", None, "no_member")
 
 
-async def test_a_sent_email_links_to_the_incident() -> None:
+@pytest.mark.parametrize("kind", ["incident_opened", "incident_escalated", "incident_resolved"])
+async def test_a_sent_email_links_to_the_incident(kind: str) -> None:
+    """Codex review of #119: an escalation email opens its incident, like the others."""
     directory = MemoryEmailDirectory({OWNER: "owner@example.test"})
     email = FakeEmail()
     message = _email_message()
     payload = dict(message.payload)
+    payload["kind"] = kind
     payload["params"] = {"incident_id": str(INCIDENT), "receipt_id": "7",
                          "cause": "sync_drift", "severity": "low"}  # fmt: skip
     pending = delivery(OutboxMessage(ORG, EMAIL_DESTINATION, "email:x", payload))
@@ -391,6 +394,30 @@ async def test_email_only_preference_writes_no_visible_in_app_notification() -> 
     owner_row = store.rows[(ORG, OWNER, f"incident_opened:{INCIDENT}")]
     assert owner_row.in_app is False
     assert any(m.payload["user_id"] == str(OWNER) for m in store.outbox.values())
+
+
+async def test_an_escalated_incident_notifies_once_with_an_email() -> None:
+    """6.7: an escalation reaches the Owners and Admins in the app and by email, once."""
+    store = members()
+    service = NotificationService(store, clock=lambda: NOW)
+    escalated = OutboxMessage(
+        organization_id=ORG, shop_id=SHOP, destination=EVENTS,
+        idempotency_key=f"incidents.escalated.v1:{INCIDENT}",
+        payload={"event_type": "incidents.escalated.v1", "incident_id": str(INCIDENT),
+                 "cause": "tracking_missing", "severity": "medium", "receipt_id": 4000000001,
+                 "escalated_from": "detected"},
+    )  # fmt: skip
+    deliverer = EventDeliverer({"incidents.escalated.v1": IncidentNotifications(service)})
+
+    await deliverer.deliver(delivery(escalated))
+    await deliverer.deliver(delivery(escalated))
+
+    rows = {(n.user_id, n.kind, n.dedup_key) for n in store.rows.values()}
+    assert rows == {
+        (user, NotificationKind.INCIDENT_ESCALATED, f"incident_escalated:{INCIDENT}")
+        for user in (OWNER, ADMIN)
+    }
+    assert len(store.outbox) == 2  # one email each: an escalation is urgent
 
 
 async def test_a_resolved_incident_notifies_once() -> None:

@@ -15,6 +15,7 @@ from enum import StrEnum
 class NotificationKind(StrEnum):
     INCIDENT_OPENED = "incident_opened"
     INCIDENT_RESOLVED = "incident_resolved"
+    INCIDENT_ESCALATED = "incident_escalated"  # slice 6.7
     ALERT_SHIP_BY = "alert_ship_by"  # slice 6.9
     ALERT_LOW_REVIEW = "alert_low_review"  # slice 6.9
     ALERT_OUT_OF_STOCK = "alert_out_of_stock"  # slice 6.9
@@ -54,6 +55,7 @@ class Audience(StrEnum):
 AUDIENCE: Mapping[NotificationKind, Audience] = {
     NotificationKind.INCIDENT_OPENED: Audience.OWNERS_AND_ADMINS,
     NotificationKind.INCIDENT_RESOLVED: Audience.OWNERS_AND_ADMINS,
+    NotificationKind.INCIDENT_ESCALATED: Audience.OWNERS_AND_ADMINS,
     NotificationKind.ALERT_SHIP_BY: Audience.OWNERS_AND_ADMINS,
     NotificationKind.ALERT_LOW_REVIEW: Audience.OWNERS_AND_ADMINS,
     NotificationKind.ALERT_OUT_OF_STOCK: Audience.OWNERS_AND_ADMINS,
@@ -70,6 +72,7 @@ AUDIENCE: Mapping[NotificationKind, Audience] = {
 # security email: those always go out, AC-6.4.4).
 EMAIL_BY_DEFAULT = SECURITY_KINDS | {
     NotificationKind.INCIDENT_OPENED,
+    NotificationKind.INCIDENT_ESCALATED,
     NotificationKind.ALERT_SHIP_BY,
     NotificationKind.ALERT_LOW_REVIEW,
     NotificationKind.RELAY_TRACKING_NEEDED,

@@ -9,6 +9,7 @@ The review's text (the buyer's words) never reaches HTCO's tables: the channel l
 """
 
 import asyncio
+import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
@@ -23,12 +24,14 @@ from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.notifications import NotificationKind
 
 REVIEWS_READ = ActionRef("etsy.reviews.read", 1)
+_log = logging.getLogger(__name__)
 LOW_REVIEW_STARS = 3
 # Twice the hourly period and more: a missed run or a slow Etsy still sees each review.
 REVIEW_LOOKBACK = timedelta(hours=48)
 PAGE = 100
 # Pages until the window's reviews run out (Codex review of #108). The bound (SECURITY GATE item
-# 9) is the app's whole daily Etsy budget (5000 calls, `etsy:app`): no run could read further.
+# 9) caps one hourly run's work at 50 calls and 5,000 reviews in 48 hours, a volume no Etsy shop
+# reaches; a run that meets it says so (`truncated`, and a warning in the log).
 MAX_PAGES = 50
 # A deferral this short (the per-second budget) is waited out inside the scan, a few times.
 MAX_INLINE_WAIT = 10.0
@@ -79,7 +82,8 @@ async def low_review_alerts(  # noqa: PLR0913 - the execution and its collaborat
     page = 0
     while True:
         if page == MAX_PAGES:
-            truncated = True  # said in the output, never silent
+            truncated = True  # said in the output and the log, never silent
+            _log.warning("reviews.truncated shop=%s pages=%s", shop_id, MAX_PAGES)
             break
         try:
             output = await _read(ctx, shop_id, since=since, offset=page * PAGE, clock=clock)
@@ -140,7 +144,9 @@ async def _alert(  # noqa: PLR0913 - one page and its collaborators
         key = (
             f"low_review:{shop_id}:{transaction}"
             if isinstance(transaction, int)
-            else f"low_review:{shop_id}:{review['listing_id']}:{written}"
+            # Etsy gives a review no ID of its own; without its transaction, its listing, time
+            # and stars stand for it (local Codex review of #108).
+            else f"low_review:{shop_id}:{review['listing_id']}:{written}:{review['rating']}"
         )
         raised += (
             await alerts.notify(

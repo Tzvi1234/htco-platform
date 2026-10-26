@@ -59,7 +59,12 @@ from htco_application.fulfillment_schedule import (
     enqueue_fulfillment_inspections,
     enqueue_review_checks,
 )
-from htco_application.incidents import INCIDENT_OPENED, INCIDENT_RESOLVED, IncidentService
+from htco_application.incidents import (
+    INCIDENT_ESCALATED,
+    INCIDENT_OPENED,
+    INCIDENT_RESOLVED,
+    IncidentService,
+)
 from htco_application.jobs import ClaimedJob, JobError, JobQueue
 from htco_application.maintenance import (
     EXPIRY_JOB,
@@ -300,6 +305,7 @@ def notification_deliverers(
             {
                 INCIDENT_OPENED: IncidentNotifications(service),
                 INCIDENT_RESOLVED: IncidentNotifications(service),
+                INCIDENT_ESCALATED: IncidentNotifications(service),
                 OUT_OF_STOCK_EVENT: StockAlerts(service),
                 NOTIFICATION_REQUESTED: RequestedNotifications(service),
                 **(order_events or {}),
