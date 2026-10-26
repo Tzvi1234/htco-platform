@@ -20,13 +20,13 @@ destination; `EventDeliverer` hands it to `IncidentNotifications`.
 
 import logging
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape
-from typing import Any, Protocol
+from typing import Protocol
 
-from htco_application.jobs import JsonValue
+from htco_application.kernel import EVENTS_DESTINATION, JsonValue, Offload, run_inline
 from htco_application.messaging import OutboxMessage, PendingDelivery
 from htco_domain.notifications import (
     AUDIENCE,
@@ -40,7 +40,6 @@ from htco_domain.notifications import (
 )
 
 EMAIL_DESTINATION = "email.send"
-EVENTS_DESTINATION = "events.publish"
 INCIDENT_RESOLVED_EVENT = "incidents.resolved.v1"
 INCIDENT_ESCALATED_EVENT = "incidents.escalated.v1"
 SENDER = "HTCO Office <noreply@office.ht-co.app>"
@@ -109,13 +108,6 @@ class NotificationStore(Protocol):
         ...
 
 
-type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
-
-
-async def _inline(work: Callable[[], Any]) -> Any:
-    return work()
-
-
 def email_message(
     notification: Notification, locale: Locale, correlation: str | None
 ) -> OutboxMessage:
@@ -141,7 +133,7 @@ class NotificationService:
     store: NotificationStore
     clock: Callable[[], datetime]
     new_id: Callable[[], uuid.UUID] = uuid.uuid7
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def notify(self, request: NotificationRequest) -> int:
         """Writes the notifications and emails; returns how many notifications were new."""
@@ -215,11 +207,19 @@ class IncidentNotifications:
         }
         if payload.get("receipt_id") is not None:
             params["receipt_id"] = payload["receipt_id"]
+        # One notification per escalation, however often its event is delivered (quill, #119),
+        # keyed by the escalation's ID (Codex, #163); an event from before it by its time.
+        occurrence = (
+            payload.get("escalation_id") or payload.get("escalated_at")
+            if kind is NotificationKind.INCIDENT_ESCALATED
+            else None
+        )
         await self.service.notify(
             NotificationRequest(
                 organization_id=message.organization_id,
                 kind=kind,
-                dedup_key=f"{kind.value}:{incident_id}",
+                dedup_key=f"{kind.value}:{incident_id}"
+                + ("" if occurrence is None else f":{occurrence}"),
                 params=params,
                 shop_id=message.shop_id,
                 incident_id=incident_id,
@@ -443,6 +443,9 @@ def render_email(
     # #108): never "order -".
     if kind is NotificationKind.ALERT_LOW_REVIEW and "receipt_id" not in checked:
         subject_template, body_template = _LOW_REVIEW_UNLINKED[locale]
+    # An incident about no order (an automation that stopped) names its cause (quill, #119).
+    if (kind, locale) in _INCIDENT_WITHOUT_ORDER and "receipt_id" not in checked:
+        subject_template, body_template = _INCIDENT_WITHOUT_ORDER[(kind, locale)]
     subject = subject_template.format_map(_Missing(values))
     body = body_template.format_map(_Missing(values))
     text = f"{body}\n\n{words['open']}: {link}\n\n{words['footer']}\n"
@@ -470,6 +473,34 @@ _LOW_REVIEW_UNLINKED: Mapping[Locale, tuple[str, str]] = {
 }
 
 
+_INCIDENT_WITHOUT_ORDER: Mapping[tuple[NotificationKind, Locale], tuple[str, str]] = {
+    (NotificationKind.INCIDENT_OPENED, Locale.EN): (
+        "Needs attention: {cause}",
+        "An incident was opened ({cause}, severity {severity}).",
+    ),
+    (NotificationKind.INCIDENT_OPENED, Locale.HE): (
+        "דורש טיפול: {cause}",
+        "נפתח אירוע ({cause}, חומרה {severity}).",
+    ),
+    (NotificationKind.INCIDENT_ESCALATED, Locale.EN): (
+        "Escalated: {cause}",
+        "An incident ({cause}, severity {severity}) has waited past its limit and needs you now.",
+    ),
+    (NotificationKind.INCIDENT_ESCALATED, Locale.HE): (
+        "הוסלם: {cause}",
+        "אירוע ({cause}, חומרה {severity}) חיכה מעבר למותר ודורש אתכם עכשיו.",
+    ),
+    (NotificationKind.INCIDENT_RESOLVED, Locale.EN): (
+        "Resolved: {cause}",
+        "The incident ({cause}) was resolved on evidence.",
+    ),
+    (NotificationKind.INCIDENT_RESOLVED, Locale.HE): (
+        "נפתר: {cause}",
+        "האירוע ({cause}) נפתר על סמך ראיה.",
+    ),
+}
+
+
 class _Missing(dict[str, str]):
     def __missing__(self, key: str) -> str:
         return "-"
@@ -484,7 +515,7 @@ class EmailDeliverer:
     clock: Callable[[], datetime]
     reply_to: str
     office_url: str
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def deliver(self, delivery: PendingDelivery) -> None:
         message = delivery.message
@@ -506,7 +537,8 @@ class EmailDeliverer:
                 error="no_member",
             )
             return
-        rendered = render_email(kind, locale, params, link=self._link(kind, params))
+        link = self._link(kind, params, organization_id)
+        rendered = render_email(kind, locale, params, link=link)
         try:
             receipt = await self.email.send(
                 EmailMessage(
@@ -538,7 +570,9 @@ class EmailDeliverer:
             error=None,
         )
 
-    def _link(self, kind: NotificationKind, params: Mapping[str, str]) -> str:
+    def _link(
+        self, kind: NotificationKind, params: Mapping[str, str], organization_id: uuid.UUID
+    ) -> str:
         base = self.office_url.rstrip("/")
         incident = params.get("incident_id")
         if (
@@ -550,7 +584,8 @@ class EmailDeliverer:
             }
             and incident
         ):
-            return f"{base}/incidents/{incident}"
+            # The address owns the workspace (clients #48): a member of several lands on it.
+            return f"{base}/incidents/{incident}?workspace={organization_id}"
         if kind.is_security:
             return f"{base}/settings/security"
         return f"{base}/notifications"
@@ -670,7 +705,7 @@ class SecurityNotices:
 
     store: SecurityNoticeStore
     clock: Callable[[], datetime]
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def signed_in(
         self, user_id: uuid.UUID, *, session_id: uuid.UUID, user_agent: str | None

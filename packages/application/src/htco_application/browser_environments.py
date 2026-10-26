@@ -27,7 +27,7 @@ from typing import Any, Protocol
 
 from htco_application.access.authentication import AuthContext, NoMembershipError
 from htco_application.access.policy import Capability, Outcome, ShopRef, decide
-from htco_application.jobs import JsonValue
+from htco_application.kernel import EVENTS_DESTINATION, JsonValue, ShopOwners
 from htco_application.messaging import OutboxMessage
 from htco_application.shops import ShopAccessDeniedError, ShopNotFoundError
 from htco_domain.actors import ActorRef
@@ -40,7 +40,6 @@ from htco_domain.browser import (
 )
 
 STATUS_CHANGED_EVENT = "browser.environment_status_changed.v1"
-EVENT_DESTINATION = "events.publish"
 CREATION_FLAG = "browser_environments"
 
 
@@ -95,10 +94,6 @@ class EnvironmentStore(Protocol):
         by: ActorRef,
         correlation_id: str,
     ) -> None: ...
-
-
-class ShopOwners(Protocol):
-    def organization_of_shop(self, shop_id: uuid.UUID) -> uuid.UUID | None: ...
 
 
 class ShopEnvironmentRegistry(Protocol):
@@ -169,7 +164,7 @@ def status_event(change: EnvironmentChange) -> OutboxMessage:
     return OutboxMessage(
         organization_id=change.organization_id,
         shop_id=change.shop_id,
-        destination=EVENT_DESTINATION,
+        destination=EVENTS_DESTINATION,
         # One event per recorded change: a change is one (environment, target, time).
         idempotency_key=(
             f"{STATUS_CHANGED_EVENT}:{change.environment_id}:{change.to_status.value}:"

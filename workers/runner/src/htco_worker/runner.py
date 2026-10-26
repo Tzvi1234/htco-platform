@@ -25,13 +25,8 @@ from datetime import datetime, timedelta
 import anyio
 import structlog
 
-from htco_application.jobs import (
-    ClaimedJob,
-    JobQueue,
-    WorkerHeartbeats,
-    describe_error,
-    due_schedule_jobs,
-)
+from htco_application.jobs import ClaimedJob, JobQueue, WorkerHeartbeats, due_schedule_jobs
+from htco_application.kernel import describe_error
 from htco_domain.jobs import JobState, Schedule, plan_after_failure
 
 type JobHandler = Callable[[ClaimedJob], Awaitable[None]]

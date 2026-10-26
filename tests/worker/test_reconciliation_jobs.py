@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
-from htco_application.maintenance import TenantShop
+from htco_application.kernel import TenantShop
 from htco_application.order_intake import (
     ORDER_SYNC_JOB,
     RECONCILIATION_TICK,

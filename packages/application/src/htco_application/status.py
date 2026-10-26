@@ -27,7 +27,7 @@ from typing import Protocol
 from htco_application.access.authentication import AuthContext
 from htco_application.access.policy import Capability, Outcome, Scope, ShopRef, decide
 from htco_application.automation.durable import StateChange
-from htco_application.jobs import JsonValue
+from htco_application.kernel import EVENTS_DESTINATION, JsonValue
 from htco_application.messaging import OutboxMessage
 from htco_application.shops import OrganizationRequiredError
 from htco_domain.actions import ActionState
@@ -35,7 +35,6 @@ from htco_domain.automation import ExecutionState
 from htco_domain.status import StatusKind, WaitingReason, status_kind, waiting_reason
 
 EXECUTION_STATE_CHANGED = "automations.execution_state_changed.v1"
-EVENT_DESTINATION = "events.publish"
 
 
 def execution_state_event(change: StateChange) -> OutboxMessage:
@@ -51,7 +50,7 @@ def execution_state_event(change: StateChange) -> OutboxMessage:
     }
     return OutboxMessage(
         organization_id=change.organization_id,
-        destination=EVENT_DESTINATION,
+        destination=EVENTS_DESTINATION,
         # One message per recorded change: the same state can be reached twice at one instant
         # (a retry), so the key names the change itself rather than the state and the time.
         idempotency_key=f"{EXECUTION_STATE_CHANGED}:{change.execution_id}:{uuid.uuid7()}",

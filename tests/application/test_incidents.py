@@ -182,11 +182,49 @@ async def test_an_escalation_is_announced_once_with_what_it_was() -> None:
     )
 
     [event] = store.events.of(INCIDENT_ESCALATED)
-    assert event.idempotency_key == f"{INCIDENT_ESCALATED}:{incident.id}"
+    # One per escalation (quill on #119): the key ends with the escalation's own ID (Codex, #163).
+    escalation = event.payload["escalation_id"]
+    assert event.idempotency_key == f"{INCIDENT_ESCALATED}:{incident.id}:{escalation}"
+    assert uuid.UUID(str(escalation)).version == 7
     assert event.payload["incident_id"] == str(incident.id)
     assert event.payload["severity"] == "medium"
     assert event.payload["escalated_from"] == "detected"
     assert event.payload["receipt_id"] == 51
+
+
+async def test_a_second_escalation_is_announced_again() -> None:
+    """Quill on #119: an incident moved back and escalated again tells the owner again."""
+    store = MemoryIncidentStore()
+    now = [NOW]
+    incidents = IncidentService(store, clock=lambda: now[0])
+    incident, _ = await incidents.open(detection(), actor=ACTOR)
+
+    await incidents.move(ORG, incident.id, IncidentState.ESCALATED, actor=ACTOR)
+    now[0] += timedelta(hours=1)
+    await incidents.move(ORG, incident.id, IncidentState.TRIAGED, actor=OWNER, note="owner_triage")
+    now[0] += timedelta(days=4)
+    await incidents.move(ORG, incident.id, IncidentState.ESCALATED, actor=ACTOR)
+
+    first, second = store.events.of(INCIDENT_ESCALATED)
+    assert first.idempotency_key != second.idempotency_key
+    assert second.payload["escalated_from"] == "triaged"
+
+
+async def test_two_escalations_in_one_second_are_two_announcements() -> None:
+    """Codex on #163: escalated, moved back and escalated again within one second (one fixed
+    clock) are two escalations, each with its own key."""
+    store = MemoryIncidentStore()
+    incidents = service(store)
+    incident, _ = await incidents.open(detection(), actor=ACTOR)
+
+    await incidents.move(ORG, incident.id, IncidentState.ESCALATED, actor=ACTOR)
+    await incidents.move(ORG, incident.id, IncidentState.TRIAGED, actor=OWNER, note="owner_triage")
+    await incidents.move(ORG, incident.id, IncidentState.ESCALATED, actor=ACTOR)
+
+    first, second = store.events.of(INCIDENT_ESCALATED)
+    assert first.idempotency_key != second.idempotency_key
+    assert first.payload["escalation_id"] != second.payload["escalation_id"]
+    assert first.payload["escalated_at"] == second.payload["escalated_at"]
 
 
 async def test_other_steps_announce_no_escalation() -> None:
