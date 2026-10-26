@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_worker;
-select plan(18);
+select plan(22);
 
 insert into auth.users (id, email) values
   ('27a10000-0000-0000-0000-000000000001', 'owner-r@example.test'),
@@ -93,6 +93,8 @@ set local role authenticated;
 select is((select count(*)::int from app.relay_items), 1, 'a viewer with the shop sees its item');
 select throws_ok($$ select code from app.relay_item_codes $$, '42501', null,
   'a viewer never reads the code');
+select throws_ok($$ select carrier, tracking_last4, tracking_fingerprint from app.relay_items $$,
+  '42501', null, 'nor the pasted tracking''s carrier, last four or fingerprint');
 reset role;
 
 -- The worker ---------------------------------------------------------------------------------
@@ -101,6 +103,21 @@ set local role htco_worker;
 select is((select count(*)::int from app.relay_items), 1, 'the worker sees its job''s organization only');
 select throws_ok($$ select code from app.relay_item_codes $$, '42501', null,
   'the worker never reads a code');
+select throws_ok(
+  $$insert into app.relay_items (id, organization_id, shop_id, receipt_id, state, paid_at, opened_at, updated_at)
+    values (gen_random_uuid(), '27b10000-0000-0000-0000-000000000000',
+            '27c10000-0000-0000-0000-000000000001', 509, 'handed_off', now(), now(), now())$$,
+  '42501', null, 'the worker opens an item as awaiting tracking only, never handed off'
+);
+select lives_ok(
+  $$delete from app.relay_item_codes where relay_item_id = '27d10000-0000-0000-0000-000000000001'$$,
+  'a delete of an open item''s code runs'
+);
+select is(
+  (select count(*)::int from app.relay_item_codes
+   where relay_item_id = '27d10000-0000-0000-0000-000000000001'),
+  1, 'but an open item''s code stays: the worker deletes a closed item''s code only'
+);
 select lives_ok(
   $$update app.relay_items set state = 'closed', closed_reason = 'tracking_on_etsy', closed_at = now(), updated_at = now()
     where id = '27d10000-0000-0000-0000-000000000001'$$,

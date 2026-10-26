@@ -49,13 +49,10 @@ from htco_application.incident_center import (
 from htco_application.incidents import IncidentRecord, IncidentService, StaleIncident
 from htco_application.notifications import Notification
 from htco_application.relay import (
-    LIST_LIMIT as RELAY_LIST_LIMIT,
-)
-from htco_application.relay import (
     RelayCursorError,
     RelayItem,
     RelayStore,
-    list_relay_items,
+    list_relay_page,
 )
 from htco_application.shops import OrganizationRequiredError
 from htco_domain.actors import ActorKind, ActorRef
@@ -467,8 +464,8 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
         store = _relay(center)
         after = None if cursor is None else decode_cursor(cursor)
         try:
-            items = await _run(
-                lambda: list_relay_items(
+            items, more = await _run(
+                lambda: list_relay_page(
                     auth, store, organization_id=organization_id, now=clock(), after=after
                 )
             )
@@ -479,7 +476,6 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
         except PermissionError, NoMembershipError:
             raise ProblemError(FORBIDDEN) from None
         response.headers["Cache-Control"] = "no-store"
-        more = len(items) == RELAY_LIST_LIMIT
         return RelayItemListView(
             items=[_relay_view(i) for i in items],
             next_cursor=encode_cursor(items[-1].id) if more else None,

@@ -73,7 +73,10 @@ revoke all on app.relay_items, app.relay_item_codes from public, anon, authentic
 
 -- Members: their shops' relay items. Never the codes table: a code is read only through the
 -- API's reveal, which checks the buyer-data right and audits it in the same transaction.
-grant select on app.relay_items to authenticated;
+-- Column by column (local Codex on #159): never the pasted tracking's carrier, last four or
+-- fingerprint, which the API shows only to the roles that may act on the relay.
+grant select (id, organization_id, shop_id, receipt_id, state, closed_reason, paid_at, opened_at,
+              updated_at, closed_at) on app.relay_items to authenticated;
 create policy relay_items_select on app.relay_items for select to authenticated
   using (
     organization_id = any (array(select private.user_org_ids()))
@@ -83,15 +86,35 @@ create policy relay_items_select on app.relay_items for select to authenticated
 -- The worker: its job's organization only. It opens items, closes them on evidence, and deletes
 -- a closed item's code; it never reads a code.
 -- Delete: the disconnect purge removes a shop's items, and their codes cascade (ADR-0018).
-grant select, insert, delete on app.relay_items to htco_worker;
+-- It opens an item only as `awaiting_tracking` with no tracking (local Codex on #159): the
+-- pasted tracking is the API's alone.
+grant select, delete on app.relay_items to htco_worker;
+grant insert (id, organization_id, shop_id, receipt_id, state, paid_at, opened_at, updated_at)
+  on app.relay_items to htco_worker;
 grant update (state, closed_reason, updated_at, closed_at) on app.relay_items to htco_worker;
-create policy relay_items_worker on app.relay_items for all to htco_worker
+create policy relay_items_worker_select on app.relay_items for select to htco_worker
+  using (organization_id = (select private.worker_organization_id()));
+create policy relay_items_worker_insert on app.relay_items for insert to htco_worker
+  with check (
+    organization_id = (select private.worker_organization_id())
+    and state = 'awaiting_tracking'
+  );
+create policy relay_items_worker_update on app.relay_items for update to htco_worker
   using (organization_id = (select private.worker_organization_id()))
   with check (organization_id = (select private.worker_organization_id()));
+create policy relay_items_worker_delete on app.relay_items for delete to htco_worker
+  using (organization_id = (select private.worker_organization_id()));
 grant delete on app.relay_item_codes to htco_worker;
 grant select (relay_item_id, organization_id) on app.relay_item_codes to htco_worker;
+-- Only a closed item's code (local Codex on #159); the purge's cascade removes the rest.
 create policy relay_item_codes_worker on app.relay_item_codes for delete to htco_worker
-  using (organization_id = (select private.worker_organization_id()));
+  using (
+    organization_id = (select private.worker_organization_id())
+    and exists (
+      select 1 from app.relay_items i
+      where i.id = relay_item_id and i.state = 'closed'
+    )
+  );
 -- A delete that names its row needs a select policy to see it; the column grant above still keeps
 -- the code itself out of the worker's reach.
 create policy relay_item_codes_worker_select on app.relay_item_codes for select to htco_worker

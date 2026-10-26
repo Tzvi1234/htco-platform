@@ -111,6 +111,17 @@ async def test_list__pages_past_the_first_200_with_a_cursor() -> None:
     assert bad.status_code == 422
 
 
+async def test_list__a_page_of_exactly_200_has_no_next_cursor() -> None:
+    """Local Codex on #159: the last page may be full; it still says nothing follows."""
+    store = MemoryRelayStore()
+    for receipt in range(1, LIST_LIMIT + 1):
+        an_item(store, receipt=receipt)
+    async with client(store) as http:
+        page = await http.get("/v1/relay-items")
+    assert len(page.json()["items"]) == LIST_LIMIT
+    assert page.json()["next_cursor"] is None
+
+
 async def test_unwired__503_relay_unavailable() -> None:
     async with client(None) as http:
         answer = await http.get("/v1/relay-items")

@@ -286,16 +286,17 @@ class RelayCursorError(ValueError):
     """The cursor names no relay item of the organization."""
 
 
-def list_relay_items(
+def list_relay_page(
     auth: AuthContext,
     store: RelayStore,
     *,
     organization_id: uuid.UUID | None,
     now: datetime,
     after: uuid.UUID | None = None,
-) -> tuple[RelayItem, ...]:
-    """One page (`LIST_LIMIT`) of the open items of the shops the caller may act on (update
-    incidents), oldest first; `after` (the last item of the previous page) continues it. Raises
+) -> tuple[tuple[RelayItem, ...], bool]:
+    """One page (`LIST_LIMIT`), and whether more follow, of the open items of the shops the
+    caller may act on (update incidents), oldest first; `after` (the last item of the previous
+    page) continues it. Raises
     `PermissionError` for a role that may not, `RelayCursorError` for an unknown cursor."""
     organization_id = _organization(auth, organization_id)
     principal = auth.principal_for(organization_id)
@@ -306,7 +307,22 @@ def list_relay_items(
     start = None if after is None else store.item(organization_id, after)
     if after is not None and start is None:
         raise RelayCursorError("no such cursor")
-    return store.open_items(organization_id, shop_ids=shops, limit=LIST_LIMIT, after=start)
+    # One more than the page, so a page of exactly LIST_LIMIT says there is nothing after it.
+    found = store.open_items(organization_id, shop_ids=shops, limit=LIST_LIMIT + 1, after=start)
+    return found[:LIST_LIMIT], len(found) > LIST_LIMIT
+
+
+def list_relay_items(
+    auth: AuthContext,
+    store: RelayStore,
+    *,
+    organization_id: uuid.UUID | None,
+    now: datetime,
+    after: uuid.UUID | None = None,
+) -> tuple[RelayItem, ...]:
+    """The page's items only (see `list_relay_page`)."""
+    items, _ = list_relay_page(auth, store, organization_id=organization_id, now=now, after=after)
+    return items
 
 
 def submit_tracking(  # noqa: PLR0913 - the caller, the item and the pasted tracking
