@@ -40,7 +40,7 @@ Accepted ADRs are not rewritten. Two things may be added later: a status change,
 | [0023](0023-routing-modes-and-difficulty-assessment.md) | Per-employee routing mode (routed or pinned to a catalog alias); difficulty by rules, then benchmarked Jev, never above the cap | Accepted (Phase 9); amends 0015 |
 | [0024](0024-knowledge-base-and-retrieval.md) | Shared knowledge base on pgvector in Supabase; structured tools, then hybrid search, then the model | Accepted (Phase 9, slice 9.10) |
 | [0025](0025-browser-and-network-providers.md) | A layered `BrowserProvider` contract with `ManagedChromiumProvider` as its only implementation; honest Browser Configuration Profiles; browser work dispatched to the browser worker and resumed through `submit`; an optional per-shop egress through `NetworkProvider`; Browser Use earlier through the gateway; Valkey only where Postgres falls short | Accepted (Phase 8A); amends 0019, 0020; extended by 0026 |
-| [0026](0026-browser-live-view-and-human-takeover.md) | Browser Live View and Human Takeover over the session's own CDP pipe: a backend-relayed screencast, one leased Controller, no frames stored, headless confirmed by a spike, the rest of the Chromium privacy pack | Accepted (Phase 8A, slice 8A.11); extends 0025 |
+| [0026](0026-browser-live-view-and-human-takeover.md) | Browser Live View and Human Takeover over the session's own CDP pipe: a backend-relayed screencast, one leased Controller, a takeover that never writes, no frames stored, headless confirmed by a spike, the rest of the Chromium privacy pack | Accepted (Phase 8A, slice 8A.11); extends 0025 |
 
 Client decisions live in `htco-clients/docs/adr/`.
 
