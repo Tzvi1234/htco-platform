@@ -95,6 +95,9 @@ select ok(not has_table_privilege('htco_browser', 'jobs.inbox', 'select, insert,
 
 -- One organization at a time, and only the health and sign-in edges.
 set local role htco_browser;
+-- Re-plan the status triggers as this role (a plan cached for postgres would hide a missing
+-- right, such as usage on `private`).
+discard plans;
 select set_config('htco.organization_id', 'b8c00000-0000-0000-0000-000000000000', true);
 select lives_ok(
   $$ update app.shop_browser_environments set last_health_at = now(), last_health_ok = false

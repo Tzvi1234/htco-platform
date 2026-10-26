@@ -44,29 +44,29 @@ language sql immutable set search_path = '' as $$
   );
 $$;
 
-create or replace function private.check_browser_environment_status() returns trigger
+-- The status trigger calls `private` helpers, which the browser role cannot see (it has no
+-- usage on that schema), so it now runs with its owner's rights. It only checks the edge.
+alter function private.check_browser_environment_status() security definer;
+
+-- The browser role's own edges, checked with the caller's rights (`current_user` is the role
+-- that changes the row), and with the list inline, so nothing in `private` is needed.
+create function private.check_browser_role_status() returns trigger
 language plpgsql set search_path = '' as $$
 begin
-  if tg_op = 'INSERT' then
-    if new.status <> 'provisioning' then
-      raise exception 'browser environment: created % instead of provisioning', new.status
-        using errcode = '23514';
-    end if;
-    return new;
-  end if;
-  if new.status <> old.status
-     and not private.browser_environment_edge_allowed(old.status, new.status) then
-    raise exception 'browser environment: % -> % is not allowed', old.status, new.status
-      using errcode = '23514';
-  end if;
   if new.status <> old.status and current_user = 'htco_browser'
-     and not private.browser_role_edge_allowed(old.status, new.status) then
+     and (old.status, new.status) not in (
+       ('ready', 'degraded'), ('degraded', 'ready'),
+       ('ready', 'login_required'), ('provisioning', 'login_required')
+     ) then
     raise exception 'browser environment: the browser worker cannot move % -> %',
       old.status, new.status using errcode = '42501';
   end if;
   return new;
 end;
 $$;
+create trigger shop_browser_environments_check_browser_role
+  before update of status on app.shop_browser_environments
+  for each row execute function private.check_browser_role_status();
 
 -- The history: the latest health results (read) and its own system rows (append).
 grant select, insert on app.browser_environment_events to htco_browser;
