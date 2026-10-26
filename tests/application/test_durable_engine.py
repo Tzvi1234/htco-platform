@@ -54,7 +54,7 @@ def registry(**changes: Any) -> Registry:
 
 
 class World:
-    def __init__(self, *, handlers: bool = True, **changes: Any) -> None:
+    def __init__(self, *, handlers: bool = True, output_check: Any = None, **changes: Any) -> None:
         self.store = MemoryExecutionStore()
         self.book = EffectBook()
         self.now = NOW
@@ -66,6 +66,7 @@ class World:
             clock=lambda: self.now,
             jitter=lambda: 1.0,
             gateway=UnavailableGateway(),
+            output_check=output_check,
         )
 
 
@@ -495,3 +496,44 @@ async def test_execution_jobs__carry_the_triggers_correlation_and_the_execution_
 
     [job] = world.store.jobs
     assert (job.correlation_id, job.causation_id) == ("corr-trace", str(execution.id))
+
+
+# --- #127: a completed execution keeps its handler's output, once checked ------------------
+
+
+async def test_completed__the_checked_output__kept_with_the_execution() -> None:
+    checked: list[tuple[str, dict[str, Any]]] = []
+
+    def check(automation_id: str, output: Any) -> dict[str, Any]:
+        checked.append((automation_id, dict(output)))
+        return dict(output)
+
+    world = World(output_check=check)
+    execution = world.engine.trigger(paid())
+
+    done = await world.engine.execute(execution.id, worker=WORKER)
+
+    stored = world.store.load(execution.id)
+    assert stored is not None
+    assert done.output == {"order": "3412987711"}
+    assert stored.execution.output == {"order": "3412987711"}
+    assert checked == [("etsy-order-intake", {"order": "3412987711"})]
+
+
+async def test_completed__an_output_the_check_refuses__not_kept() -> None:
+    world = World(output_check=lambda automation_id, output: None)  # noqa: ARG005
+    execution = world.engine.trigger(paid())
+
+    done = await world.engine.execute(execution.id, worker=WORKER)
+
+    assert done.state is ExecutionState.SUCCEEDED
+    assert done.output is None
+
+
+async def test_completed__without_an_output_check__nothing_kept() -> None:
+    world = World()
+    execution = world.engine.trigger(paid())
+
+    done = await world.engine.execute(execution.id, worker=WORKER)
+
+    assert done.output is None
