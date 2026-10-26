@@ -813,4 +813,4 @@ def test_run_steps__interrupted__stops_the_step_and_its_children_before_raising(
         assert not _alive(child), "the step's child outlived the interrupted runner"
     finally:
         with contextlib.suppress(ProcessLookupError):
-            os.kill(child, signal.SIGKILL)
+            os.kill(child, signal.SIGTERM)

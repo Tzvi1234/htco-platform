@@ -233,6 +233,49 @@ def _step_seconds(step: Step, job_deadline: float) -> float:
     return min(step.timeout_minutes * _MINUTE, remaining)
 
 
+def _run_one(  # noqa: PLR0913 - one step: its script, env, where, its output and its time
+    script: Path,
+    env: dict[str, str],
+    *,
+    cwd: Path,
+    output: Path,
+    sink: IO[str] | None,
+    seconds: float,
+) -> tuple[int, bool]:
+    """Run one step's script for at most `seconds`: its exit code, and whether it timed out."""
+    timed_out = False
+    # The step writes to a file, not a pipe: closing or draining a pipe can block for as long
+    # as any process that inherited it lives (Codex on #99).
+    done = threading.Event()
+    with output.open("wb") as out:
+        tail = threading.Thread(target=_tail, args=(output, done, sink), daemon=True)
+        tail.start()
+        with subprocess.Popen(  # noqa: S603 - runs the repository's own workflow steps
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],  # noqa: S607
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            # Its own process group, so a timeout ends everything the step started.
+            start_new_session=True,
+        ) as process:
+            try:
+                process.wait(timeout=seconds)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                _stop_group(process)
+            except BaseException:
+                # Ctrl-C reaches only the runner (the step has its own session): stop the
+                # step's group before the interrupt ends the run and frees the lock.
+                _stop_group(process)
+                raise
+            finally:
+                done.set()
+                tail.join()  # bounded: it only reads to where the step ended
+    return process.returncode, timed_out
+
+
 def run_steps(  # noqa: PLR0913 - the job's steps, env and where to run them
     steps: list[Step],
     job_env: dict[str, str],
@@ -275,37 +318,16 @@ def run_steps(  # noqa: PLR0913 - the job's steps, env and where to run them
                 "PATH": os.pathsep.join([*reversed(added_paths), os.environ.get("PATH", "")]),
             }
             started = time.monotonic()
-            timed_out = False
-            # The step writes to a file, not a pipe: closing or draining a pipe can block for
-            # as long as any process that inherited it lives (Codex on #99).
-            output = temp / f"step-{number}.out"
-            done = threading.Event()
-            with output.open("wb") as out:
-                tail = threading.Thread(target=_tail, args=(output, done, sink), daemon=True)
-                tail.start()
-                with subprocess.Popen(  # noqa: S603 - runs the repository's own workflow steps
-                    ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],  # noqa: S607
-                    cwd=cwd,
-                    env=env,
-                    stdin=subprocess.DEVNULL,
-                    stdout=out,
-                    stderr=subprocess.STDOUT,
-                    # Its own process group, so a timeout ends everything the step started.
-                    start_new_session=True,
-                ) as process:
-                    try:
-                        process.wait(timeout=_step_seconds(step, job_deadline))
-                    except subprocess.TimeoutExpired:
-                        timed_out = True
-                        _stop_group(process)
-                done.set()
-                tail.join()  # bounded: it only reads to the end of the file
+            returncode, timed_out = _run_one(
+                script, env, cwd=cwd, output=temp / f"step-{number}.out", sink=sink,
+                seconds=_step_seconds(step, job_deadline),
+            )  # fmt: skip
             if timed_out:
                 message = f"\n=== {step.name}: timed out, stopped with its processes\n"
                 sys.stdout.write(message)
                 if sink is not None:
                     sink.write(message)
-            passed = process.returncode == 0 and not timed_out
+            passed = returncode == 0 and not timed_out
             results.append(
                 StepResult(step.name, True, passed, time.monotonic() - started, timed_out)
             )
