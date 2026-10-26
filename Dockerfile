@@ -31,7 +31,6 @@ COPY --from=build /app/.venv /app/.venv
 # The worker's Action Gateway reads the reviewed registry and the action contracts (slice 5.4).
 COPY --from=build /src/registry /app/registry
 COPY --from=build /src/packages/contracts/actions /app/packages/contracts/actions
-COPY --from=build /src/packages/contracts/automations /app/packages/contracts/automations
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \

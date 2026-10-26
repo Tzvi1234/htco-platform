@@ -73,8 +73,6 @@ class WorkerSettings(BaseSettings):
     # The reviewed registry and the action contracts, copied into the image next to the code.
     registry_path: Path = Path("registry")
     action_schemas_path: Path = Path("packages/contracts/actions")
-    # The automations' output contracts: a completed run keeps only an output they accept (#127).
-    automation_schemas_path: Path = Path("packages/contracts/automations")
     # Email (slice 6.4): `log` (default) sends nothing and logs the kind and key; `resend` sends
     # through Resend, only once the owner verified office.ht-co.app (SPF, DKIM, DMARC).
     email_provider: Literal["log", "resend"] = "log"

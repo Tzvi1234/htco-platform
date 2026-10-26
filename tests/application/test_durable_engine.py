@@ -6,7 +6,7 @@ import logging
 import threading
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -560,6 +560,7 @@ async def test_completed__a_check_that_raises__the_run_still_succeeds_without_ou
 class OutputRefusingStore(MemoryExecutionStore):
     """A store whose database refuses the output (for example its size check)."""
 
+    @override
     def advance(self, before: Any, steps: Any, **kwargs: Any) -> bool:
         after, _ = steps[-1]
         if after.output is not None:

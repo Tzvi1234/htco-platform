@@ -105,7 +105,7 @@ class Offload(Protocol):
 
 
 # What a completed run's output may be kept as (#127): the output to store, or None to keep
-# nothing (no contract, or the contract refused it). `ContractOutputs.check` in production.
+# nothing. `TypedOutputs.check` in production.
 type OutputCheck = Callable[[str, Mapping[str, JsonValue]], Mapping[str, JsonValue] | None]
 
 
@@ -374,15 +374,37 @@ class DurableAutomationEngine:
             )
             await self._offload(lambda: self._store.advance(running, [(waiting, change)]))
             return waiting
-        kept = (
-            None
-            if self._output_check is None
-            else self._output_check(definition.id, outcome.output)
-        )
+        # The handler's work is done: from here nothing may fail the run (#158). A check or a
+        # store that refuses the output costs the output, never the success.
+        kept = self._kept_output(definition.id, outcome.output)
         done = replace(running.transition(ExecutionState.SUCCEEDED), output=kept)
         change = self._change(running, running.state, done.state, worker, now)
-        await self._offload(lambda: self._store.advance(running, [(done, change)]))
+        try:
+            await self._offload(lambda: self._store.advance(running, [(done, change)]))
+        except Exception as error:
+            if done.output is None:
+                raise
+            _log.warning(
+                "automation.output_not_saved",
+                extra={"automation_id": definition.id, "error": describe_error(error)},
+            )
+            done = replace(done, output=None)
+            await self._offload(lambda: self._store.advance(running, [(done, change)]))
         return done
+
+    def _kept_output(
+        self, automation_id: str, output: Mapping[str, JsonValue]
+    ) -> Mapping[str, JsonValue] | None:
+        if self._output_check is None:
+            return None
+        try:
+            return self._output_check(automation_id, output)
+        except Exception as error:  # a bug in the check must not fail a finished run
+            _log.warning(
+                "automation.output_check_failed",
+                extra={"automation_id": automation_id, "error": describe_error(error)},
+            )
+            return None
 
     def _context(
         self, running: AutomationExecution, payload: Mapping[str, JsonValue]

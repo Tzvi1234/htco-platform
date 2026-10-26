@@ -28,7 +28,7 @@ from htco_application.automation.durable import (
     Handler,
     OutputCheck,
 )
-from htco_application.automation.outputs import ContractOutputs
+from htco_application.automation.outputs import TypedOutputs
 from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_tokens import VaultAccessTokenProvider
 from htco_application.etsy_webhooks import (
@@ -663,9 +663,10 @@ async def _serve(settings: WorkerSettings) -> None:
     gateway = worker_gateway(settings, database, etsy.gateway_adapter)
     deployed = {} if vault is None or adapter is None else intake_handlers(database, vault)
     deployed |= fulfillment_handlers(database, None if adapter is None else vault)
-    # A completed run keeps its output only when its automation's contract accepts it (#127).
-    outputs = ContractOutputs(settings.automation_schemas_path)
-    engine = worker_engine(database, gateway=gateway, handlers=deployed, output_check=outputs.check)
+    # A completed run keeps only what its automation's typed output model allows (#127).
+    engine = worker_engine(
+        database, gateway=gateway, handlers=deployed, output_check=TypedOutputs().check
+    )
     handlers |= outbox_handlers(
         PostgresOutbox(database),
         notification_deliverers(

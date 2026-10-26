@@ -1,6 +1,7 @@
 -- A completed execution keeps its handler output (#127): per-run identifiers and counts, for
--- example Tracking Sync's `{"receipts": 2, "recorded": 1}`. The worker writes it only after the
--- automation's output contract accepted it (`ContractOutputs`), so it is never buyer data. The
+-- example Tracking Sync's `{"receipts": 2, "recorded": 1}`. The worker writes only what the
+-- automation's typed output model allows (`TypedOutputs`: closed keys, integers, codes, flags,
+-- UUIDs), so it is never buyer data. The
 -- API shows it to the Owner and Admins; a signed-in user never reads it directly.
 --
 -- Safe on the live database: one nullable column and a column-level grant.
