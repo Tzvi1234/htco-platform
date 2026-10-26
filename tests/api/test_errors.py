@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from typing import Annotated
 
 import httpx
@@ -149,7 +150,9 @@ _PATH_SEGMENT = st.text(
 )
 
 
-@settings(max_examples=60, deadline=None)
+# Each example is one request (#115): building an app per example made this test take 45 s
+# locally, which looked like a stall. The deadline keeps it that way.
+@settings(max_examples=60, deadline=timedelta(milliseconds=500))
 @given(segments=st.lists(_PATH_SEGMENT, min_size=1, max_size=4))
 def test_any_unknown_path__is_a_404_problem_never_a_500(segments: list[str]) -> None:
     path = "/" + "/".join(segments)
