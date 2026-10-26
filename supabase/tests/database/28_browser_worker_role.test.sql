@@ -41,8 +41,8 @@ select ok(not has_table_privilege('htco_browser', 'app.shop_integrations', 'sele
   'AC-8A.1.2: the browser role has no right on shop_integrations');
 select ok(not has_any_column_privilege('htco_browser', 'app.shop_integrations', 'select'),
   'AC-8A.1.2: nor on any of its columns');
-select ok(has_schema_privilege('htco_browser', 'jobs', 'usage'),
-  'the browser role reaches the jobs schema, for its status events only (8A.3, test 31)');
+select ok(not has_schema_privilege('htco_browser', 'jobs', 'usage'),
+  'the browser role cannot reach the jobs schema: its status event goes through app.browser_publish_status_change (sage on #170)');
 select ok(not has_schema_privilege('htco_browser', 'private', 'usage'),
   'the browser role cannot reach the private schema');
 select is(
@@ -53,8 +53,8 @@ select is(
     order by 1
   ),
   array['app.browser_environment_events', 'app.browser_profile_archives', 'app.browser_sessions',
-        'audit.audit_log', 'jobs.jobs', 'jobs.outbox'],
-  'AC-8A.1.2: the browser role holds table rights on its archives, its sessions (8A.2), the history, the status event (8A.3) and the audit log only'
+        'audit.audit_log'],
+  'AC-8A.1.2: the browser role holds table rights on its archives, its sessions (8A.2), the history (8A.3) and the audit log only'
 );
 select is(
   array(
@@ -64,7 +64,7 @@ select is(
     order by 1
   ),
   array['app.browser_environment_events', 'app.browser_profile_archives', 'app.browser_sessions',
-        'app.shop_browser_environments', 'audit.audit_log', 'jobs.jobs', 'jobs.outbox'],
+        'app.shop_browser_environments', 'audit.audit_log'],
   'AC-8A.1.2: beyond those, its only column rights are on the browser environments'
 );
 select ok(

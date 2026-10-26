@@ -47,7 +47,8 @@ def _environment(row: tuple[Any, ...]) -> BrowserEnvironment:
     )  # fmt: skip
 
 
-def _add_change(connection: psycopg.Connection[Any], change: EnvironmentChange) -> None:
+def _add_change(connection: psycopg.Connection[Any], change: EnvironmentChange) -> uuid.UUID:
+    change_id = uuid.uuid7()
     connection.execute(
         """
         insert into app.browser_environment_events
@@ -56,7 +57,7 @@ def _add_change(connection: psycopg.Connection[Any], change: EnvironmentChange) 
         values (%s, %s, %s, %s, 'transition', %s, %s, %s, %s, %s, %s, %s)
         """,
         [
-            uuid.uuid7(),
+            change_id,
             change.organization_id,
             change.shop_id,
             change.environment_id,
@@ -69,6 +70,7 @@ def _add_change(connection: psycopg.Connection[Any], change: EnvironmentChange) 
             change.occurred_at,
         ],
     )
+    return change_id
 
 
 class PostgresEnvironmentStore:
@@ -261,10 +263,15 @@ class PostgresBrowserEnvironmentStore:
         raise BrowserCannotCreateError(str(environment.shop_id))
 
     def apply(
-        self, after: BrowserEnvironment, change: EnvironmentChange, event: OutboxMessage
+        self,
+        after: BrowserEnvironment,
+        change: EnvironmentChange,
+        event: OutboxMessage,  # noqa: ARG002 - the database builds it from the change
     ) -> bool:
         """The status only (the consent record is never the browser's), with its change and
-        its event, while the row is still in `change.from_status`."""
+        its event, while the row is still in `change.from_status`. The role has no right on
+        the outbox or the queue: the database's one writer, `app.browser_publish_status_change`,
+        builds the event and its delivery job from the change just recorded (sage on #170)."""
         with self._database.connection() as connection, connection.transaction():
             moved = connection.execute(
                 """
@@ -276,8 +283,8 @@ class PostgresBrowserEnvironmentStore:
             ).fetchone()
             if moved is None:
                 return False
-            _add_change(connection, change)
-            add_outbox_in(connection, event, now=change.occurred_at)
+            change_id = _add_change(connection, change)
+            connection.execute("select app.browser_publish_status_change(%s)", [change_id])
         return True
 
     def add_health(

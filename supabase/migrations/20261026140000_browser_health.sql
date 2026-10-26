@@ -11,7 +11,8 @@
 --   its history),
 -- - moves the status only along the health and sign-in edges (`ready` <-> `degraded`,
 --   `ready` or `provisioning` -> `login_required`), each with its `transition` history row,
--- - writes the `browser.environment_status_changed.v1` outbox message and its delivery job.
+-- - publishes the `browser.environment_status_changed.v1` event of a change it recorded, only
+--   through `app.browser_publish_status_change` (no right on the outbox or the queue itself).
 -- Its history rows are always the system's (`actor_kind = 'system'`), never a person's. It
 -- still never sees or writes the consent record, and nothing else changes.
 
@@ -82,28 +83,89 @@ create policy browser_environment_events_browser_insert on app.browser_environme
          or private.browser_role_edge_allowed(from_status, to_status))
   );
 
--- The status event: its outbox message and that message's delivery job, nothing else.
-grant usage on schema jobs to htco_browser;
-grant insert on jobs.outbox to htco_browser;
-grant select (id, organization_id, idempotency_key, destination) on jobs.outbox
-  to htco_browser;
-create policy outbox_browser_insert on jobs.outbox for insert to htco_browser
-  with check (
-    organization_id = (select private.worker_organization_id())
-    and destination = 'events.publish'
-  );
-create policy outbox_browser_select on jobs.outbox for select to htco_browser
-  using (
-    organization_id = (select private.worker_organization_id())
-    and destination = 'events.publish'
-  );
-grant insert on jobs.jobs to htco_browser;
-grant select (id, kind, idempotency_key, organization_id) on jobs.jobs to htco_browser;
-create policy jobs_browser_insert on jobs.jobs for insert to htco_browser
-  with check (
-    organization_id = (select private.worker_organization_id()) and kind = 'outbox.deliver'
-  );
-create policy jobs_browser_select on jobs.jobs for select to htco_browser
-  using (
-    organization_id = (select private.worker_organization_id()) and kind = 'outbox.deliver'
-  );
+-- The status event (sage's SECURITY BLOCK on #170): the browser role has no right on
+-- `jobs.outbox` or `jobs.jobs` at all. It publishes the event of a status change it has just
+-- recorded through this one writer, which builds the message and its delivery job from that
+-- change row only, so the role can never name another event type, another tenant's message,
+-- a dead message or a crafted job.
+create function app.browser_publish_status_change(p_change_id uuid) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare
+  organization uuid := private.worker_organization_id();
+  change app.browser_environment_events%rowtype;
+  current_status text;
+  message uuid;
+  key text;
+begin
+  -- Only `htco_browser` may execute this (the grant below); it acts in its job's organization.
+  if organization is null then
+    raise exception 'browser status event: the browser worker in its organization only'
+      using errcode = '42501';
+  end if;
+  select * into change from app.browser_environment_events
+  where id = p_change_id and organization_id = organization and kind = 'transition'
+    and actor_kind = 'system' and private.browser_role_edge_allowed(from_status, to_status);
+  if not found then
+    raise exception 'browser status event: no such status change of the browser worker'
+      using errcode = '42501';
+  end if;
+  -- The change is the environment's current status: never an event for a change undone.
+  select status into current_status from app.shop_browser_environments
+  where id = change.environment_id and organization_id = organization;
+  if current_status is distinct from change.to_status then
+    raise exception 'browser status event: the environment is no longer %', change.to_status
+      using errcode = '42501';
+  end if;
+  key := 'browser.environment_status_changed.v1:' || change.environment_id || ':'
+    || change.to_status || ':' || change.id;
+  insert into jobs.outbox
+    (id, organization_id, shop_id, destination, idempotency_key, payload, next_attempt_at,
+     correlation_id)
+  values (
+    gen_random_uuid(), organization, change.shop_id, 'events.publish', key,
+    jsonb_build_object(
+      'event_type', 'browser.environment_status_changed.v1',
+      'environment_id', change.environment_id,
+      'shop_id', change.shop_id,
+      'from_status', change.from_status,
+      'to_status', change.to_status,
+      'actor', change.actor_kind || ':' || change.actor_id,
+      'occurred_at', change.occurred_at
+    ),
+    now(), change.correlation_id
+  )
+  on conflict (idempotency_key) do nothing
+  returning id into message;
+  if message is null then  -- published already: the first message stands, no second job
+    select id into message from jobs.outbox where idempotency_key = key;
+    return message;
+  end if;
+  insert into jobs.jobs
+    (id, kind, idempotency_key, organization_id, shop_id, payload, max_attempts,
+     initial_backoff_ms, max_backoff_ms, run_at, correlation_id)
+  values (
+    gen_random_uuid(), 'outbox.deliver', 'outbox:' || message, organization, change.shop_id,
+    jsonb_build_object('outbox_id', message), 3, 10000, 300000, now(), change.correlation_id
+  )
+  on conflict (kind, idempotency_key) do nothing;
+  return message;
+end;
+$$;
+revoke all on function app.browser_publish_status_change(uuid) from public, anon, authenticated;
+grant execute on function app.browser_publish_status_change(uuid) to htco_browser;
+
+-- A dead delivery job marks only its own organization's message dead (Codex P1 on #170).
+create or replace function private.sync_outbox_with_job() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  update jobs.outbox
+  set next_attempt_at = new.run_at,
+      status = case when new.state = 'dead' then 'dead' else status end,
+      last_error = case when new.state = 'dead' then coalesce(new.last_error, last_error)
+                   else last_error end
+  where id = (new.payload ->> 'outbox_id')::uuid and status = 'pending'
+    and organization_id is not distinct from new.organization_id;
+  return null;
+end;
+$$;
+revoke all on function private.sync_outbox_with_job() from public;

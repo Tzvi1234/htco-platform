@@ -6,7 +6,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_browser;
-select plan(28);
+select plan(33);
 
 insert into app.organizations (id, name) values
   ('b8c00000-0000-0000-0000-000000000000', 'Organization Health A'),
@@ -83,12 +83,23 @@ select ok(
 );
 select ok(not has_table_privilege('htco_browser', 'app.browser_environment_events', 'update, delete'),
   'the history stays append-only for the browser role');
+-- Another organization's transition row, for the cross-tenant check.
+insert into app.browser_environment_events
+  (id, organization_id, shop_id, environment_id, kind, from_status, to_status, actor_kind,
+   actor_id, correlation_id, reason, occurred_at)
+values ('b8d30000-0000-0000-0000-000000000001', 'b8d00000-0000-0000-0000-000000000000',
+        'b8d10000-0000-0000-0000-000000000001', 'b8d20000-0000-0000-0000-000000000001',
+        'transition', 'provisioning', 'ready', 'system', 'browser-worker', 'test:b1',
+        'ready', now());
+
 select ok(
-  not has_table_privilege('htco_browser', 'jobs.jobs', 'update, delete')
-  and not has_table_privilege('htco_browser', 'jobs.outbox', 'update, delete')
-  and not has_column_privilege('htco_browser', 'jobs.jobs', 'payload', 'select')
-  and not has_column_privilege('htco_browser', 'jobs.outbox', 'payload', 'select'),
-  'it writes the status event and its delivery job, never claims, edits or reads other jobs'
+  not has_table_privilege('htco_browser', 'jobs.jobs', 'select, insert, update, delete')
+  and not has_table_privilege('htco_browser', 'jobs.outbox', 'select, insert, update, delete')
+  and not has_any_column_privilege('htco_browser', 'jobs.jobs', 'select, insert, update')
+  and not has_any_column_privilege('htco_browser', 'jobs.outbox', 'select, insert, update')
+  and has_function_privilege('htco_browser', 'app.browser_publish_status_change(uuid)', 'execute')
+  and not has_function_privilege('authenticated', 'app.browser_publish_status_change(uuid)', 'execute'),
+  'sage on #170: no right on the outbox or the queue; the status event goes through its one writer'
 );
 select ok(not has_table_privilege('htco_browser', 'jobs.inbox', 'select, insert, update, delete'),
   'it never reaches the inbox');
@@ -190,43 +201,51 @@ select results_eq(
 );
 update app.shop_browser_environments set status = 'degraded'
   where id = 'b8d20000-0000-0000-0000-000000000001';
+-- The status event goes only through `app.browser_publish_status_change` (sage on #170).
+insert into app.browser_environment_events
+  (id, organization_id, shop_id, environment_id, kind, from_status, to_status, actor_kind,
+   actor_id, correlation_id, reason, occurred_at)
+values ('b8c30000-0000-0000-0000-000000000006', 'b8c00000-0000-0000-0000-000000000000',
+        'b8c10000-0000-0000-0000-000000000002', 'b8c20000-0000-0000-0000-000000000002',
+        'transition', 'provisioning', 'login_required', 'system', 'browser-worker', 'test:6',
+        'signed_out', now());
 select lives_ok(
+  $$ select app.browser_publish_status_change('b8c30000-0000-0000-0000-000000000006') $$,
+  'it publishes the event of a status change it recorded'
+);
+select is(
+  app.browser_publish_status_change('b8c30000-0000-0000-0000-000000000006'),
+  app.browser_publish_status_change('b8c30000-0000-0000-0000-000000000006'),
+  'publishing the same change again returns the same message'
+);
+select throws_ok(
+  $$ select app.browser_publish_status_change('b8c30000-0000-0000-0000-000000000002') $$,
+  '42501', null, 'never the event of a change the environment has since left'
+);
+select throws_ok(
+  $$ select app.browser_publish_status_change('b8c30000-0000-0000-0000-000000000001') $$,
+  '42501', null, 'never an event for a health row'
+);
+select throws_ok(
+  $$ select app.browser_publish_status_change('b8d30000-0000-0000-0000-000000000001') $$,
+  '42501', null, 'never another organization''s change'
+);
+select throws_ok(
   $$ insert into jobs.outbox (id, organization_id, shop_id, destination, idempotency_key, payload,
                               next_attempt_at)
      values ('b8c40000-0000-0000-0000-000000000001', 'b8c00000-0000-0000-0000-000000000000',
              'b8c10000-0000-0000-0000-000000000001', 'events.publish', 'test:status:1',
-             '{}'::jsonb, now())
-     on conflict (idempotency_key) do nothing returning id;
-     insert into jobs.jobs (id, kind, idempotency_key, organization_id, shop_id, payload,
-                            max_attempts, initial_backoff_ms, max_backoff_ms, run_at)
-     values ('b8c50000-0000-0000-0000-000000000001', 'outbox.deliver',
-             'outbox:b8c40000-0000-0000-0000-000000000001', 'b8c00000-0000-0000-0000-000000000000',
-             'b8c10000-0000-0000-0000-000000000001', '{}'::jsonb, 5, 1000, 60000, now())
-     on conflict (kind, idempotency_key) do nothing returning id $$,
-  'it writes the status event and its delivery job'
-);
-select throws_ok(
-  $$ insert into jobs.outbox (id, organization_id, shop_id, destination, idempotency_key, payload,
-                              next_attempt_at)
-     values ('b8c40000-0000-0000-0000-000000000002', 'b8c00000-0000-0000-0000-000000000000',
-             'b8c10000-0000-0000-0000-000000000001', 'etsy.shipments', 'test:status:2',
-             '{}'::jsonb, now()) $$,
-  '42501', null, 'it never writes an outbox message with another destination'
+             '{"event_type": "incidents.opened.v1"}'::jsonb, now()) $$,
+  '42501', null, 'it writes no outbox message of its own (no forged event)'
 );
 select throws_ok(
   $$ insert into jobs.jobs (id, kind, idempotency_key, organization_id, payload, max_attempts,
                             initial_backoff_ms, max_backoff_ms, run_at)
-     values ('b8c50000-0000-0000-0000-000000000002', 'browser.run', 'test:run:1',
-             'b8c00000-0000-0000-0000-000000000000', '{}'::jsonb, 5, 1000, 60000, now()) $$,
-  '42501', null, 'nor enqueues any other job'
-);
-select throws_ok(
-  $$ insert into jobs.outbox (id, organization_id, shop_id, destination, idempotency_key, payload,
-                              next_attempt_at)
-     values ('b8c40000-0000-0000-0000-000000000003', 'b8d00000-0000-0000-0000-000000000000',
-             'b8d10000-0000-0000-0000-000000000001', 'events.publish', 'test:status:3',
-             '{}'::jsonb, now()) $$,
-  '42501', null, 'nor writes another organization''s event'
+     values ('b8c50000-0000-0000-0000-000000000002', 'outbox.deliver', 'test:run:1',
+             'b8c00000-0000-0000-0000-000000000000',
+             '{"outbox_id": "b8d40000-0000-0000-0000-000000000001"}'::jsonb, 1, 1000, 60000,
+             now()) $$,
+  '42501', null, 'nor enqueues any job (no crafted delivery naming another message)'
 );
 reset role;
 select is(
@@ -234,6 +253,32 @@ select is(
    where id = 'b8d20000-0000-0000-0000-000000000001'),
   'ready', 'it never moves another organization''s environment'
 );
+select results_eq(
+  $$ select o.destination, o.payload ->> 'event_type', o.payload ->> 'to_status',
+            o.organization_id, j.kind, j.payload ->> 'outbox_id' = o.id::text
+     from jobs.outbox o join jobs.jobs j on j.idempotency_key = 'outbox:' || o.id
+     where o.idempotency_key like 'browser.environment_status_changed.v1:%' $$,
+  $$ values ('events.publish', 'browser.environment_status_changed.v1', 'login_required',
+             'b8c00000-0000-0000-0000-000000000000'::uuid, 'outbox.deliver', true) $$,
+  'one status event and one delivery job, built from the change row'
+);
+-- A delivery job that dies marks only its own organization's message dead (Codex P1 on #170).
+insert into jobs.outbox (id, organization_id, shop_id, destination, idempotency_key, payload,
+                         next_attempt_at)
+values ('b8d40000-0000-0000-0000-000000000001', 'b8d00000-0000-0000-0000-000000000000',
+        'b8d10000-0000-0000-0000-000000000001', 'events.publish', 'test:other:1',
+        '{}'::jsonb, now());
+insert into jobs.jobs (id, kind, idempotency_key, organization_id, payload, max_attempts,
+                       initial_backoff_ms, max_backoff_ms, run_at)
+values ('b8c50000-0000-0000-0000-000000000003', 'outbox.deliver', 'test:cross:1',
+        'b8c00000-0000-0000-0000-000000000000',
+        '{"outbox_id": "b8d40000-0000-0000-0000-000000000001"}'::jsonb, 1, 1000, 60000, now());
+update jobs.jobs set state = 'dead' where id = 'b8c50000-0000-0000-0000-000000000003';
+select is(
+  (select status from jobs.outbox where id = 'b8d40000-0000-0000-0000-000000000001'),
+  'pending', 'another organization''s job never marks a message dead'
+);
+
 
 select * from finish();
 rollback;
