@@ -11,6 +11,7 @@ import io
 import os
 import shutil
 import tarfile
+import threading
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -570,3 +571,37 @@ def test_workspace__a_socket_or_pipe_in_the_profile_is_not_sealed(tmp_path: Path
         getattr(os, "mkfifo")(directory / "pipe")  # noqa: B009 - POSIX only, the test is skipped elsewhere
     with tarfile.open(fileobj=io.BytesIO(profiles.open(env) or b""), mode="r:*") as archive:
         assert archive.getnames() == ["Preferences"]
+
+
+@_LINUX_WALK
+def test_open_at__a_file_swapped_for_a_fifo_is_refused_without_hanging(tmp_path: Path) -> None:
+    """Codex on #125: a regular file replaced by a FIFO after its stat must not block the
+    open (nobody writes to it); it is opened non-blocking and refused by its fstat."""
+    open_at = browser_profiles_module._open_at
+    read = browser_profiles_module._READ
+    (tmp_path / "Cookies").write_bytes(COOKIE)
+    parent = os.open(tmp_path, os.O_RDONLY)
+    try:
+        listed = os.stat("Cookies", dir_fd=parent, follow_symlinks=False)
+        (tmp_path / "Cookies").unlink()
+        getattr(os, "mkfifo")(tmp_path / "Cookies")  # noqa: B009 - POSIX only
+
+        failure: list[BaseException] = []
+
+        def attempt() -> None:
+            try:
+                open_at("Cookies", read, parent, listed)
+            except BaseException as error:
+                failure.append(error)
+
+        worker = threading.Thread(target=attempt, daemon=True)
+        worker.start()
+        worker.join(timeout=2)
+        if worker.is_alive():  # unblock the hung open so the test run can finish
+            with open(tmp_path / "Cookies", "wb"):  # noqa: PTH123
+                pass
+            pytest.fail("opening the swapped FIFO blocked")
+        assert len(failure) == 1
+        assert isinstance(failure[0], ProfileUnsafeError)
+    finally:
+        os.close(parent)

@@ -255,7 +255,9 @@ _FD_WALK = (
 )
 _O_NOFOLLOW: int = getattr(os, "O_NOFOLLOW", 0)
 _O_DIRECTORY: int = getattr(os, "O_DIRECTORY", 0)
-_READ = os.O_RDONLY | _O_NOFOLLOW | getattr(os, "O_BINARY", 0)
+# Non-blocking: a file swapped for a FIFO after its stat must not hang the open; the fstat
+# below then refuses it. A regular file ignores the flag.
+_READ = os.O_RDONLY | _O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
 _OPEN_DIRECTORY = os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW
 
 
@@ -381,7 +383,11 @@ def _open_at(name: str, flags: int, parent: int, listed: os.stat_result) -> int:
 
 def _same(descriptor: int, listed: os.stat_result) -> None:
     opened = os.fstat(descriptor)
-    if (opened.st_dev, opened.st_ino) != (listed.st_dev, listed.st_ino):
+    if (opened.st_dev, opened.st_ino, stat.S_IFMT(opened.st_mode)) != (
+        listed.st_dev,
+        listed.st_ino,
+        stat.S_IFMT(listed.st_mode),
+    ):
         os.close(descriptor)
         raise ProfileUnsafeError("a profile entry changed while it was packed")
 
