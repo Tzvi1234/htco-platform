@@ -22,6 +22,7 @@ from htco_api.browser_environments import BrowserEnvironmentServices
 from htco_api.incidents import IncidentCenter
 from htco_api.problems import AUTH_UNAVAILABLE, ProblemError
 from htco_api.settings import ApiSettings, Environment
+from htco_api.tasks import TaskCenter
 from htco_api.web_auth import WebAuth
 from htco_application.access.management import (
     AccessStore,
@@ -97,6 +98,7 @@ from htco_persistence.shop_integrations import (
 )
 from htco_persistence.shops import PostgresShopReader, PostgresShopRemover
 from htco_persistence.status import PostgresChainReader
+from htco_persistence.tasks import PostgresTaskReader
 from htco_persistence.web_sessions import PostgresSessionStore
 from htco_platform.crypto import EnvelopeSealer, Sealer
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter, SentryErrorReporter
@@ -212,6 +214,7 @@ def main(
         execution_chain=wiring.execution_chain,
         incident_center=wiring.incident_center,
         security_notices=wiring.security_notices,
+        task_center=wiring.task_center,
         operations=wiring.operations,
         resources=wiring.resources,
     )
@@ -375,6 +378,7 @@ class _Wiring:
     execution_chain: PostgresChainReader | None = None
     incident_center: IncidentCenter | None = None
     security_notices: SecurityNotices | None = None
+    task_center: TaskCenter | None = None
     operations: PostgresOperationsHealth | None = None
     resources: list[Resource] = field(default_factory=list)
 
@@ -466,6 +470,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
             PostgresEnvironmentReader(database), PostgresEnvironmentStore(database)
         ),
         execution_chain=PostgresChainReader(database),
+        task_center=TaskCenter(PostgresTaskReader(database)),
         incident_center=IncidentCenter(
             reader=PostgresIncidentReader(database),
             service=IncidentService(
