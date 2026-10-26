@@ -247,8 +247,10 @@ class SessionLifecycle(Protocol):  # status changes go through ShopEnvironmentRe
         """Re-seal the profile under the session's own lock lease (ProfileFence): checked on
         that lock's own connection, never looked up by environment; the archive is written on
         that connection or with a generation compare-and-set. A lost lock never writes back."""
+
     async def renew(self, handle: ProviderHandle, *, fence: ProfileFence) -> HealthReport:
         """A short scheduled session: check the sign-in, re-seal refreshed cookies."""
+
     async def recover(
         self, environment: BrowserEnvironment, *, fence: ProfileFence
     ) -> HealthReport: ...  # restore the last good archive, then a health check
@@ -277,7 +279,9 @@ class EngineExecution(Protocol):  # the engines that act on a page (ADR-0025 §5
 class SessionAuthentication(Protocol):  # the session redeems grants; the provider never does
     async def signed_in(self, handle: ProviderHandle, site: str) -> bool: ...
     async def challenge(self, handle: ProviderHandle) -> ChallengeKind | None: ...
-    async def type_secret(self, handle: ProviderHandle, value: SecretValue, field: FieldRef) -> None: ...
+    async def type_secret(
+        self, handle: ProviderHandle, value: SecretValue, field: FieldRef
+    ) -> None: ...
 
 
 class ProviderNetworking(Protocol):
@@ -315,6 +319,7 @@ class BrowserConfigurations(Protocol):  # ADR-0025 §2: one versioned profile pe
 class NetworkProvider(Protocol):  # ADR-0025 §4; first adapter: SharedEgress
     async def egress_for(self, shop_id: UUID) -> EgressProfile:
         """shared (default, no allocation needed) or dedicated (an HTCO-owned static IP)."""
+
     async def allocate(self, shop_id: UUID, *, by: ActorRef) -> EgressProfile: ...  # Owner, audited
     async def release(self, shop_id: UUID, *, by: ActorRef) -> None: ...  # Owner, audited
     async def check(self, shop_id: UUID) -> EgressCheck:
@@ -331,6 +336,7 @@ class BrowserDispatch(Protocol):  # the agent-worker side of the Browser channel
         """In the claim's transaction: the execution moves to DISPATCHED, one browser.run job
         (key: execution and attempt; concurrency: the profile) and actions.dispatched.v1. The
         job carries IDs and the recipe's declared parameters only: no secret, token or authority."""
+
     async def outcome_of(self, execution_id: UUID, attempt: int) -> BrowserRunOutcome | None: ...
 
 
@@ -338,11 +344,15 @@ class BrowserRunOutcome(BaseModel):  # one row per execution and attempt: starte
     model_config = ConfigDict(frozen=True)
     execution_id: UUID
     attempt: int
-    status: Literal["started", "succeeded", "failed", "challenge", "refused", "timeout", "interrupted"]
-    started_at: AwareDatetime | None  # committed before a write touches a page (the started marker)
-    output: dict[str, JsonValue] | None  # validated against the recipe's schema; DC1 only if declared
+    # started, then once: succeeded, failed, challenge, refused, timeout or interrupted
+    status: RunStatus
+    # The started marker: committed before a write touches a page.
+    started_at: AwareDatetime | None
+    # Validated against the recipe's schema; DC1 only where the recipe's output declares it.
+    output: dict[str, JsonValue] | None
     evidence: tuple[Evidence, ...] = ()
-    error_code: str | None = None  # "kill_switch", "flag_off", "not_ready", "deadline", "approval_revoked", ...
+    # "kill_switch", "flag_off", "not_ready", "deadline", "approval_revoked", ...
+    error_code: str | None = None
 
 
 class ShopEnvironmentRegistry(Protocol):
@@ -568,7 +578,7 @@ RECEIVED ─► AUTHORIZED ─► (WAITING_APPROVAL ─► AUTHORIZED) ─► RO
                                                                    └► FAILED ─► (retry policy) ─► ROUTED | DEAD_LETTERED
 ROUTED ─► DISPATCHED (Browser channel, ADR-0025 §3) ─► RUNNING (resume: the outcome is in) ─► VERIFYING
               ├► HANDED_TO_HUMAN (a challenge, or a write that started with no outcome: interrupted or past its deadline)
-              ├► CANCELLED (its approval was cancelled or expired after dispatch, in the same transaction)
+              ├► CANCELLED (its approval was revoked or expired before the attempt started, in the same transaction)
               └► FAILED (refused at execution time, approval_revoked included, or a read past its deadline)
 VERIFYING ─► FAILED (verification) ─► incident
 ```

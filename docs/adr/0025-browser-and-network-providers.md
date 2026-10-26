@@ -189,7 +189,12 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
 
    If any check fails, the run ends `refused` with its code (`approval_revoked` for the approval), and no page is touched.
 
-   **The started marker.** Before a write touches a page, the browser worker inserts the run's row for this execution and attempt, with the status `started` and `started_at`, and commits it. That commit happens before any side effect. The insert is `on conflict do nothing`, so only one worker can ever start an attempt. A job redelivered for an attempt that already has a `started` row never touches the page again (step 6).
+   **The started marker.** Before a write touches a page, the browser worker starts the attempt through one database function, `private.start_browser_run(execution, attempt, request_hash)`. In one transaction it:
+   - locks the action execution's row;
+   - checks again that the action is `DISPATCHED` with this request hash, before its deadline, with its approval still `APPROVED` for this hash and not expired;
+   - inserts the run's row with the status `started` and `started_at` (`on conflict do nothing`), and commits.
+
+   That commit happens before any side effect, and only one worker can ever start an attempt. A job redelivered for an attempt that already has a `started` row never touches the page again (step 6). The function is `security definer`, so the browser role needs no right to lock or write `action_executions` itself.
 
    Then the browser worker runs the recipe through `BrowserController.session` and validates the result against the recipe's schema. Browser Use runs only for employee bindings with `deterministic = False`.
 4. **It publishes the outcome** in one transaction, idempotent per execution and attempt:
@@ -197,11 +202,12 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
    - `browser.run_finished.v1` in the outbox.
 
    The row never holds a secret, and holds DC1 only when the recipe's output model declares it.
-4a. **A revoked approval stops a dispatched write in two ways** (defense in depth):
-   - **(b), in the gateway.** Cancelling or expiring an approval moves its `DISPATCHED` action to `CANCELLED` in the same transaction. The browser worker's claim check then refuses the run.
-   - **(a), in the browser worker.** Before acting, it re-checks the approval read-only (step 3), in case a revocation lands between the gateway and the run.
+4a. **A revoked approval stops a dispatched write in two ways** (defense in depth). Cancellation and start are serialized on the action execution's row:
+   - **(b), in the gateway.** Cancelling or expiring an approval locks the same row. It moves the `DISPATCHED` action to `CANCELLED` in the same transaction **only if the current attempt has no `started` row**. The browser worker's start then refuses the run.
+   - **(a), in the browser worker.** The start function re-checks the approval under that lock (step 3), in case a revocation lands between the gateway and the run.
+   - **An attempt that has already started is never cancelled through this path.** Its write may be happening, so the action stays `DISPATCHED`, and its outcome is processed as usual: verification and one final result, or the reconciliation task after a crash (step 6). The revocation is recorded with the action, and the result says that the approval was revoked during the run, so the Owner sees it.
 
-   The re-check is the last point before the page. A revocation after it does not undo a write that has already started: the started marker records the write, and the outcome says what happened.
+   The start function is the last point before the page.
 5. **Resume through `submit`.** A `browser.resume` job in the agent-worker wakes the waiting execution, or resumes the employee's graph. It resubmits the same request with the same idempotency key. `submit` finds the stored claim in `DISPATCHED` and resumes it, as it already resumes a human hand-off:
    - with no outcome yet, it answers `DISPATCHED` again;
    - with an outcome, it validates the output against the action's output schema and runs the action's verification (the schema, or a re-read through the API channel). Then it records exactly one final result: `SUCCEEDED`, `FAILED`, or `HANDED_TO_HUMAN` with one Human task for a challenge.
@@ -217,7 +223,7 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
    - **Its role can:**
      - claim `browser.*` jobs;
      - read a claim's state, request hash and deadline, and an approval's state, request hash and expiry, in its own organization;
-     - insert a run's row and set its final status once.
+     - start an attempt only through `private.start_browser_run` (`security definer`: the lock, the checks and the `started` row in one transaction), insert a read's row, and set a run's final status once.
    - It cannot write `action_executions` or approvals.
    - A forged or replayed job is refused: one for an execution that is not `DISPATCHED`, or that carries another request hash.
 
@@ -345,7 +351,7 @@ The acceptance criteria are in Phase 8A:
 
   No provider that attaches to browsers run outside HTCO, and no external-vendor adapter.
 - 2026-10-26: The security review of this ADR (sage-arch on PR #136) and a Codex finding were folded in before merge:
-  - an approval re-checked at execution time, in two ways: revoking it cancels the dispatched action in the same transaction, and the browser worker re-checks it read-only before a write;
+  - an approval re-checked at execution time, in two ways: revoking it cancels the dispatched action in the same transaction, and the browser worker re-checks it read-only before a write. A later Codex finding then serialized the two on the action execution's row: an attempt that has already started is never cancelled through that path, and its outcome is processed as usual;
   - CDP on a pipe only, with no TCP port;
   - a durable started marker before a dispatched write. A started write with no outcome goes to a person and is never re-sent;
   - the browser's background-traffic switches and an explicit decision on Safe Browsing;
