@@ -125,6 +125,8 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
+            # Fail closed: an empty base would make the range `..HEAD`, which scans nothing.
+            [ -n "$BASE_SHA" ] || { echo "::error::no base SHA for the pull request's range"; exit 1; }
             range="$BASE_SHA..HEAD"
           else
             range="HEAD"

@@ -15,8 +15,8 @@ IGNORE = REPO / ".gitleaksignore"
 FINGERPRINT = re.compile(r"^[0-9a-f]{40}:[^:\s]+:[a-z0-9-]+:\d+$")
 
 
-def _workflow(path: Path) -> dict[str, Any]:
-    loaded: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
+def _workflow(path: Path) -> dict[Any, Any]:
+    loaded: dict[Any, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
     return loaded
 
 
@@ -50,6 +50,10 @@ def test_ci__gitleaks_scans_the_run_and_never_softly() -> None:
     assert "--exit-code" not in run  # the default: a finding fails the step
     assert '--log-opts="$range"' in run
     assert 'range="$BASE_SHA..HEAD"' in run  # a pull request: the commits it brings
+    # ...and never an empty range: no base SHA fails the step before the scan (sage-arch).
+    assert '[ -n "$BASE_SHA" ] || {' in run
+    assert run.index('[ -n "$BASE_SHA" ]') < run.index('range="$BASE_SHA..HEAD"')
+    assert "exit 1" in run.split('[ -n "$BASE_SHA" ]', 1)[1].split("\n", 1)[0]
     assert 'range="HEAD"' in run  # a push to main: main's whole history
     assert step["env"]["BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
     assert job["steps"][0]["with"]["fetch-depth"] == 0
@@ -68,6 +72,13 @@ def test_history__every_ref_is_scanned_daily() -> None:
     assert job["steps"][0]["with"]["fetch-depth"] == 0
     assert workflow["permissions"] == {}
     assert job["permissions"] == {"contents": "read"}
+
+
+def test_ignore__owned_by_the_owner() -> None:
+    """No PR whitelists its own leak unseen: CODEOWNERS names the owner for the ignore file."""
+    owners = (REPO / ".github/CODEOWNERS").read_text(encoding="utf-8").splitlines()
+
+    assert "/.gitleaksignore @Tzvi1234" in owners
 
 
 def test_ignore__only_fingerprints_each_with_a_reason() -> None:
