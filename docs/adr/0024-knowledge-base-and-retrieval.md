@@ -52,9 +52,11 @@ The organization and the shop are bound by composite foreign keys, as on the oth
 - B-tree on `(organization_id, shop_id)`.
 
 RLS is on for both tables:
-- Members read only their organizations' rows of the shops they may access (`user_org_ids()` and `user_shop_ids()`).
-- The worker, which runs ingestion and the agents' searches, sees only its job's organization (`worker_organization_id()`).
+- Members read only their organizations' rows of the shops they may access (`user_org_ids()` and `user_shop_ids()`). Organization-wide rows, with a null `shop_id`, are visible to every member of that organization, including shop-scoped roles, and to no other organization.
+- The worker, which runs ingestion and the agents' searches, sees only its job's organization (`worker_organization_id()`). That RLS is organization-wide, so **shop isolation for an employee's search rests on the scope the search applies**, and that scope comes only from the task's session (§5).
 - No client role writes. Writes happen only through the ingestion use case.
+
+**Classification (ER-DATA-07).** `shop_policy`, `faq`, `listing` and `product` chunks are shop or organization content. `approved_reply` chunks and `knowledge_sources.derived_from_conversation` are **derived from DC2**. They are redacted, but they keep DC2's 365-day retention and buyer-erasure rules (§7).
 
 ### 2. What may be embedded
 
@@ -70,25 +72,29 @@ There is an allowlist of source kinds. Nothing else is ingested:
 
 **Never embedded:** raw buyer messages or emails (DC2), and buyer names, contacts or addresses (DC1). Order and tracking data are left out too, because tools answer them.
 
-Approved replies pass a **deterministic redaction** step before chunking. It removes or replaces names (including the buyer's name from the linked order record), email addresses, phone numbers, postal addresses, tracking numbers and order numbers (replaced with placeholders such as `[order]`). The gateway's PII masking then applies again at embedding time, as a second layer. A chunk in which the residual check still finds PII is **quarantined**: it is not embedded, and it is reported.
+Approved replies pass a **deterministic redaction** step before chunking. It removes or replaces names (including the buyer's name from the linked order record), email addresses, phone numbers, postal addresses, tracking numbers and order numbers (replaced with placeholders such as `[order]`). The gateway's PII masking then applies again at embedding time, as a second layer.
+
+**Buyer text quoted inside a reply** is not an identifier, so redaction alone does not remove it. This covers quoted history (`> …`, "On … wrote:") and inline quotes. The step strips quoted history. It also runs an **overlap check** against the linked buyer message: a chunk that shares a run of words with that message above the agreed threshold is quarantined.
+
+A chunk in which the residual check still finds PII, or quoted buyer text, is **quarantined**: it is not embedded, and it is reported.
 
 ### 3. Retrieval order: tools, then hybrid search, then the model
 
 1. **Structured tools first.** Order state, listing state, tracking, prices and stock come from their read tools, never from the knowledge base. None of that is indexed.
-2. **Hybrid search through `knowledge.search`.** This is **one SQL statement** whose `WHERE` clause applies the organization, the shop and the allowed kinds before any ranking. It combines Postgres full-text search with vector similarity (the `simple` configuration for Hebrew, `english` for English) and fuses the two ranked lists by reciprocal rank fusion. The result is bounded: `k` is at most 10, and there is a minimum score. Each hit carries its kind, source, version, chunk ID and score.
+2. **Hybrid search through `knowledge.search`.** This is **one SQL statement** whose `WHERE` clause applies the organization, the shop and the allowed kinds before any ranking. It combines Postgres full-text search with vector similarity (the `simple` configuration for Hebrew, `english` for English) and fuses the two ranked lists by reciprocal rank fusion. The `tsquery` is built with `websearch_to_tsquery` or `plainto_tsquery`, never `to_tsquery` on raw text, and the query is capped in length before it is parsed or embedded. The result is bounded: `k` is at most 10, and there is a minimum score. Each hit carries its kind, source, version, chunk ID and score.
 3. **The model last.** The employee's model composes the answer from the tool results and the retrieved chunks, and cites the chunk IDs it used.
 
 ### 4. Embeddings through the Model Gateway
 
-The catalog gains the `embedding` capability and an alias such as `default-embedding`. That alias names the embedding model, never a model ID in code. Every embedding call goes through the gateway: indexing a chunk, and embedding a query at search time. That means routing (the alias, ADR-0023's pinned semantics apply), budget reservation and settlement, PII masking, and one `routing_decisions` row and one `model_usage` row. Ingestion is billed to the organization and shop. Query embeddings are billed to the searching employee and the task.
+The catalog gains the `embedding` capability and an alias such as `default-embedding`. That alias names the embedding model, never a model ID in code. Every embedding call goes through the gateway: indexing a chunk, and embedding a query at search time. That means routing (the alias, ADR-0023's pinned semantics apply), budget reservation and settlement, PII masking, and one `routing_decisions` row and one `model_usage` row. Ingestion is billed to the organization and shop, under a **system routing policy, `knowledge-ingest`**. It is pinned to the embedding alias with `max_data_class = internal`, so the gateway's data-class check has a policy to apply even though no employee is calling. Query embeddings are billed to the searching employee and the task, under that employee's policy. Every query is **PII-masked by the gateway before it is embedded**, because Dana builds her queries from buyer messages.
 
 Changing the embedding model is a catalog change to the alias. It also triggers a full **re-embed** job for the affected rows, because vectors from different models are not comparable. Each chunk records the alias and model that produced it, and a search only compares vectors from the same model.
 
 ### 5. A shared capability behind a port
 
-`KnowledgeBase` is the application port: `ingest(source)`, `search(query, scope, policy)` and `delete(source)`. The pgvector adapter lives in persistence, and its embeddings go through the gateway port. An in-memory adapter for tests passes the same contract suite. A future external vector store would need its own ADR, and the tenant-isolation and residency questions above, before it could sit behind the port.
+`KnowledgeBase` is the application port: `ingest(source)`, `search(query, scope, policy)` and `delete(source)`. **`scope` is the organization and shop from the task's session (ER-AI-12, the Phase 8 tool bridge), never from tool arguments.** The tool's input schema has no organization or shop field and rejects one that the model supplies. The pgvector adapter lives in persistence, and its embeddings go through the gateway port. An in-memory adapter for tests passes the same contract suite. A future external vector store would need its own ADR, and the tenant-isolation and residency questions above, before it could sit behind the port.
 
-Employees use the capability through the registry tool **`knowledge.search`**: `side_effect = "none"`, `data_scope = "internal"`, audited. Each employee's sheet sets a **knowledge policy**: which kinds it may search, its maximum `k`, and its languages. The tool bridge and the policy engine enforce it. Dana is the first consumer (policy, FAQ, listing, product, approved replies). An employee without the grant is denied. The search is recorded as an activity: the employee, the task, a **hash** of the query (never its text, which may contain a buyer's words), the result IDs and the latency.
+Employees use the capability through the registry tool **`knowledge.search`**: `side_effect = "none"`, `data_scope = "internal"`, audited. Each employee's sheet sets a **knowledge policy**: which kinds it may search, its maximum `k`, and its languages. The tool bridge and the policy engine enforce it. Dana is the first consumer (policy, FAQ, listing, product, approved replies). An employee without the grant is denied. The search is recorded as an activity: the employee, the task, a **keyed hash** of the query (an HMAC with a server-side key, never its text, which may contain a buyer's words; a plain hash of a short query such as a name could be reversed by guessing), the result IDs and the latency.
 
 ### 6. Ingestion and refresh
 
@@ -142,3 +148,4 @@ The acceptance criteria are AC-9.10.1 to AC-9.10.12 in Phase 9, with pgTAP for R
 ## Validation log
 
 - 2026-10-26: Decisions approved by the owner (pgvector in Supabase; tools, then hybrid search, then the model; embeddings through the gateway; a shared capability through `knowledge.search`; a new slice 9.10 before Dana).
+- 2026-10-26: The security review of the ADR (PR #130, before any 9.10 code) added eight hardening points, folded into §1, §2, §3, §4 and §5 and into AC-9.10.1, 3, 4, 5 and 9. The decisions above are unchanged. The points: organization-wide rows visible to the whole organization; shop isolation for a worker search resting on the session's scope; approved-reply chunks classified as derived from DC2; quoted buyer text stripped, with an overlap check; `websearch_to_tsquery` or `plainto_tsquery` only, with a length cap; the `knowledge-ingest` system policy; queries masked before embedding; a keyed query hash (HMAC).
