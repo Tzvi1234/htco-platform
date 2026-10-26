@@ -19,7 +19,7 @@ Migration `20261025100000_fulfillment_incidents.sql`:
 - `app.tracking_checks`: the schedule's cursor, one row per receipt with the Etsy version last read. A receipt is due again only when Etsy changes it, so receipts without a code never pin the batch and a second parcel is read (Codex review of #79).
 - `app.sla_policies`: one per organization, shop, supplier and shipping method (`unique nulls not distinct`), `window_days` 1–90, `unit` (`calendar_days`, `business_days`), the calendar's time zone, weekend days and holidays. No row: the built-in default (7 business days, Saturday and Sunday off, UTC; the owner's decision of 2026-10-23, replacing the first 10, which the migration's comment still names). Supplier and shipping-method scopes are refused by a check constraint until orders carry those values (Phase 13); the domain already selects by them.
 
-Migration `20261026120000_relay_items.sql` (slice 6.10):
+Migration `20261026160000_relay_items.sql` (slice 6.10):
 
 - `app.relay_items`: one per order (`shop_id, receipt_id` unique); `state` `awaiting_tracking`, `handed_off` or `closed` with `closed_reason` (`tracking_on_etsy`, `uploaded`, `cancelled`); the pasted carrier, fingerprint (the same as `tracking_events`, unique per shop) and last four characters. Members read their shops' items; the worker inserts and closes in its job's organization and never changes the pasted tracking.
 - `app.relay_item_codes`: the full pasted code while the item waits, read only by the shop's buyer-data roles (`user_buyer_data_shop_ids`), deleted on close; the worker may delete a code, never read one.
