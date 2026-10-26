@@ -1,0 +1,16 @@
+From: quotes@autova.example.com
+Subject: New supplier quote for AV-PRD-10423
+Message-ID: <q-88240@autova.example.com>
+
+A supplier sent a quote for one of your products.
+
+Product: AV-PRD-10423
+Etsy listing: 1234567890
+Supplier: Porto Craft Supplies
+Unit price: €9.15
+Shipping: Free
+Shipping method: CTT Expresso
+Processing time: 3 days
+Shipping time: 4-6 days
+Valid until: 2026-11-30
+Quote ID: Q-88240

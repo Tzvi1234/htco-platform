@@ -1,0 +1,23 @@
+From: AutoVA Quotes <quotes@autova.example.com>
+Subject: New supplier quote for AV-PRD-10423
+Message-ID: <q-88213@autova.example.com>
+
+Hello,
+
+A supplier sent a quote for one of your products.
+
+Product: AV-PRD-10423
+Etsy listing: 1234567890
+SKU: WAL-BRN-01
+Supplier: Guangzhou Leather Works
+Unit price: 7.40 USD
+Shipping: 2.10 USD
+Shipping method: Yun Express
+Processing time: 2-4 days
+Shipping time: 7-12 days
+Valid until: 2026-11-10
+Quote ID: Q-88213
+
+Open AutoVA to compare the quotes.
+
+The AutoVA team

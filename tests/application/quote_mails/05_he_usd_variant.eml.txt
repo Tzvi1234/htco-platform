@@ -1,0 +1,17 @@
+From: AutoVA Quotes <quotes@autova.example.com>
+Subject: הצעת מחיר חדשה מספק ל-AV-PRD-10423-V2
+Message-ID: <q-88302@autova.example.com>
+
+התקבלה הצעת מחיר חדשה לאחד המוצרים שלך.
+
+מוצר: AV-PRD-10423-V2
+רישום Etsy: 1234567890
+וריאציה: pid:5512
+ספק: Guangzhou Leather Works
+מחיר ליחידה: 6.95 USD
+משלוח: 2.10 USD
+שיטת משלוח: Yun Express
+זמן טיפול: 2–4 ימים
+זמן משלוח: 7–12 ימים
+בתוקף עד: 2026-11-15
+מזהה הצעה: Q-88302
