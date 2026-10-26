@@ -83,8 +83,10 @@ Live View and Takeover must keep every one of these.
 
 **Two permissions and one Controller:**
 - **The permissions.** `CONTROL_BROWSER_SESSION` is separate from viewing, and needs `aal2` and a step-up at each takeover.
-  - **By default only the Owner has it** (D-25, recommended).
-  - The Owner may grant it to an Admin, and only for the **sign-in, MFA and challenge** purposes, never for a stuck step. The grant is audited and the Owner can revoke it.
+  - **The Owner and Admins have it, limited by purpose** (D-25, the owner's decision of 2026-10-26).
+    - **The Owner** may take control for any purpose.
+    - **An Admin** may take control only for sign-in, MFA, a challenge or a stuck step, with no separate grant.
+    - Either way, the takeover reaches only that purpose's pre-approved path scope (below). The pages blocked for every Controller stay blocked for the Owner too.
   - Agents and automations never have it.
 - **The lease.** A session has **at most one Controller at a time**, through a lease: one active row per session in `browser_control_leases`, taken by compare-and-set.
   - It holds a short timeout, for example 90 seconds.
@@ -235,9 +237,9 @@ Brave is not adopted (owner, 2026-10-26: not approved).
 
 ## Validation
 
-The acceptance criteria are AC-8A.11.1 to AC-8A.11.15 in Phase 8A.
+The acceptance criteria are AC-8A.11.1 to AC-8A.11.16 in Phase 8A.
 
 ## Validation log
 
 - 2026-10-26: The owner approved the direction: Live View and Takeover over CDP screencast, a single leased Controller, no frames stored, headless confirmed by a spike, noVNC documented only, and the privacy pack without Brave. Written after ADR-0025's last review round, so it adopts that round's fail-closed rules from the start: frames of signed-in pages only for buyer-data viewers, no frame to a model, the private-network rule, D-16 approvals for every browser action, and the run token.
-- 2026-10-26: The security review of #166 (sage-arch) narrowed the takeover. There is now a deny-by-default path scope per purpose. The Owner-only W3, money and account pages are blocked for every Controller. Control is Owner-only by default (D-25), and an Admin can be granted only sign-in, MFA and challenge. The undefined "site allowlist" is replaced by the environment's recorded path scope and its recipes' allowlists.
+- 2026-10-26: The security review of #166 (sage-arch) narrowed the takeover. There is now a deny-by-default path scope per purpose. The Owner-only W3, money and account pages are blocked for every Controller. Control was proposed as Owner-only by default; the owner then decided D-25 (Admins limited): the Owner for any purpose, an Admin only for sign-in, MFA, challenge or a stuck step, both inside the purpose's path scope, with no separate grant. The undefined "site allowlist" is replaced by the environment's recorded path scope and its recipes' allowlists.
