@@ -217,7 +217,7 @@ Create a synthetic late order in a test shop; watch the incident and email arriv
 
 ## Rollback
 
-Set Tracking Synchronization's and Incident Detection & Escalation's `readiness` back to `draft` (a registry change and a deploy): the engine refuses every trigger, the schedule and the `order.shipped` webhook alike. Removing `fulfillment.inspect` from `HTCO_WORKER_SCHEDULES` stops the schedule only. Incidents remain for review.
+Set Tracking Synchronization's and Incident Detection & Escalation's `readiness` back to `draft` (a registry change and a deploy): the engine refuses every new trigger, the schedule and the `order.shipped` webhook alike; executions already queued still run, so stop the agent-worker deployment as well to stop them at once. Removing `fulfillment.inspect` from `HTCO_WORKER_SCHEDULES` stops the schedule only. Incidents remain for review.
 
 ## Risks
 

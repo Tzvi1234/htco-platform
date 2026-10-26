@@ -58,7 +58,7 @@ text = "A deferred read (429 or the daily floor) or a refused read raises into t
 
 [specification.retry_policy]
 status = "defined"
-text = "Five attempts, exponential backoff from 5 s to 15 min with jitter; then dead-lettered, visible in Admin › Health and recoverable by an audited admin retry (POST /v1/operations/dead-letters/{job_id}/retry)."
+text = "Five attempts, exponential backoff from 5 s to 15 min with jitter; then dead-lettered, visible in Admin › Health and recoverable by an audited Owner or Admin retry of the execution (POST /v1/automations/{automation_id}/executions/{execution_id}/retry; the queue's dead-letter retry refuses an execution's job with 409 retry-through-execution)."
 
 [specification.idempotency]
 status = "defined"
@@ -82,7 +82,7 @@ text = "tests/application/test_tracking_sync.py (each shipment once however ofte
 
 [specification.recovery]
 status = "defined"
-text = "Runbook: docs/features/fulfillment-monitoring/operations.md (Runbook: tracking not recorded). To stop it, set readiness back to draft in this file (the engine refuses every trigger of a draft automation, the schedule and the order.shipped webhook alike); taking fulfillment.inspect out of HTCO_WORKER_SCHEDULES stops only the schedule. Everything it records is rebuilt by reading Etsy again: retry a dead letter from Admin › Health, and the next run reads the due receipts again."
+text = "Runbook: docs/features/fulfillment-monitoring/operations.md (Runbook: tracking not recorded). To stop new runs, set readiness back to draft in this file (the engine refuses every trigger of a draft automation, the schedule and the order.shipped webhook alike); taking fulfillment.inspect out of HTCO_WORKER_SCHEDULES stops only the schedule. Setting readiness back to draft stops new triggers only: executions already pending or retry-scheduled still run, because the engine checks readiness when it is triggered, not when it executes. To stop those at once, stop the agent-worker deployment (all queue work pauses and resumes when it starts again). Everything it records is rebuilt by reading Etsy again: retry a dead-lettered execution (see the retry policy), and the next run reads the due receipts again."
 
 [specification.approvals]
 status = "defined"
