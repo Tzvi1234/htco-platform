@@ -124,7 +124,7 @@ Option 3.
   2. **The breaker and the rate budget (#143 AC-5).** Both apply at dispatch, per the binding's keys:
      - the `browser:{shop}` breaker is checked at dispatch (open means `DEFERRED`, as for any channel);
      - the `browser:{shop}` rate window is spent at dispatch;
-     - the browser worker reads the same breaker again at execution time, next to the kill switches, so a backlog of `browser.run` jobs dispatched just before it opened is stopped too (AC-8A.2.29);
+     - the browser worker reads the same breaker again at execution time, next to the kill switches, so a backlog of `browser.run` jobs dispatched just before it opened is stopped too (AC-8A.2.30);
      - the resume records the run's result on that breaker, and **only a run that started on the site counts** (quill): a session that failed with the controller's `timeout` or `error`, and an `interrupted` run, count as a failure. These never count, because they say nothing about the shop's site, or, like a 4xx on the API channel, they are handled elsewhere:
        - the watchdog's `timeout` for an attempt that never started (the profile was busy, no worker slot was free, or the browser worker was down), so a backed-up HTCO worker never opens a healthy shop's breaker;
        - `deferred`: the profile was busy, or no parallel slot was free by the deadline;
