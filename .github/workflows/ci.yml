@@ -357,7 +357,7 @@ jobs:
     name: ci-gate
     if: always()
     needs:
-      [checks, tests, database, security, workflows, image, contract, test-integrity, migration-order, pr-title]
+      [checks, tests, browser, database, security, workflows, image, contract, test-integrity, migration-order, pr-title]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
