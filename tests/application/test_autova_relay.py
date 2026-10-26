@@ -20,6 +20,7 @@ from htco_application.relay import (
     RelayItemNotVisibleError,
     list_relay_items,
     open_due_relay_items,
+    relay_code,
     submit_tracking,
 )
 from htco_application.sla_inspector import AwaitingOrder
@@ -336,3 +337,25 @@ async def test_the_inspection_opens_the_due_relay_items() -> None:
     assert isinstance(outcome, Completed)
     assert outcome.output["relay_items_opened"] == 1
     assert [i.receipt_id for i in store.items.values()] == [51]
+
+
+async def test_the_code_is_given_back_for_the_copy_to_buyer_data_roles_only() -> None:
+    store = MemoryRelayStore()
+    item = await an_item(store)
+    submit_tracking(
+        auth(), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE, now=PAID,
+        correlation_id="req-1",
+    )  # fmt: skip
+
+    assert relay_code(auth(), store, organization_id=ORG, item_id=item, now=PAID) == CODE
+    with pytest.raises(RelayItemNotVisibleError):  # a viewer of the shop: not even that it exists
+        relay_code(auth(Role.VIEWER), store, organization_id=ORG, item_id=item, now=PAID)
+    store.close(item, reason=ClosedReason.TRACKING_ON_ETSY, now=PAID)
+    with pytest.raises(RelayItemNotVisibleError):  # closed: the code is gone
+        relay_code(auth(), store, organization_id=ORG, item_id=item, now=PAID)
+
+
+async def test_one_workspace_needs_no_organization_named() -> None:
+    store = MemoryRelayStore()
+    await an_item(store)
+    assert len(list_relay_items(auth(), store, organization_id=None, now=PAID)) == 1

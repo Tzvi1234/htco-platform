@@ -17,14 +17,15 @@ roles, never in an audit, an event or a log.
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from functools import partial
 from datetime import datetime
+from functools import partial
 from typing import Any, Protocol
 
 from htco_application.access.authentication import AuthContext
 from htco_application.access.policy import Capability, Outcome, Scope, ShopRef, decide
 from htco_application.audit import AuditRecord
 from htco_application.notifications import NotificationRequest, NotificationService
+from htco_application.shops import OrganizationRequiredError
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.fulfillment import TrackingNumber
 from htco_domain.notifications import NotificationKind
@@ -96,6 +97,10 @@ class RelayStore(Protocol):
         self, organization_id: uuid.UUID, *, shop_ids: frozenset[uuid.UUID] | None, limit: int
     ) -> tuple[RelayItem, ...]:
         """Oldest first; `shop_ids` (a shop-scoped role's grants) is applied before `limit`."""
+        ...
+
+    def code(self, organization_id: uuid.UUID, item_id: uuid.UUID) -> str | None:
+        """The pasted code while the item waits for its upload; None once it closed."""
         ...
 
     def tracking_on_receipt(self, shop_id: uuid.UUID, receipt_id: int, fingerprint: bytes) -> bool:
@@ -184,6 +189,13 @@ async def open_due_relay_items(  # noqa: PLR0913 - the order list and its collab
     return opened
 
 
+def _organization(auth: AuthContext, organization_id: uuid.UUID | None) -> uuid.UUID:
+    organization = organization_id or auth.default_organization()
+    if organization is None:
+        raise OrganizationRequiredError("name the organization")
+    return organization
+
+
 def _allowed(
     auth: AuthContext,
     organization_id: uuid.UUID,
@@ -198,10 +210,11 @@ def _allowed(
 
 
 def list_relay_items(
-    auth: AuthContext, store: RelayStore, *, organization_id: uuid.UUID, now: datetime
+    auth: AuthContext, store: RelayStore, *, organization_id: uuid.UUID | None, now: datetime
 ) -> tuple[RelayItem, ...]:
     """The open items of the shops the caller may act on (update incidents). Raises
     `PermissionError` for a role that may not."""
+    organization_id = _organization(auth, organization_id)
     principal = auth.principal_for(organization_id)
     overall = decide(principal, Capability.UPDATE_INCIDENTS, shop=None, now=now)
     if overall.outcome is not Outcome.ALLOW:
@@ -214,7 +227,7 @@ def submit_tracking(  # noqa: PLR0913 - the caller, the item and the pasted trac
     auth: AuthContext,
     store: RelayStore,
     *,
-    organization_id: uuid.UUID,
+    organization_id: uuid.UUID | None,
     item_id: uuid.UUID,
     carrier: str,
     code: str,
@@ -224,6 +237,7 @@ def submit_tracking(  # noqa: PLR0913 - the caller, the item and the pasted trac
     """The owner pastes the number from AutoVA. Raises `RelayItemNotVisibleError` (404),
     `PermissionError` (403), `TrackingFormatError` (422), `RelayItemMovedError` and
     `DuplicateTrackingError` (409)."""
+    organization_id = _organization(auth, organization_id)
     item = store.item(organization_id, item_id)
     if item is None or not _allowed(
         auth, organization_id, item.shop_id, Capability.VIEW_INCIDENTS, now=now
@@ -256,6 +270,30 @@ def submit_tracking(  # noqa: PLR0913 - the caller, the item and the pasted trac
         now=now,
         audit=_audit(item, actor, "relay.tracking_pasted", tracking, correlation_id),
     )
+
+
+def relay_code(
+    auth: AuthContext,
+    store: RelayStore,
+    *,
+    organization_id: uuid.UUID | None,
+    item_id: uuid.UUID,
+    now: datetime,
+) -> str:
+    """The pasted code for the person who copies it into Etsy: buyer-data roles of the shop
+    only, while the item is open. Anyone else, or a closed item, gets `RelayItemNotVisibleError`
+    (404), so the answer never says whether a code exists."""
+    organization_id = _organization(auth, organization_id)
+    item = store.item(organization_id, item_id)
+    if item is None or not all(
+        _allowed(auth, organization_id, item.shop_id, capability, now=now)
+        for capability in (Capability.UPDATE_INCIDENTS, Capability.VIEW_BUYER_CONTACT)
+    ):
+        raise RelayItemNotVisibleError("no such relay item")
+    code = store.code(organization_id, item_id)
+    if code is None or not item.state.is_open:
+        raise RelayItemNotVisibleError("no such relay item")
+    return code
 
 
 def _audit(

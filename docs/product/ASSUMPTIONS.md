@@ -60,6 +60,7 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 | A-16 | Supabase Auth's OAuth 2.1 server can back a system-browser sign-in for the native apps with an HTCO-hosted sign-in page | Spike at the start of Phase 16 | Platform | Phase 16 | Open |
 | A-17 | Jev's API, terms, limits and price are as reported (decision-only model; early access via TypeSafe and OpenRouter; about $0.042 per million input tokens, output free; 32K or 64K context) | TypeSafe documentation and a sandbox call | Platform | Phase 9 | Open |
 | A-18 | Jev is at least as accurate as rules plus an economy model on our triage questions | 200-example benchmark per task family (FR-MDL-08) | Platform | Phase 9 | Open |
+| A-20 | A paid order's tracking reaches Etsy within 2 business days of payment for every supplier; after that the AutoVA relay item opens (slice 6.10) | The relay items opened per week against the orders shipped in time | Owner | Phase 13 (per supplier) | Accepted 2026-10-25 by the owner, one window for all suppliers until Phase 13 |
 | A-19 | One `agent-worker` carries automations and employees at pilot load | Load test and queue-age metrics | Platform | Phase 10 | Open |
 
 ## 3. Verified facts (research on 2026-10-14)

@@ -93,6 +93,17 @@ class PostgresRelayStore:
             ).fetchall()
         return tuple(_item(r) for r in rows)
 
+    def code(self, organization_id: uuid.UUID, item_id: uuid.UUID) -> str | None:
+        with self._database.connection() as connection:
+            row = connection.execute(
+                """
+                select code from app.relay_item_codes
+                where organization_id = %s and relay_item_id = %s
+                """,
+                [organization_id, item_id],
+            ).fetchone()
+        return None if row is None else str(row[0])
+
     def tracking_on_receipt(self, shop_id: uuid.UUID, receipt_id: int, fingerprint: bytes) -> bool:
         with self._database.connection() as connection:
             row = connection.execute(

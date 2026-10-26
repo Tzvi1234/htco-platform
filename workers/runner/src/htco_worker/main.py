@@ -149,6 +149,7 @@ from htco_persistence.maintenance import PostgresPurgeStore, PostgresShopDirecto
 from htco_persistence.messaging import PostgresOutbox
 from htco_persistence.notifications import PostgresEmailDirectory, PostgresNotificationStore
 from htco_persistence.order_automations import PostgresOrderAutomationStore
+from htco_persistence.relay import PostgresRelayStore
 from htco_persistence.shop_integrations import (
     PostgresCapabilityStore,
     PostgresRefreshLock,
@@ -448,13 +449,15 @@ def fulfillment_handlers(
             alerts=NotificationService(
                 PostgresNotificationStore(database), clock=_now, offload=anyio.to_thread.run_sync
             ),
+            relay=PostgresRelayStore(database),
         )
     }
     if vault is not None:
         tracking = PostgresTrackingStore(database)
         recorder = TrackingRecorder(
-            tracking, incidents, clock=_now, offload=anyio.to_thread.run_sync
-        )
+            tracking, incidents, clock=_now, offload=anyio.to_thread.run_sync,
+            relay=PostgresRelayStore(database),
+        )  # fmt: skip
         handlers[TRACKING_SYNC] = TrackingSync(
             recorder, tracking, vault, clock=_now, offload=anyio.to_thread.run_sync
         )

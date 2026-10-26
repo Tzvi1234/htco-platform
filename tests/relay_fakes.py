@@ -50,6 +50,10 @@ class MemoryRelayStore:
         ]
         return tuple(sorted(found, key=lambda i: i.opened_at)[:limit])
 
+    def code(self, organization_id: uuid.UUID, item_id: uuid.UUID) -> str | None:
+        found = self.item(organization_id, item_id)
+        return None if found is None else self.codes.get(item_id)
+
     def tracking_on_receipt(self, shop_id: uuid.UUID, receipt_id: int, fingerprint: bytes) -> bool:
         return (shop_id, receipt_id, fingerprint) in self.on_etsy
 
