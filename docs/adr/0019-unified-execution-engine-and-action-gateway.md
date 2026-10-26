@@ -105,3 +105,26 @@ Option 3.
   - **Lost writes.** A write is never re-sent blindly.
 
   Decision §3's Browser row and the action state machine in [execution-engine.md](../architecture/execution-engine.md) §7 follow this.
+- 2026-10-27 — The AUD-04 design is complete (#143, AC-1). ADR-0025 §3 is the design; this entry maps #143's criteria onto it and settles the four points it left open. The code (#143 AC-2 to AC-5) follows in `htco_application.execution` once orion's `execution/` work (#147, #161) has merged.
+
+  | #143 AC-1 asks for | Where it is decided |
+  |---|---|
+  | A dispatched outcome | `DISPATCHED`, a waiting outcome (`StatusKind.waiting`, reason `waiting_for_browser`): ADR-0025 §3 step 1, execution-engine.md §7 |
+  | The `browser.*` job kind and its payload | `browser.run` with a locator payload only (execution ID and attempt); the routed binding and the request hash live on the stored claim, never a secret: §3 step 1 |
+  | One lock per browser profile | The job's concurrency key `browser:{environment_id}`, and the profile's advisory lock in the controller: §3 steps 1 and 6 |
+  | How the worker reports a result | The run's row (set once through `private.finish_browser_run`) and `browser.run_finished.v1` in the outbox: §3 step 4 |
+  | How the action resumes | A `browser.resume` job resubmits the same request; `submit` continues the stored claim, as for a human hand-off: §3 step 5 |
+  | Timeouts and the slot's lease | The gateway's slot is released at dispatch; the deadline watchdog (deadline plus grace, grace at least the session's maximum) resolves every attempt: §3 steps 1, 2 and 6 |
+
+  **Settled here:**
+  1. **Completions that change nothing (#143 AC-3).** A resume applies an outcome only to an action that is `DISPATCHED`, for the attempt and the request hash of its stored claim. The resume ignores three kinds of completion, and records each one: a log line with the code below, and `actions.resume_ignored.v1` with the execution, the attempt and the code, through the outbox. Nothing else changes.
+     - `duplicate`: the outcome of this attempt was already applied. The resume answers the recorded result, as `submit` does for any repeated key.
+     - `cancelled`: the action is `CANCELLED` (an approval revoked or expired before the attempt started, ADR-0025 §3 step 4a) or already final.
+     - `hash_mismatch`: the outcome names a request hash, or an attempt, that is not the stored claim's. This one also opens an incident, because only a bug or a forged row can cause it.
+  2. **The breaker and the rate budget (#143 AC-5).** Both apply at dispatch, per the binding's keys:
+     - the `browser:{shop}` breaker is checked at dispatch (open means `DEFERRED`, as for any channel);
+     - the `browser:{shop}` rate window is spent at dispatch;
+     - the resume records the run's result on that breaker: a `failed`, `timeout` or `interrupted` run counts as a failure, while a `challenge` or a `refused` does not, like a 4xx on the API channel.
+     The concurrency slot is the job's (`browser:{environment_id}`), held by the queue while the browser worker runs it, never by the gateway call.
+  3. **The browser worker's handlers (#143 AC-6).** They make no blocking database call on the event loop. Every store they use is an async adapter, or offloaded to a worker thread (`anyio.to_thread.run_sync`), as AUD-05 (#150) asks at the store boundary.
+  4. **Where the browser channel lives.** In the agent-worker, `BrowserChannel` only dispatches. Like every channel, it exposes `.recipes`, so the startup check of #147 (an enabled binding without a recipe refuses to start) covers browser bindings too. The browser worker never calls the gateway.
