@@ -52,8 +52,8 @@ select is(
       and has_table_privilege('htco_browser', c.oid, 'select, insert, update, delete, truncate, references, trigger')
     order by 1
   ),
-  array['app.browser_profile_archives', 'audit.audit_log'],
-  'AC-8A.1.2: the browser role holds table rights on its archives and the audit log only'
+  array['app.browser_profile_archives', 'app.browser_sessions', 'audit.audit_log'],
+  'AC-8A.1.2: the browser role holds table rights on its archives, its sessions (8A.2) and the audit log only'
 );
 select is(
   array(
@@ -62,7 +62,7 @@ select is(
       and has_any_column_privilege('htco_browser', c.oid, 'select, insert, update, references')
     order by 1
   ),
-  array['app.browser_profile_archives', 'app.shop_browser_environments', 'audit.audit_log'],
+  array['app.browser_profile_archives', 'app.browser_sessions', 'app.shop_browser_environments', 'audit.audit_log'],
   'AC-8A.1.2: beyond those, its only column rights are on the browser environments'
 );
 select ok(
