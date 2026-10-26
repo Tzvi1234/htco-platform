@@ -182,21 +182,25 @@ _TAIL_INTERVAL_SECONDS = 0.1
 
 
 def _tail(path: Path, done: threading.Event, sink: IO[str] | None) -> None:
-    """Copy the step's output file to the console and the log as it grows, until `done` is set
-    and the file is read to its end. A file read never waits on a writer, so a process that
-    keeps the output open (even outside the step's group) cannot hold the runner."""
+    """Copy the step's output file to the console and the log as it grows. Once `done` is set,
+    read only up to the size the file had then. A file read never waits on a writer, and the end
+    is fixed, so a process that keeps the output open and keeps writing (even outside the step's
+    group) cannot hold the runner."""
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    end: int | None = None
     with path.open("rb") as source:
         while True:
-            finished = done.is_set()  # read once more after it is set: nothing is lost
-            chunk = source.read()
+            if end is None and done.is_set():
+                end = path.stat().st_size  # what the step wrote; anything later is a leftover's
+            remaining = -1 if end is None else max(end - source.tell(), 0)
+            chunk = source.read(remaining) if remaining else b""
             if chunk:
                 text = decoder.decode(chunk)
                 sys.stdout.write(text)
                 sys.stdout.flush()
                 if sink is not None:
                     sink.write(text)
-            elif finished:
+            elif end is not None:
                 break
             else:
                 time.sleep(_TAIL_INTERVAL_SECONDS)
