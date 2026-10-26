@@ -59,3 +59,4 @@ Scenario E (two employees, one router, different policies) and Scenario F (rules
 ## Validation log
 
 - 2026-10-14 — Router and advisor chain tested with fakes (`tests/application/test_model_router.py`, `test_decision_advisor.py`).
+- 2026-10-26 — Amended by [ADR-0023](0023-routing-modes-and-difficulty-assessment.md): a routing policy has a mode, either `routed` (this ADR's design) or `pinned` (one catalog alias, with explicit fallbacks or a stop), chosen by the Owner and audited. A task that declares no difficulty is assessed by rules, then by Jev on the benchmarked `task_difficulty` family, then the default tier. Difficulty only raises the tier, and it is clamped at the policy's maximum.

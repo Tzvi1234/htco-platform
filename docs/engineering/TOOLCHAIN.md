@@ -55,6 +55,7 @@
 | YAML | PyYAML 6.0.3 (with `types-pyyaml`) | | Renders the contract without anchors or aliases |
 | HTTP mocks | respx | Planned 0.23.x | |
 | Database | Supabase CLI | 2.120.0 (CI downloads the release and checks its SHA-256; locally from the GitHub release) | Local Postgres (Docker), migrations, pgTAP (`supabase test db`); the owner-started `migrate.yml` workflow for deployed projects |
+| Vector search | pgvector (Supabase's `vector` extension, in the `extensions` schema) | Planned for slice 9.10 (version as Supabase ships it, recorded at kickoff) | The knowledge base's embeddings and HNSW index next to the rows they describe, under the same RLS ([ADR-0024](../adr/0024-knowledge-base-and-retrieval.md)); no external vector service |
 
 ## Security and supply chain
 

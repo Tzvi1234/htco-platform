@@ -198,8 +198,12 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 | Table | Purpose | Phase |
 |---|---|---|
 | `model_catalog` | Verified models, prices with as-of dates, health, eval scores | 9 |
-| `routing_decisions`, `model_usage` | Routing decisions (employee, policy version, tier, model, reason) and token and cost logs | 9 |
+| `model_catalog_aliases` | Stable names (`default-advanced`, `default-embedding`), each pointing to exactly one catalog row, with an as-of date and a source; changed only by pull request ([ADR-0023](../adr/0023-routing-modes-and-difficulty-assessment.md)) | 9 |
+| `employee_routing_settings` | The Owner's current routing mode per employee (`routed` or `pinned`, alias and fallback list), set only by the Owner and carried into each new profile version | 9 |
+| `routing_decisions`, `model_usage` | Routing decisions (employee, policy version, mode, alias, tier, model, difficulty and its source, the clamp and pin flags, reason) and token and cost logs | 9 |
 | `decision_records` | Decision Advisor attempts: question, provider, outcome, value, latency, cost | 9 |
+| `knowledge_sources` | One row per ingested knowledge source: organization, shop, kind (`shop_policy`, `faq`, `listing`, `product`, `approved_reply`), source reference, content hash, version, status, the conversation an approved reply derives from, `retain_until`. RLS by organization and shop ([ADR-0024](../adr/0024-knowledge-base-and-retrieval.md)) | 9 |
+| `knowledge_chunks` | Redacted chunk text, language, `tsvector`, `vector(n)` embedding with its alias and model, position; HNSW and GIN indexes; RLS by organization and shop; never DC1 or DC2 data | 9 |
 
 ### Activity, supervision and improvement
 
