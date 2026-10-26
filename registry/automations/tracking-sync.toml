@@ -70,7 +70,7 @@ text = "120 s per attempt; every 15 minutes per shop once the schedule is on, or
 
 [specification.permissions]
 status = "defined"
-text = "Runs as the htco_worker role inside its job's organization: select and insert on tracking_events, select, insert and update on tracking_checks, the incident updates of slice 6.3, the outbox, and the etsy_orders columns it needs. Its only action is etsy.receipts.read; it has no Etsy write."
+text = "Runs as the htco_worker role inside its job's organization: select and insert on tracking_events, select, insert and update on tracking_checks, the incident updates of slice 6.3, the outbox, and the etsy_orders columns it needs. Its only action is etsy.receipts.read; it has no Etsy write. It receives the shipments' tracking codes in that action's order history form (TRACKING_CODE_AUTOMATIONS) because recording them is its job; never the buyer's name or address (AUD-06)."
 
 [specification.audit]
 status = "defined"
