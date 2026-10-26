@@ -92,3 +92,21 @@ async def test_get__not_wired__503() -> None:
         answer = await http.get(f"/v1/executions/{uuid.uuid4()}")
 
     assert answer.status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("role", "output"),
+    [(Role.OWNER, {"receipts": 2, "recorded": 1}), (Role.ADMIN, {"receipts": 2, "recorded": 1}),
+     (Role.OPERATIONS, None)],
+)  # fmt: skip
+async def test_get__the_run_output_for_the_owner_and_admins_only(
+    role: Role, output: dict[str, int] | None
+) -> None:
+    """Per-run counts (#127): shown to the Owner and Admins, null for a shop-scoped role."""
+    records = order_records(output={"receipts": 2, "recorded": 1})
+
+    async with client(role, records=records) as http:
+        answer = await http.get(f"/v1/executions/{records.execution.id}")
+
+    assert answer.status_code == 200
+    assert answer.json()["output"] == output

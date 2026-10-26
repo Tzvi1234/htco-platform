@@ -19,7 +19,7 @@ puts them in order.
 
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
@@ -89,6 +89,8 @@ class ExecutionRecord:
     state: ExecutionState
     correlation_id: str
     created_at: datetime
+    # A succeeded run's checked handler output (#127): for the Owner and Admins only.
+    output: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -262,4 +264,7 @@ def execution_chain(
         is not Outcome.ALLOW
     ):  # fmt: skip
         raise ExecutionNotVisibleError(str(execution_id))
+    if office.scope is not Scope.ORGANIZATION and records.execution.output is not None:
+        # Per-run counts are the office's view (#127): a shop-scoped role sees the run without.
+        records = replace(records, execution=replace(records.execution, output=None))
     return build_chain(records)

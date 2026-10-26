@@ -314,11 +314,30 @@ def test_worker__secrets_are_placeholders_and_the_database_url_has_no_password()
     assert envs["HTCO_ENVIRONMENT"]["value"] == "production"
 
 
-def test_worker__runs_only_the_named_maintenance_schedules() -> None:
+def test_worker__runs_only_the_named_schedules() -> None:
     envs = {env["key"]: env for env in _worker()["envs"]}
     assert set(envs["HTCO_WORKER_SCHEDULES"]["value"].split(",")) == {
         "maintenance.capability_probes",
         "maintenance.refresh_token_expiry",
         "maintenance.purge_disconnected_shops",
         "maintenance.prune_finished_jobs",
+        # Activation step 4 (5.11): reconciliation at HTCO_RECONCILIATION_SCHEDULE's times.
+        "orders.reconciliation",
     }
+
+
+def test_order_automations_active__the_api_stops_syncing_and_takes_webhooks() -> None:
+    """Activation steps 3 and 5 (5.11): the worker owns the order sync; the webhook endpoint is
+    on, since the owner registered it in the Etsy developer portal and set ETSY_WEBHOOK_SECRET
+    (2026-10-26), which the deploy maps from the GitHub secret, never a literal."""
+    envs = _envs()
+    assert envs["HTCO_ORDER_SYNC_IN_API"]["value"] == "false"
+    assert envs["HTCO_ETSY_WEBHOOKS_ENABLED"]["value"] == "true"
+    assert envs["HTCO_ETSY_WEBHOOK_SECRET"]["type"] == "SECRET"
+    assert envs["HTCO_ETSY_WEBHOOK_SECRET"]["value"] == "${HTCO_ETSY_WEBHOOK_SECRET}"
+
+
+def test_api__starts_automation_executions_for_the_worker() -> None:
+    """Activation step 2b and the audited admin retry (5.10, 5.11): the API's engine creates
+    executions and jobs, and never runs a handler."""
+    assert _envs()["HTCO_AUTOMATIONS_ENABLED"]["value"] == "true"
