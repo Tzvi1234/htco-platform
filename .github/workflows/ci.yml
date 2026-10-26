@@ -90,7 +90,7 @@ jobs:
           HTCO_TEST_BROWSER: "1"
           # Ubuntu 24.04 runners restrict unprivileged user namespaces, which the sandbox needs.
           HTCO_TEST_BROWSER_SANDBOX: "0"
-        run: uv run pytest -m browser -q tests/browser_worker
+        run: uv run pytest -m browser -q tests/browser_worker tests/contracts
 
   security:
     name: security

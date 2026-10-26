@@ -201,13 +201,25 @@ forbidden_modules = ["htco_agent_runtime", "langgraph", "langchain_core"]
 
 [[tool.importlinter.contracts]]
 id = "playwright-only-in-browser-worker"
-name = "Only the browser worker imports Playwright (ADR-0020 §8)"
+name = "Only the browser worker imports Playwright or Browser Use (ADR-0020 §8, ADR-0025 §1, AC-8A.2.7)"
 type = "forbidden"
 source_modules = [
   "htco_domain", "htco_application", "htco_platform", "htco_agent_runtime", "htco_persistence",
   "htco_integrations", "htco_api", "htco_worker",
 ]
-forbidden_modules = ["playwright"]
+forbidden_modules = ["playwright", "browser_use"]
+
+[[tool.importlinter.contracts]]
+id = "model-sdks-only-in-gateway"
+name = "Model SDKs only in the model gateway package (ADR-0004, ADR-0025 §1, AC-8A.2.7)"
+type = "forbidden"
+# The gateway package (`htco_model_router`, ADR-0002) is not built yet, so no package here may
+# import a model SDK. When it lands it joins root_packages and stays out of this list.
+source_modules = [
+  "htco_domain", "htco_application", "htco_platform", "htco_agent_runtime", "htco_persistence",
+  "htco_integrations", "htco_api", "htco_worker", "htco_browser_worker",
+]
+forbidden_modules = ["anthropic", "openai", "langchain_anthropic", "langchain_openai", "litellm"]
 
 [[tool.importlinter.contracts]]
 id = "browser-worker-holds-no-etsy-tokens"

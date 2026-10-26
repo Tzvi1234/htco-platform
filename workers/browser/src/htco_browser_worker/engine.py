@@ -1,7 +1,7 @@
 """The Playwright engine (slice 8A.2): one Chromium persistent context on an unpacked profile.
 
-`PlaywrightEngine` is the Browser Controller's `BrowserEngine`. It starts Playwright and opens
-`chromium.launch_persistent_context(user_data_dir=<the unpacked profile>)`, so cookies and
+`PlaywrightEngine` is `ManagedChromiumProvider`'s `BrowserEngine` (8A.2a). It starts Playwright
+and opens `chromium.launch_persistent_context(user_data_dir=<the unpacked profile>)`, so cookies and
 storage live in the shop's own profile, which the controller re-seals after the session.
 
 The browser is honest by default (ADR-0020 §2 and §4). The adapter has no way to set a user
@@ -39,6 +39,23 @@ class PlaywrightHandle:
 
     async def close(self) -> None:
         await _to_the_end(self._close())
+
+    async def probe(self) -> str:
+        """The health probe (8A.2a): load `about:blank`, run one script, and read the running
+        browser's version over the CDP pipe. Nothing leaves the worker."""
+        page = await self.context.new_page()
+        try:
+            await page.goto("about:blank")
+            if await page.evaluate("1 + 1") != 2:  # noqa: PLR2004 - the probe's own answer
+                raise RuntimeError("the page did not run the probe script")
+            cdp = await self.context.new_cdp_session(page)
+            try:
+                info = await cdp.send("Browser.getVersion")
+            finally:
+                await cdp.detach()
+        finally:
+            await page.close()
+        return _version(str(info["product"]))
 
     async def _close(self) -> None:
         try:
@@ -80,6 +97,21 @@ class PlaywrightEngine:
                     _log.warning("browser.close_failed_after_cancel: %s", type(error).__name__)
             raise
 
+    async def version(self) -> str:
+        """The Chromium build this engine really starts, from a throwaway browser with no
+        profile (ADR-0025 §2: one pinned build for the fleet)."""
+        playwright: Playwright = await self._start().start()
+        try:
+            browser = await playwright.chromium.launch(
+                headless=self._headless, chromium_sandbox=self._sandbox, timeout=self._timeout_ms
+            )
+            try:
+                return _version(browser.version)
+            finally:
+                await browser.close()
+        finally:
+            await playwright.stop()
+
     async def _open(self, profile_directory: Path) -> PlaywrightHandle:
         playwright: Playwright = await self._start().start()
         try:
@@ -94,6 +126,11 @@ class PlaywrightEngine:
             await playwright.stop()
             raise
         return PlaywrightHandle(context, playwright)
+
+
+def _version(product: str) -> str:
+    """`HeadlessChrome/140.0.7339.16` or `140.0.7339.16` -> `140.0.7339.16`."""
+    return product.rsplit("/", 1)[-1]
 
 
 async def _to_the_end[T](work: Awaitable[T]) -> T:

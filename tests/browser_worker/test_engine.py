@@ -35,10 +35,20 @@ from htco_application.browser_profiles import (
     ProfileWorkspaces,
 )
 from htco_browser_worker.engine import PlaywrightEngine, PlaywrightHandle
+from htco_browser_worker.managed_chromium import (
+    BrowserEngine,
+    ManagedChromiumProvider,
+    managed_chromium_capabilities,
+)
 from htco_domain.browser import BrowserEnvironment, EnvironmentStatus
 from htco_platform.crypto import EnvelopeSealer, KeyRing
 
 pytestmark = pytest.mark.anyio
+
+
+def _provider(workspaces: ProfileWorkspaces, engine: BrowserEngine) -> ManagedChromiumProvider:
+    return ManagedChromiumProvider(workspaces, engine, managed_chromium_capabilities("test"))
+
 
 # Anything here would change what the browser says about itself or where it comes from.
 _DISHONEST = frozenset(
@@ -252,8 +262,9 @@ async def test_session__a_deadline_during_the_launch_releases_the_lock_after_chr
 
     monkeypatch.setattr(locks, "hold", recording_hold)
     controller = BrowserController(
-        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(vault, tmp_path),
-        engine(fake), locks, MemorySessionLog(), clock=lambda: datetime.now(UTC),
+        MemoryProfileRecords({env.id: env}),
+        _provider(ProfileWorkspaces(vault, tmp_path), engine(fake)), locks, MemorySessionLog(),
+        clock=lambda: datetime.now(UTC),
     )  # fmt: skip
 
     async def run() -> None:
@@ -318,8 +329,11 @@ async def test_chromium__a_cookie_survives_from_one_sealed_session_to_the_next(
     root = tmp_path / "tmpfs"
     root.mkdir()
     controller = BrowserController(
-        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(vault, root),
-        PlaywrightEngine(chromium_sandbox=os.environ.get("HTCO_TEST_BROWSER_SANDBOX") != "0"),
+        MemoryProfileRecords({env.id: env}),
+        _provider(
+            ProfileWorkspaces(vault, root),
+            PlaywrightEngine(chromium_sandbox=os.environ.get("HTCO_TEST_BROWSER_SANDBOX") != "0"),
+        ),
         MemoryProfileLocks(), MemorySessionLog(), clock=lambda: datetime.now(UTC),
     )  # fmt: skip
 
@@ -327,13 +341,13 @@ async def test_chromium__a_cookie_survives_from_one_sealed_session_to_the_next(
         return datetime.now(UTC) + timedelta(seconds=60)
 
     async with controller.session(env.id, purpose="test.sign_in", deadline=deadline()) as one:
-        assert isinstance(one.engine, PlaywrightHandle)
-        page = await one.engine.context.new_page()
+        assert isinstance(one.connection, PlaywrightHandle)
+        page = await one.connection.context.new_page()
         await page.goto(f"{local_site}/sign-in")
         assert await page.title() == "local fixture"
 
     assert not any(root.iterdir())
     async with controller.session(env.id, purpose="test.again", deadline=deadline()) as two:
-        assert isinstance(two.engine, PlaywrightHandle)
-        cookies = await two.engine.context.cookies(local_site)
+        assert isinstance(two.connection, PlaywrightHandle)
+        cookies = await two.connection.context.cookies(local_site)
         assert [(c["name"], c["value"]) for c in cookies] == [("htco_test", "signed-in")]
