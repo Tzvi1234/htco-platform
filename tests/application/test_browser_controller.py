@@ -26,6 +26,7 @@ from htco_application.browser_controller import (
     MemoryProfileLocks,
     MemorySessionLog,
     SessionDeferredError,
+    SessionLockLostError,
     SessionOutcome,
     SessionRecord,
     SessionRefusedError,
@@ -614,3 +615,26 @@ async def test_destroy__an_unknown_environment_is_not_found(tmp_path: Path) -> N
     s = setup(tmp_path, environment())
     with pytest.raises(EnvironmentNotFoundError):
         await s.controller.destroy_profile(uuid.uuid4(), deadline=soon())
+
+
+async def test_session__a_lost_lock_never_writes_the_profile_back(tmp_path: Path) -> None:
+    """quill on #121: if the lock's connection dropped during the session, another session may
+    hold the profile now, so this one must not re-seal; it fails as `lock_lost`."""
+    env = environment()
+    s = setup(tmp_path, env)
+    async with s.controller.session(env.id, purpose="test.good", deadline=soon()):
+        (s.engine.handles[0].profile / "Cookies").write_bytes(b"good")
+    good = s.vault.open(env)
+
+    async def run() -> None:
+        async with s.controller.session(env.id, purpose="test.lost", deadline=soon()):
+            (s.engine.handles[1].profile / "Cookies").write_bytes(b"stale")
+            s.locks.held.discard(env.id)  # the lock's connection dropped
+
+    with pytest.raises(SessionLockLostError):
+        await run()
+    assert s.vault.open(env) == good
+    assert s.engine.handles[1].closed
+    assert on_disk(tmp_path) == []
+    lost = [r for r in s.log.records.values() if r.purpose == "test.lost"]
+    assert [(r.outcome, r.failure) for r in lost] == [(SessionOutcome.FAILED, "lock_lost")]

@@ -55,6 +55,7 @@ _SESSION_STATUSES = frozenset(
     }
 )
 TIMEOUT = "timeout"
+LOCK_LOST = "lock_lost"
 ERROR = "error"
 
 
@@ -71,6 +72,11 @@ class SessionDeferredError(Exception):
 
 class SessionTimeoutError(Exception):
     """The session ran past its deadline and was closed."""
+
+
+class SessionLockLostError(Exception):
+    """The profile lock was lost during the session (its connection dropped); the profile was
+    not written back, because another session may hold it now."""
 
 
 class SessionRefusedError(Exception):
@@ -99,6 +105,10 @@ class ProfileLocks(Protocol):
     ) -> AbstractAsyncContextManager[bool]:
         """Yields True while this process holds the environment's lock, or False when it was
         still held elsewhere at `until`. The lock is released on exit."""
+        ...
+
+    async def still_held(self, environment_id: uuid.UUID) -> bool:
+        """Whether this process still holds the lock it took (its connection is alive)."""
         ...
 
 
@@ -198,7 +208,12 @@ class BrowserController:
                         yield ControllerSession(record.id, environment, handle)
                     finally:
                         await _shielded(handle.close())
+                    # Write the profile back only while the lock is still ours.
+                    await self._still_ours(environment)
                 outcome, failure = SessionOutcome.SUCCEEDED, None
+            except SessionLockLostError:
+                failure = LOCK_LOST
+                raise
             except TimeoutError:
                 if not limit.expired():
                     raise
@@ -217,6 +232,10 @@ class BrowserController:
             if not held:
                 raise SessionDeferredError("the profile is busy until past the deadline")
             await _shielded(asyncio.to_thread(self._workspaces.vault.delete, environment))
+
+    async def _still_ours(self, environment: BrowserEnvironment) -> None:
+        if not await self._locks.still_held(environment.id):
+            raise SessionLockLostError("the profile lock was lost")
 
     async def _takes_sessions(self, environment_id: uuid.UUID) -> BrowserEnvironment:
         environment = await _blocking(self._records.by_id, environment_id)
@@ -306,6 +325,9 @@ class MemoryProfileLocks:
                 yield True
             finally:
                 self.held.discard(environment_id)
+
+    async def still_held(self, environment_id: uuid.UUID) -> bool:
+        return environment_id in self.held
 
     async def _wait(self, environment_id: uuid.UUID, until: datetime) -> bool:
         while environment_id in self.held:
