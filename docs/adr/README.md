@@ -34,11 +34,12 @@ Accepted ADRs are not rewritten. Two things may be added later: a status change,
 | [0017](0017-engineering-on-claude-code-subscription.md) | The Engineering department runs on Claude Code with the owner's subscription | Accepted |
 | [0018](0018-order-history-and-buyer-data.md) | Order history is stored with the buyer's name and shipping address, never contact data | Accepted |
 | [0019](0019-unified-execution-engine-and-action-gateway.md) | One execution engine and one Action Gateway for automations and AI employees | Accepted (2026-10-23, slice 5.0 complete: AC-5.0.1 and AC-5.0.2 tested); amends 0003, 0007, 0012, 0013, 0014 |
-| [0020](0020-per-shop-browser-environment.md) | An optional, honest per-shop Browser Environment (no anti-detect browser, no proxy per shop) | Accepted (owner, 2026-10-23) |
+| [0020](0020-per-shop-browser-environment.md) | An optional, honest per-shop Browser Environment (no anti-detect browser, no proxy per shop) | Accepted (owner, 2026-10-23); amended by 0025 |
 | [0021](0021-authenticator-service.md) | An internal Authenticator service: PyOTP on the existing vault | Proposed (Phase 8B) |
 | [0022](0022-etsy-write-tools-and-browser-scope.md) | Every Etsy API endpoint as a tool, writes under approvals; browser actions only inside the recorded Etsy scope | Accepted (browser actions off until scoped); amends 0008 |
 | [0023](0023-routing-modes-and-difficulty-assessment.md) | Per-employee routing mode (routed or pinned to a catalog alias); difficulty by rules, then benchmarked Jev, never above the cap | Accepted (Phase 9); amends 0015 |
 | [0024](0024-knowledge-base-and-retrieval.md) | Shared knowledge base on pgvector in Supabase; structured tools, then hybrid search, then the model | Accepted (Phase 9, slice 9.10) |
+| [0025](0025-browser-and-network-providers.md) | `BrowserProvider` and `NetworkProvider` ports (plain Chromium the only implementation; the owner's AdsPower choice recorded as an external dependency, out of scope and not enabled); Browser Use earlier through the gateway; Valkey only where Postgres falls short | Accepted (Phase 8A); amends 0020 |
 
 Client decisions live in `htco-clients/docs/adr/`.
 

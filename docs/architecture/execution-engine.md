@@ -202,6 +202,38 @@ class BrowserSession(Protocol):
     async def inject_secret(self, grant: InjectionGrant, selector: str) -> None: ...
 
 
+class BrowserProvider(Protocol):  # ADR-0025 §1; the only implementation: ChromiumProvider (8A.1/8A.2)
+    """The browser engine behind BrowserController. A provider never sees an OAuth token, the
+    Secret Broker, a database role or a network outside its NetworkProvider egress; the
+    controller holds the lock, the deadline and the session record around every call."""
+
+    provider_id: str  # "chromium"; shop_browser_environments.provider; Owner-only to change
+    async def create_profile(self, environment: BrowserEnvironment) -> ProfileRecord: ...
+    async def open(
+        self, environment: BrowserEnvironment, *, egress: EgressProfile, deadline: AwareDatetime
+    ) -> ProviderHandle: ...
+    async def connect_cdp(self, handle: ProviderHandle) -> CdpEndpoint:
+        """A pipe or loopback endpoint inside the browser worker only; never published."""
+    async def health_check(self, handle: ProviderHandle) -> HealthReport: ...
+    async def save_session(self, handle: ProviderHandle, *, fence: ProfileFence) -> None:
+        """Re-seal the profile, only while the profile lock is held (fenced write)."""
+    async def close(self, handle: ProviderHandle) -> None:  # always; wipes the workspace
+        ...
+    def status(self, environment_id: UUID) -> EnvironmentStatus: ...
+    def set_status(
+        self, environment_id: UUID, target: EnvironmentStatus, *, reason: str, by: ActorRef
+    ) -> None: ...  # through ShopEnvironmentRegistry.transition's rules
+
+
+class NetworkProvider(Protocol):  # ADR-0025 §2; first adapter: SharedEgress
+    def egress_for(self, shop_id: UUID) -> EgressProfile:
+        """shared (default, no allocation needed) or dedicated (an HTCO-owned static IP)."""
+    def allocate(self, shop_id: UUID, *, by: ActorRef) -> EgressProfile: ...  # Owner, audited
+    def release(self, shop_id: UUID, *, by: ActorRef) -> None: ...  # Owner, audited
+    async def check(self, shop_id: UUID) -> EgressCheck:
+        """The public IP seen by HTCO's echo endpoint equals the expected egress."""
+
+
 class ShopEnvironmentRegistry(Protocol):
     def get(self, shop_id: UUID) -> BrowserEnvironment | None: ...
     def create(
