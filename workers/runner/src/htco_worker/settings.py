@@ -79,6 +79,12 @@ class WorkerSettings(BaseSettings):
     resend_api_key: SecretStr | None = None
     email_reply_to: str = Field(default="support@ht-co.app", pattern=r"^[^@\s]+@[^@\s]+$")
     office_url: str = Field(default="https://office.ht-co.app", pattern=r"^https://[^\s]+$")
+    # The AutoVA quote mails' sender (slice 7.15, A-09): the parser reads mail from this address
+    # only and quarantines the rest. Unset (the default) until the owner confirms AutoVA's real
+    # sending address; the quote intake stays off without it.
+    autova_quote_sender: str | None = Field(
+        default=None, pattern=r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$"
+    )
 
     @field_validator(
         "etsy_keystring",

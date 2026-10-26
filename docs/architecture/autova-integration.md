@@ -73,3 +73,24 @@ AutoVA signs in with email and password and has no TOTP (A-08, 2026-10-23). The 
 | (b) Gmail read-only OAuth | `gmail.readonly` with a query filter on AutoVA's sender, polled every few minutes | No DNS change | HTCO holds a token able to read the whole mailbox; Google's verification for a restricted scope |
 
 AutoVA's sending address is still unknown (A-09). The parser accepts only mail from the confirmed sender, and anything else is quarantined.
+
+## The quote mail's layout (slice 7.15)
+
+The parser (`htco_application.quote_parser`) reads one layout: `Label: value` lines, in English or Hebrew, with no model involved. Until the owner sends real mails, the layout is **made up** (the fixtures in `tests/application/quote_mails/`); a real mail that differs is refused and opens one Human task, never a guessed quote, and the layout is adjusted with its own golden file.
+
+| Field | English label | Hebrew label | Required | Reads |
+|---|---|---|---|---|
+| AutoVA product | Product | מוצר | Yes | `AV-…` code |
+| Etsy listing | Etsy listing | רישום Etsy | Yes | digits |
+| SKU | SKU | מק״ט | No | code |
+| Variant | Variant | וריאציה | No | code (for example `pid:5512`) |
+| Supplier | Supplier | ספק | Yes | the name AutoVA shows |
+| Unit price | Unit price | מחיר ליחידה | Yes | `7.40 USD`, `USD 7.40`, `$1,240.00`, `€9.15`, `£4.80`, `₪ 38.50` |
+| Shipping | Shipping | משלוח | Yes | money in the same currency, or Free / חינם |
+| Shipping method | Shipping method | שיטת משלוח | Yes | text |
+| Processing time | Processing time | זמן טיפול | Yes | `2-4 days`, `1 day`, `2–4 ימים` |
+| Shipping time | Shipping time | זמן משלוח | Yes | the same |
+| Valid until | Valid until | בתוקף עד | No | ISO date |
+| Quote ID | Quote ID | מזהה הצעה | Yes | `Q-88213` (the quote's source reference) |
+
+Refused: an unknown label, a field twice, a required field missing, a value that does not read exactly, a price and shipping in two currencies, or a mail over 200,000 characters.
