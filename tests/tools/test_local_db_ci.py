@@ -267,18 +267,26 @@ OWNER_MARKER = ".htco-local-db-ci"
 STACK_MARKER = "stack-started"
 
 
-def _fake_docker(bin_dir: Path, tmp_path: Path, *, running: bool) -> None:
-    """`docker ps` lists one container of the project while a stack runs, until `supabase stop`
-    is called (the fake supabase records its calls in supabase-calls.txt)."""
+def _fake_docker(
+    bin_dir: Path, tmp_path: Path, *, running: bool, saved_volume: bool = False
+) -> None:
+    """`docker ps` lists one container of the project while a stack runs, and `docker volume ls`
+    one volume while it runs or after a plain `supabase stop` kept its data (`saved_volume`),
+    until `supabase stop --no-backup` (the fake supabase records its calls in
+    supabase-calls.txt)."""
     log = tmp_path / "docker-calls.txt"
     stops = tmp_path / "supabase-calls.txt"
     listing = "c0ffee" if running else ""
+    volume = "supabase_db_htco-platform" if running or saved_volume else ""
     _fake_tool(
         bin_dir,
         "docker",
         f'echo "$*" >> "{log}"\n'
         f'if [ "$1" = ps ] && [ -n "{listing}" ] && ! grep -qs stop "{stops}"; then\n'
-        f"  echo {listing}\nfi\nexit 0",
+        f"  echo {listing}\nfi\n"
+        f'if [ "$1" = volume ] && [ "$2" = ls ] && [ -n "{volume}" ] '
+        f'&& ! grep -qs "stop --no-backup" "{stops}"; then\n'
+        f"  echo {volume}\nfi\nexit 0",
     )
 
 
@@ -526,13 +534,15 @@ def test_setup__pins_the_sha256_of_the_uv_that_ci_uses() -> None:
 # --- Codex (local) on #99, P1: never stop a Supabase stack the script did not start ----------
 
 
-def _wrapper_tools(tmp_path: Path, *, running: bool) -> tuple[Path, Path]:
+def _wrapper_tools(
+    tmp_path: Path, *, running: bool, saved_volume: bool = False
+) -> tuple[Path, Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "supabase-calls.txt"
     _fake_tool(bin_dir, "supabase", f'echo "$*" >> "{calls}"')
     _fake_tool(bin_dir, "uv", "exit 0")
-    _fake_docker(bin_dir, tmp_path, running=running)
+    _fake_docker(bin_dir, tmp_path, running=running, saved_volume=saved_volume)
     return bin_dir, calls
 
 
@@ -814,3 +824,39 @@ def test_run_steps__interrupted__stops_the_step_and_its_children_before_raising(
     finally:
         with contextlib.suppress(ProcessLookupError):
             os.kill(child, signal.SIGTERM)
+
+
+# --- Codex on #99 (d29c2c5), P1: a developer's saved volumes are not free to take ------------
+
+
+@needs_flock
+def test_wrapper__saved_volumes_of_a_stopped_dev_stack__left_alone_and_the_run_refused(
+    tmp_path: Path,
+) -> None:
+    """After `just db-stop` (a plain `supabase stop`) no container runs but the data volume is
+    kept: the run must not claim the project, or its reset would wipe that data."""
+    repo = _wrapper_repo(tmp_path)
+    bin_dir, calls = _wrapper_tools(tmp_path, running=False, saved_volume=True)
+    cache = tmp_path / "cache"
+
+    result = _run_wrapper(repo, bin_dir, cache)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "supabase_db_htco-platform" in result.stderr
+    assert not calls.exists(), "supabase was called on the developer's project"
+    assert not (cache / STACK_MARKER).exists()
+
+
+@needs_flock
+def test_wrapper__volumes_of_its_own_kept_stack__are_its_own_to_remove(tmp_path: Path) -> None:
+    repo = _wrapper_repo(tmp_path)
+    bin_dir, calls = _wrapper_tools(tmp_path, running=False, saved_volume=True)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / OWNER_MARKER).write_text("", encoding="utf-8")
+    (cache / STACK_MARKER).write_text("htco-platform\n", encoding="utf-8")
+
+    result = _run_wrapper(repo, bin_dir, cache)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls.read_text(encoding="utf-8").splitlines()[0] == "stop --no-backup"
