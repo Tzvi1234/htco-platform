@@ -1,7 +1,7 @@
 """Errors use one RFC 9457 envelope with a request_id and no internals (ER-CODE-06, ASVS 16.5)."""
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import timedelta
 from typing import Annotated
 
@@ -150,14 +150,23 @@ _PATH_SEGMENT = st.text(
 )
 
 
+@pytest.fixture(scope="module")
+def unknown_path_client() -> Iterator[TestClient]:
+    """One app for every example: the requests are reads of unknown paths, so nothing carries
+    over between them."""
+    with TestClient(create_app()) as client:
+        yield client
+
+
 # Each example is one request (#115): building an app per example made this test take 45 s
 # locally, which looked like a stall. The deadline keeps it that way.
 @settings(max_examples=60, deadline=timedelta(milliseconds=500))
 @given(segments=st.lists(_PATH_SEGMENT, min_size=1, max_size=4))
-def test_any_unknown_path__is_a_404_problem_never_a_500(segments: list[str]) -> None:
+def test_any_unknown_path__is_a_404_problem_never_a_500(
+    unknown_path_client: TestClient, segments: list[str]
+) -> None:
     path = "/" + "/".join(segments)
-    with TestClient(create_app()) as client:
-        response = client.get(path)
+    response = unknown_path_client.get(path)
 
     if response.status_code == 200:
         assert path in {"/healthz", "/readyz"}
