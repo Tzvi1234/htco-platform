@@ -25,6 +25,7 @@ from htco_application.browser_profiles import (
     MAX_ARCHIVE_BYTES,
     MemoryProfileArchiveStore,
     MemoryProfileRecords,
+    ProfileRecordError,
     ProfileTooLargeError,
     ProfileUnsafeError,
     ProfileVault,
@@ -298,12 +299,13 @@ class Checked:
 
 def provisioner(
     tmp_path: Path, env: BrowserEnvironment, check: Checked | None = None
-) -> tuple[SealedProfileProvisioner, MemoryProfileRecords, ProfileVault]:
+) -> tuple[SealedProfileProvisioner, MemoryProfileArchiveStore, ProfileVault]:
     records = MemoryProfileRecords({env.id: env})
-    profiles = vault()
+    store = MemoryProfileArchiveStore()
+    profiles = vault(store)
     return (
         SealedProfileProvisioner(records, ProfileWorkspaces(profiles, tmp_path), check),
-        records,
+        store,
         profiles,
     )
 
@@ -312,12 +314,12 @@ async def test_provision__seals_an_empty_profile_records_it_and_ends_signed_out(
     tmp_path: Path,
 ) -> None:
     env = environment()
-    provision, records, profiles = provisioner(tmp_path, env)
+    provision, store, profiles = provisioner(tmp_path, env)
 
     result = await provision.provision(env.id)
 
     assert result == ProvisioningResult(EnvironmentStatus.LOGIN_REQUIRED, "new_profile_signed_out")
-    assert records.profiles[env.id] == (profile_storage_key(env), "browser-1")
+    assert store.profiles[env.id] == (profile_storage_key(env), "browser-1")
     with tarfile.open(fileobj=io.BytesIO(profiles.open(env) or b""), mode="r:*") as archive:
         assert archive.getnames() == []
     assert everything_under(tmp_path) == []
@@ -333,24 +335,24 @@ async def test_provision__runs_the_first_health_check_when_one_is_given(tmp_path
 
 async def test_provision__refuses_an_unknown_or_moved_environment(tmp_path: Path) -> None:
     env = environment(status=EnvironmentStatus.READY)
-    provision, records, _ = provisioner(tmp_path, env)
+    provision, store, _ = provisioner(tmp_path, env)
     with pytest.raises(EnvironmentNotFoundError):
         await provision.provision(uuid.uuid4())
     with pytest.raises(StaleEnvironmentError):
         await provision.provision(env.id)
-    assert records.profiles == {}
+    assert store.profiles == {}
 
 
 async def test_deprovision__destroys_the_archive_and_clears_the_record(tmp_path: Path) -> None:
     env = environment()
-    provision, records, profiles = provisioner(tmp_path, env)
+    provision, store, profiles = provisioner(tmp_path, env)
     await provision.provision(env.id)
 
     await provision.deprovision(env.id)
     await provision.deprovision(uuid.uuid4())  # an unknown environment: nothing to destroy
 
     assert profiles.open(env) is None
-    assert records.profiles[env.id] == (None, None)
+    assert store.profiles[env.id] == (None, None)
 
 
 def test_vault__refuses_a_plain_archive_over_the_cap() -> None:
@@ -423,3 +425,32 @@ def test_workspace__hard_linked_files_are_sealed_as_regular_files(tmp_path: Path
         assert (directory / "Cookies").read_bytes() == COOKIE
         assert (directory / "Cookies-backup").read_bytes() == COOKIE
     assert everything_under(root) == []
+
+
+def test_vault__the_record_follows_every_seal_including_a_key_rotation() -> None:
+    """CODEX (local) on #116: the environment's key ID is written with the archive itself."""
+    store = MemoryProfileArchiveStore()
+    env = environment()
+    old, new = os.urandom(32), os.urandom(32)
+    ProfileVault(EnvelopeSealer(KeyRing(("browser-1", old))), store, lambda: NOW).seal(env, b"a")
+    rotated = ProfileVault(
+        EnvelopeSealer(KeyRing(("browser-2", new), [("browser-1", old)])), store, lambda: NOW
+    )
+    assert rotated.open(env) == b"a"
+    rotated.seal(env, b"b")
+    assert store.profiles[env.id] == (profile_storage_key(env), "browser-2")
+    assert store.archives[env.id].key_id == "browser-2"
+
+
+def test_vault__an_environment_row_that_is_gone_stores_nothing() -> None:
+    """CODEX (local) on #116: the archive and its record are one write; with no environment
+    row to record on, neither is stored."""
+    env = environment()
+    store = MemoryProfileArchiveStore(missing={env.id})
+    profiles = vault(store)
+    with pytest.raises(ProfileRecordError):
+        profiles.seal(env, b"archive")
+    with pytest.raises(ProfileRecordError):
+        profiles.delete(env)
+    assert store.archives == {}
+    assert store.profiles == {}
