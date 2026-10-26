@@ -20,6 +20,8 @@ pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 NOW = datetime(2026, 10, 26, 22, 0, tzinfo=UTC)
 SYSTEM = ActorRef(ActorKind.SYSTEM, "test")
+# A test correlation ID, never a secret: a constant, so gitleaks never reads it next to a key.
+CORRELATION = "corr-db-tasks"
 
 
 @pytest.fixture
@@ -60,7 +62,7 @@ def a_task(org: uuid.UUID, key: str, *, shop: uuid.UUID | None = None) -> Stored
     task = BusinessTask(
         id=uuid.uuid7(), organization_id=org, shop_id=shop, kind=TaskKind.HUMAN_CHANNEL,
         title="Log in to Etsy again", assignee=SYSTEM, state=TaskState.CREATED,
-        idempotency_key=key, correlation_id="corr-db-tasks",
+        idempotency_key=key, correlation_id=CORRELATION,
     )  # fmt: skip
     return StoredTask(task, created_at=NOW, updated_at=NOW)
 
