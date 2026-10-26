@@ -37,7 +37,7 @@ from typing import Protocol
 
 from htco_application.browser_environments import EnvironmentNotFoundError
 from htco_application.browser_profiles import ProfileRecords, ProfileWorkspaces
-from htco_domain.browser import BrowserEnvironment, EnvironmentStatus
+from htco_domain.browser import BrowserEnvironment, EnvironmentStatus, HealthReport
 
 _PURPOSE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
 _MAX_PURPOSE = 64
@@ -54,6 +54,7 @@ _SESSION_STATUSES = frozenset(
     }
 )
 TIMEOUT = "timeout"
+PREFLIGHT_FAILED = "preflight_failed"
 ERROR = "error"
 
 
@@ -70,6 +71,14 @@ class SessionDeferredError(Exception):
 
 class SessionTimeoutError(Exception):
     """The session ran past its deadline and was closed."""
+
+
+class PreflightFailedError(Exception):
+    """The preflight found a problem (slice 8A.3); no engine was started."""
+
+    def __init__(self, report: HealthReport) -> None:
+        super().__init__(", ".join(report.problems))
+        self.report = report
 
 
 class SessionRefusedError(Exception):
@@ -111,6 +120,16 @@ class BrowserEngine(Protocol):
         ...
 
 
+class PreflightCheck(Protocol):
+    async def run(self) -> HealthReport: ...
+
+
+class HealthSink(Protocol):
+    def record(
+        self, environment: BrowserEnvironment, report: HealthReport, *, correlation_id: str
+    ) -> EnvironmentStatus: ...
+
+
 class SessionLog(Protocol):
     def started(self, record: SessionRecord) -> None: ...
 
@@ -148,6 +167,8 @@ class BrowserController:
         *,
         clock: Callable[[], datetime],
         new_id: Callable[[], uuid.UUID] = uuid.uuid7,
+        preflight: PreflightCheck | None = None,
+        health: HealthSink | None = None,
     ) -> None:
         self._records = records
         self._workspaces = workspaces
@@ -156,6 +177,8 @@ class BrowserController:
         self._log = log
         self._clock = clock
         self._new_id = new_id
+        self._preflight = preflight
+        self._health = health
 
     @asynccontextmanager
     async def session(
@@ -189,11 +212,15 @@ class BrowserController:
             self._log.started(record)
             outcome: SessionOutcome = SessionOutcome.FAILED
             failure: str | None = ERROR
-            limit = asyncio.timeout(remaining)
+            when = asyncio.get_running_loop().time() + remaining
+            preflight_limit, limit = asyncio.timeout_at(when), asyncio.timeout_at(when)
             try:
-                # The deadline covers the engine and the work. Unpacking and the clean exit's
-                # re-seal are bounded by the archive caps instead, so a session that finished
-                # its work in time and committed its profile is never reported as timed out.
+                # The deadline covers the preflight, the engine and the work. Unpacking and the
+                # clean exit's re-seal are bounded by the archive caps instead, so a session that
+                # finished its work in time and committed its profile is never reported as
+                # timed out. A failed preflight stops before anything is unpacked.
+                async with preflight_limit:
+                    await self._check(environment, record)
                 async with self._profile(environment) as directory, limit:
                     handle = await self._engine.launch(directory)
                     try:
@@ -201,13 +228,26 @@ class BrowserController:
                     finally:
                         await _shielded(handle.close())
                 outcome, failure = SessionOutcome.SUCCEEDED, None
+            except PreflightFailedError:
+                failure = PREFLIGHT_FAILED
+                raise
             except TimeoutError:
-                if not limit.expired():
+                if not (limit.expired() or preflight_limit.expired()):
                     raise
                 failure = TIMEOUT
                 raise SessionTimeoutError("the session ran past its deadline") from None
             finally:
                 self._end(record, outcome, failure)
+
+    async def _check(self, environment: BrowserEnvironment, record: SessionRecord) -> None:
+        """The preflight, recorded as a health report; a failure stops the session here."""
+        if self._preflight is None:
+            return
+        report = await self._preflight.run()
+        if self._health is not None:
+            self._health.record(environment, report, correlation_id=f"browser-session:{record.id}")
+        if not report.ok:
+            raise PreflightFailedError(report)
 
     @asynccontextmanager
     async def _profile(self, environment: BrowserEnvironment) -> AsyncIterator[Path]:

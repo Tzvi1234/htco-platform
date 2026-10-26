@@ -187,3 +187,25 @@ def environment_edges() -> frozenset[tuple[EnvironmentStatus, EnvironmentStatus]
         for current, targets in _ENVIRONMENT_TRANSITIONS.items()
         for target in targets
     )
+
+
+HEALTH_WINDOW = 2  # two health checks in a row move the status (slice 8A.3)
+
+
+def next_health_status(
+    status: EnvironmentStatus, recent: tuple[bool, ...]
+) -> EnvironmentStatus | None:
+    """The status the latest health checks call for (`recent`: newest first), or None.
+
+    Two failures in a row move `READY` to `DEGRADED`; two passes in a row move `DEGRADED` back
+    to `READY` (AC-8A.3.3). Every other status is left to its own owner: a person signs in,
+    resumes a suspended environment or re-provisions a failed one.
+    """
+    if len(recent) < HEALTH_WINDOW:
+        return None
+    window = recent[:HEALTH_WINDOW]
+    if status is EnvironmentStatus.READY and not any(window):
+        return EnvironmentStatus.DEGRADED
+    if status is EnvironmentStatus.DEGRADED and all(window):
+        return EnvironmentStatus.READY
+    return None

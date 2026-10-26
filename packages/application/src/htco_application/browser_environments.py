@@ -349,6 +349,11 @@ class MemoryEnvironmentStore:
             self.events.append(event)
             return True
 
+    def recent_health(self, environment_id: uuid.UUID, limit: int) -> tuple[bool, ...]:
+        with self._lock:
+            mine = [report for (env, report, _, _) in self.health if env == environment_id]
+            return tuple(report.ok for report in reversed(mine))[:limit]
+
     def add_health(
         self,
         environment: BrowserEnvironment,

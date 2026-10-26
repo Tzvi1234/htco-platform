@@ -18,6 +18,7 @@ from htco_domain.browser import (
     HealthReport,
     check_environment_transition,
     environment_edges,
+    next_health_status,
 )
 from htco_domain.state_machine import IllegalTransition
 
@@ -228,3 +229,28 @@ def test_health_report__naive_time__is_refused() -> None:
 
 def test_environment_edges__are_the_table() -> None:
     assert environment_edges() == ALLOWED
+
+
+# Health status rules (slice 8A.3, AC-8A.3.3): two in a row move the status, one never does.
+
+
+@pytest.mark.ac("AC-8A.3.3")
+@pytest.mark.parametrize(
+    ("status", "recent", "expected"),
+    [
+        (EnvironmentStatus.READY, (False, False), EnvironmentStatus.DEGRADED),
+        (EnvironmentStatus.READY, (False, True), None),
+        (EnvironmentStatus.READY, (False,), None),
+        (EnvironmentStatus.READY, (True, True), None),
+        (EnvironmentStatus.DEGRADED, (True, True), EnvironmentStatus.READY),
+        (EnvironmentStatus.DEGRADED, (True, False), None),
+        (EnvironmentStatus.DEGRADED, (False, False), None),
+        (EnvironmentStatus.LOGIN_REQUIRED, (False, False), None),
+        (EnvironmentStatus.SUSPENDED, (True, True), None),
+        (EnvironmentStatus.PROVISIONING, (False, False), None),
+    ],
+)
+def test_health_status__two_in_a_row_move_ready_and_degraded_only(
+    status: EnvironmentStatus, recent: tuple[bool, ...], expected: EnvironmentStatus | None
+) -> None:
+    assert next_health_status(status, recent) is expected
