@@ -779,3 +779,38 @@ def test_tail__a_writer_that_never_stops__drained_only_to_where_the_step_ended(
 
     assert not still_reading, "the runner kept reading a leftover process's output"
     assert log.getvalue().startswith("step-output\n")
+
+
+# --- Codex on #99 (d29c2c5): an interrupted runner stops its step first ---------------------
+
+
+@needs_posix_bash
+def test_run_steps__interrupted__stops_the_step_and_its_children_before_raising(
+    tmp_path: Path,
+) -> None:
+    """Ctrl-C reaches only the runner (the step has its own session): the step's group must be
+    stopped before the interrupt propagates, or it outlives the run and its lock."""
+    pid_file = tmp_path / "child.pid"
+    step = Step(name="Long", run=f'sleep 300 &\necho $! > "{pid_file}"\nsleep 300\n')
+
+    def interrupt_once_started() -> None:
+        deadline = time.monotonic() + 20
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    threading.Thread(target=interrupt_once_started, daemon=True).start()
+    started = time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        run_steps([step], {}, cwd=tmp_path, log=tmp_path / "log.txt")
+
+    assert time.monotonic() - started < 30
+    child = int(pid_file.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 10
+    while _alive(child) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    try:
+        assert not _alive(child), "the step's child outlived the interrupted runner"
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(child, signal.SIGKILL)
