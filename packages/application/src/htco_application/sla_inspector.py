@@ -34,6 +34,7 @@ from htco_application.incidents import (
 from htco_application.jobs import JobError, JsonValue
 from htco_application.messaging import OutboxMessage
 from htco_application.notifications import NotificationRequest, NotificationService
+from htco_application.relay import RelayStore, open_due_relay_items
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.fulfillment import SlaPolicy, select_policy, ship_by_at_risk
 from htco_domain.incidents import (
@@ -126,6 +127,8 @@ class IncidentDetection:
     # Ship-by alerts (slice 6.9) through the notification path of 6.4; None: none raised.
     alerts: NotificationService | None = None
     ship_by_warning_days: int = SHIP_BY_WARNING_DAYS
+    # The AutoVA relay (slice 6.10): the inspection opens the due relay items; None: none open.
+    relay: RelayStore | None = None
 
     async def __call__(self, ctx: HandlerContext) -> HandlerOutcome:
         drift = ctx.payload.get("drift")
@@ -190,6 +193,12 @@ class IncidentDetection:
         }
         if self.alerts is not None:
             output["ship_by_alerts"] = await self._ship_by(ctx, shop_id, policies, awaiting, now)
+            if self.relay is not None:
+                output["relay_items_opened"] = await open_due_relay_items(
+                    self.relay, self.alerts, organization_id=ctx.organization_id,
+                    shop_id=shop_id, awaiting=awaiting, now=now,
+                    correlation_id=ctx.correlation_id, offload=self.offload,
+                )  # fmt: skip
         return Completed(output)
 
     async def _ship_by(
