@@ -8,6 +8,7 @@ automation added later, receives the same receipts without them. Invented values
 import json
 import tomllib
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,15 @@ from htco_application.order_receipts import (
 from htco_domain.actors import ActorKind, ActorRef
 from tests.application.test_action_gateway import ORG, SHOP
 from tests.application.test_execution_router import EtsyShops, FakeMarketplace
-from tests.order_intake_fakes import FAKE_LINE, FAKE_NAME, FAKE_TRACKING, paid_receipt, shipped
+from tests.order_intake_fakes import (
+    FAKE_LINE,
+    FAKE_NAME,
+    FAKE_NOTE,
+    FAKE_TRACKING,
+    paid_receipt,
+    refunded,
+    shipped,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -58,7 +67,8 @@ def test_only_etsy_order_intake__is_entitled_to_buyer_data() -> None:
 
 
 async def _order_history(automation_id: str, values: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    receipt = shipped(paid_receipt(RECEIPT), minutes=30)
+    receipt = refunded(shipped(paid_receipt(RECEIPT), minutes=30), minutes=60)
+    receipt = replace(receipt, shipments=shipped(receipt, minutes=30).shipments)
     channel = EtsyApiChannel(FakeMarketplace(order_receipts=(receipt,)), EtsyShops())
     outcome = await channel.execute(
         ActionRequest(
@@ -148,3 +158,25 @@ async def test_order_history_form__refused_to_a_person_or_an_employee(kind: Acto
 
     assert refused.value.status == 403
     assert marketplace.calls == []
+
+
+@pytest.mark.parametrize("automation_id", CANDIDATES)
+async def test_order_history_form__the_sellers_refund_note_reaches_intake_only(
+    automation_id: str,
+) -> None:
+    """The seller's note on a refund is shown only to buyer-data roles (sage on #135): every
+    automation but Intake gets the refund's amount, reason and status without it."""
+    output = await _order_history(automation_id, {"receipt_id": RECEIPT})
+    receipts = output["receipts"]
+    assert isinstance(receipts, list)
+    [raw] = receipts
+    assert isinstance(raw, dict)
+    receipt = receipt_from_json(raw)
+
+    assert receipt.refunds
+    notes = {refund.note_from_issuer for refund in receipt.refunds}
+    if automation_id in BUYER_DATA_AUTOMATIONS:
+        assert notes == {FAKE_NOTE}
+    else:
+        assert notes == {None}
+        assert FAKE_NOTE not in json.dumps(output)
