@@ -48,7 +48,6 @@ from htco_application.automation.requests import (
     AutomationForbiddenError,
     AutomationNotFoundError,
     ExecutionReader,
-    ShopOwners,
     UserTrigger,
     list_definitions,
     list_executions,
@@ -56,6 +55,7 @@ from htco_application.automation.requests import (
     trigger_as_user,
 )
 from htco_application.idempotency import IdempotencyStore
+from htco_application.kernel import ShopOwners
 from htco_application.shops import OrganizationRequiredError, ShopNotFoundError
 from htco_domain.automation import AutomationDefinition, AutomationExecution
 

@@ -18,8 +18,8 @@ from htco_application.execution.channels import EtsyApiChannel
 from htco_application.execution.gateway import ActionOutcome, ActionRequest, Channel
 from htco_application.execution.guards import Guards, MemoryBreakers, MemoryRateLimiter, MemorySlots
 from htco_application.execution.service import ActionGatewayService, GatewayParts
-from htco_application.maintenance import TenantShop
-from htco_application.marketplace import OrderReceipt, Page
+from htco_application.kernel import Page, TenantShop
+from htco_application.marketplace import OrderReceipt
 from htco_application.order_ingest import (
     DRIFT_DETECTED,
     DriftKind,
