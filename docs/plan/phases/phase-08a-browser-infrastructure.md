@@ -182,6 +182,7 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.2.21 | **Only the starter gets the binding, and every run can record its outcome.**<br>- `start_browser_run` returns the request, the binding and a run token only to the caller whose `insert … on conflict do nothing returning` created the `started` row. A redelivered worker for the same attempt gets nothing, not even the binding, and touches no page (tested by redelivering with `release_expired`).<br>- `finish_browser_run(run_token, outcome)` records the outcome of a run whose queue lease has expired, sets it once, and refuses a token of another attempt, a used one, or a forged one (pgTAP).<br>- While a run goes on, its job's lease is renewed on a heartbeat. A run longer than one lease period is not redelivered while the heartbeat beats (tested), and a stopped heartbeat makes it redeliverable without giving the redelivered job the binding. |
 | AC-8A.2.22 | **The egress rules fail closed.** At startup, and before each session, the browser worker proves that the per-user egress rules for Chromium's OS user are active:<br>- probes from that user to `127.0.0.1`, `[::1]`, `169.254.169.254` and one address in each private range are dropped;<br>- the worker's own process still reaches its exact internal endpoints.<br><br>If any probe connects, or the rules cannot be read or applied (for example where the platform grants no `NET_ADMIN`), the worker starts no session. It reports `egress_rules_missing` in the health view and alerts the Owner. A test runs the worker with the rules removed and shows that no session starts. |
 | AC-8A.2.23 | **Profile archives only through a leased job.** `htco_browser` has no direct grant on `app.browser_profile_archives`. Opening a profile and the fenced write-back go only through `security definer` functions bound to a `browser.*` job leased with the caller's token, as `start_browser_run` is. That covers `renew`, `recover`, provisioning and destroy, which are all browser jobs. The functions:<br>- take the environment and organization from the leased job row, never from an argument or `htco.organization_id`;<br>- write with the generation compare-and-set of ADR-0025 §1, so the fence still holds;<br>- set `search_path = ''`, and can be executed by `htco_browser` only.<br><br>pgTAP: with the setting pointed at another organization, or with an unleased or expired job, no archive can be read or written. A leased job reaches only its own environment's archive. |
+| AC-8A.2.24 | **Implementation details from #136's review** (sage-arch):<br>- **`finish_browser_run` has two explicit modes.** A started run finishes by its run token, and that works after its job lease has expired. An unapproved read's row is inserted through its leased job. The lease-expiry refusal applies only to the start and to that insert. `browser_run_outcomes` stores `run_token_hash`.<br>- **The 8A.6 minimal gateway is the 9.1 package itself**, not a copy, and its interim ledger is the table that 9.4 extends.<br>- **The egress self-test (AC-8A.2.22) runs on the real platform** that hosts the browser worker: the droplet of D-18 (a), or App Platform if it ever grants the rules. |
 
 ### 8A.3 — Preflight, session validation and network health
 
@@ -208,7 +209,7 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 
 - **Detectors:** CAPTCHA widgets, passkey and WebAuthn prompts, "verify it's you" pages, block or "unusual activity" pages, and permission errors. Each has recorded fixtures.
 - **On detection:** stop, record a screenshot **hash** (the image itself is kept 7 days for the reviewer only), open a Human task with a link, and move the environment to `LOGIN_REQUIRED` or `DEGRADED`. Two challenges in 24 hours move it to `SUSPENDED`.
-- **Manual login:** the person signs in through a supervised live view of the same profile (a noVNC or CDP screencast session that only the Owner or Admin can open), then the engine resumes from its checkpoint.
+- **Manual login:** the person signs in through Live View and Takeover of the same session (slice 8A.11, [ADR-0026](../../adr/0026-browser-live-view-and-human-takeover.md)): a CDP screencast and typed input, never noVNC. Then the engine resumes from its checkpoint.
 - **With 8B:** TOTP injection from the Secret Broker for TOTP prompts only.
 
 | ID | Acceptance criterion |
@@ -340,6 +341,51 @@ AutoVA is the owner's supplier platform (`beta.autova.io`). These recipes run in
 | AC-8A.10.3 | A-02 refuses to act when the page's supplier, price or terms differ from the approved quote's hash, and opens a Human task. |
 | AC-8A.10.4 | A fixture page with a Pay button: A-02 never clicks it (the allowlist test), and a payment step stops the run with a Human task. |
 | AC-8A.10.5 | An AutoVA order still Unpaid after its window raises exactly one alert and one task for the owner; HTCO takes no payment action. |
+
+### 8A.11 — Live View and Human Takeover ([ADR-0026](../../adr/0026-browser-live-view-and-human-takeover.md))
+
+**It starts with a spike.** On the fleet's pinned build in new-headless mode, over the pipe, against a `127.0.0.1` page, it confirms that:
+- `Page.startScreencast` delivers frames;
+- `Input.dispatchMouseEvent`, `Input.dispatchKeyEvent` and `Input.insertText` reach the page;
+- the managed policies of ADR-0026 §6 apply to this build.
+
+The result goes in ADR-0026's validation log before the rest is built.
+
+- **Live View.**
+  - The session's CDP screencast is relayed by the browser worker, which dials out to the API's internal relay, to an authenticated WebSocket on the dashboard's origin.
+  - Each viewer needs a single-use ticket bound to the user, organization, shop and session, valid for 60 seconds, plus an `Origin` check.
+  - Viewers see the facts: tabs (host and path), status, actor, shop, step and last action.
+  - Frames are held in memory only. They are never stored and never sent to a model.
+- **Takeover.**
+  - `VIEW_BROWSER_SESSION` and `CONTROL_BROWSER_SESSION` are separate permissions.
+  - One Controller at a time holds a lease (`browser_control_leases`) with a timeout, renewal by its holder only, and a maximum duration.
+  - The run pauses at a safe point and becomes `WAITING_FOR_HUMAN`, with the session `HUMAN_CONTROLLING`, while the worker, the browser, the profile lock, the run token and the job's lease stay held.
+  - A single input gate takes a closed set of typed events.
+  - Return Control re-checks everything, then resumes the same attempt from its checkpoint.
+- **The privacy pack** (ADR-0026 §6). One pinned managed-policy file covers:
+  - DNS over HTTPS with HTCO's chosen resolver;
+  - no extensions;
+  - third-party cookies and the Privacy Sandbox ad features off, plus a pinned tracker blocklist;
+  - no sync, no metrics, no crash reports;
+  - no helpers that send data out.
+
+  The worker checks that the file is in effect at start (fail closed). Per-session cleanup leaves only the allowlisted origins' cookies and storage.
+- **The screen** (`htco-clients`, web first): Live View, Take Control, Return Control, and the holder's name.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-8A.11.1 | **An authorized view works.** An Owner or Admin, or Operations and Support on a granted shop, opens a session's Live View with a fresh ticket. Frames and facts arrive, and a dropped connection reconnects with a new ticket from the latest frame. Each of these is refused (negative tests):<br>- a viewer without `VIEW_BROWSER_SESSION`, from another organization, or without the shop;<br>- a reused or expired ticket;<br>- a cross-origin upgrade.<br><br>No frame is ever written to the database, a disk or a log, and none is sent to a model. |
+| AC-8A.11.2 | **Redaction fails closed.**<br>- Frames of any signed-in page go only to viewers with `VIEW_BUYER_CONTACT` on that shop, whatever the recipe declares. Everyone else gets the facts and a placeholder. That includes a fixture where a recipe that declares no buyer data meets an unexpected buyer-data page.<br>- While a secret is typed, no frame is captured: the stream has no frame between the field's focus and its blur. |
+| AC-8A.11.3 | **One Controller.**<br>- Two concurrent Take Control requests yield exactly one lease, and the second is refused with the holder named.<br>- Only the holder renews. A lease without renewal expires, and the maximum duration ends it.<br>- Taking control needs `CONTROL_BROWSER_SESSION`, `aal2` and a step-up.<br>- Agents and automations have no tool for viewing or control (negative tests). |
+| AC-8A.11.4 | **No conflict with the agent.**<br>- Take Control pauses a deterministic recipe between steps, and a Browser Use or LangGraph run between agent steps.<br>- While the session is `HUMAN_CONTROLLING`, every agent or automation action is refused at the input gate, and while the agent runs, every Controller event is refused (both directions tested).<br>- The profile lock, the browser, the run token and the job's lease stay held, and the session's deadline is suspended up to the lease's maximum. |
+| AC-8A.11.5 | **Typing, clicks and scroll work** in new headless, against a `127.0.0.1` fixture page. Key events, `insertText`, mouse presses and wheel events each change the page's DOM as expected.<br><br>Refused:<br>- an event outside the closed set, or one from anyone but the lease holder;<br>- an event over the rate or size limits;<br>- a raw CDP command.<br><br>A navigation outside the allowlist, a payment page, or a private address (AC-8A.2.20) is blocked during a takeover too. |
+| AC-8A.11.6 | **Manual MFA.**<br>1. A fixture sign-in with a TOTP or passkey challenge hands the run to a person.<br>2. The Controller takes over, completes the MFA, and returns control.<br>3. The profile is re-sealed under the fence, and the next session is signed in.<br><br>The typed code appears in no log, audit record, model input or frame. |
+| AC-8A.11.7 | **Return Control re-checks.** Before anything resumes, it checks the page state, the run's permissions, the flags and the scope, every kill switch, the approval of every approval-gated run (D-16), and the deadline. A failed check ends the run as `HANDED_TO_HUMAN` or `FAILED` and never resumes it. A deterministic recipe resumes from its checkpointed step, and a LangGraph run from its interrupt, with the current page as its observation. |
+| AC-8A.11.8 | **No double execution.**<br>- The same attempt resumes after a return, keeping its run token, and no new attempt starts.<br>- A write step that was in progress, or is uncertain, at the takeover is not re-run unless a re-read shows that it did not happen, and otherwise goes to a person.<br>- A write that the person did by hand is found by verification and recorded once, with the person as the actor.<br>- The gateway records exactly one final result. |
+| AC-8A.11.9 | **Disconnects and crashes.**<br>- When the Controller's connection drops, the lease expires and the run stays paused; it never returns to the agent by itself. At the maximum duration the run becomes `HANDED_TO_HUMAN`, and the session closes with a fenced re-seal.<br>- When the browser worker is killed during a takeover, Postgres releases the profile lock, the last good archive stays, and the attempt resolves through the started marker and the watchdog with no double write. Viewers see "session ended".<br>- When the relay is killed, the outcome is the same as a disconnect. |
+| AC-8A.11.10 | **Every takeover is audited:** the request with its purpose, the grant, each renewal, the release or expiry, each navigation (host and path only), the number of input events, and the result of the return checks. Viewing start and end are audited too. No key or text value appears anywhere. |
+| AC-8A.11.11 | **The privacy pack is in force.** The managed policy file is pinned in the image, and the effective policies equal it. A missing or changed policy starts no session (`policies_missing`). DNS goes only to the chosen DoH resolver, with no plain-DNS fallback. Extension installs are blocked. Sync, metrics and crash reports are off. After a session, the re-sealed archive holds only the allowlisted origins' cookies and storage. |
+| AC-8A.11.12 | **The headless spike is recorded** in ADR-0026's validation log before 8A.11 is built further: screencast and input over the pipe in new headless, on the pinned build. If frames don't arrive, ADR-0026 is amended (headed Chromium on Xvfb in the same worker) before any code relies on it. |
 
 ## Test plan
 

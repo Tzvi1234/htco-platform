@@ -307,6 +307,25 @@ class BrowserProvider(
     capabilities: ProviderCapabilities
 
 
+class LiveSession(Protocol):  # ADR-0026 §3, in the browser worker only, on the session's pipe
+    async def start_screencast(self, limits: FrameLimits) -> AsyncIterator[Frame]: ...
+    async def stop_screencast(self) -> None: ...
+    async def pause_frames(self) -> None: ...  # while a secret is typed
+    async def resume_frames(self) -> None: ...
+    async def dispatch(self, event: ControllerInput, *, lease: ControlLease) -> None:
+        """The closed set only (mouse, wheel, keys, insertText), through the one input gate:
+        refused while the agent runs, or for anyone but the lease holder."""
+
+
+class BrowserTakeover(Protocol):  # ADR-0026 §2: one leased Controller per session
+    async def request_control(
+        self, session_id: UUID, *, by: AuthContext, purpose: TakeoverPurpose
+    ) -> ControlLease: ...  # CONTROL_BROWSER_SESSION, aal2, step-up; compare-and-set
+    async def renew(self, lease: ControlLease) -> ControlLease: ...  # the holder only
+    async def release(self, lease: ControlLease) -> ReturnChecks: ...  # re-checks, then resume
+    async def state(self, session_id: UUID) -> ControlState: ...
+
+
 class BrowserConfigurations(Protocol):  # ADR-0025 §2: one versioned profile per environment
     async def current(self, environment_id: UUID) -> BrowserConfiguration: ...
     async def change(
