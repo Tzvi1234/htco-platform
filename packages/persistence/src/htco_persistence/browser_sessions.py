@@ -13,13 +13,14 @@ import contextlib
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 import anyio
 import psycopg
 
-from htco_application.browser_controller import SessionOutcome, SessionRecord
+from htco_application.browser_controller import ProfileLease, SessionOutcome, SessionRecord
 from htco_persistence.database import Database
 
 POLL_SECONDS = 0.2
@@ -29,25 +30,30 @@ def lock_key(environment_id: uuid.UUID) -> str:
     return f"htco.browser_profile:{environment_id}"
 
 
+@dataclass(frozen=True, eq=False)
+class PostgresLease:
+    """One `hold()`'s lock, bound to the dedicated connection that took it."""
+
+    environment_id: uuid.UUID
+    held: bool
+    connection: psycopg.Connection[Any] = field(repr=False)
+
+
 class PostgresProfileLocks:
     def __init__(self, database: Database, *, poll_seconds: float = POLL_SECONDS) -> None:
         self._database = database
         self._poll = poll_seconds
-        self._held: dict[uuid.UUID, psycopg.Connection[Any]] = {}
 
     @asynccontextmanager
-    async def hold(self, environment_id: uuid.UUID, *, until: datetime) -> AsyncIterator[bool]:
+    async def hold(
+        self, environment_id: uuid.UUID, *, until: datetime
+    ) -> AsyncIterator[PostgresLease]:
         connection = await anyio.to_thread.run_sync(self._database.dedicated_connection)
         try:
             held = await self._wait(connection, lock_key(environment_id), until)
-            if held:
-                self._held[environment_id] = connection
             try:
-                yield held
+                yield PostgresLease(environment_id, held, connection)
             finally:
-                # Only the holder forgets its entry: a waiter that gave up leaves it alone.
-                if held and self._held.get(environment_id) is connection:
-                    del self._held[environment_id]
                 if held:
                     with anyio.CancelScope(shield=True):
                         await anyio.to_thread.run_sync(
@@ -57,13 +63,15 @@ class PostgresProfileLocks:
             with anyio.CancelScope(shield=True):
                 await anyio.to_thread.run_sync(connection.close)
 
-    async def still_held(self, environment_id: uuid.UUID) -> bool:
-        """Asked on the lock's own connection: a dropped connection has lost the lock."""
-        connection = self._held.get(environment_id)
-        if connection is None:
+    async def still_held(self, lease: ProfileLease) -> bool:
+        """Asked on the lease's own connection only: once that connection dropped, the lease
+        has lost the lock, whoever holds the environment now."""
+        if not isinstance(lease, PostgresLease) or not lease.held:
             return False
         try:
-            return await anyio.to_thread.run_sync(_holds, connection, lock_key(environment_id))
+            return await anyio.to_thread.run_sync(
+                _holds, lease.connection, lock_key(lease.environment_id)
+            )
         except psycopg.Error:
             return False
 

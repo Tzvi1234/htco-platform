@@ -99,16 +99,29 @@ class SessionRecord:
 # --- Ports --------------------------------------------------------------------------------------
 
 
+class ProfileLease(Protocol):
+    """One `hold()`'s claim on an environment's profile lock: `held` says whether it got the
+    lock. It is bound to its own lock (in Postgres, its own connection), never to whichever
+    session holds the environment now."""
+
+    @property
+    def environment_id(self) -> uuid.UUID: ...
+
+    @property
+    def held(self) -> bool: ...
+
+
 class ProfileLocks(Protocol):
     def hold(
         self, environment_id: uuid.UUID, *, until: datetime
-    ) -> AbstractAsyncContextManager[bool]:
-        """Yields True while this process holds the environment's lock, or False when it was
-        still held elsewhere at `until`. The lock is released on exit."""
+    ) -> AbstractAsyncContextManager[ProfileLease]:
+        """Yields a lease that holds the environment's lock, or one with `held` false when the
+        lock was still taken elsewhere at `until`. A held lease releases its lock on exit."""
         ...
 
-    async def still_held(self, environment_id: uuid.UUID) -> bool:
-        """Whether this process still holds the lock it took (its connection is alive)."""
+    async def still_held(self, lease: ProfileLease) -> bool:
+        """Whether this lease's own lock is still held: false once its connection dropped, even
+        if another session has taken the environment's lock since."""
         ...
 
 
@@ -182,8 +195,8 @@ class BrowserController:
             organization_id=environment.organization_id, shop_id=environment.shop_id,
             purpose=purpose, started_at=self._clock(),
         )  # fmt: skip
-        async with self._locks.hold(environment.id, until=deadline) as held:
-            if not held or deadline <= self._clock():
+        async with self._locks.hold(environment.id, until=deadline) as lease:
+            if not lease.held or deadline <= self._clock():
                 await self._start(record)
                 await self._end(record, SessionOutcome.DEFERRED, None)
                 raise SessionDeferredError("the profile is busy until past the deadline")
@@ -203,13 +216,18 @@ class BrowserController:
                 # re-seal are bounded by the archive caps instead, so a session that finished
                 # its work in time and committed its profile is never reported as timed out.
                 async with self._profile(environment) as directory, limit:
+                    # The unpack may have used up the time: never begin starting a browser
+                    # past the deadline.
+                    if deadline <= self._clock():
+                        failure = TIMEOUT
+                        raise SessionTimeoutError("the deadline passed during the unpack")
                     handle = await self._engine.launch(directory)
                     try:
                         yield ControllerSession(record.id, environment, handle)
                     finally:
                         await _shielded(handle.close())
-                    # Write the profile back only while the lock is still ours.
-                    await self._still_ours(environment)
+                    # Write the profile back only while this session's own lock holds.
+                    await self._still_ours(lease)
                 outcome, failure = SessionOutcome.SUCCEEDED, None
             except SessionLockLostError:
                 failure = LOCK_LOST
@@ -228,13 +246,13 @@ class BrowserController:
         environment = await _blocking(self._records.by_id, environment_id)
         if environment is None:
             raise EnvironmentNotFoundError(str(environment_id))
-        async with self._locks.hold(environment.id, until=deadline) as held:
-            if not held:
+        async with self._locks.hold(environment.id, until=deadline) as lease:
+            if not lease.held:
                 raise SessionDeferredError("the profile is busy until past the deadline")
             await _shielded(asyncio.to_thread(self._workspaces.vault.delete, environment))
 
-    async def _still_ours(self, environment: BrowserEnvironment) -> None:
-        if not await self._locks.still_held(environment.id):
+    async def _still_ours(self, lease: ProfileLease) -> None:
+        if not await self._locks.still_held(lease):
             raise SessionLockLostError("the profile lock was lost")
 
     async def _start(self, record: SessionRecord) -> None:
@@ -324,25 +342,41 @@ async def _shielded[T](work: Awaitable[T]) -> T:
 # --- In memory ----------------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, eq=False)
+class MemoryLease:
+    environment_id: uuid.UUID
+    held: bool
+
+
 @dataclass
 class MemoryProfileLocks:
-    """One holder per environment inside this process, polled like the Postgres lock."""
+    """One holder per environment inside this process, polled like the Postgres lock. `held`
+    is the environments locked now (a test drops an entry to play a dropped connection)."""
 
     held: set[uuid.UUID] = field(default_factory=set)
+    _owners: dict[uuid.UUID, MemoryLease] = field(default_factory=dict)
 
     @asynccontextmanager
-    async def hold(self, environment_id: uuid.UUID, *, until: datetime) -> AsyncIterator[bool]:
+    async def hold(
+        self, environment_id: uuid.UUID, *, until: datetime
+    ) -> AsyncIterator[MemoryLease]:
         if not await self._wait(environment_id, until):
-            yield False
-        else:
-            self.held.add(environment_id)
-            try:
-                yield True
-            finally:
+            yield MemoryLease(environment_id, held=False)
+            return
+        lease = MemoryLease(environment_id, held=True)
+        self.held.add(environment_id)
+        self._owners[environment_id] = lease
+        try:
+            yield lease
+        finally:
+            # Release only this lease's lock, never a later holder's.
+            if self._owners.get(environment_id) is lease:
+                del self._owners[environment_id]
                 self.held.discard(environment_id)
 
-    async def still_held(self, environment_id: uuid.UUID) -> bool:
-        return environment_id in self.held
+    async def still_held(self, lease: ProfileLease) -> bool:
+        environment = lease.environment_id
+        return environment in self.held and self._owners.get(environment) is lease
 
     async def _wait(self, environment_id: uuid.UUID, until: datetime) -> bool:
         while environment_id in self.held:

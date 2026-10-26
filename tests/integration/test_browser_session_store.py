@@ -57,11 +57,11 @@ async def test_lock__one_holder_per_environment_and_parallel_environments(
     one, two = uuid.uuid4(), uuid.uuid4()
     async with locks.hold(one, until=soon(1)) as first:
         async with locks.hold(one, until=soon(0.3)) as second:
-            assert (first, second) == (True, False)
+            assert (first.held, second.held) == (True, False)
         async with locks.hold(two, until=soon(0.3)) as other:
-            assert other
+            assert other.held
     async with locks.hold(one, until=soon(0.3)) as again:
-        assert again
+        assert again.held
 
 
 @pytest.mark.ac("AC-8A.2.2")
@@ -74,11 +74,11 @@ async def test_lock__a_killed_holder_releases_the_profile(admin: Database) -> No
         )
         pid = holder.info.backend_pid
         locks = PostgresProfileLocks(admin, poll_seconds=0.05)
-        async with locks.hold(environment, until=soon(0.2)) as held:
-            assert not held
+        async with locks.hold(environment, until=soon(0.2)) as waiting:
+            assert not waiting.held
         scalar(admin, "select pg_terminate_backend(%s)", [pid])  # the worker dies
-        async with locks.hold(environment, until=soon(2)) as held:
-            assert held
+        async with locks.hold(environment, until=soon(2)) as lease:
+            assert lease.held
     finally:
         holder.close()
 
@@ -136,9 +136,9 @@ async def test_lock__a_dropped_lock_connection_is_noticed(admin: Database) -> No
     connection was killed no longer holds the lock."""
     locks = PostgresProfileLocks(admin, poll_seconds=0.05)
     environment = uuid.uuid4()
-    async with locks.hold(environment, until=soon(1)) as held:
-        assert held
-        assert await locks.still_held(environment)
+    async with locks.hold(environment, until=soon(1)) as lease:
+        assert lease.held
+        assert await locks.still_held(lease)
         pid = scalar(
             admin,
             "select pid from pg_locks where locktype = 'advisory' and granted "
@@ -146,8 +146,8 @@ async def test_lock__a_dropped_lock_connection_is_noticed(admin: Database) -> No
             [lock_key(environment)],
         )
         scalar(admin, "select pg_terminate_backend(%s)", [pid])
-        assert not await locks.still_held(environment)
-    assert not await locks.still_held(environment)
+        assert not await locks.still_held(lease)
+    assert not await locks.still_held(lease)
 
 
 @pytest.mark.ac("AC-8A.2.1")
@@ -157,7 +157,30 @@ async def test_lock__a_deferred_waiter_leaves_the_holder_tracked(admin: Database
     locks = PostgresProfileLocks(admin, poll_seconds=0.05)
     environment = uuid.uuid4()
     async with locks.hold(environment, until=soon(2)) as first:
-        assert first
+        assert first.held
         async with locks.hold(environment, until=soon(0.2)) as second:
-            assert not second
-        assert await locks.still_held(environment)
+            assert not second.held
+        assert await locks.still_held(first)
+
+
+@pytest.mark.ac("AC-8A.2.2")
+async def test_lock__a_dropped_lease_stays_lost_after_another_session_takes_the_lock(
+    admin: Database,
+) -> None:
+    """sage and Codex on #121/#122, on real Postgres: S1's backend is killed, S2 takes the
+    lock on a new connection, and S1's lease reports lost while S2's reports held."""
+    locks = PostgresProfileLocks(admin, poll_seconds=0.05)
+    environment = uuid.uuid4()
+    async with locks.hold(environment, until=soon(2)) as first:
+        assert first.held
+        pid = scalar(
+            admin,
+            "select pid from pg_locks where locktype = 'advisory' and granted "
+            "and objid = (hashtextextended(%s, 0) & 4294967295)::oid",
+            [lock_key(environment)],
+        )
+        scalar(admin, "select pg_terminate_backend(%s)", [pid])  # S1's connection drops
+        async with locks.hold(environment, until=soon(2)) as second:
+            assert second.held
+            assert not await locks.still_held(first)
+            assert await locks.still_held(second)
