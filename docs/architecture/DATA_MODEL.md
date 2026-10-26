@@ -139,7 +139,7 @@ The phase column says when a table first appears.
 |---|---|---|
 | `tasks`, `task_events` | Business tasks (assignee: user, employee or automation) and their history | 7 |
 | `approvals` | Approval requests and decisions | 7 |
-| `policies` | Versioned policy documents for the policy engine | 7 |
+| `policies`, `policy_decisions` | Versioned policy documents for policy engine v1: the capability catalogue with side effect and risk, and the grants of employees, automations and system components. They are append-only, so a change is the next version. Each engine decision is stored with its actor, capability, verdict, reason and `policy_version`, also append-only, with no request parameters or buyer data. RLS: the Owner and Admins read; the worker reads its job's policy and records its job's decisions. **Created** (slice 7.2, `20261027110000_policies.sql`) | 7 |
 
 ### Workforce (the office)
 
