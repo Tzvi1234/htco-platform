@@ -367,7 +367,15 @@ def format_summary(
     return "\n".join(lines) + "\n"
 
 
+def _terminate(signum: int, _frame: object) -> None:
+    """SIGTERM ends the runner the way Ctrl-C does: as an exception, so the active step's group is
+    stopped first (`_run_one`); Python's default would exit with no cleanup at all (#128)."""
+    raise SystemExit(128 + signum)
+
+
 def main(argv: list[str]) -> int:
+    if sys.platform != "win32":
+        signal.signal(signal.SIGTERM, _terminate)
     parser = argparse.ArgumentParser(description="Run a CI job's steps locally.")
     parser.add_argument("--root", type=Path, default=Path(), help="repository root")
     parser.add_argument("--workflow", type=Path, help="workflow file (default: ci.yml in --root)")
