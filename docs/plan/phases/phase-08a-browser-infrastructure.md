@@ -6,7 +6,7 @@
 | **Milestone** | — |
 | **Repositories** | `htco-platform` (most work), `htco-clients` (environment screens) |
 | **Size** | L |
-| **Depends on** | [Phase 5](phase-05-orders-ingest.md) (gateway, router, Browser interface, Environment Registry), [Phase 7](phase-07-tasks-approvals.md) (Human channel: tasks and approvals). **Starts right after Phase 6, in parallel with Phase 7** (owner, 2026-10-23): until Phase 7's task store lands, Human hand-offs use the relay item of slice 6.10, which Phase 7 then absorbs. The AutoVA recipes (8A.10) are built first, right after the worker, controller, preflight and challenge handler (8A.1 to 8A.4). Slice 8A.6 (Browser Use) is **moved earlier** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §3). It no longer waits for all of Phase 9, only for the **minimal Model Gateway** pulled forward from slices 9.1 and 9.2: one provider adapter, the pinned `browser-agent-default` alias, hard caps, masking, recording and the kill switch. The secret-injection part of 8A.4 needs [Phase 8B](phase-08b-authenticator.md); until then, login is a Human task. |
+| **Depends on** | [Phase 5](phase-05-orders-ingest.md) (gateway, router, Browser interface, Environment Registry), [Phase 7](phase-07-tasks-approvals.md) (Human channel: tasks and approvals). **Starts right after Phase 6, in parallel with Phase 7** (owner, 2026-10-23): until Phase 7's task store lands, Human hand-offs use the relay item of slice 6.10, which Phase 7 then absorbs. The AutoVA recipes (8A.10) are built first, right after the worker, controller, preflight and challenge handler (8A.1 to 8A.4). Slice 8A.6 (Browser Use) is **moved earlier** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §5). It no longer waits for all of Phase 9, only for the **minimal Model Gateway** pulled forward from slices 9.1 and 9.2: one provider adapter, the pinned `browser-agent-default` alias, hard caps, masking, recording and the kill switch. The secret-injection part of 8A.4 needs [Phase 8B](phase-08b-authenticator.md); until then, login is a Human task. |
 | **Parallel with** | Phase 8 and Phase 8B |
 | **Decisions** | [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md), [ADR-0020](../../adr/0020-per-shop-browser-environment.md), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md), [ADR-0025](../../adr/0025-browser-and-network-providers.md) (browser and network providers, Browser Use earlier, Valkey), [Etsy automation approval](../../architecture/etsy-automation-approval.md) |
 | **Status** | IN PROGRESS (8A.1 built) |
@@ -41,7 +41,10 @@ Phases 5 and 7 provided the contracts and the Human channel. Listing Health (11)
 - environment screens;
 - the first two recipes (B-02 and B-03, behind flags);
 - from ADR-0025:
-  - the generic `BrowserProvider` port, with plain Chromium (the code of 8A.1 and 8A.2) as its only implementation;
+  - the layered `BrowserProvider` contract with a capabilities declaration and one shared contract suite, and `ManagedChromiumProvider` (the code of 8A.1 and 8A.2) as its only implementation;
+  - Browser Configuration Profiles: one pinned Chromium for the fleet, the same operational settings for every shop, locale and language per shop, validated and versioned, with a central management screen;
+  - browser work dispatched to the browser worker, with resume through `submit` (audit AUD-04);
+  - async ports (AUD-05) and the import contracts that keep Playwright, Browser Use and the model SDKs in their packages (AUD-13);
   - the `NetworkProvider` port: shared egress by default, an optional dedicated egress per shop, consistency checks;
   - Browser Use through the minimal Model Gateway;
   - Valkey only behind the `RateLimiter` or `Cache` ports, and only where Postgres falls short.
@@ -49,7 +52,8 @@ Phases 5 and 7 provided the contracts and the Human channel. Listing Health (11)
 **Out:**
 
 - anti-detect browsers, fingerprint spoofing, residential, ISP or rotating proxies, and CAPTCHA solving: never ([ADR-0020](../../adr/0020-per-shop-browser-environment.md));
-- any AdsPower or other anti-detect adapter. AdsPower Professional (SunBrowser) is recorded as the owner's chosen external browser provider: an **external dependency** behind the `BrowserProvider` port that this team does not design, specify or build. It stays disabled unless it passes the port contract and every security gate, which today's rules forbid ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §1, "Scope boundary");
+- any other browser provider: none that attaches to a browser run outside HTCO's browser worker, and no external-vendor adapter. Any future provider must implement the contract and pass the same gates ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §1);
+- a per-shop User-Agent, screen resolution, time zone or geolocation, or anything else that would make shops look like different devices (ADR-0025 §2);
 - TOTP enrolment and display (8B);
 - browser **write** actions on Etsy (B-05 to B-10: Phases 13 and 14, after written confirmation);
 - non-Etsy sites (POD partners, suppliers: Phase 13, with their own scope rows).
@@ -101,18 +105,65 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.2.2 | Killing the worker mid-session releases the lock (the connection drops), and the next session re-seals from the last good archive. |
 | AC-8A.2.3 | A session past its deadline is closed and recorded as `FAILED (timeout)`; the environment's error counter increments. |
 
-**8A.2a — The `BrowserProvider` port** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §1).
-- The port has `create_profile`, `open`, `connect_cdp`, `health_check`, `save_session`, `close` and status management. The contract is in [execution-engine.md](../../architecture/execution-engine.md).
-- Its first and only implementation, `ChromiumProvider`, is **the existing code mapped onto the port, not rewritten**: `SealedProfileProvisioner` and `ProfileWorkspaces` (8A.1), and the controller's write-back and `PlaywrightEngine` (8A.2).
-- `BrowserController` stays the only entry point. It holds the lock, the deadline and the record, and it calls the provider inside them.
-- `shop_browser_environments.provider` names each environment's provider (default `chromium`). Only the Owner changes it.
-- No AdsPower or anti-detect adapter is designed or built. Any external adapter must pass the port contract and every security gate before it can be enabled.
+**8A.2a — The `BrowserProvider` contract and `ManagedChromiumProvider`** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §1).
+- **The contract** has seven async layers and a capabilities declaration. The layers are Provisioning, Lifecycle, Connection, Execution, Authentication, Networking and Monitoring. The signatures are in [execution-engine.md](../../architecture/execution-engine.md) §3.
+- **`ManagedChromiumProvider`**, in the browser-worker package, is the only implementation. It is **the existing code mapped onto the contract, not rewritten**:
+  - `SealedProfileProvisioner` and `ProfileWorkspaces` (8A.1);
+  - the controller's fenced write-back and `PlaywrightEngine` (8A.2).
+
+  It adds `renew` and `recover`, and runs parallel profiles, each under its own lock.
+- **`BrowserController` stays the only entry point.** It holds the lock, the deadline and the record, and calls the provider inside them.
+- **Import contracts (AUD-13):** `playwright` and `browser_use` only in `htco_browser_worker`, and the model SDKs only in the gateway package.
+- **Async ports (AUD-05):** the new ports are async, and each adapter owns its thread hop.
+- **The environment's provider:** `shop_browser_environments.provider` names it (`managed-chromium`). Only the Owner changes it.
+- **No other provider** is designed or built: none that attaches to a browser run outside HTCO's browser worker, and no external-vendor adapter. Any future provider must implement the contract and pass the same gates.
 
 | ID | Acceptance criterion |
 |---|---|
-| AC-8A.2.4 | One contract suite for `BrowserProvider` (create, open, CDP attach, health, save, close and status, against fixtures and `127.0.0.1` pages only) passes for `ChromiumProvider` and for a fake provider. Nothing in LangGraph, the execution engine, the Action Gateway, the recipes or the guards imports a provider: an architecture test checks it. |
-| AC-8A.2.5 | `connect_cdp` exposes CDP only inside the browser worker, as a pipe or loopback in its own network namespace. A test shows the endpoint can't be reached from outside the worker, and that no port is published. |
-| AC-8A.2.6 | An environment's provider can be changed only by the Owner, with `aal2` and step-up, and only to a provider whose readiness is `enabled`. The change is audited. An Admin, an agent and an automation are refused (negative tests). Only `chromium` is `enabled` at the end of this phase. |
+| AC-8A.2.4 | One shared contract suite runs layer by layer against fixtures and `127.0.0.1` pages only. It covers Provisioning, Lifecycle, Connection, Execution, Authentication, Networking and Monitoring, and it passes for `ManagedChromiumProvider` and for a fake provider. A capability that a provider declares but the suite cannot confirm fails the suite. The controller refuses a recipe that needs an undeclared capability before a session starts. |
+| AC-8A.2.5 | The Connection layer exposes CDP only inside the browser worker, as a pipe or as loopback in its own network namespace. A test shows the endpoint can't be reached from outside the worker, and that no port is published. |
+| AC-8A.2.6 | Only the Owner can change an environment's provider, with `aal2` and step-up, and only to a provider whose readiness is `enabled`. The change is audited. An Admin, an agent and an automation are refused (negative tests). Only `managed-chromium` is `enabled` at the end of this phase. |
+| AC-8A.2.7 | import-linter forbids `playwright` and `browser_use` outside `htco_browser_worker`, and the model SDKs outside the gateway package. An architecture test finds no provider class and no Chromium import in the domain, the application layer, the graphs, the execution engine, the gateway, the recipes or the guards. |
+| AC-8A.2.8 | Parallel profiles, tested with fixtures. On one worker, sessions for as many different profiles as the declared capacity run at once, each holding its own profile lock. One more session waits for a slot, and the same profile is never open twice. `renew` re-seals refreshed cookies under the lock. `recover` restores the last good archive and runs a health check. **The fence:** session S1's lock connection drops and S2 takes the lock. S1's write-back is then refused, because its lease is checked on its own connection, never by environment. The archive write is fenced too, on that connection or with a generation compare-and-set. Red first, on a fake lock server and on Postgres. |
+| AC-8A.2.9 | The provider, configuration, network and dispatch ports are async (AUD-05). A test runs a browser session while the worker's heartbeat task keeps its schedule, with no blocking database call on the event loop. |
+
+**8A.2b — Browser Configuration Profiles** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §2).
+- **One versioned configuration profile per environment.** It has two parts:
+  - **The platform baseline, the same for every shop:**
+    - the one pinned Chromium;
+    - one color scheme;
+    - one permissions policy;
+    - one viewport, sized for Browser Use and Playwright;
+    - standard privacy and security defaults.
+  - **Per shop:** the locale and language the shop is really operated in, and the egress assignment.
+- **Never configurable:**
+  - the User-Agent, the screen resolution or the time zone;
+  - geolocation, unless a real, authorized need is recorded in a recipe's scope row, and then only the truthful location;
+  - any fingerprint or "stealth" setting, extensions, and proxy settings outside `NetworkProvider`.
+- **The Playwright engine adapter (#122)** gains only the typed options the baseline and the profile allow: locale, viewport, color scheme and permissions.
+- **One pinned Chromium for the fleet**, under a controlled update policy.
+- **Validation** runs on save and again at session start.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-8A.2.10 | Saving a configuration is refused, with each issue named, if it has any of: a never-configurable key, a locale outside the shop's recorded languages, an unallocated dedicated egress, or a permission or download the baseline denies. Nothing is saved, and the same validation at session start refuses the session. Each accepted change is a new version, made by the Owner or an Admin with step-up, and audited. Agents and automations have no tool for it (negative tests). |
+| AC-8A.2.11 | In a real Chromium, on a `127.0.0.1` page:<br>- `navigator.userAgent` is the pinned build's own, and the time zone is the worker's;<br>- geolocation is denied, and nothing hides automation;<br>- the viewport and the locale equal the configuration's.<br><br>Two shops' sessions report the same User-Agent, platform, time zone and viewport. They differ only in language, where their languages differ. |
+| AC-8A.2.12 | Every browser worker runs the one pinned Chromium build, in an image pinned by digest, and a worker whose build differs from the fleet's refuses to start sessions. A profile last opened by a newer build is refused. An update rolls out only after the contract suite and a canary health check pass. Each profile's pre-update archive is kept until the new build has run cleanly for 7 days. |
+| AC-8A.2.13 | Every session records its configuration version, its Chromium version and its egress ID. Two sessions of one environment that differ in any of them, with no audited change in between, raise a consistency finding. |
+
+**8A.2c — Browser dispatch and resume** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §3, amending ADR-0019; audit AUD-04). This slice lands before any recipe runs through the gateway (8A.5, 8A.10).
+- **The Browser channel in the agent-worker dispatches.** It returns `DISPATCHED` with one `browser.run` job, and holds no lease, slot or connection while the run goes on.
+- **The browser worker re-checks before it acts.** It claims the job, re-checks the claim, the deadline, the status, the flag, the scope and every kill switch, runs the recipe through the controller, and publishes one outcome.
+- **A resume re-enters `submit` with the stored claim**, as the human hand-off already does.
+- **A write is never re-sent blindly.**
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-8A.2.14 | A Browser binding returns `DISPATCHED`. In the same transaction, one `browser.run` job (keyed by execution and attempt) and `actions.dispatched.v1` are written. While the run goes on, the automation execution waits without its job lease, the gateway's slot is released, and no connection is held (tested with a fake browser worker). The job's payload holds no secret, token or authority (schema test). |
+| AC-8A.2.15 | Before it touches a page, the browser worker re-checks:<br>- the claim is still `DISPATCHED`, with the same request hash;<br>- the deadline has not passed;<br>- the environment is `READY`;<br>- the flag is on and the scope row is recorded;<br>- no kill switch is on.<br><br>Each failed check ends the run `refused` with its code, and no page loads. A forged or replayed job, for an execution that is not `DISPATCHED` or that has another request hash, is refused. |
+| AC-8A.2.16 | The outcome is published once per execution and attempt: a row, and `browser.run_finished.v1`. The resume resubmits the same request. `submit` resumes the stored claim, validates the output against the action's output schema, verifies it, and records exactly one final result. It never runs the browser step again, and replaying the event changes nothing. |
+| AC-8A.2.17 | A read run that dies is retried within its policy. A write run with no outcome past its deadline and grace period is never re-sent: it becomes `HANDED_TO_HUMAN`, with one task. A challenge ends the run as `challenge`, and the resume records `HANDED_TO_HUMAN` with one Human task. |
+| AC-8A.2.18 | pgTAP: in its own organization, the `htco_browser` role claims only `browser.*` jobs, reads only a claim's state, request hash and deadline, and inserts only outcomes. It cannot write `action_executions`, approvals, or another organization's rows. |
 
 ### 8A.3 — Preflight, session validation and network health
 
@@ -120,7 +171,7 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 - **Session validation:** the signed-in marker for the site.
 - **Network diagnostics (daily):** egress stability, latency and a reputation lookup of our own egress IP. These are recorded as diagnostics only and never used to switch IPs.
 - **Status updates:** `READY` ↔ `DEGRADED` ↔ `LOGIN_REQUIRED`.
-- **The `NetworkProvider` port** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §2): `egress_for(shop)`, `allocate` and `release` (owner-only, optional) and `check`.
+- **The `NetworkProvider` port** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §4), async: `egress_for(shop)`, `allocate` and `release` (owner-only, optional) and `check`. It supplies the egress that each configuration profile names (8A.2b).
   - The first adapter, `SharedEgress`, gives every shop the shared browser egress. A new shop never needs an allocation (D-18 (c)).
   - A **dedicated egress** per shop is an optional, owner-allocated static datacenter IP of HTCO's own cloud account. It is truthful, never rotated, and never used to hide that shops are related.
   - No residential, ISP or rotating proxy, proxy marketplace or VPN, ever.
@@ -161,9 +212,9 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.5.2 | An export that fails its schema stores nothing and opens a quality finding; one that passes is idempotent per shop and day. |
 | AC-8A.5.3 | A recipe whose scope row is missing, or whose flag is off, is refused before the controller starts. |
 
-### 8A.6 — Browser Use driver for employees (moved earlier, ADR-0025 §3)
+### 8A.6 — Browser Use driver for employees (moved earlier, ADR-0025 §5)
 
-- [Browser Use](https://github.com/browser-use/browser-use) (MIT) is wrapped behind `BrowserSession`. It is the **primary AI browser engine** for employees, attached through `BrowserProvider.connect_cdp`.
+- [Browser Use](https://github.com/browser-use/browser-use) (MIT) is wrapped behind `BrowserSession`. It is the **primary AI browser engine** for employees, attached through the provider's Connection layer (`connect_cdp`).
 - **The order inside a session:**
   1. Playwright for every deterministic step (recipes, extraction, verification).
   2. Jev "Ultrafast" as an optional fast path for small structured decisions, only once its 9.6 benchmark passes. It is off before Phase 9.
@@ -231,11 +282,19 @@ The controller can fall back from Playwright to Browser Use only for employee ac
   - recent sessions;
   - the enabled actions with their scope row and flag.
 - The global browser kill switch, for the Owner.
+- **Admin › Browser environments**, the central management screen ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §2). It lists every shop environment the viewer may see, with:
+  - its status and configuration version;
+  - its Chromium version and egress;
+  - its last health check and last session.
+
+  It offers Create (step-up and consent), Edit configuration (validated before saving), Check now, Provision, Re-provision and Recover. Egress and provider changes stay Owner-only. Web first (ADR-0016).
 
 | ID | Acceptance criterion |
 |---|---|
 | AC-8A.9.1 | Creating an environment requires step-up and the consent text; both are recorded. |
 | AC-8A.9.2 | The kill switch stops running sessions within one step and refuses new ones. |
+| AC-8A.9.3 | The management screen lists only the environments that the viewer's role and shop access allow (RLS). It names each validation issue before saving. Every change needs step-up, and changes to the egress or the provider are Owner-only (negative tests). |
+| AC-8A.9.4 | Check now, Provision, Re-provision and Recover each enqueue a browser job; the API never runs a browser. The screen shows each result once its outcome is published. |
 
 ### 8A.10 — AutoVA recipes: A-01 (Export first) and A-02 (approve the chosen quote)
 
@@ -271,7 +330,14 @@ AutoVA is the owner's supplier platform (`beta.autova.io`). These recipes run in
 - Integration tests with a real Chromium against a local test site (never etsy.com in CI).
 - pgTAP for the roles.
 - A manual verification on the owner's shop with B-02 only, after its scope row and flag.
-- The `BrowserProvider` contract suite against `ChromiumProvider` and a fake provider.
+- The shared `BrowserProvider` contract suite, layer by layer, against `ManagedChromiumProvider` and a fake provider. It includes the honesty checks of AC-8A.2.11 in a real Chromium.
+- Configuration validation: every never-configurable key, every conflict, at save and at session start.
+- Dispatch and resume with a fake browser worker:
+  - lease and slot release;
+  - the execution-time re-checks;
+  - a forged or replayed job;
+  - outcome replay;
+  - a lost read and a lost write.
 - Egress consistency tests with a local echo endpoint.
 - Browser Use against a fake `ModelGateway` that records every call: caps, masking, kill switches and the stop on an unavailable alias.
 - Tests for the per-run gateway token: expired, replayed, wrong alias.
@@ -282,7 +348,20 @@ AutoVA is the owner's supplier platform (`beta.autova.io`). These recipes run in
 - [ ] The browser worker holds no OAuth tokens; profiles are sealed; secrets only through grants.
 - [ ] THREAT_MODEL updated (browser environment assets, profile theft, injection, session hijack).
 - [ ] The browser worker holds no provider key. Browser Use's model calls go only through the Model Gateway, with a per-run token, the pinned alias, hard caps, masking, recording and kill switches.
-- [ ] Only `chromium` is an enabled provider. An external adapter, including the owner's recorded AdsPower dependency, stays disabled unless it passes the port contract and every security gate (ADR-0025 §1).
+- [ ] Only `managed-chromium` is an enabled provider. No provider attaches to a browser run outside HTCO's browser worker, and there is no external-vendor adapter. Any future provider must implement the contract and pass the same gates (ADR-0025 §1).
+- [ ] Business logic never imports Chromium, Playwright, Browser Use or a provider class, and the model SDKs stay in the gateway package (import contracts, AUD-13).
+- [ ] The browser stays honest (ADR-0025 §2):
+  - the real User-Agent and the worker's time zone;
+  - one viewport and one pinned Chromium for every shop;
+  - no geolocation without a recorded, authorized need;
+  - no fingerprint, stealth or proxy setting.
+
+  A configuration that breaks this is refused at save and at session start.
+- [ ] Browser work is dispatched (ADR-0025 §3):
+  - the job carries no secret, token or authority;
+  - the browser worker re-checks the claim, the flag, the scope and every kill switch before it acts;
+  - its role cannot write action executions or approvals;
+  - a write is never re-sent blindly.
 - [ ] Egress is truthful: shared, or a dedicated HTCO-owned static IP, never rotated and never hiding shop linkage. Changes are Owner-only and audited, and consistency is checked before every session.
 - [ ] CDP is reachable only inside the browser worker.
 
@@ -311,8 +390,10 @@ Switch the global browser kill switch on: all `browser.etsy.*` flags go off, and
 | Frequent challenges make the environment useless | Persistent profiles and human pace; measure the challenge rate weekly; stop if it exceeds 1 per shop per week |
 | Etsy's page layout changes break recipes | Schema validation stores nothing wrong; recipe failures alert; recipes are versioned |
 | Browser Use spends too much on models | Hard caps per run and per shop per day, reserved before every call (AC-8A.6.6), until the Phase 9 ledger takes over; deterministic recipes preferred |
-| An external browser provider weakens the honest design | Only `chromium` is enabled; an external adapter needs the port contract and every security gate, and today's gates forbid anti-detect providers, so enabling one needs a superseding ADR with the risks accepted on record ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §1) |
-| A shop's egress changes unnoticed | Consistency check before every session; the egress ID recorded per session; owner-only, audited changes (AC-8A.3.4 to AC-8A.3.7) |
+| A future provider weakens the honest design | Only `managed-chromium` is enabled. Any future provider must implement the contract and pass the same gates: the shared contract suite, the SECURITY GATE checklist and ADR-0020's rules ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §1) |
+| A shop's egress or configuration changes unnoticed | A consistency check before every session. Each session records its egress ID, configuration version and Chromium version. Changes are owner or admin actions, audited (AC-8A.2.13, AC-8A.3.4 to AC-8A.3.7) |
+| A Chromium update breaks sessions for every shop at once | The contract suite and a canary health check before the fleet moves; each profile's pre-update archive kept for 7 days; no downgrade of a newer profile (AC-8A.2.12) |
+| A browser run dies mid-write and its effect is unknown | It is never re-sent. Past its deadline it becomes `HANDED_TO_HUMAN` with a task to check (AC-8A.2.17) |
 
 ## Cost impact
 

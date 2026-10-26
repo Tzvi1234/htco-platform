@@ -111,6 +111,7 @@ class ActionOutcome(StrEnum):
     PENDING_APPROVAL = "pending_approval"
     HANDED_TO_HUMAN = "handed_to_human"
     DEFERRED = "deferred"  # breaker open or rate-limited; re-queued
+    DISPATCHED = "dispatched"  # browser work queued for the browser worker; resumed through submit (ADR-0025 §3)
 
 
 class ActionResult(BaseModel):
@@ -202,36 +203,144 @@ class BrowserSession(Protocol):
     async def inject_secret(self, grant: InjectionGrant, selector: str) -> None: ...
 
 
-class BrowserProvider(Protocol):  # ADR-0025 §1; the only implementation: ChromiumProvider (8A.1/8A.2)
-    """The browser engine behind BrowserController. A provider never sees an OAuth token, the
-    Secret Broker, a database role or a network outside its NetworkProvider egress; the
-    controller holds the lock, the deadline and the session record around every call."""
+# --- The browser provider contract (ADR-0025 §1): seven layers and a capabilities declaration.
+# The only implementation is ManagedChromiumProvider (htco_browser_worker). Business logic
+# depends on BrowserController and BrowserSession only, never on a provider or on Chromium.
+# A provider never sees an OAuth token, the Secret Broker, a database role or a network
+# outside its NetworkProvider egress; it gets a secret only as a one-use value for one field.
 
-    provider_id: str  # "chromium"; shop_browser_environments.provider; Owner-only to change
-    async def create_profile(self, environment: BrowserEnvironment) -> ProfileRecord: ...
+
+class ProviderCapabilities(BaseModel):  # a claim the contract suite checks; it grants nothing
+    model_config = ConfigDict(frozen=True)
+    provider_id: str  # "managed-chromium"; shop_browser_environments.provider (Owner-only)
+    engine: Literal["chromium"]
+    engine_version: str  # the fleet's one pinned build (ADR-0025 §2)
+    layers: frozenset[ProviderLayer]  # all seven for an enabled provider
+    execution_engines: frozenset[Literal["playwright", "browser_use", "jev"]]
+    cdp_transport: Literal["pipe", "loopback"]  # never a published TCP port
+    renew: bool
+    recover: bool
+    downloads: bool
+    parallel_profiles: int  # sessions per worker, one per profile, each under its own lock
+
+
+class ProfileProvisioning(Protocol):  # the profile manager
+    async def create_profile(
+        self, environment: BrowserEnvironment, config: BrowserConfiguration
+    ) -> ProfileRecord: ...
+    async def reprovision(self, environment: BrowserEnvironment) -> ProfileRecord: ...
+    async def destroy_profile(self, environment: BrowserEnvironment) -> None: ...
+    async def validate(self, config: BrowserConfiguration) -> tuple[ConfigurationIssue, ...]: ...
+
+
+class SessionLifecycle(Protocol):  # status changes go through ShopEnvironmentRegistry.transition
     async def open(
-        self, environment: BrowserEnvironment, *, egress: EgressProfile, deadline: AwareDatetime
+        self,
+        environment: BrowserEnvironment,
+        *,
+        config: BrowserConfiguration,
+        egress: EgressProfile,
+        deadline: AwareDatetime,
+        fence: ProfileFence,
     ) -> ProviderHandle: ...
-    async def connect_cdp(self, handle: ProviderHandle) -> CdpEndpoint:
-        """A pipe or loopback endpoint inside the browser worker only; never published."""
-    async def health_check(self, handle: ProviderHandle) -> HealthReport: ...
     async def save_session(self, handle: ProviderHandle, *, fence: ProfileFence) -> None:
-        """Re-seal the profile, only while the profile lock is held (fenced write)."""
+        """Re-seal the profile under the session's own lock lease (ProfileFence): checked on
+        that lock's own connection, never looked up by environment; the archive is written on
+        that connection or with a generation compare-and-set. A lost lock never writes back."""
+    async def renew(self, handle: ProviderHandle, *, fence: ProfileFence) -> HealthReport:
+        """A short scheduled session: check the sign-in, re-seal refreshed cookies."""
+    async def recover(
+        self, environment: BrowserEnvironment, *, fence: ProfileFence
+    ) -> HealthReport: ...  # restore the last good archive, then a health check
     async def close(self, handle: ProviderHandle) -> None:  # always; wipes the workspace
         ...
-    def status(self, environment_id: UUID) -> EnvironmentStatus: ...
-    def set_status(
-        self, environment_id: UUID, target: EnvironmentStatus, *, reason: str, by: ActorRef
-    ) -> None: ...  # through ShopEnvironmentRegistry.transition's rules
 
 
-class NetworkProvider(Protocol):  # ADR-0025 §2; first adapter: SharedEgress
-    def egress_for(self, shop_id: UUID) -> EgressProfile:
+class EngineConnection(Protocol):
+    async def connect_cdp(self, handle: ProviderHandle) -> CdpEndpoint:
+        """A pipe or loopback endpoint inside the browser worker only; never published."""
+
+
+class EngineExecution(Protocol):  # the engines that act on a page (ADR-0025 §5)
+    async def run_steps(
+        self, handle: ProviderHandle, recipe: RecipeSpec, params: Mapping[str, JsonValue]
+    ) -> RecipeOutcome: ...  # Playwright: deterministic, the only engine automations use
+    async def run_agent(
+        self, handle: ProviderHandle, task: AgentTask, *, gateway: RunToken
+    ) -> AgentOutcome: ...  # Browser Use, employees only, model calls through the gateway
+    async def decide(
+        self, handle: ProviderHandle, question: StepQuestion, *, gateway: RunToken
+    ) -> StepAnswer: ...  # Jev, only for families whose 9.6 benchmark passed
+
+
+class SessionAuthentication(Protocol):  # the session redeems grants; the provider never does
+    async def signed_in(self, handle: ProviderHandle, site: str) -> bool: ...
+    async def challenge(self, handle: ProviderHandle) -> ChallengeKind | None: ...
+    async def type_secret(self, handle: ProviderHandle, value: SecretValue, field: FieldRef) -> None: ...
+
+
+class ProviderNetworking(Protocol):
+    async def observed_egress(self, handle: ProviderHandle) -> str:
+        """The public IP that HTCO's echo endpoint sees from inside the session."""
+
+
+class ProviderMonitoring(Protocol):
+    async def health_check(self, handle: ProviderHandle) -> HealthReport: ...
+    async def engine_version(self) -> str: ...
+
+
+class BrowserProvider(
+    ProfileProvisioning,
+    SessionLifecycle,
+    EngineConnection,
+    EngineExecution,
+    SessionAuthentication,
+    ProviderNetworking,
+    ProviderMonitoring,
+    Protocol,
+):
+    capabilities: ProviderCapabilities
+
+
+class BrowserConfigurations(Protocol):  # ADR-0025 §2: one versioned profile per environment
+    async def current(self, environment_id: UUID) -> BrowserConfiguration: ...
+    async def change(
+        self, environment_id: UUID, change: ConfigurationChange, *, by: AuthContext
+    ) -> ConfigurationVersion | tuple[ConfigurationIssue, ...]:
+        """Owner or Admin with step-up, audited; validated before it is saved. Locale, language
+        and the egress assignment only: no User-Agent, screen size, time zone or geolocation."""
+
+
+class NetworkProvider(Protocol):  # ADR-0025 §4; first adapter: SharedEgress
+    async def egress_for(self, shop_id: UUID) -> EgressProfile:
         """shared (default, no allocation needed) or dedicated (an HTCO-owned static IP)."""
-    def allocate(self, shop_id: UUID, *, by: ActorRef) -> EgressProfile: ...  # Owner, audited
-    def release(self, shop_id: UUID, *, by: ActorRef) -> None: ...  # Owner, audited
+    async def allocate(self, shop_id: UUID, *, by: ActorRef) -> EgressProfile: ...  # Owner, audited
+    async def release(self, shop_id: UUID, *, by: ActorRef) -> None: ...  # Owner, audited
     async def check(self, shop_id: UUID) -> EgressCheck:
         """The public IP seen by HTCO's echo endpoint equals the expected egress."""
+
+
+# --- Browser dispatch (ADR-0025 §3, amends ADR-0019): the Browser channel never awaits a browser.
+
+
+class BrowserDispatch(Protocol):  # the agent-worker side of the Browser channel
+    async def dispatch(
+        self, request: ActionRequest, binding: ChannelBinding, *, execution_id: UUID, attempt: int
+    ) -> UUID:
+        """In the claim's transaction: the execution moves to DISPATCHED, one browser.run job
+        (key: execution and attempt; concurrency: the profile) and actions.dispatched.v1. The
+        job carries IDs and the recipe's declared parameters only: no secret, token or authority."""
+    async def outcome_of(self, execution_id: UUID, attempt: int) -> BrowserRunOutcome | None: ...
+
+
+class BrowserRunOutcome(BaseModel):  # published once per execution and attempt by the browser worker
+    model_config = ConfigDict(frozen=True)
+    execution_id: UUID
+    attempt: int
+    status: Literal["succeeded", "failed", "challenge", "refused", "timeout"]
+    output: dict[str, JsonValue] | None  # validated against the recipe's schema; DC1 only if declared
+    evidence: tuple[Evidence, ...] = ()
+    error_code: str | None = None  # "kill_switch", "flag_off", "not_ready", "deadline", ...
 
 
 class ShopEnvironmentRegistry(Protocol):
@@ -332,7 +441,7 @@ class ConcurrencyLimiter(Protocol):
 6. **Apply the guards** in this order: circuit breaker → rate limiter → concurrency slot. If any is unavailable, the result is `DEFERRED` with `retry_at`.
 7. **Execute** through the adapter:
    - API writes go through the outbox (PR #55's `Deliverer` for `etsy.*` destinations);
-   - browser work goes through the controller.
+   - browser work is dispatched: the action becomes `DISPATCHED`, the browser worker runs it through the controller, and a resubmission resumes the claim once the outcome is in ([ADR-0025](../adr/0025-browser-and-network-providers.md) §3).
 8. **Verify.**
    - `reread`: fetch the object again and compare it with the intended state;
    - `schema`: validate the extraction against its Pydantic model;
@@ -455,8 +564,13 @@ RECEIVED ─► AUTHORIZED ─► (WAITING_APPROVAL ─► AUTHORIZED) ─► RO
    └► DENIED     └► DENIED        └► REJECTED / EXPIRED            ├► DEFERRED ─► ROUTED
                                                                    ├► HANDED_TO_HUMAN ─► RUNNING (resume) | CANCELLED
                                                                    └► FAILED ─► (retry policy) ─► ROUTED | DEAD_LETTERED
+ROUTED ─► DISPATCHED (Browser channel, ADR-0025 §3) ─► RUNNING (resume: the outcome is in) ─► VERIFYING
+              ├► HANDED_TO_HUMAN (a challenge, or a write with no outcome past its deadline)
+              └► FAILED (refused at execution time, or a read past its deadline)
 VERIFYING ─► FAILED (verification) ─► incident
 ```
+
+A `DISPATCHED` action holds no lease, slot or connection while the browser worker runs it. A resubmission with the same key resumes the stored claim: with no outcome yet it answers `DISPATCHED`, and with one it validates and verifies the output and records one final result. The browser step never runs twice.
 
 ### Business task (`tasks.state`, Phase 7; existing `htco_domain.tasks.TaskState`)
 
@@ -464,10 +578,10 @@ Tasks keep their domain state machine (`BusinessTask`). The engine adds two wait
 
 ### Status management (slice 5.18, as built)
 
-- **One vocabulary.** `htco_domain.status` maps every state of `ExecutionState`, `ActionState`, `EnvironmentStatus` and `TaskState` to one `StatusKind` (`active`, `waiting`, `succeeded`, `failed`, `stopped`), and names the two waiting reasons (`waiting_for_human`, `waiting_for_approval`).
+- **One vocabulary.** `htco_domain.status` maps every state of `ExecutionState`, `ActionState`, `EnvironmentStatus` and `TaskState` to one `StatusKind` (`active`, `waiting`, `succeeded`, `failed`, `stopped`), and names the waiting reasons (`waiting_for_human`, `waiting_for_approval`, and `waiting_for_browser` for a `DISPATCHED` action, ADR-0025 §3).
 - **One event per status change**, through the outbox in the same transaction:
   - an automation execution's change is `automations.execution_state_changed.v1`, written by the execution store with the change row;
-  - an action's recorded step is `actions.executed.v1` (a result), `actions.approval_required.v1`, `actions.handed_to_human.v1` or `actions.deferred.v1`; a resubmission that changes nothing publishes nothing;
+  - an action's recorded step is `actions.executed.v1` (a result), `actions.approval_required.v1`, `actions.handed_to_human.v1`, `actions.deferred.v1` or `actions.dispatched.v1` (ADR-0025 §3); a resubmission that changes nothing publishes nothing;
   - a browser environment's change is `browser.environment_status_changed.v1` (5.16).
 - **The chain view.** `GET /v1/executions/{id}` lists the trigger (the inbox event when the execution's `causation_id` names it), the state changes, the actions the execution caused (`causation_id` = its ID) or that share its correlation ID, with channel and outcome, their approvals and hand-offs, and the published events, in causal order.
 
@@ -503,7 +617,7 @@ These are unchanged from ADR-0013 and PR #58 (`ExecutionState`), and from PR #53
 |---|---|---|
 | `api` | Gateway for user actions, approvals, webhooks | 1 → 5 |
 | `agent-worker` (PR #54) | Job queue: automations, API and Internal channel jobs; employees from Phase 8 | 5 |
-| `browser-worker` | Browser channel only: Chromium, Playwright, Browser Use; its own database role, storage prefix and fixed egress IP; no Etsy OAuth tokens | 8A |
+| `browser-worker` | Browser channel only: `ManagedChromiumProvider` (the one pinned Chromium, Playwright, Browser Use). It claims only `browser.*` jobs, re-checks the claim and the switches before acting, and publishes each run's outcome (ADR-0025 §3). Its own database login (`htco_browser`), its egress from `NetworkProvider`, no Etsy OAuth tokens and no provider keys | 8A |
 | Monitoring | Prometheus and Grafana OSS (self-hosted on the browser worker's host or Grafana Cloud free tier) | 8A |
 
 Separation: API workers never hold browser profiles; browser workers never hold Etsy OAuth tokens; only the Secret Broker opens sealed credentials, and only for a grant.
