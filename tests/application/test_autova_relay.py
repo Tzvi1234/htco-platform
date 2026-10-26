@@ -14,7 +14,11 @@ from typing import override
 import pytest
 
 from htco_application.access.authentication import AuthContext, Membership
-from htco_application.notifications import NotificationService
+from htco_application.automation.durable import HandlerContext
+from htco_application.execution.gateway import UnavailableGateway
+from htco_application.fulfillment_schedule import INCIDENT_DETECTION
+from htco_application.incidents import IncidentService
+from htco_application.notifications import NotificationRequest, NotificationService
 from htco_application.relay import (
     LIST_LIMIT,
     RELAY_CODE_TTL,
@@ -28,12 +32,13 @@ from htco_application.relay import (
     relay_code,
     submit_tracking,
 )
-from htco_application.sla_inspector import AwaitingOrder
+from htco_application.sla_inspector import AwaitingOrder, IncidentDetection
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.fulfillment import TrackingFormatError, tracking_fingerprint
 from htco_domain.identity import AssuranceLevel, Role
 from htco_domain.notifications import NotificationKind
 from htco_domain.relay import ClosedReason, RelayState
+from tests.fulfillment_fakes import MemoryIncidentStore, MemorySlaStore, MemoryTrackingStore
 from tests.notification_fakes import Member, MemoryNotificationStore
 from tests.relay_fakes import MemoryRelayStore
 
@@ -47,6 +52,11 @@ OWNER = uuid.UUID("00000000-0000-0000-0000-0000000ac0a1")
 PAID = datetime(2026, 10, 19, 12, 0, tzinfo=UTC)  # a Monday
 CODE = "9400100000000000001234"  # a USPS-shaped test number
 RELAY_ACTOR = ActorRef(ActorKind.AUTOMATION, "incident-detection-escalation")
+
+
+def NONE(_shop: uuid.UUID, _receipts: tuple[int, ...]) -> frozenset[int]:  # noqa: N802
+    """No order of these has tracking."""
+    return frozenset()
 
 
 def auth(
@@ -478,15 +488,15 @@ async def test_a_pasted_code_never_outlives_its_ttl_the_item_expires() -> None:
     )  # fmt: skip
 
     early = await reconcile_relay_items(
-        store, lambda _shop, _receipts: {}, organization_id=ORG, shop_id=SHOP,
+        store, lambda _shop, _receipts: {}, organization_id=ORG, shop_id=SHOP, tracked_orders=NONE,
         now=PAID + RELAY_CODE_TTL - timedelta(minutes=1),
     )  # fmt: skip
     late = await reconcile_relay_items(
-        store, lambda _shop, _receipts: {}, organization_id=ORG, shop_id=SHOP,
+        store, lambda _shop, _receipts: {}, organization_id=ORG, shop_id=SHOP, tracked_orders=NONE,
         now=PAID + RELAY_CODE_TTL + timedelta(minutes=1),
     )  # fmt: skip
 
-    assert (early, late) == ((0, 0), (0, 1))
+    assert (early, late) == ((0, 0, 0), (0, 1, 0))
     assert store.items[item].closed_reason is ClosedReason.EXPIRED
     assert store.codes == {}
 
@@ -527,13 +537,157 @@ async def test_reconcile_reaches_items_beyond_the_first_page() -> None:
 
     result = await reconcile_relay_items(
         store, lambda _shop, receipts: {r: now for r in receipts if r == 9002},
-        organization_id=ORG, shop_id=SHOP, now=now,
+        organization_id=ORG, shop_id=SHOP, now=now, tracked_orders=NONE,
     )  # fmt: skip
 
-    assert result == (1, 1)
+    assert result == (1, 1, 0)
     assert store.items[handed.id].closed_reason is ClosedReason.EXPIRED
     assert store.items[cancelled.id].closed_reason is ClosedReason.CANCELLED
     assert store.codes == {}
+
+
+async def test_a_developer_updates_incidents_but_never_pastes_or_sees_a_code() -> None:
+    """Quill on #159 (M1, M2): DEVELOPER has UPDATE_INCIDENTS but no buyer data, so it is the
+    role that tells the two rights apart. The paste is refused, the code is not there for it,
+    and nothing is audited. (Moved from the routes test with option (a).)"""
+    store = MemoryRelayStore()
+    await opened(
+        store, PAID + timedelta(days=3), orders=(AwaitingOrder(51, PAID), AwaitingOrder(52, PAID))
+    )
+    waiting, pasted = (i.id for i in sorted(store.items.values(), key=lambda i: i.receipt_id))
+    submit_tracking(
+        auth(), store, organization_id=ORG, item_id=pasted, carrier="usps", code=CODE, now=PAID,
+        correlation_id="req-1",
+    )  # fmt: skip
+    audits = list(store.audits)
+    developer = auth(Role.DEVELOPER)
+
+    with pytest.raises(PermissionError):
+        submit_tracking(
+            developer, store, organization_id=ORG, item_id=waiting, carrier="usps",
+            code="9400100000000000005678", now=PAID, correlation_id="req-2",
+        )  # fmt: skip
+    with pytest.raises(RelayItemNotVisibleError):
+        relay_code(
+            developer, store, organization_id=ORG, item_id=pasted, now=PAID,
+            correlation_id="req-3",
+        )  # fmt: skip
+
+    assert store.items[waiting].state is RelayState.AWAITING_TRACKING
+    assert waiting not in store.codes
+    assert store.audits == audits
+
+
+# --- Local Codex on #159 ------------------------------------------------------------------------
+
+
+async def test_an_item_whose_order_already_has_tracking_closes_on_it() -> None:
+    """An item opened from a snapshot taken before Tracking Synchronization recorded the order's
+    tracking closes as tracking_on_etsy, with its code."""
+    store = MemoryRelayStore()
+    item = await an_item(store)
+    receipt = store.items[item].receipt_id
+
+    result = await reconcile_relay_items(
+        store, lambda _shop, _receipts: {}, organization_id=ORG, shop_id=SHOP, now=PAID,
+        tracked_orders=lambda _shop, receipts: frozenset(r for r in receipts if r == receipt),
+    )  # fmt: skip
+
+    assert result == (0, 0, 1)
+    assert store.items[item].closed_reason is ClosedReason.TRACKING_ON_ETSY
+
+
+class StaleSnapshot(MemorySlaStore):
+    """Tracking Synchronization records the order's tracking right after the inspector read
+    the orders awaiting it, before the relay item is inserted."""
+
+    meanwhile: set[int] = set()  # noqa: RUF012 - one per test
+
+    @override
+    def awaiting_tracking(self, shop_id: uuid.UUID) -> tuple[AwaitingOrder, ...]:
+        snapshot = super().awaiting_tracking(shop_id)
+        self.meanwhile |= {order.receipt_id for order in snapshot}
+        return snapshot
+
+    @override
+    def tracked_orders(self, shop_id: uuid.UUID, receipt_ids: tuple[int, ...]) -> frozenset[int]:
+        return super().tracked_orders(shop_id, receipt_ids) | (self.meanwhile & set(receipt_ids))
+
+
+def inspection(
+    sla: MemorySlaStore, store: MemoryRelayStore, alerts: NotificationService, now: datetime
+) -> tuple[IncidentDetection, HandlerContext]:
+    detection = IncidentDetection(
+        sla, IncidentService(MemoryIncidentStore(), clock=lambda: now), clock=lambda: now,
+        alerts=alerts, relay=store,
+    )  # fmt: skip
+    ctx = HandlerContext(
+        execution_id=uuid.uuid7(), automation_id=INCIDENT_DETECTION, actor=RELAY_ACTOR,
+        organization_id=ORG, shop_id=SHOP, correlation_id="sched:9", causation_id=None,
+        attempt=1, payload={"mode": "inspect"}, gateway=UnavailableGateway(),
+    )  # fmt: skip
+    return detection, ctx
+
+
+async def test_an_item_opened_from_a_stale_snapshot_closes_in_the_same_run() -> None:
+    now = PAID + timedelta(days=4)
+    sla = StaleSnapshot(MemoryTrackingStore())
+    sla.awaiting[SHOP] = [AwaitingOrder(receipt_id=71, paid_at=PAID)]
+    store = MemoryRelayStore()
+    notes = MemoryNotificationStore([Member(OWNER, "owner", "owner@example.test")])
+    detection, ctx = inspection(sla, store, NotificationService(notes, clock=lambda: now), now)
+
+    await detection(ctx)
+
+    [item] = store.items.values()
+    assert item.closed_reason is ClosedReason.TRACKING_ON_ETSY
+
+
+class FailingAlerts(NotificationService):
+    @override
+    async def notify(self, request: NotificationRequest) -> int:
+        raise RuntimeError("the notification store is down")
+
+
+async def test_a_failing_notification_never_keeps_an_expired_code() -> None:
+    """The retention runs first: an expired code goes even when a notification later fails."""
+    store = MemoryRelayStore()
+    item = await an_item(store)
+    submit_tracking(
+        auth(), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE, now=PAID,
+        correlation_id="req-1",
+    )  # fmt: skip
+    now = PAID + RELAY_CODE_TTL + timedelta(minutes=1)
+    sla = MemorySlaStore(MemoryTrackingStore())
+    sla.awaiting[SHOP] = [AwaitingOrder(receipt_id=72, paid_at=PAID)]  # its relay item notifies
+    notes = MemoryNotificationStore([Member(OWNER, "owner", "owner@example.test")])
+    detection, ctx = inspection(sla, store, FailingAlerts(notes, clock=lambda: now), now)
+
+    with pytest.raises(RuntimeError, match="notification store"):
+        await detection(ctx)
+
+    assert store.items[item].closed_reason is ClosedReason.EXPIRED
+    assert item not in store.codes
+
+
+async def test_a_code_past_its_ttl_is_never_revealed_and_goes() -> None:
+    store = MemoryRelayStore()
+    item = await an_item(store)
+    submit_tracking(
+        auth(), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE, now=PAID,
+        correlation_id="req-1",
+    )  # fmt: skip
+    audits = len(store.audits)
+
+    with pytest.raises(RelayItemNotVisibleError):
+        relay_code(
+            auth(), store, organization_id=ORG, item_id=item,
+            now=PAID + RELAY_CODE_TTL + timedelta(minutes=1), correlation_id="req-2",
+        )  # fmt: skip
+
+    assert store.items[item].closed_reason is ClosedReason.EXPIRED
+    assert item not in store.codes
+    assert len(store.audits) == audits  # nothing revealed, so no reveal is audited
 
 
 async def test_every_reveal_of_a_code_is_audited_without_the_code() -> None:

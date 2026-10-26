@@ -1,10 +1,10 @@
 -- The AutoVA relay (slice 6.10): one relay item per order, a number used for one order of a shop
--- only, members see their shops' items, the full code only the shop's buyer-data roles, and the
--- worker acts in its job's organization and never reads a code.
+-- only, members see their shops' items, no member reads a code directly (only the API's audited
+-- reveal does), and the worker acts in its job's organization and never reads a code.
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_worker;
-select plan(17);
+select plan(18);
 
 insert into auth.users (id, email) values
   ('27a10000-0000-0000-0000-000000000001', 'owner-r@example.test'),
@@ -73,20 +73,32 @@ select throws_ok(
             '27c20000-0000-0000-0000-000000000001', 'not a code; drop table')$$,
   '23514', null, 'a code is a normalised tracking code only'
 );
+select throws_ok(
+  $$insert into app.relay_item_codes (relay_item_id, organization_id, shop_id, code)
+    values ('27d20000-0000-0000-0000-000000000001', '27b10000-0000-0000-0000-000000000000',
+            '27c10000-0000-0000-0000-000000000001', '9400100000000000005678')$$,
+  '23503', null, 'a code carries its item''s organization and shop, never another'
+);
+select throws_ok(
+  $$insert into app.relay_item_codes (relay_item_id, organization_id, shop_id, code)
+    values ('27d20000-0000-0000-0000-000000000001', '27b10000-0000-0000-0000-000000000000',
+            '27c10000-0000-0000-0000-000000000001', '9400100000000000005678')$$,
+  '23503', null, 'a code carries its item''s organization and shop, never another'
+);
 
 -- Members ------------------------------------------------------------------------------------
 select set_config('request.jwt.claims', '{"sub":"27a10000-0000-0000-0000-000000000001","role":"authenticated","aal":"aal2"}', true);
 set local role authenticated;
 select is((select count(*)::int from app.relay_items), 1, 'the owner sees their shop''s item only');
-select is((select code from app.relay_item_codes), '9400100000000000001234',
-  'the owner (a buyer-data role) reads the code');
+select throws_ok($$ select code from app.relay_item_codes $$, '42501', null,
+  'even the owner never reads a code directly: only the API''s audited reveal does');
 reset role;
 
 select set_config('request.jwt.claims', '{"sub":"27a10000-0000-0000-0000-000000000002","role":"authenticated","aal":"aal1"}', true);
 set local role authenticated;
 select is((select count(*)::int from app.relay_items), 1, 'a viewer with the shop sees its item');
-select is_empty($$ select code from app.relay_item_codes $$,
-  'a viewer (not a buyer-data role) never reads the code');
+select throws_ok($$ select code from app.relay_item_codes $$, '42501', null,
+  'a viewer never reads the code');
 reset role;
 
 -- The worker ---------------------------------------------------------------------------------

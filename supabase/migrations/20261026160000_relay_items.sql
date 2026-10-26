@@ -6,7 +6,8 @@
 -- closed, and the tracking the owner pasted as carrier, fingerprint and last four characters:
 -- the same fingerprint as `tracking_events`, so a number is never used twice (AC-6.10.2).
 -- `app.relay_item_codes`: the full pasted code, buyer data (ADR-0018). It exists only while the
--- item waits for its upload, is read only by the buyer-data roles of its shop, and is deleted
+-- item waits for its upload, is read only through the API's audited reveal (`relay.code_revealed`;
+-- no member role selects it directly, local Codex on #159), and is deleted
 -- when the item closes, when its order is cancelled or refunded, after 30 days at the latest
 -- (the time to live), and with the shop's disconnect purge.
 --
@@ -37,6 +38,10 @@ create table app.relay_items (
   constraint relay_items_shop_fkey foreign key (shop_id, organization_id)
     references app.shops (id, organization_id) on delete cascade,
   constraint relay_items_order_key unique (shop_id, receipt_id),
+  -- The code table's tenant columns are tied to their item's (local Codex on #159).
+  constraint relay_items_tenant_key unique (id, organization_id, shop_id),
+  -- The code table's tenant columns are tied to their item's (local Codex on #159).
+  constraint relay_items_tenant_key unique (id, organization_id, shop_id),
   -- A closed item says why; an open one does not.
   constraint relay_items_closed_check check (
     (state = 'closed') = (closed_reason is not null and closed_at is not null)
@@ -53,29 +58,28 @@ create unique index relay_items_fingerprint_key on app.relay_items (shop_id, tra
   where tracking_fingerprint is not null;
 
 create table app.relay_item_codes (
-  relay_item_id uuid primary key references app.relay_items (id) on delete cascade,
+  relay_item_id uuid primary key,
   organization_id uuid not null references app.organizations (id) on delete cascade,
   shop_id uuid not null,
   code text not null constraint relay_item_codes_code_check check (code ~ '^[A-Z0-9]{8,40}$'),
   constraint relay_item_codes_shop_fkey foreign key (shop_id, organization_id)
-    references app.shops (id, organization_id) on delete cascade
+    references app.shops (id, organization_id) on delete cascade,
+  -- The same organization and shop as the item, never a member's guess.
+  constraint relay_item_codes_item_fkey foreign key (relay_item_id, organization_id, shop_id)
+    references app.relay_items (id, organization_id, shop_id) on delete cascade
 );
 
 alter table app.relay_items enable row level security;
 alter table app.relay_item_codes enable row level security;
 revoke all on app.relay_items, app.relay_item_codes from public, anon, authenticated, service_role;
 
--- Members: their shops' relay items; the code only for the shop's buyer-data roles.
-grant select on app.relay_items, app.relay_item_codes to authenticated;
+-- Members: their shops' relay items. Never the codes table: a code is read only through the
+-- API's reveal, which checks the buyer-data right and audits it in the same transaction.
+grant select on app.relay_items to authenticated;
 create policy relay_items_select on app.relay_items for select to authenticated
   using (
     organization_id = any (array(select private.user_org_ids()))
     and shop_id = any (array(select private.user_shop_ids()))
-  );
-create policy relay_item_codes_select on app.relay_item_codes for select to authenticated
-  using (
-    organization_id = any (array(select private.user_org_ids()))
-    and shop_id = any (array(select private.user_buyer_data_shop_ids()))
   );
 
 -- The worker: its job's organization only. It opens items, closes them on evidence, and deletes

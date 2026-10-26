@@ -182,6 +182,19 @@ class PostgresSlaStore:
             ).fetchall()
         return {int(r[0]): r[1] for r in rows}
 
+    def tracked_orders(self, shop_id: uuid.UUID, receipt_ids: tuple[int, ...]) -> frozenset[int]:
+        if not receipt_ids:
+            return frozenset()
+        with self._database.connection() as connection:
+            rows = connection.execute(
+                """
+                select distinct receipt_id from app.tracking_events
+                where shop_id = %s and receipt_id = any(%s)
+                """,
+                [shop_id, list(receipt_ids)],
+            ).fetchall()
+        return frozenset(int(r[0]) for r in rows)
+
     def receipts_for_transactions(
         self, shop_id: uuid.UUID, transaction_ids: tuple[int, ...]
     ) -> Mapping[int, int]:

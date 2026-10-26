@@ -88,6 +88,10 @@ class MemorySlaStore:
         closed = self.closed.get(shop_id, {})
         return {r: closed[r] for r in receipt_ids if r in closed}
 
+    def tracked_orders(self, shop_id: uuid.UUID, receipt_ids: tuple[int, ...]) -> frozenset[int]:
+        tracked = {r for (s, r, _) in self.tracking.rows if s == shop_id}
+        return frozenset(r for r in receipt_ids if r in tracked)
+
     def receipts_for_transactions(
         self, shop_id: uuid.UUID, transaction_ids: tuple[int, ...]
     ) -> Mapping[int, int]:

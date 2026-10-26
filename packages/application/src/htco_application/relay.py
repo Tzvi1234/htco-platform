@@ -212,14 +212,17 @@ async def reconcile_relay_items(  # noqa: PLR0913 - the shop and its collaborato
     organization_id: uuid.UUID,
     shop_id: uuid.UUID,
     now: datetime,
+    tracked_orders: Callable[[uuid.UUID, tuple[int, ...]], frozenset[int]],
     offload: Offload = _inline,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Close the shop's open items whose order was cancelled or refunded on Etsy (`cancelled`,
     Codex review of #159) and those handed off longer than `RELAY_CODE_TTL` (`expired`, Sage's
     security review). Closing deletes a pasted code. Every open item is reached, page by page
     (keyset on `(opened_at, id)`), so a full first page never hides a later one (Codex, #159).
-    Returns (cancelled, expired)."""
-    cancelled = expired = 0
+    An item whose order already has tracking closes as `tracking_on_etsy`: one opened from a
+    snapshot taken before Tracking Synchronization recorded it is never left behind (local Codex
+    on #159). Returns (cancelled, expired, tracked)."""
+    cancelled = expired = tracked = 0
     after: RelayItem | None = None
     while True:
         items: tuple[RelayItem, ...] = await offload(
@@ -233,13 +236,15 @@ async def reconcile_relay_items(  # noqa: PLR0913 - the shop and its collaborato
         )
         if not items:
             break
-        done: Mapping[int, datetime] = await offload(
-            partial(closed_orders, shop_id, tuple(i.receipt_id for i in items))
-        )
+        receipts = tuple(i.receipt_id for i in items)
+        done: Mapping[int, datetime] = await offload(partial(closed_orders, shop_id, receipts))
+        shipped: frozenset[int] = await offload(partial(tracked_orders, shop_id, receipts))
         for item in items:
             reason = (
                 ClosedReason.CANCELLED
                 if item.receipt_id in done
+                else ClosedReason.TRACKING_ON_ETSY
+                if item.receipt_id in shipped
                 else ClosedReason.EXPIRED
                 if item.state is RelayState.HANDED_OFF and now - item.updated_at > RELAY_CODE_TTL
                 else None
@@ -250,10 +255,11 @@ async def reconcile_relay_items(  # noqa: PLR0913 - the shop and its collaborato
             if moved is not None:
                 cancelled += reason is ClosedReason.CANCELLED
                 expired += reason is ClosedReason.EXPIRED
+                tracked += reason is ClosedReason.TRACKING_ON_ETSY
         if len(items) < LIST_LIMIT:
             break
         after = items[-1]
-    return cancelled, expired
+    return cancelled, expired, tracked
 
 
 def _organization(auth: AuthContext, organization_id: uuid.UUID | None) -> uuid.UUID:
@@ -276,18 +282,31 @@ def _allowed(
     return decide(principal, capability, shop=shop, now=now).outcome is Outcome.ALLOW
 
 
+class RelayCursorError(ValueError):
+    """The cursor names no relay item of the organization."""
+
+
 def list_relay_items(
-    auth: AuthContext, store: RelayStore, *, organization_id: uuid.UUID | None, now: datetime
+    auth: AuthContext,
+    store: RelayStore,
+    *,
+    organization_id: uuid.UUID | None,
+    now: datetime,
+    after: uuid.UUID | None = None,
 ) -> tuple[RelayItem, ...]:
-    """The open items of the shops the caller may act on (update incidents). Raises
-    `PermissionError` for a role that may not."""
+    """One page (`LIST_LIMIT`) of the open items of the shops the caller may act on (update
+    incidents), oldest first; `after` (the last item of the previous page) continues it. Raises
+    `PermissionError` for a role that may not, `RelayCursorError` for an unknown cursor."""
     organization_id = _organization(auth, organization_id)
     principal = auth.principal_for(organization_id)
     overall = decide(principal, Capability.UPDATE_INCIDENTS, shop=None, now=now)
     if overall.outcome is not Outcome.ALLOW:
         raise PermissionError("the role may not act on fulfillment")
     shops = principal.granted_shops if overall.scope is Scope.GRANTED_SHOPS else None
-    return store.open_items(organization_id, shop_ids=shops, limit=LIST_LIMIT)
+    start = None if after is None else store.item(organization_id, after)
+    if after is not None and start is None:
+        raise RelayCursorError("no such cursor")
+    return store.open_items(organization_id, shop_ids=shops, limit=LIST_LIMIT, after=start)
 
 
 def submit_tracking(  # noqa: PLR0913 - the caller, the item and the pasted tracking
@@ -360,6 +379,11 @@ def relay_code(  # noqa: PLR0913 - the caller, the item and the request
     ):
         raise RelayItemNotVisibleError("no such relay item")
     if not item.state.is_open:
+        raise RelayItemNotVisibleError("no such relay item")
+    if item.state is RelayState.HANDED_OFF and now - item.updated_at > RELAY_CODE_TTL:
+        # Past its time to live the code is gone even before the next inspection deletes it
+        # (local Codex on #159): the item closes as expired, and nothing is revealed.
+        store.close(item.id, reason=ClosedReason.EXPIRED, now=now)
         raise RelayItemNotVisibleError("no such relay item")
     reveal = AuditRecord.new(
         organization_id=organization_id,

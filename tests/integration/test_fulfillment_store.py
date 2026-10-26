@@ -326,3 +326,28 @@ async def test_worker__a_reviews_transaction_finds_its_order_in_its_own_shop_onl
 
     assert found == {910: 91, 920: 92}  # 930 is the other shop's, 999 is not stored
     assert store.receipts_for_transactions(integration.shop_id, ()) == {}
+
+
+async def test_worker__tracked_orders_names_the_receipts_with_tracking(
+    database: Database, worker_db: Database
+) -> None:
+    """Slice 6.10 (local Codex on #159): the relay closes an item whose order got tracking."""
+    tenant, integration = await connected(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    with tenant_scope(org):
+        await PostgresOrderStore(worker_db).ingest_receipts(
+            integration, [order(95), order(96)], context=WEBHOOK, now=NOW
+        )
+        incidents = IncidentService(PostgresIncidentStore(worker_db), clock=lambda: NOW)
+        recorder = TrackingRecorder(PostgresTrackingStore(worker_db), incidents, clock=lambda: NOW)
+        await recorder.record(
+            organization_id=org, shop_id=shop, receipt_id=95, carrier_name="USPS",
+            code="FAKE-DB-TRACK-95", source=TrackingSource.ETSY,
+            observed_via=ObservedVia.SCHEDULE, notified_at=NOW, actor=ACTOR,
+        )  # fmt: skip
+        store = PostgresSlaStore(worker_db)
+        found = store.tracked_orders(shop, (95, 96, 97))
+        none = store.tracked_orders(shop, ())
+
+    assert found == frozenset({95})
+    assert none == frozenset()

@@ -22,7 +22,9 @@ Migration `20261025100000_fulfillment_incidents.sql`:
 Migration `20261026160000_relay_items.sql` (slice 6.10):
 
 - `app.relay_items`: one per order (`shop_id, receipt_id` unique); `state` `awaiting_tracking`, `handed_off` or `closed` with `closed_reason` (`tracking_on_etsy`, `uploaded`, `cancelled`); the pasted carrier, fingerprint (the same as `tracking_events`, unique per shop) and last four characters. Members read their shops' items; the worker inserts and closes in its job's organization and never changes the pasted tracking.
-- `app.relay_item_codes`: the full pasted code while the item waits, read only by the shop's buyer-data roles (`user_buyer_data_shop_ids`), deleted on close; the worker may delete a code, never read one.
+- `app.relay_item_codes`: the full pasted code while the item waits. No member role may select it: a code is read only through the API's audited reveal, which checks the shop's buyer-data right and audits `relay.code_revealed` in the same transaction. Its organization and shop are tied to the item's by a composite key. It is deleted on close, on cancel or refund, after its 30-day time to live (also at a reveal), and with the disconnect purge. The worker may delete a code, never read one.
+- Each inspection reconciles first: cancelled or refunded orders, expired codes, and items whose order already has tracking (`tracking_on_etsy`), page by page. A failing notification later in the run never keeps a code. It runs again after opening, so an item opened from a stale snapshot closes in the same run.
+- `GET /v1/relay-items` lists in pages of 200 (`cursor`, `next_cursor`), without any code, carrier or last four. The paste and the code reveal move to the parcels routes (lyra's relay-parcels PR, option (a)).
 
 ## Flows
 
