@@ -119,12 +119,17 @@ class Authenticator:
     enrolled: bool = True
     verified: list[tuple[str, str]] = field(default_factory=list)
     codes: dict[str, str] = field(default_factory=lambda: {"factor-1": RIGHT_CODE})
+    # Verified passkeys (issue #113), listed before the apps; a code sent for one is a request
+    # Supabase refuses as malformed, which the adapter turns into "Auth unavailable".
+    passkeys: tuple[str, ...] = ()
 
     async def enroll_totp(self, access_token: str, *, friendly_name: str) -> Enrollment:
         raise NotImplementedError
 
     async def verify_totp(self, access_token: str, factor_id: str, code: str) -> IssuedTokens:
         await anyio.lowlevel.checkpoint()  # a network call
+        if factor_id in self.passkeys:
+            raise RuntimeError("a code for a passkey: Supabase refuses the request")
         if self.codes.get(factor_id) != code:
             raise CredentialsRefusedError
         self.verified.append((access_token, factor_id))
@@ -134,7 +139,10 @@ class Authenticator:
     async def factors_of(self, access_token: str) -> list[Factor]:  # noqa: ARG002 - fake
         if not self.enrolled:
             return []
-        return [Factor(id=factor, verified=True, name=factor) for factor in self.codes]
+        return [
+            *(Factor(id=key, verified=True, name=key, kind="webauthn") for key in self.passkeys),
+            *(Factor(id=factor, verified=True, name=factor) for factor in self.codes),
+        ]
 
     async def remove_factor(self, access_token: str, factor_id: str) -> None:
         raise NotImplementedError

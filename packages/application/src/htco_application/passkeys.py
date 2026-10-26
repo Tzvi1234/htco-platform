@@ -26,7 +26,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -44,6 +44,7 @@ from htco_application.web_sessions import (
     IssuedTokens,
     SessionStore,
     Throttled,
+    TooManyAttemptsError,
 )
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.identity import AssuranceLevel
@@ -52,6 +53,15 @@ _log = logging.getLogger(__name__)
 
 TOTP = "totp"
 PASSKEY = "webauthn"
+
+
+# How long a factor change holds its claim at most: a crashed request never blocks the user.
+FACTOR_CHANGE_LEASE = timedelta(minutes=1)
+
+
+def factor_change_key(user_id: uuid.UUID) -> bytes:
+    """The per-user claim key for changing second factors (its own namespace of the claims)."""
+    return hashlib.sha256(f"mfa-factor-change:{user_id}".encode()).digest()
 
 
 class PasskeysUnavailableError(Exception):
@@ -237,9 +247,24 @@ class Passkeys:
             session, factor_id, challenge_id, Ceremony.REQUEST, credential, client=client, now=now
         )
 
-    async def remove(self, session: ActiveSession, factor_id: str) -> Factor:
-        """Removes a factor of either kind; never the last verified one or the last app."""
+    async def remove(self, session: ActiveSession, factor_id: str, *, now: datetime) -> Factor:
+        """Removes a factor of either kind; never the last verified one or the last app.
+
+        Behind the passkeys flag like every passkey route (factor removal is new with them). One
+        change of a user's factors at a time, across API workers (a claim in the database with a
+        short lease): two removals at once could otherwise both pass the guard and leave no app
+        (Codex on #171). The second gets `TooManyAttemptsError` and may try again."""
+        self._on()
         _require_aal2(session)
+        key = factor_change_key(session.user.user_id)
+        if not await self.store.claim_link(key, now - FACTOR_CHANGE_LEASE, now):
+            raise TooManyAttemptsError("another change of your second factors is in progress")
+        try:
+            return await self._remove(session, factor_id)
+        finally:
+            await self.store.release_link(key)
+
+    async def _remove(self, session: ActiveSession, factor_id: str) -> Factor:
         access_token = session.tokens.access_token
         factors = await self.mfa.factors_of(access_token)
         target = next((f for f in factors if f.id == factor_id), None)

@@ -7,8 +7,9 @@ import json
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, override
 
+import anyio
 import pytest
 
 from htco_application.mfa import MAX_CODE_FAILURES, Factor
@@ -178,7 +179,7 @@ async def test_step_up__adding_or_removing_needs_an_aal2_session(change: str) ->
                 session, "pk-1", "ch-1", credential(), client=CLIENT, now=NOW
             )
         else:
-            await world.passkeys.remove(session, "app-1")
+            await world.passkeys.remove(session, "app-1", now=NOW)
 
     with pytest.raises(StepUpForFactorsError):
         await attempt()
@@ -249,7 +250,7 @@ def test_origin__a_malformed_credential_has_none(broken: dict[str, Any]) -> None
 async def test_remove__a_passkey_and_it_is_audited() -> None:
     world = World().with_app()
     world.mfa.factors.append(Factor("pk-9", True, "Phone", PASSKEY))
-    removed = await world.passkeys.remove(await world.session(), "pk-9")
+    removed = await world.passkeys.remove(await world.session(), now=NOW, factor_id="pk-9")
     assert removed.kind == PASSKEY
     assert [f.id for f in world.mfa.factors] == ["app-1"]
     assert world.audit.changes == [(USER, "pk-9", PASSKEY, "removed")]
@@ -258,7 +259,7 @@ async def test_remove__a_passkey_and_it_is_audited() -> None:
 async def test_remove__the_last_factor_is_blocked() -> None:
     world = World().with_app()
     with pytest.raises(LastFactorError):
-        await world.passkeys.remove(await world.session(), "app-1")
+        await world.passkeys.remove(await world.session(), now=NOW, factor_id="app-1")
     assert [f.id for f in world.mfa.factors] == ["app-1"]
     assert world.audit.changes == []
 
@@ -268,20 +269,82 @@ async def test_remove__the_last_authenticator_app_stays_even_with_a_passkey() ->
     world = World().with_app()
     world.mfa.factors.append(Factor("pk-9", True, "Phone", PASSKEY))
     with pytest.raises(LastFactorError):
-        await world.passkeys.remove(await world.session(), "app-1")
+        await world.passkeys.remove(await world.session(), now=NOW, factor_id="app-1")
 
 
 async def test_remove__a_second_app_may_go() -> None:
     world = World().with_app()
     world.mfa.factors.append(Factor("app-2", True, "Old phone", TOTP))
-    await world.passkeys.remove(await world.session(), "app-2")
+    await world.passkeys.remove(await world.session(), now=NOW, factor_id="app-2")
     assert [f.id for f in world.mfa.factors] == ["app-1"]
+
+
+class SlowMfa(Mfa):
+    """Supabase over the network: every call yields, so two requests can interleave."""
+
+    @override
+    async def factors_of(self, access_token: str) -> list[Factor]:
+        await anyio.lowlevel.checkpoint()
+        return await super().factors_of(access_token)
+
+    @override
+    async def remove_factor(self, access_token: str, factor_id: str) -> None:
+        await anyio.lowlevel.checkpoint()
+        await super().remove_factor(access_token, factor_id)
+
+
+async def test_remove__two_apps_removed_at_once__one_app_always_stays() -> None:
+    """Codex on #171: two requests removing the user's two apps both saw the other app and
+    both went through, leaving only the passkey. Changes are serialized per user."""
+    world = World(mfa=SlowMfa()).with_app()
+    world.mfa.factors += [
+        Factor("app-2", True, "Old phone", TOTP),
+        Factor("pk-9", True, "Phone", PASSKEY),
+    ]
+    session = await world.session()
+    outcomes: list[str] = []
+
+    async def remove(factor_id: str) -> None:
+        try:
+            await world.passkeys.remove(session, factor_id, now=NOW)
+            outcomes.append("removed")
+        except (LastFactorError, TooManyAttemptsError) as error:
+            outcomes.append(type(error).__name__)
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(remove, "app-1")
+        group.start_soon(remove, "app-2")
+
+    assert outcomes.count("removed") == 1
+    assert any(f.kind == TOTP and f.verified for f in world.mfa.factors)
+
+
+async def test_remove__the_next_change_may_run_once_the_first_finished() -> None:
+    world = World().with_app()
+    world.mfa.factors += [
+        Factor("app-2", True, "Old phone", TOTP),
+        Factor("pk-9", True, "Phone", PASSKEY),
+    ]
+    session = await world.session()
+
+    await world.passkeys.remove(session, "pk-9", now=NOW)
+    await world.passkeys.remove(session, "app-2", now=NOW)
+
+    assert [f.id for f in world.mfa.factors] == ["app-1"]
+
+
+async def test_remove__off_with_the_flag_like_every_passkey_route() -> None:
+    world = World(switched_on=False).with_app()
+    world.mfa.factors.append(Factor("app-2", True, "Old phone", TOTP))
+    with pytest.raises(PasskeysUnavailableError):
+        await world.passkeys.remove(await world.session(), "app-2", now=NOW)
+    assert len(world.mfa.factors) == 2
 
 
 async def test_remove__an_unknown_factor() -> None:
     world = World().with_app()
     with pytest.raises(FactorNotFoundError):
-        await world.passkeys.remove(await world.session(), "nope")
+        await world.passkeys.remove(await world.session(), now=NOW, factor_id="nope")
 
 
 async def test_switched_off__every_passkey_step_says_so() -> None:

@@ -167,7 +167,11 @@ def passkeys_router(*, clock: Any) -> APIRouter:
     @router.post(
         "/mfa/passkeys",
         summary="Start adding a passkey (biometric sign-in)",
-        responses={**_COMMON, 422: validation_doc("Invalid name")},
+        responses={
+            **_COMMON,
+            400: problem_doc("The body is not valid JSON"),
+            422: validation_doc("Invalid name"),
+        },
     )
     async def start_passkey(
         body: PasskeyStartRequest, request: Request, response: Response, web: Web
@@ -184,7 +188,11 @@ def passkeys_router(*, clock: Any) -> APIRouter:
     @router.post(
         "/mfa/passkeys/{factor_id}/verify",
         summary="Finish adding the passkey",
-        responses={**_COMMON, 422: validation_doc("Invalid challenge or credential")},
+        responses={
+            **_COMMON,
+            400: problem_doc("The body is not valid JSON"),
+            422: validation_doc("Invalid factor ID, challenge or credential"),
+        },
     )
     async def verify_passkey(
         factor_id: Annotated[str, _FACTOR_ID],
@@ -232,7 +240,11 @@ def passkeys_router(*, clock: Any) -> APIRouter:
         status_code=status.HTTP_204_NO_CONTENT,
         response_class=Response,
         summary="Confirm it is you with a passkey",
-        responses={**_COMMON, 422: validation_doc("Invalid challenge or credential")},
+        responses={
+            **_COMMON,
+            400: problem_doc("The body is not valid JSON"),
+            422: validation_doc("Invalid challenge or credential"),
+        },
     )
     async def confirm_with_passkey(
         body: PasskeyConfirmRequest, request: Request, web: Web
@@ -257,7 +269,11 @@ def passkeys_router(*, clock: Any) -> APIRouter:
         status_code=status.HTTP_204_NO_CONTENT,
         response_class=Response,
         summary="Remove a passkey or an authenticator app",
-        responses={**_COMMON, 409: problem_doc("The last factor, or the last authenticator app")},
+        responses={
+            **_COMMON,
+            409: problem_doc("The last factor, or the last authenticator app"),
+            422: validation_doc("Invalid factor ID"),
+        },
     )
     async def remove_factor(
         factor_id: Annotated[str, _FACTOR_ID], request: Request, web: Web
@@ -265,7 +281,7 @@ def passkeys_router(*, clock: Any) -> APIRouter:
         """Needs a session signed in with two factors; the last factor stays (audited)."""
         active = await resume(request, web, clock())
         try:
-            removed = await passkeys_of(web).remove(active, factor_id)
+            removed = await passkeys_of(web).remove(active, factor_id, now=clock())
         except _EXPECTED as error:
             raise _refused(error) from None
         if removed.verified:
