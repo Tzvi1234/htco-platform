@@ -5178,7 +5178,11 @@ paths:
       tags:
       - incidents
       summary: The organization's incidents the caller may view
-      description: Newest first; a shop-scoped role sees its granted shops' incidents only.
+      description: 'Newest first; a shop-scoped role sees its granted shops'' incidents only.
+
+        `shop_id` and `receipt_id` narrow the list to one shop or one order; pass
+
+        `next_cursor` back as `cursor` for the next page.'
       operationId: get_incidents
       security:
       - HTTPBearer: []
@@ -5202,6 +5206,42 @@ paths:
           type: string
           default: open
           title: State
+      - name: shop_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Shop Id
+      - name: receipt_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+          title: Receipt Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 200
+          title: Limit
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 256
+          - type: 'null'
+          title: Cursor
       responses:
         '200':
           description: Successful Response
@@ -6992,6 +7032,11 @@ components:
             $ref: '#/components/schemas/IncidentSummaryView'
           type: array
           title: Items
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
       type: object
       required:
       - items

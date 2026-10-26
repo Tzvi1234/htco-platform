@@ -2,6 +2,7 @@
 and the per-listing sales counters, each change in one transaction, as the worker's role in its
 job's organization."""
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -71,13 +72,26 @@ on conflict (shop_id, receipt_id) do update
       execution_id = excluded.execution_id
 """
 
-_MOVE = """
+# The counter row first (so `for update` always has a row to lock: two recounts of a new listing
+# never both read "none" and overwrite each other), then locked, then set.
+_ENSURE_COUNTER = """
 insert into app.product_sales_counters (organization_id, shop_id, listing_id, units, orders)
-values (%s, %s, %s, greatest(%s, 0), greatest(%s, 0))
-on conflict (shop_id, listing_id) do update
-  set units = greatest(app.product_sales_counters.units + %s, 0),
-      orders = greatest(app.product_sales_counters.orders + %s, 0)
+values (%s, %s, %s, 0, 0)
+on conflict (shop_id, listing_id) do nothing
 """
+
+_COUNTER = """
+select units, orders from app.product_sales_counters
+where shop_id = %s and listing_id = %s
+for update
+"""
+
+_SET = """
+update app.product_sales_counters set units = %s, orders = %s
+where shop_id = %s and listing_id = %s
+"""
+
+_log = logging.getLogger(__name__)
 
 
 class PostgresOrderAutomationStore:
@@ -173,10 +187,20 @@ class PostgresOrderAutomationStore:
                 )  # fmt: skip
                 delta = counter_delta(previous, desired)
                 for listing in sorted(set(delta.units) | set(delta.orders)):
-                    units = delta.units.get(listing, 0)
-                    orders = delta.orders.get(listing, 0)
-                    c.execute(_MOVE, [organization_id, shop_id, listing, units, orders, units,
-                                      orders])  # fmt: skip
+                    c.execute(_ENSURE_COUNTER, [organization_id, shop_id, listing])
+                    current = c.execute(_COUNTER, [shop_id, listing]).fetchone()
+                    if current is None:  # the row was just ensured: only RLS could hide it
+                        raise LookupError("the listing's counter is not visible to this job")
+                    units = int(current[0]) + delta.units.get(listing, 0)
+                    orders = int(current[1]) + delta.orders.get(listing, 0)
+                    if units < 0 or orders < 0:
+                        # With the ledger this means drift or a bug: keep zero (the check
+                        # constraint), and say so. IDs and numbers only.
+                        _log.warning(
+                            "product_sales.clamped: shop=%s listing=%s units=%s orders=%s",
+                            shop_id, listing, units, orders,
+                        )  # fmt: skip
+                    c.execute(_SET, [max(units, 0), max(orders, 0), shop_id, listing])
                 c.execute(
                     _KEEP,
                     [organization_id, shop_id, receipt_id,

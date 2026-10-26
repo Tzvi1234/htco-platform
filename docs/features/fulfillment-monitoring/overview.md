@@ -16,7 +16,7 @@ HTCO notices fulfillment problems before buyers do. Two deterministic automation
 - **Tracking Synchronization** (`tracking-sync`) reads each shipped receipt through the Action Gateway (`etsy.receipts.read`, GET only) and records every shipment once in `tracking_events`, with when it first appeared and from where. It never writes to Etsy and never moves the order: the order's move to `SHIPPED` belongs to Etsy Order Intake's state machine (slice 5.4).
 - **Incident Detection & Escalation** (`incident-detection-escalation`) checks every paid, unshipped order without tracking against its SLA policy. An order past its window opens exactly one incident (see [incidents](../incidents/overview.md)); tracking closes it on that evidence.
 
-Windows start **generous**: ten business days from payment to the first tracking, until the owner agrees the real windows from data.
+The default window is **seven business days** from payment to the first tracking (the owner's decision of 2026-10-23, replacing the first ten). A policy row per shop, supplier or shipping method overrides it once the owner agrees those windows from data.
 
 ## Users and actors
 

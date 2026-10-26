@@ -1,6 +1,7 @@
 """The incident center and the notification inbox (slices 6.4, 6.5).
 
-- `GET /v1/incidents`: the organization's incidents the caller may view (open ones by default).
+- `GET /v1/incidents`: the organization's incidents the caller may view (open ones by default),
+  optionally one shop's or one order's (`shop_id`, `receipt_id`), in cursor pages.
 - `GET /v1/incidents/{id}`: one incident with its history and evidence.
 - `POST /v1/incidents/{id}/transitions`: a person's step along the machine ("Open or update
   incidents"); `resolved` is refused (409 `evidence-required`): incidents resolve on evidence.
@@ -16,16 +17,22 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 import anyio
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
 from htco_api.auth import CurrentAuth
-from htco_api.identity import ORGANIZATION_REQUIRED, problem_responses
+from htco_api.identity import (
+    ORGANIZATION_REQUIRED,
+    decode_cursor,
+    encode_cursor,
+    problem_responses,
+)
 from htco_api.policy_guard import FORBIDDEN
 from htco_api.problems import NOT_FOUND, Problem, ProblemError, ProblemType, ValidationProblem
 from htco_application.access.authentication import NoMembershipError
 from htco_application.incident_center import (
     IncidentDetail,
+    IncidentFilter,
     IncidentNotVisibleError,
     IncidentReader,
     NotificationInbox,
@@ -83,6 +90,8 @@ class IncidentSummaryView(BaseModel):
 
 class IncidentListView(BaseModel):
     items: list[IncidentSummaryView]
+    # Pass it back as `cursor` for the next page; null on the last page.
+    next_cursor: str | None = None
 
 
 class EvidenceView(BaseModel):
@@ -208,19 +217,27 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
         summary="The organization's incidents the caller may view",
         responses=problem_responses({**_COMMON, 403: "The role may not view incidents"}),
     )
-    async def get_incidents(
+    async def get_incidents(  # noqa: PLR0913, PLR0917 - the filters and the page
         response: Response,
         auth: CurrentAuth,
         center: Center,
         organization_id: uuid.UUID | None = None,
         state: Literal["open", "all"] = "open",
+        shop_id: uuid.UUID | None = None,
+        receipt_id: Annotated[int | None, Query(ge=1)] = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 200,
+        cursor: Annotated[str | None, Query(max_length=256)] = None,
     ) -> IncidentListView:
-        """Newest first; a shop-scoped role sees its granted shops' incidents only."""
+        """Newest first; a shop-scoped role sees its granted shops' incidents only.
+        `shop_id` and `receipt_id` narrow the list to one shop or one order; pass
+        `next_cursor` back as `cursor` for the next page."""
+        before = decode_cursor(cursor) if cursor is not None else None
         try:
-            items = await _run(
+            page = await _run(
                 lambda: list_incidents(
                     auth, center.reader, organization_id=organization_id,
-                    open_only=state == "open", now=clock(),
+                    open_only=state == "open", now=clock(), limit=limit,
+                    where=IncidentFilter(shop_id=shop_id, receipt_id=receipt_id), before=before,
                 )
             )  # fmt: skip
         except OrganizationRequiredError:
@@ -228,7 +245,10 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
         except PermissionError, NoMembershipError:
             raise ProblemError(FORBIDDEN) from None
         response.headers["Cache-Control"] = "no-store"
-        return IncidentListView(items=[IncidentSummaryView(**_summary(i)) for i in items])
+        return IncidentListView(
+            items=[IncidentSummaryView(**_summary(i)) for i in page.items],
+            next_cursor=None if page.next_before is None else encode_cursor(page.next_before),
+        )
 
     @router.get(
         "/incidents/{incident_id}",

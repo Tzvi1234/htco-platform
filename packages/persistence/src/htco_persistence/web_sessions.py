@@ -12,7 +12,12 @@ from typing import Any
 import anyio
 import psycopg
 
-from htco_application.web_sessions import IssuedTokens, NewSession, StoredSession
+from htco_application.web_sessions import (
+    AttemptOutcome,
+    IssuedTokens,
+    NewSession,
+    StoredSession,
+)
 from htco_persistence.database import Database
 from htco_platform.crypto import Sealer
 
@@ -134,26 +139,53 @@ class PostgresSessionStore:
         since: datetime,
         at: datetime,
     ) -> bool:
-        def run() -> bool:
+        attempt = await self.reserve_attempt(
+            key, ip_hash, max_by_key=max_by_key, max_by_ip=max_by_ip, since=since, at=at
+        )
+        return attempt is not None
+
+    async def reserve_attempt(  # noqa: PLR0913 - the keys, the limits and the moments
+        self,
+        key: bytes,
+        ip_hash: bytes | None,
+        *,
+        max_by_key: int,
+        max_by_ip: int | None,
+        since: datetime,
+        at: datetime,
+    ) -> int | None:
+        def run() -> int | None:
             with self._database.connection() as connection, connection.transaction():
                 # Always the key first, then the address: no two requests wait on each other.
+                # The address is locked even when it is not limited here, because the row still
+                # counts against it wherever it is.
                 _lock(connection, key)
                 if ip_hash is not None:
                     _lock(connection, ip_hash)
                 by_key, by_ip = _count_failures(connection, key, ip_hash, since)
-                if by_key >= max_by_key or by_ip >= max_by_ip:
-                    return False
-                connection.execute(
+                if by_key >= max_by_key or (max_by_ip is not None and by_ip >= max_by_ip):
+                    return None
+                row = connection.execute(
                     """
                     insert into private.sign_in_attempts
                       (email_hash, ip_hash, succeeded, attempted_at)
                     values (%s, %s, false, %s)
+                    returning id
                     """,
                     [key, ip_hash, at],
-                )
-                return True
+                ).fetchone()
+                return None if row is None else int(row[0])
 
         return await anyio.to_thread.run_sync(run)
+
+    async def settle_attempt(self, attempt_id: int, outcome: AttemptOutcome) -> None:
+        if outcome is AttemptOutcome.SUCCEEDED:
+            sql = "update private.sign_in_attempts set succeeded = true where id = %s"
+        elif outcome is AttemptOutcome.NOT_COUNTED:
+            sql = "delete from private.sign_in_attempts where id = %s"
+        else:
+            return  # reserved as a failure already
+        await self._execute(sql, [attempt_id])
 
     # Sync work in a worker thread ----------------------------------------------------------------
 

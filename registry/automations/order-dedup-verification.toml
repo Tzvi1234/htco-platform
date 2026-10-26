@@ -30,7 +30,7 @@ text = "eitan: accountable for the outcome (the owner until Eitan is active in P
 
 [specification.trigger]
 status = "defined"
-text = "Primary: workflow, a step of Etsy Order Intake: each orders.ingested.v1 or orders.updated.v1 event starts it (key verify:{shop_id}:{receipt_id}:{etsy_updated_at}). Also schedule and agent_tool, through the engine's authorization."
+text = "Primary: workflow, a step of Etsy Order Intake: each orders.ingested.v1 or orders.updated.v1 event starts it, except those whose source is reconciliation, which has just compared the receipt with Etsy (key verify:{shop_id}:{receipt_id}:{etsy_updated_at}). Also schedule and agent_tool, through the engine's authorization."
 
 [specification.input_schema]
 status = "defined"

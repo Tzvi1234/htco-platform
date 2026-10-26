@@ -39,6 +39,21 @@ class IncidentHistoryEntry:
 
 
 @dataclass(frozen=True)
+class IncidentFilter:
+    """Narrows the list to one shop, or one order (`shop_id` and `receipt_id` together)."""
+
+    shop_id: uuid.UUID | None = None
+    receipt_id: int | None = None
+
+
+@dataclass(frozen=True)
+class IncidentPage:
+    items: tuple[IncidentRecord, ...]
+    # The last incident of a full page: pass it back as `before` for the next page.
+    next_before: uuid.UUID | None
+
+
+@dataclass(frozen=True)
 class IncidentDetail:
     incident: IncidentRecord
     history: tuple[IncidentHistoryEntry, ...]
@@ -47,16 +62,21 @@ class IncidentDetail:
 class IncidentReader(Protocol):
     """Synchronous; run in a worker thread."""
 
-    def list_incidents(
+    def list_incidents(  # noqa: PLR0913 - the scope, the filters and the page
         self,
         organization_id: uuid.UUID,
         *,
         open_only: bool,
         limit: int,
         shop_ids: frozenset[uuid.UUID] | None = None,
+        shop_id: uuid.UUID | None = None,
+        receipt_id: int | None = None,
+        before: uuid.UUID | None = None,
     ) -> Sequence[IncidentRecord]:
-        """Newest first; `shop_ids` (a shop-scoped role's grants) is applied before `limit`
-        and leaves out organization-wide incidents."""
+        """Newest first (`detected_at`, then `id`); every filter is applied before `limit`.
+        `shop_ids` (a shop-scoped role's grants) leaves out organization-wide incidents;
+        `shop_id`/`receipt_id` narrow to one shop or one order; `before` starts after that
+        incident (keyset paging)."""
         ...
 
     def incident_detail(
@@ -101,8 +121,10 @@ def list_incidents(  # noqa: PLR0913 - the caller, the reader and the filters
     open_only: bool,
     now: datetime,
     limit: int = 200,
-) -> tuple[IncidentRecord, ...]:
-    """Raises `PermissionError` for a role that may not view incidents."""
+    where: IncidentFilter = IncidentFilter(),  # noqa: B008 - frozen, so a safe default
+    before: uuid.UUID | None = None,
+) -> IncidentPage:
+    """One page, newest first. Raises `PermissionError` for a role that may not view incidents."""
     organization = _organization(auth, organization_id)
     principal = auth.principal_for(organization)
     overall = decide(principal, Capability.VIEW_INCIDENTS, shop=None, now=now)
@@ -110,11 +132,20 @@ def list_incidents(  # noqa: PLR0913 - the caller, the reader and the filters
         raise PermissionError("the role may not view incidents")
     # Shop scope in the query, before the limit (Codex review of #87).
     shops = principal.granted_shops if overall.scope is Scope.GRANTED_SHOPS else None
-    rows = reader.list_incidents(organization, open_only=open_only, limit=limit, shop_ids=shops)
-    return tuple(
-        i
-        for i in rows
-        if _visible(auth, organization, i.shop_id, Capability.VIEW_INCIDENTS, now=now)
+    rows = reader.list_incidents(
+        organization, open_only=open_only, limit=limit + 1, shop_ids=shops,
+        shop_id=where.shop_id, receipt_id=where.receipt_id, before=before,
+    )  # fmt: skip
+    page = tuple(rows[:limit])
+    more = len(rows) > limit
+    return IncidentPage(
+        items=tuple(
+            i
+            for i in page
+            if _visible(auth, organization, i.shop_id, Capability.VIEW_INCIDENTS, now=now)
+        ),
+        # From the reader's rows, so a hidden last row never ends the paging early.
+        next_before=page[-1].id if more and page else None,
     )
 
 

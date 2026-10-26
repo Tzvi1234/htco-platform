@@ -3,7 +3,8 @@
 Enrolling an authenticator app and verifying its first code upgrade the session to `aal2`: the
 new tokens replace the old ones on the server, and the moment counts as a re-authentication.
 Step-up re-enters a code later; the policy engine accepts the session as recently re-authenticated
-for ten minutes (AC-3.5.7). Wrong codes are throttled per user like wrong passwords.
+for ten minutes (AC-3.5.7). Wrong codes are throttled per user like wrong passwords: each code
+is reserved against the user's limit before Supabase verifies it.
 
 Users see and revoke their own sessions; revoking one also ends it at Supabase, so that device is
 signed out on its next request (AC-3.5.4).
@@ -17,7 +18,6 @@ from typing import Protocol
 
 from htco_application import web_sessions
 from htco_application.web_sessions import (
-    THROTTLE_WINDOW,
     ActiveSession,
     AuthProvider,
     ClientInfo,
@@ -25,7 +25,7 @@ from htco_application.web_sessions import (
     IssuedTokens,
     SessionStore,
     StoredSession,
-    TooManyAttemptsError,
+    Throttled,
 )
 from htco_domain.identity import AssuranceLevel
 
@@ -165,17 +165,22 @@ async def _verify(  # noqa: PLR0913 - the code, its factor and the collaborators
 ) -> None:
     key = mfa_failure_key(session.user.user_id)
     ip_hash = hashlib.sha256(client.ip.encode()).digest() if client.ip else None
-    failures, _ = await store.recent_failures(key, None, now - THROTTLE_WINDOW)
-    if failures >= MAX_CODE_FAILURES:
-        raise TooManyAttemptsError("too many wrong codes")
-    try:
-        issued = await mfa.verify_totp(session.tokens.access_token, factor_id, code)
-    except CredentialsRefusedError:
-        await store.record_attempt(key, ip_hash, succeeded=False, at=now)
-        raise MfaCodeRefusedError("wrong code") from None
-    await store.replace_tokens(session.session_id, issued)
-    await store.set_reauthenticated(session.session_id, now)
-    await store.record_attempt(key, ip_hash, succeeded=True, at=now)
+    # The address is recorded (failed codes count against it at sign-in) but not limited here.
+    async with Throttled(
+        store,
+        key,
+        ip_hash,
+        max_by_key=MAX_CODE_FAILURES,
+        max_by_ip=None,
+        now=now,
+        failures=(MfaCodeRefusedError,),
+    ):
+        try:
+            issued = await mfa.verify_totp(session.tokens.access_token, factor_id, code)
+        except CredentialsRefusedError:
+            raise MfaCodeRefusedError("wrong code") from None
+        await store.replace_tokens(session.session_id, issued)
+        await store.set_reauthenticated(session.session_id, now)
 
 
 async def list_sessions(

@@ -37,16 +37,25 @@ class Reader:
     def __init__(self, store: MemoryIncidentStore) -> None:
         self.store = store
 
-    def list_incidents(
+    def list_incidents(  # noqa: PLR0913 - the scope, the filters and the page
         self,
         organization_id: uuid.UUID,
         *,
         open_only: bool,
         limit: int,
         shop_ids: frozenset[uuid.UUID] | None = None,
+        shop_id: uuid.UUID | None = None,
+        receipt_id: int | None = None,
+        before: uuid.UUID | None = None,
     ) -> Sequence[IncidentRecord]:
         rows = [i for i in self.store.incidents.values() if i.organization_id == organization_id]
         rows = [i for i in rows if shop_ids is None or i.shop_id in shop_ids]
+        rows = [i for i in rows if shop_id is None or i.shop_id == shop_id]
+        rows = [i for i in rows if receipt_id is None or i.receipt_id == receipt_id]
+        rows.sort(key=lambda i: (i.detected_at, i.id), reverse=True)
+        if before is not None:
+            anchor = self.store.incidents[before]
+            rows = [i for i in rows if (i.detected_at, i.id) < (anchor.detected_at, anchor.id)]
         return [i for i in rows if i.state.is_open or not open_only][:limit]
 
     def incident_detail(
@@ -236,3 +245,57 @@ async def test_list__the_shop_scope_applies_before_the_limit() -> None:
     async with world.client() as http:
         items = (await http.get("/v1/incidents")).json()["items"]
     assert [i["receipt_id"] for i in items] == [7]
+
+
+async def test_list__one_orders_incidents_by_shop_and_receipt() -> None:
+    """Review of clients#48: the order sheet asks for one order's incidents, not the history."""
+    world = World()
+    await world.incident(SHOP, 7)
+    await world.incident(SHOP, 8)
+    await world.incident(OTHER_SHOP, 7)
+    async with world.client() as http:
+        answer = await http.get(
+            "/v1/incidents", params={"state": "all", "shop_id": str(SHOP), "receipt_id": 7}
+        )
+    assert answer.status_code == 200
+    assert [(i["shop_id"], i["receipt_id"]) for i in answer.json()["items"]] == [(str(SHOP), 7)]
+
+
+async def test_list__pages_with_an_opaque_cursor() -> None:
+    world = World()
+    for receipt in range(1, 6):
+        await world.incident(SHOP, receipt)
+    seen: list[int] = []
+    cursor: str | None = None
+    async with world.client() as http:
+        for _ in range(5):
+            params: dict[str, str | int] = {"limit": 2}
+            if cursor is not None:
+                params["cursor"] = cursor
+            body = (await http.get("/v1/incidents", params=params)).json()
+            assert len(body["items"]) <= 2
+            seen += [i["receipt_id"] for i in body["items"]]
+            cursor = body["next_cursor"]
+            if cursor is None:
+                break
+    assert sorted(seen) == [1, 2, 3, 4, 5]
+
+
+async def test_list__the_last_page_has_no_cursor() -> None:
+    world = World()
+    await world.incident(SHOP, 7)
+    async with world.client() as http:
+        body = (await http.get("/v1/incidents", params={"limit": 1})).json()
+    assert [i["receipt_id"] for i in body["items"]] == [7]
+    assert body["next_cursor"] is None
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"limit": 0}, {"limit": 201}, {"cursor": "not a cursor!"}, {"receipt_id": 0},
+     {"shop_id": "nope"}],
+)  # fmt: skip
+async def test_list__invalid_filters_are_422(params: dict[str, str | int]) -> None:
+    async with World().client() as http:
+        answer = await http.get("/v1/incidents", params=params)
+    assert answer.status_code == 422
