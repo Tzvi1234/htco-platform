@@ -34,6 +34,7 @@ from htco_application.incidents import (
 from htco_application.jobs import JobError, JsonValue
 from htco_application.messaging import OutboxMessage
 from htco_application.notifications import NotificationRequest, NotificationService
+from htco_application.review_alerts import low_review_alerts
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.fulfillment import SlaPolicy, select_policy, ship_by_at_risk
 from htco_domain.incidents import (
@@ -76,6 +77,12 @@ class SlaStore(Protocol):
         self, shop_id: uuid.UUID, receipt_ids: tuple[int, ...]
     ) -> Mapping[int, datetime]:
         """Of these receipts, the cancelled or refunded ones, with Etsy's update time."""
+        ...
+
+    def receipts_for_transactions(
+        self, shop_id: uuid.UUID, transaction_ids: tuple[int, ...]
+    ) -> Mapping[int, int]:
+        """The stored order of each transaction, in this shop only (low-review alerts, 6.9)."""
         ...
 
 
@@ -126,16 +133,33 @@ class IncidentDetection:
     # Ship-by alerts (slice 6.9) through the notification path of 6.4; None: none raised.
     alerts: NotificationService | None = None
     ship_by_warning_days: int = SHIP_BY_WARNING_DAYS
+    # Waits out a short gateway deferral inside the low-review scan (6.9); tests pass a fake.
+    sleep: Callable[[float], Awaitable[None]] | None = None
 
     async def __call__(self, ctx: HandlerContext) -> HandlerOutcome:
         drift = ctx.payload.get("drift")
         if isinstance(drift, dict):
             return await self._drift(ctx, drift)
-        if ctx.payload.get("mode") != "inspect":
-            raise JobError("an incident detection names the inspect mode or a drift")
+        mode = ctx.payload.get("mode")
+        if mode not in {"inspect", "reviews"}:
+            raise JobError("an incident detection names the reviews or the inspect mode or a drift")
         if ctx.shop_id is None:
-            raise JobError("an inspection names its shop")
+            raise JobError(f"the {mode} mode names its shop")
+        if mode == "reviews":
+            return await self._reviews(ctx, ctx.shop_id)
         return await self._inspect(ctx, ctx.shop_id)
+
+    async def _reviews(self, ctx: HandlerContext, shop_id: uuid.UUID) -> HandlerOutcome:
+        """Low-review alerts (slice 6.9, AC-6.9.2); without the alert service nothing is read."""
+        if self.alerts is None:
+            return Completed({"mode": "reviews", "reviews_read": 0, "low_review_alerts": 0})
+        return Completed(
+            await low_review_alerts(
+                ctx, shop_id, orders=self.store, alerts=self.alerts,
+                offload=self.offload, clock=self.clock,
+                **({} if self.sleep is None else {"sleep": self.sleep}),
+            )
+        )  # fmt: skip
 
     async def _inspect(self, ctx: HandlerContext, shop_id: uuid.UUID) -> HandlerOutcome:
         now = self.clock()

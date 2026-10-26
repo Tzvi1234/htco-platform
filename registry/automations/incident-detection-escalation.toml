@@ -11,6 +11,9 @@ timeout_seconds = 120
 side_effect = "internal"
 approval_required = false
 ai_steps = []
+# Low-review alerts (slice 6.9): it reads the shop's newest reviews through the Action Gateway
+# (R0, GET only); it never writes to Etsy.
+allowed_actions = ["etsy.reviews.read"]
 readiness = "draft"
 activation_phase = 6
 
@@ -21,7 +24,7 @@ max_backoff_seconds = 900
 
 [specification.identity]
 status = "defined"
-text = "Incident Detection & Escalation (incident-detection-escalation), version 1. Deterministic: no model calls, no browser, no Etsy call."
+text = "Incident Detection & Escalation (incident-detection-escalation), version 1. Deterministic: no model calls, no browser; its one Etsy call is the low-review read (etsy.reviews.read, R0, GET) through the Action Gateway (slice 6.9)."
 
 [specification.business_owner]
 status = "defined"
@@ -29,31 +32,31 @@ text = "amir: accountable for the outcome (the owner until Amir is active); Engi
 
 [specification.trigger]
 status = "defined"
-text = "Primary: schedule. The fulfillment.inspect schedule (every 15 minutes, off until HTCO_WORKER_SCHEDULES names it) enqueues one fulfillment.inspect_shop job per shop and period, which starts this automation with the key incident-detection-escalation:{shop_id}:{period} (mode inspect). The handler also accepts a drift payload (AC-6.3.4), but no trigger passes one yet. Workflow goes through the engine's authorization."
+text = "Primary: schedule. The fulfillment.inspect schedule (every 15 minutes, off until HTCO_WORKER_SCHEDULES names it) enqueues one fulfillment.inspect_shop job per shop and period, which starts this automation with the key incident-detection-escalation:{shop_id}:{period} (mode inspect). The fulfillment.reviews schedule (hourly, off until HTCO_WORKER_SCHEDULES names it) enqueues one fulfillment.reviews_shop job per shop and hour, which starts it with the key incident-detection-escalation:reviews:{shop_id}:{period} (mode reviews, AC-6.9.2). The handler also accepts a drift payload (AC-6.3.4), but no trigger passes one yet. Workflow goes through the engine's authorization."
 
 [specification.input_schema]
 status = "defined"
-text = "packages/contracts/automations/incident-detection-escalation.input.json: mode inspect, or a drift (its ID, kind and receipt). No buyer data."
+text = "packages/contracts/automations/incident-detection-escalation.input.json: mode inspect or reviews, or a drift (its ID, kind and receipt). No buyer data."
 
 [specification.preconditions]
 status = "defined"
-text = "The shop belongs to the execution's organization; a job that names no shop, an unknown mode or a malformed drift is a job error, and an unknown shop finds nothing under RLS. It reads only HTCO's own store, so a disconnected shop is still inspected from the stored orders."
+text = "The shop belongs to the execution's organization; a job that names no shop, an unknown mode or a malformed drift is a job error, and an unknown shop finds nothing under RLS. The inspect mode reads only HTCO's own store, so a disconnected shop is still inspected from the stored orders; the reviews mode reads through the gateway, which refuses a shop without an Etsy connection."
 
 [specification.steps]
 status = "defined"
-text = "Read the organization's SLA policies and the shop's paid orders awaiting tracking; pick each order's most specific policy (no row: the built-in default, htco_domain.fulfillment.DEFAULT_WINDOW_DAYS business days) and, strictly past its deadline, open one tracking_missing incident with its first incident_events row, incidents.opened.v1 and fulfillment.sla_breached.v1 in one transaction. Follow up the open incidents: resolve one whose order closed (cancelled or refunded), and move one older than its severity's limit to escalated (note age_over_severity_limit). Raise the ship-by warnings of slice 6.9. The outbox subscriber turns incidents.opened.v1 and incidents.resolved.v1 into one in-app notification per Owner and Admin; an opening also sends one email each by default (a resolution does not, and a recipient's preferences can turn the email off; Resend is off until the owner's DNS: logged meanwhile). An escalation changes the incident's state only; it notifies nobody yet."
+text = "Read the organization's SLA policies and the shop's paid orders awaiting tracking; pick each order's most specific policy (no row: the built-in default, htco_domain.fulfillment.DEFAULT_WINDOW_DAYS business days) and, strictly past its deadline, open one tracking_missing incident with its first incident_events row, incidents.opened.v1 and fulfillment.sla_breached.v1 in one transaction. Follow up the open incidents: resolve one whose order closed (cancelled or refunded), and move one older than its severity's limit to escalated (note age_over_severity_limit). Raise the ship-by warnings of slice 6.9. The outbox subscriber turns incidents.opened.v1 and incidents.resolved.v1 into one in-app notification per Owner and Admin; an opening also sends one email each by default (a resolution does not, and a recipient's preferences can turn the email off; Resend is off until the owner's DNS: logged meanwhile). An escalation changes the incident's state only; it notifies nobody yet. The reviews mode reads the shop's reviews of the last 48 hours through the gateway, page by page, and raises one alert_low_review per review of 3 stars or fewer (the owner's decision of 2026-10-23), with its listing and, from etsy_order_items by transaction, its order; the review's text never leaves the gateway's API channel."
 
 [specification.output_schema]
 status = "defined"
-text = "packages/contracts/automations/incident-detection-escalation.output.json: how many orders were checked and how many incidents were opened, resolved and escalated, the ship-by alerts raised, and for a drift its incident_id. No amounts and no buyer data."
+text = "packages/contracts/automations/incident-detection-escalation.output.json: how many orders were checked and how many incidents were opened, resolved and escalated, the ship-by alerts raised; for the reviews mode the reviews read, the low-review alerts raised and whether the page bound cut the scan (truncated); and for a drift its incident_id. No amounts and no buyer data."
 
 [specification.dependencies]
 status = "defined"
-text = "HTCO's own store only: app.sla_policies, app.etsy_orders, app.tracking_events, app.incidents and app.incident_events, app.notifications, app.email_deliveries and the outbox; Resend for email once switched on."
+text = "The Action Gateway for etsy.reviews.read (the reviews mode); otherwise HTCO's own store: app.sla_policies, app.etsy_orders, app.etsy_order_items (transaction to receipt), app.tracking_events, app.incidents and app.incident_events, app.notifications, app.email_deliveries and the outbox; Resend for email once switched on."
 
 [specification.error_handling]
 status = "defined"
-text = "A database error raises into the retry policy; nothing half-written survives, because each opening is one transaction. A temporary email failure is retried by the outbox; a permanent one is recorded on the delivery. Errors are recorded as their type name only (a job error also keeps its safe message)."
+text = "A database error raises into the retry policy; nothing half-written survives, because each opening is one transaction. A temporary email failure is retried by the outbox; a permanent one is recorded on the delivery. Errors are recorded as their type name only (a job error also keeps its safe message). A gateway deferral of the reviews read up to 10 s is waited out inside the scan on the same page; a longer one ends the attempt with the gateway's retry time, which the engine honours (never a sooner retry), after the pages already read have raised their alerts."
 
 [specification.retry_policy]
 status = "defined"
@@ -65,11 +68,11 @@ text = "The engine's unique (automation_id, idempotency_key) absorbs a repeated 
 
 [specification.timeouts_and_sla]
 status = "defined"
-text = "120 s per attempt; every 15 minutes per shop once the schedule is on, so a breach is opened within 15 minutes of its deadline. Escalation after 7 days (low), 3 days (medium), 24 hours (high) or 4 hours (critical) without progress."
+text = "120 s per attempt; every 15 minutes per shop once the schedule is on, so a breach is opened within 15 minutes of its deadline; the reviews mode runs every hour, so a low review is alerted within the hour. Escalation after 7 days (low), 3 days (medium), 24 hours (high) or 4 hours (critical) without progress."
 
 [specification.permissions]
 status = "defined"
-text = "Runs as the htco_worker role inside its job's organization: select on sla_policies and the etsy_orders columns it needs; select and insert on incidents (update of state, severity and its times only) and incident_events; select and insert on notifications and email_deliveries, select on notification_settings and notification_preferences, and execute on the security-definer functions app.worker_notification_recipients and app.worker_member_email, which read the members' email addresses for the fan-out; the outbox. No action through the Action Gateway, no Etsy call."
+text = "Runs as the htco_worker role inside its job's organization: select on sla_policies and the etsy_orders columns it needs; select and insert on incidents (update of state, severity and its times only) and incident_events; select and insert on notifications and email_deliveries, select on notification_settings and notification_preferences, and execute on the security-definer functions app.worker_notification_recipients and app.worker_member_email, which read the members' email addresses for the fan-out; the outbox. The select of transaction_id and receipt_id on etsy_order_items for the reviews mode. Its one action through the Action Gateway is etsy.reviews.read (allowed_actions); no other Etsy call."
 
 [specification.audit]
 status = "defined"
@@ -77,7 +80,7 @@ text = "Execution state changes with actor and correlation ID; every incident ch
 
 [specification.tests]
 status = "defined"
-text = "tests/application/test_sla_inspector.py (AC-6.2.1 and 6.2.2; inspecting again opens nothing new, AC-6.3.1; a cancelled order resolves; an old incident escalates once; the schedule and its keys; a draft automation refused); tests/application/test_incidents.py; tests/domain/test_incidents.py (the escalation table); tests/application/test_notifications.py (one notification and one email, AC-6.4.1); tests/application/test_fulfillment_alerts.py; tests/integration/test_fulfillment_store.py and test_notification_store.py against Postgres; pgTAP 19, 25 and 26."
+text = "tests/application/test_low_review_alerts.py (AC-6.9.2: one alert per review of 3 stars or fewer, once, with listing and order; paging, deferrals, the window's edge); tests/application/test_sla_inspector.py (AC-6.2.1 and 6.2.2; inspecting again opens nothing new, AC-6.3.1; a cancelled order resolves; an old incident escalates once; the schedule and its keys; a draft automation refused); tests/application/test_incidents.py; tests/domain/test_incidents.py (the escalation table); tests/application/test_notifications.py (one notification and one email, AC-6.4.1); tests/application/test_fulfillment_alerts.py; tests/integration/test_fulfillment_store.py and test_notification_store.py against Postgres; pgTAP 19, 25 and 26."
 
 [specification.recovery]
 status = "defined"

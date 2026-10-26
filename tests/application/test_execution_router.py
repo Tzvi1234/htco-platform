@@ -43,6 +43,7 @@ from htco_application.marketplace import (
     Page,
     Receipt,
     ReceiptLine,
+    ShopReview,
 )
 from htco_domain.actions import ActionState
 from htco_domain.actors import ActorKind, ActorRef
@@ -95,6 +96,7 @@ class FakeMarketplace:
     calls: list[tuple[str, int, dict[str, Any]]] = field(default_factory=list)
     receipts: tuple[Receipt, ...] = ()
     order_receipts: tuple[OrderReceipt, ...] = ()
+    reviews: tuple[ShopReview, ...] = ()
     fail: Exception | None = None
 
     async def get_shop(self, shop_id: int, *, urgent: bool = False) -> MarketplaceShop:
@@ -134,6 +136,12 @@ class FakeMarketplace:
         if found is None:
             raise MarketplaceNotFoundError("no such receipt", status=404)
         return found
+
+    async def list_reviews(self, shop_id: int, **filters: Any) -> Page[ShopReview]:
+        self.calls.append(("list_reviews", shop_id, filters))
+        if self.fail is not None:
+            raise self.fail
+        return Page(items=self.reviews, total_count=len(self.reviews), offset=0)
 
 
 @dataclass
@@ -550,6 +558,53 @@ async def test_api__shop__mapped() -> None:
 
     assert result.outcome is ActionOutcome.SUCCEEDED
     assert result.output == {"shop_id": ETSY_SHOP, "name": "LeatherTest", "currency": "USD"}
+
+
+async def test_api__reviews__identifiers_and_stars_never_the_buyers_words() -> None:
+    """Slice 6.9 (AC-6.9.2): `etsy.reviews.read` is an R0 GET; an R0 output may be stored, so
+    the review's text (the buyer's words) never leaves the channel."""
+    written = datetime(2026, 10, 24, 8, 0, tzinfo=UTC)
+    marketplace = FakeMarketplace(
+        reviews=(
+            ShopReview(listing_id=6, rating=2, language="en", created_at=written,
+                       text="Fake review text: arrived late.", transaction_id=5),
+            ShopReview(listing_id=7, rating=5, language=None, created_at=written),
+        )
+    )  # fmt: skip
+    adapter = EtsyApiChannel(marketplace, EtsyShops())
+    definition = real_catalog(office()).actions["etsy.reviews.read"]
+    request = ask(
+        "etsy.reviews.read",
+        actor=ActorRef(ActorKind.AUTOMATION, "incident-detection-escalation"),
+        key="reviews:1",
+        input={"min_created": 1_761_000_000, "limit": 100, "offset": 0},
+    )
+
+    outcome = await adapter.execute(request, definition.bindings[0])
+
+    assert definition.approval_policy.value == "R0"
+    [(name, shop, filters)] = marketplace.calls
+    assert (name, shop) == ("list_reviews", ETSY_SHOP)
+    assert filters["min_created"] == datetime.fromtimestamp(1_761_000_000, UTC)
+    assert (filters["limit"], filters["offset"]) == (100, 0)
+    assert outcome.output == {
+        "reviews": [
+            {"listing_id": 6, "rating": 2, "created_at": written.isoformat(),
+             "transaction_id": 5},
+            {"listing_id": 7, "rating": 5, "created_at": written.isoformat()},
+        ],
+        "count": 2,
+    }  # fmt: skip
+    assert "arrived late" not in str(outcome)
+
+
+def test_reviews__only_incident_detection_may_read_them_as_an_automation() -> None:
+    from htco_application.workforce.files import read_registry  # noqa: PLC0415
+    from tests.execution_fakes import REGISTRY  # noqa: PLC0415
+
+    automations = read_registry(REGISTRY).registry().automations
+    readers = sorted(a for a, d in automations.items() if "etsy.reviews.read" in d.allowed_actions)
+    assert readers == ["incident-detection-escalation"]
 
 
 async def test_api__a_write__refused_before_any_call() -> None:
