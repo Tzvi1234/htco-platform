@@ -40,6 +40,7 @@ from htco_domain.automation import (
 )
 from htco_persistence.automation import PostgresAutomationCatalog, PostgresExecutionStore
 from htco_persistence.database import Database, tenant_scope
+from htco_persistence.status import PostgresChainReader
 from tests.automation_fakes import EffectBook, engine_document
 from tests.integration.test_etsy_connection import Tenant, _url, scalar
 
@@ -86,7 +87,7 @@ def register(admin: Database, **changes: Any) -> str:
 
 
 def engine_on(
-    database: Database, automation_id: str, handler: Handler | None
+    database: Database, automation_id: str, handler: Handler | None, output_check: Any = None
 ) -> DurableAutomationEngine:
     catalog = PostgresAutomationCatalog(database)
     return DurableAutomationEngine(
@@ -97,6 +98,7 @@ def engine_on(
         jitter=lambda: 1.0,
         gateway=UnavailableGateway(),
         offload=anyio.to_thread.run_sync,
+        output_check=output_check,
     )
 
 
@@ -349,3 +351,27 @@ async def test_waiting__on_postgres_the_job_ends_and_a_resume_runs_it_once(
     path = [(row[0], row[1]) for row in events(admin, execution.id)]
     assert ("running", "waiting") in path
     assert ("waiting", "retry_scheduled") in path
+
+
+async def test_succeeded__the_checked_output__stored_and_read_back_for_the_chain(
+    admin: Database, worker_db: Database
+) -> None:
+    """#127 on Postgres: the worker stores the accepted output with the run, and the chain
+    reader returns it; nothing else is stored for a run without one."""
+    tenant = Tenant(admin)
+    book = EffectBook()
+    automation = register(admin)
+    execution = engine_on(admin, automation, book.handle).trigger(trigger(automation, tenant))
+    worker = engine_on(
+        worker_db, automation, book.handle, output_check=lambda _automation, output: dict(output)
+    )
+
+    done = await in_scope(tenant, worker, execution.id, worker=WORKER)
+
+    assert done.output == {"order": "3412987711"}
+    assert scalar(
+        admin, "select output from app.automation_executions where id = %s", [execution.id]
+    ) == {"order": "3412987711"}  # fmt: skip
+    records = PostgresChainReader(admin).records(tenant.organization_id, execution.id)
+    assert records is not None
+    assert records.execution.output == {"order": "3412987711"}
