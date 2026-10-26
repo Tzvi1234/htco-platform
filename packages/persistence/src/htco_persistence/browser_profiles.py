@@ -89,10 +89,19 @@ class PostgresBrowserProfiles:
                     archive.sealed_at,
                 ],
             )
+            # The environment's record names the key of the archive it has now (rotation).
+            connection.execute(
+                "update app.shop_browser_environments set profile_key_id = %s where id = %s",
+                [archive.key_id, archive.environment_id],
+            )
 
     def delete(self, environment_id: uuid.UUID) -> None:
         with self._database.connection() as connection, connection.transaction():
             connection.execute(
                 "delete from app.browser_profile_archives where environment_id = %s",
+                [environment_id],
+            )
+            connection.execute(
+                "update app.shop_browser_environments set profile_key_id = null where id = %s",
                 [environment_id],
             )

@@ -11,6 +11,7 @@ import io
 import os
 import tarfile
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -422,4 +423,39 @@ def test_workspace__hard_linked_files_are_sealed_as_regular_files(tmp_path: Path
     with workspaces.checkout(env) as directory:
         assert (directory / "Cookies").read_bytes() == COOKIE
         assert (directory / "Cookies-backup").read_bytes() == COOKIE
+    assert everything_under(root) == []
+
+
+def test_workspace__a_file_swapped_for_a_symlink_while_packing_is_never_followed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """quill on #116: between listing and reading, a file replaced by a symlink to a secret
+    outside the profile is refused, never read, and the last good archive stays."""
+    import htco_application.browser_profiles as module  # noqa: PLC0415
+
+    profiles = vault()
+    env = environment()
+    root = tmp_path / "tmpfs"
+    root.mkdir()
+    secret = tmp_path / "outside-secret"
+    secret.write_bytes(b"never in an archive")
+    workspaces = ProfileWorkspaces(profiles, root)
+    workspaces.create(env)
+    good = profiles.open(env)
+    listed = module._profile_files
+
+    def swap_after_listing(directory: Path) -> Iterator[Path]:
+        paths = list(listed(directory))
+        target = directory / "Cookies"
+        target.unlink()
+        try:
+            target.symlink_to(secret)
+        except OSError:  # pragma: no cover - Windows without the symlink privilege
+            pytest.skip("symlinks need a privilege on this machine")
+        return iter(paths)
+
+    monkeypatch.setattr(module, "_profile_files", swap_after_listing)
+    with pytest.raises(ProfileUnsafeError), workspaces.checkout(env) as directory:
+        (directory / "Cookies").write_bytes(COOKIE)
+    assert profiles.open(env) == good
     assert everything_under(root) == []

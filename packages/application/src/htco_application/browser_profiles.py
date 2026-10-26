@@ -23,7 +23,9 @@ A new profile is signed out, so without a check (until slice 8A.3) it ends `LOGI
 """
 
 import io
+import os
 import shutil
+import stat
 import tarfile
 import tempfile
 import threading
@@ -243,15 +245,40 @@ class ProfileWorkspaces:
 
 
 def _pack(files: list[tuple[Path, str]]) -> bytes:
+    """Each entry is written from what was opened, never by following a path again: a file
+    swapped for a link after the listing is refused (no time-of-check to time-of-use gap), and a
+    hard link becomes its own regular member."""
     buffer = io.BytesIO()
-    # dereference: a hard link is written as its own regular file, never as a link member.
-    with tarfile.open(fileobj=buffer, mode="w:gz", dereference=True) as tar:
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
         for path, name in files:
-            tar.add(path, arcname=name, recursive=False)
+            _add(tar, path, name)
     packed = buffer.getvalue()
     if len(packed) > MAX_ARCHIVE_BYTES:
         raise ProfileTooLargeError("the profile archive is over the cap")
     return packed
+
+
+def _add(tar: tarfile.TarFile, path: Path, name: str) -> None:
+    before = path.lstat()
+    if stat.S_ISDIR(before.st_mode):
+        info = tarfile.TarInfo(name)
+        info.type, info.mode, info.mtime = tarfile.DIRTYPE, 0o700, int(before.st_mtime)
+        tar.addfile(info)
+        return
+    if not stat.S_ISREG(before.st_mode):
+        raise ProfileUnsafeError("a profile entry is not a regular file")
+    descriptor = os.open(
+        path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    )
+    with os.fdopen(descriptor, "rb") as handle:
+        opened = os.fstat(handle.fileno())
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino) or not stat.S_ISREG(
+            opened.st_mode
+        ):
+            raise ProfileUnsafeError("a profile entry changed while it was packed")
+        info = tarfile.TarInfo(name)
+        info.size, info.mode, info.mtime = opened.st_size, 0o600, int(opened.st_mtime)
+        tar.addfile(info, handle)
 
 
 def _profile_files(directory: Path) -> Iterator[Path]:
