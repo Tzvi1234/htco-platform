@@ -411,3 +411,4 @@ The acceptance criteria are in Phase 8A:
   - pre-update archives treated as profiles;
   - the classification of browser run rows.
 - 2026-10-26: This is the last rewrite before merge (the owner approved the ADR). From now on, a further design-level point from a review is answered with a rationale and becomes an implementation acceptance criterion, checked again at the code pull request. That keeps the decision record stable while the 8A.2a to 8A.2c pull requests prove it.
+- 2026-10-27: D-18 is now (a) (#168). The browser worker runs on a basic HTCO droplet, because its egress rules need `NET_ADMIN`, which App Platform does not grant. So §4's shared browser egress, "the platform's own fixed IP (D-18 (c) today)", is that droplet's own IP. The API keeps its own egress. The droplet's baseline is AC-8A.2.29.

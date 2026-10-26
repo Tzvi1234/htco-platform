@@ -287,4 +287,4 @@ The acceptance criteria are AC-8A.11.1 to AC-8A.11.21 in Phase 8A.
   - control is bound to the session's organization and shop;
   - validation never echoes input;
   - revocation takes effect at once;
-  - one immutable deadline per takeover episode.
+  - one immutable deadline per takeover episode. A retake after Return Control, in the same run, is a new episode with its own deadline, and a run has at most 3 episodes, after which it goes to `HANDED_TO_HUMAN` or fails (main's decision). This settles the maximum duration in §2: "another step-up" never extends an episode.
