@@ -1,5 +1,6 @@
 """The local runner replays CI's `database` job from `ci.yml`, so local and CI never drift."""
 
+import contextlib
 import os
 import re
 import shutil
@@ -503,7 +504,7 @@ def test_setup__pins_the_sha256_of_the_uv_that_ci_uses() -> None:
     setup = (REPO / "scripts/local-db-setup.sh").read_text(encoding="utf-8")
     pinned = re.search(r'^uv_pinned_version="([0-9.]+)"$', setup, re.MULTILINE)
     digest = re.search(r'^uv_sha256_x86_64="([0-9a-f]{64})"$', setup, re.MULTILINE)
-    arm = re.search(r'^uv_sha256_aarch64="([0-9a-f]{64})"$', setup, re.MULTILINE)
+
     ci = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     versions = {
         step["with"]["version"]
@@ -514,7 +515,6 @@ def test_setup__pins_the_sha256_of_the_uv_that_ci_uses() -> None:
 
     assert pinned is not None
     assert digest is not None
-    assert arm is not None
     assert versions == {pinned.group(1)}
     assert '.sha256"' not in setup  # never the release's own checksum file
 
@@ -646,18 +646,8 @@ def test_wrapper__a_new_cache__created_with_its_marker(tmp_path: Path) -> None:
 
 
 @needs_bash
-@pytest.mark.parametrize(
-    ("machine", "archive"),
-    [
-        ("x86_64", "uv-x86_64-unknown-linux-gnu.tar.gz"),
-        ("aarch64", "uv-aarch64-unknown-linux-gnu.tar.gz"),
-        ("arm64", "uv-aarch64-unknown-linux-gnu.tar.gz"),
-    ],
-)
-def test_setup__picks_the_uv_archive_and_pin_for_the_architecture(
-    tmp_path: Path, machine: str, archive: str
-) -> None:
-    _fake_tool(tmp_path, "uname", f"echo {machine}")
+def test_setup__x86_64__picks_the_pinned_uv_archive(tmp_path: Path) -> None:
+    _fake_tool(tmp_path, "uname", "echo x86_64")
 
     result = subprocess.run(
         ["bash", str(REPO / "scripts/local-db-setup.sh"), "--uv-asset"],  # noqa: S607
@@ -669,13 +659,19 @@ def test_setup__picks_the_uv_archive_and_pin_for_the_architecture(
 
     assert result.returncode == 0, result.stderr
     name, digest = result.stdout.split()
-    assert name == archive
+    assert name == "uv-x86_64-unknown-linux-gnu.tar.gz"
     assert re.fullmatch(r"[0-9a-f]{64}", digest)
 
 
 @needs_bash
-def test_setup__an_unsupported_architecture__fails_clearly(tmp_path: Path) -> None:
-    _fake_tool(tmp_path, "uname", "echo armv7l")
+@pytest.mark.parametrize("machine", ["aarch64", "arm64", "armv7l"])
+def test_setup__an_architecture_ci_cannot_replay__refused_before_installing(
+    tmp_path: Path, machine: str
+) -> None:
+    """CI's database job installs the linux_amd64 Supabase CLI, so on ARM the local run could
+    never work: refuse there, before apt or uv touch the machine (Codex on #99)."""
+    _fake_tool(tmp_path, "uname", f"echo {machine}")
+    _fake_tool(tmp_path, "apt-get", f'echo apt-get >> "{tmp_path}/installed.txt"')
 
     result = subprocess.run(
         ["bash", str(REPO / "scripts/local-db-setup.sh"), "--uv-asset"],  # noqa: S607
@@ -686,4 +682,52 @@ def test_setup__an_unsupported_architecture__fails_clearly(tmp_path: Path) -> No
     )
 
     assert result.returncode == 2
-    assert "armv7l" in result.stderr
+    assert machine in result.stderr
+    assert "linux_amd64" in result.stderr
+    assert not (tmp_path / "installed.txt").exists()
+
+
+@needs_bash
+@pytest.mark.parametrize("machine", ["aarch64", "arm64"])
+def test_wrapper__on_arm__refused_with_the_reason(tmp_path: Path, machine: str) -> None:
+    repo = _wrapper_repo(tmp_path)
+    bin_dir, _ = _wrapper_tools(tmp_path, running=False)
+    _fake_tool(bin_dir, "uname", f"echo {machine}")
+
+    result = _run_wrapper(repo, bin_dir, tmp_path / "cache")
+
+    assert result.returncode == 2
+    assert "linux_amd64" in result.stderr
+
+
+# --- Codex on #99 (e9c8a7a): output cleanup is bounded too --------------------------------
+
+
+@needs_posix_bash
+@pytest.mark.parametrize("timeout_minutes", [None, 0.02])
+def test_run_steps__a_detached_child_holding_the_output__does_not_hold_the_runner(
+    tmp_path: Path, timeout_minutes: float | None
+) -> None:
+    """`setsid` puts the child outside the step's process group, so the kill cannot reach it,
+    and it keeps the step's output open for 60 s. The runner must still return promptly."""
+    pid_file = tmp_path / "detached.pid"
+    hang = "" if timeout_minutes is None else "sleep 300\n"
+    step = Step(
+        name="Leaves a detached child",
+        run=f'setsid sleep 60 &\necho $! > "{pid_file}"\necho step-output\n{hang}',
+        timeout_minutes=timeout_minutes,
+    )
+    log = tmp_path / "log.txt"
+
+    started = time.monotonic()
+    try:
+        results = run_steps([step], {}, cwd=tmp_path, log=log)
+        elapsed = time.monotonic() - started
+    finally:
+        if pid_file.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid_file.read_text(encoding="utf-8")), signal.SIGTERM)
+
+    assert elapsed < 20, f"the runner waited {elapsed:.0f}s for the detached child"
+    assert results[0].timed_out is (timeout_minutes is not None)
+    assert "step-output" in log.read_text(encoding="utf-8")
