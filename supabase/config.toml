@@ -192,11 +192,15 @@ password_requirements = "lower_upper_letters_digits"
 # [auth.passkey]
 # enabled = false
 
-# Configure WebAuthn relying party settings (required when passkey is enabled).
-# [auth.webauthn]
-# rp_display_name = "Supabase"
-# rp_id = "localhost"
-# rp_origins = ["http://127.0.0.1:3000"]
+# WebAuthn relying party (issue #113): required for passkeys as a second factor. This is the
+# LOCAL stack only: a passkey is bound to its RP ID, and localhost cannot share one with
+# ht-co.app. Production (hosted, OFF until the owner enables the WebAuthn MFA add-on) is
+# rp_id = "ht-co.app", rp_origins = ["https://dash.ht-co.app"], rp_display_name = "HTCO"
+# (docs/features/identity-access/passkeys.md). Never `config push` this section as it is.
+[auth.webauthn]
+rp_display_name = "HTCO"
+rp_id = "localhost"
+rp_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]
 
 [auth.rate_limit]
 # Number of emails that can be sent per hour. Requires auth.email.smtp to be enabled.
@@ -316,10 +320,11 @@ otp_length = 6
 template = "Your code is {{ .Code }}"
 max_frequency = "5s"
 
-# Configure MFA via WebAuthn
-# [auth.mfa.web_authn]
-# enroll_enabled = true
-# verify_enabled = true
+# Passkeys (Face ID, Touch ID, Windows Hello, Android biometrics) as a second factor next to TOTP
+# (issue #113). Locally on; the API offers them only with HTCO_PASSKEYS_ENABLED=true.
+[auth.mfa.web_authn]
+enroll_enabled = true
+verify_enabled = true
 
 # Use an external OAuth provider. The full list of providers are: `apple`, `azure`, `bitbucket`,
 # `discord`, `facebook`, `github`, `gitlab`, `google`, `keycloak`, `linkedin_oidc`, `notion`, `twitch`,

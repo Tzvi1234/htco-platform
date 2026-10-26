@@ -48,6 +48,8 @@ class Factor:
     id: str
     verified: bool
     name: str | None
+    # "totp" (an authenticator app) or "webauthn" (a passkey, issue #113).
+    kind: str = "totp"
 
 
 @dataclass(frozen=True)
@@ -147,7 +149,8 @@ async def step_up(  # noqa: PLR0913 - the code and the collaborators
     now: datetime,
 ) -> None:
     factors = await mfa.factors_of(session.tokens.access_token)
-    verified = next((factor for factor in factors if factor.verified), None)
+    # A code belongs to an authenticator app; passkeys step up through their own route.
+    verified = next((f for f in factors if f.verified and f.kind == "totp"), None)
     if verified is None:
         raise MfaNotEnrolledError("enroll an authenticator app first")
     await _verify(session, mfa, store, verified.id, code, client=client, now=now)
