@@ -64,6 +64,10 @@ class ProfileTooLargeError(Exception):
     """The sealed archive would exceed `MAX_ARCHIVE_BYTES`; nothing was stored."""
 
 
+class ProfileRecordError(Exception):
+    """The environment's row was not there to record the archive on; nothing was written."""
+
+
 class ProfileUnsafeError(Exception):
     """The archive's row or contents are not this environment's profile; nothing was unpacked."""
 
@@ -100,6 +104,7 @@ class SealedArchive:
     key_id: str
     blob: bytes = field(repr=False)
     sealed_at: datetime
+    storage_key: str = ""
 
 
 class ProfileArchiveStore(Protocol):
@@ -108,20 +113,21 @@ class ProfileArchiveStore(Protocol):
     def get(self, environment_id: uuid.UUID) -> SealedArchive | None: ...
 
     def put(self, archive: SealedArchive) -> None:
-        """Insert or replace the environment's archive."""
+        """In one transaction: insert or replace the archive, and record its storage key and key
+        ID on the environment's row. Raises `ProfileRecordError` (and writes nothing) unless
+        exactly that one row was updated."""
         ...
 
-    def delete(self, environment_id: uuid.UUID) -> None: ...
+    def delete(self, environment_id: uuid.UUID) -> None:
+        """In one transaction: delete the archive and clear the row's profile columns; raises
+        `ProfileRecordError` (and changes nothing) unless exactly that one row was updated."""
+        ...
 
 
 class ProfileRecords(Protocol):
-    """The environment rows as the browser worker sees them, and their profile columns."""
+    """The environment rows as the browser worker sees them."""
 
     def by_id(self, environment_id: uuid.UUID) -> BrowserEnvironment | None: ...
-
-    def record_profile(
-        self, environment_id: uuid.UUID, *, storage_key: str | None, key_id: str | None
-    ) -> None: ...
 
 
 class FirstHealthCheck(Protocol):
@@ -152,6 +158,7 @@ class ProfileVault:
         sealed = SealedArchive(
             environment_id=environment.id, organization_id=environment.organization_id,
             shop_id=environment.shop_id, key_id=key_id, blob=blob, sealed_at=self._clock(),
+            storage_key=profile_storage_key(environment),
         )  # fmt: skip
         self._store.put(sealed)
         return sealed
@@ -325,10 +332,7 @@ class SealedProfileProvisioner:
             raise EnvironmentNotFoundError(str(environment_id))
         if environment.status is not EnvironmentStatus.PROVISIONING:
             raise StaleEnvironmentError(EnvironmentStatus.PROVISIONING, environment.status)
-        sealed = self._workspaces.create(environment)
-        self._records.record_profile(
-            environment.id, storage_key=profile_storage_key(environment), key_id=sealed.key_id
-        )
+        self._workspaces.create(environment)  # the archive and its record, in one write
         if self._first_check is None:
             return ProvisioningResult(EnvironmentStatus.LOGIN_REQUIRED, NEW_PROFILE_REASON)
         return await self._first_check.check(environment)
@@ -338,8 +342,7 @@ class SealedProfileProvisioner:
         environment = self._records.by_id(environment_id)
         if environment is None:
             return
-        self._workspaces.vault.delete(environment)
-        self._records.record_profile(environment.id, storage_key=None, key_id=None)
+        self._workspaces.vault.delete(environment)  # the archive and its record, in one write
 
 
 # --- In memory ----------------------------------------------------------------------------------
@@ -347,7 +350,12 @@ class SealedProfileProvisioner:
 
 @dataclass
 class MemoryProfileArchiveStore:
+    """The archives and the environments' profile columns; `missing` names environments
+    whose row is gone (failure injection)."""
+
     archives: dict[uuid.UUID, SealedArchive] = field(default_factory=dict)
+    profiles: dict[uuid.UUID, tuple[str | None, str | None]] = field(default_factory=dict)
+    missing: set[uuid.UUID] = field(default_factory=set)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def get(self, environment_id: uuid.UUID) -> SealedArchive | None:
@@ -356,22 +364,22 @@ class MemoryProfileArchiveStore:
 
     def put(self, archive: SealedArchive) -> None:
         with self._lock:
+            if archive.environment_id in self.missing:
+                raise ProfileRecordError("no environment row to record the archive on")
             self.archives[archive.environment_id] = archive
+            self.profiles[archive.environment_id] = (archive.storage_key, archive.key_id)
 
     def delete(self, environment_id: uuid.UUID) -> None:
         with self._lock:
+            if environment_id in self.missing:
+                raise ProfileRecordError("no environment row to clear")
             self.archives.pop(environment_id, None)
+            self.profiles[environment_id] = (None, None)
 
 
 @dataclass
 class MemoryProfileRecords:
     environments: dict[uuid.UUID, BrowserEnvironment] = field(default_factory=dict)
-    profiles: dict[uuid.UUID, tuple[str | None, str | None]] = field(default_factory=dict)
 
     def by_id(self, environment_id: uuid.UUID) -> BrowserEnvironment | None:
         return self.environments.get(environment_id)
-
-    def record_profile(
-        self, environment_id: uuid.UUID, *, storage_key: str | None, key_id: str | None
-    ) -> None:
-        self.profiles[environment_id] = (storage_key, key_id)

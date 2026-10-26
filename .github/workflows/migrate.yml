@@ -68,7 +68,7 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         if: ${{ !cancelled() }}
         with:
-          version: "0.13.0"
+          version: "0.13.5"
       # Slice 5.10: the reviewed automation definitions of registry/automations/ (dry run first).
       - name: Automation definitions (dry run)
         if: ${{ !cancelled() }}

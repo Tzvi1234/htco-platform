@@ -16,10 +16,11 @@ Read only (the owner's rule: connected shops are live, with real buyers). Every 
 one choke point, `_request`, which refuses any method but GET before a token is fetched unless
 the caller sets the `allow_write` flag for that call; no code path does. As a second, independent
 guard the adapter installs a request hook on its HTTP client that stops any non-GET request to
-Etsy's shop API (`ETSY_BASE_URL`) before it leaves the process, even if some code used the
-client directly. The OAuth token endpoint (`api.etsy.com/v3/public/oauth/token`) is outside that
-API and unaffected. Etsy's `tokenScopes` is a POST, so it is not used: the capability probes
-read the stored scopes.
+any Etsy host (`etsy.com` and every `*.etsy.com`: the shop API on openapi.etsy.com and
+api.etsy.com, the website) and to the configured base URL, before it leaves the process, even if
+some code used the client directly. The one exception is the OAuth token exchange, a POST to
+exactly `api.etsy.com/v3/public/oauth/token`, which changes no shop. Etsy's `tokenScopes` is a
+POST, so it is not used: the capability probes read the stored scopes.
 
 Retries: only GETs are made here, so 429 (honouring `retry-after`), 5xx and transport failures
 (timeouts, refused connections) are retried with capped exponential backoff. Other 4xx answers
@@ -95,6 +96,9 @@ MAX_PAGE_SIZE = 100
 READ_ONLY_METHODS = frozenset({"GET"})
 # Request extension that lets one request past the hook; set only when `allow_write` is set.
 _WRITE_ALLOWED = "htco.etsy.write_allowed"
+# The only non-GET request to an Etsy host the client hook lets through without that flag: the
+# OAuth token exchange (`htco_integrations.etsy_oauth`), which changes no shop.
+_TOKEN_EXCHANGE = ("POST", "api.etsy.com", "/v3/public/oauth/token")
 # Fields whose presence on a receipt shows Etsy shares the buyer's shipping address.
 _ADDRESS_FIELDS = ("first_line", "city")
 
@@ -781,9 +785,14 @@ class _WriteGuard:
         method = request.method.upper()
         if method in READ_ONLY_METHODS or request.extensions.get(_WRITE_ALLOWED) is True:
             return
+        host = (request.url.host or "").lower().rstrip(".")
+        if (method, host, request.url.path) == _TOKEN_EXCHANGE:
+            return
         url = str(request.url)
         if (
-            url == self._root
+            host == "etsy.com"
+            or host.endswith(".etsy.com")
+            or url == self._root
             or url.startswith(self._root + "/")
             or url.startswith(self._root + "?")
         ):
