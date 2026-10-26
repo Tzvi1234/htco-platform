@@ -18,7 +18,7 @@ from htco_domain.automation import (
 )
 from htco_domain.improvement import OptimizationProposal, ProposalState
 from htco_domain.state_machine import IllegalTransition
-from htco_domain.tasks import BusinessTask, TaskState
+from htco_domain.tasks import BusinessTask, EvidenceKind, TaskEvidence, TaskKind, TaskState
 from htco_domain.tooling import SideEffect
 from htco_domain.workforce import Readiness, SectionStatus, SpecSection
 
@@ -174,9 +174,11 @@ def _task() -> BusinessTask:
         id=uuid.uuid7(),
         organization_id=ORG,
         shop_id=None,
+        kind=TaskKind.GENERAL,
         title="Prepare the weekly review",
         assignee=ActorRef(ActorKind.EMPLOYEE, "maya"),
         state=TaskState.CREATED,
+        idempotency_key="weekly-review:2026-w44",
         correlation_id="corr-2",
     )
 
@@ -193,9 +195,9 @@ def test_task__moves_through_its_lifecycle() -> None:
         TaskState.RUNNING,
         TaskState.WAITING_FOR_APPROVAL,
         TaskState.RUNNING,
-        TaskState.COMPLETED,
     ):
         task = task.transition(state)
+    task = task.transition(TaskState.COMPLETED, evidence=TaskEvidence(EvidenceKind.RESOURCE, "r-1"))
 
     assert task.state is TaskState.COMPLETED
 
