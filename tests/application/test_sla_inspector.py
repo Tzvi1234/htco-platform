@@ -150,6 +150,8 @@ async def test_an_old_incident_escalates_once() -> None:
     assert second.output["escalated"] == 0
     [incident] = inspector.incident_store.incidents.values()
     assert incident.state is IncidentState.ESCALATED
+    # 6.7: the escalation is announced once, however often the inspector runs.
+    assert len(inspector.incident_store.events.of("incidents.escalated.v1")) == 1
 
 
 @pytest.mark.ac("AC-6.3.4")
