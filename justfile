@@ -91,7 +91,7 @@ up:
 
 # Fast feedback for agent hooks: lint, types and tests (no coverage)
 check-fast: lint types
-    uv run pytest -q -x
+    uv run pytest -q -x -m "not db and not slow"
 
 # What CI checks, minus the secret and vulnerability scans: format, lint, types, contracts, workflows, tests
 check: lint types arch workflows test
