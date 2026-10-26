@@ -43,7 +43,7 @@
 | 25 | Phase 8 (registry tables, LangGraph checkpointer, tool bridge on the gateway 8.10) | 24 | AC-8.x | 26, 27 |
 | 26 | **Pulled forward (owner, 2026-10-23): starts right after Phase 6, in parallel with Phase 7.** Phase 8A slices 8A.1–8A.5, 8A.7–8A.10: browser worker, controller, preflight, challenges, then **AutoVA recipes first** (A-01 with Export first; then A-02 approving the chosen quote), then B-02 and B-03, guards, monitoring | 24, 24a (for A-02), A-08 (AutoVA's terms), owner fills B-01–B-03 (D-16) | AC-8A.x except 8A.6; AC-8A.10.x | 25, 27 |
 | 27 | Phase 8B (authenticator) | 24 | AC-8B.x | 25, 26 |
-| 28 | Phase 9 (router, budgets, Jev, simple vs complex routing 9.9; Eitan) | 25 | AC-9.x | — |
+| 28 | Phase 9 (router with routed and pinned modes and automatic difficulty, ADR-0023; budgets, Jev, simple vs complex routing 9.9; the knowledge base and retrieval 9.10, ADR-0024, ready before Dana in Phase 14; Eitan) | 25 | AC-9.x | — |
 | 29 | Phase 8A slice 8A.6 (Browser Use for employees) | 26, 28 | AC-8A.6.x | 30 |
 | 30 | Phase 10 (supervision with the execution-chain monitors) | 28 | AC-10.x | 29 |
 | 31 | Phases 11 → 12 → 13; Phase 14 in parallel with 11–13 (needs 8A and 8B for delivery A) | 30 | Phase gates | — |

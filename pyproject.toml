@@ -121,6 +121,7 @@ filterwarnings = [
 markers = [
   "ac(id): the acceptance criterion (for example AC-1.2.3) that this test proves",
   "db: needs a running database (HTCO_TEST_DATABASE_URL); run with `just test-db`",
+  "slow: starts a real process or similar (seconds each); `just check-fast` skips it, CI runs it",
 ]
 
 [tool.coverage.run]

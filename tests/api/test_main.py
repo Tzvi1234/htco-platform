@@ -106,6 +106,7 @@ def test_main__valid_configuration__logs_json_and_serves_the_app(
 
 
 @pytest.mark.ac("AC-1.2.5")
+@pytest.mark.slow  # a real interpreter start: 13 to 17 s on a Windows PC (#115)
 def test_process__started_without_required_setting__exits_non_zero_with_a_clear_message() -> None:
     env = {name: value for name, value in os.environ.items() if not name.startswith("HTCO_")}
 
@@ -114,7 +115,7 @@ def test_process__started_without_required_setting__exits_non_zero_with_a_clear_
         capture_output=True,
         text=True,
         env=env,
-        timeout=60,
+        timeout=180,  # generous: a loaded local machine took more than 60 s once (#115)
         check=False,
     )
 

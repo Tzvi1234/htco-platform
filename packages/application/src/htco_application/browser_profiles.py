@@ -23,7 +23,9 @@ A new profile is signed out, so without a check (until slice 8A.3) it ends `LOGI
 """
 
 import io
+import os
 import shutil
+import stat
 import tarfile
 import tempfile
 import threading
@@ -202,7 +204,7 @@ class ProfileWorkspaces:
 
     def create(self, environment: BrowserEnvironment) -> SealedArchive:
         """Seal an empty profile: Chromium fills it on the first launch."""
-        return self._vault.seal(environment, _pack([]))
+        return self._vault.seal(environment, _empty_archive())
 
     @contextmanager
     def checkout(self, environment: BrowserEnvironment) -> Iterator[Path]:
@@ -218,14 +220,9 @@ class ProfileWorkspaces:
             _wipe(directory)
 
     def _packed(self, directory: Path) -> bytes:
-        """The session's profile, refused before sealing when the next checkout would refuse
-        it, so an oversized session never replaces the last good archive."""
-        files = list(_profile_files(directory))
-        if len(files) > self._max_members:
-            raise ProfileTooLargeError("the profile has too many entries")
-        if sum(path.stat().st_size for path in files if path.is_file()) > self._max_unpacked:
-            raise ProfileTooLargeError("the profile is past the unpacked cap")
-        return _pack([(path, path.relative_to(directory).as_posix()) for path in files])
+        """The session's profile, packed in one pass that never follows a link, and refused
+        before sealing when the next checkout would refuse it (the member and unpacked caps)."""
+        return _Packer(self._max_members, self._max_unpacked).pack(directory)
 
     def _unpack(self, archive: bytes, directory: Path) -> None:
         try:
@@ -249,30 +246,150 @@ class ProfileWorkspaces:
                 raise ProfileUnsafeError("the profile archive names a path outside the profile")
 
 
-def _pack(files: list[tuple[Path, str]]) -> bytes:
+# Linux (the browser worker): every entry is opened relative to its parent's descriptor with
+# O_NOFOLLOW, so swapping a file or a directory for a link after the listing cannot lead outside
+# the profile. Elsewhere (developer machines) the same walk runs by path, with each opened file's
+# identity checked against its listing and its real path checked to be inside the profile.
+_FD_WALK = (
+    os.open in os.supports_dir_fd and hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY")
+)
+_O_NOFOLLOW: int = getattr(os, "O_NOFOLLOW", 0)
+_O_DIRECTORY: int = getattr(os, "O_DIRECTORY", 0)
+# Non-blocking: a file swapped for a FIFO after its stat must not hang the open; the fstat
+# below then refuses it. A regular file ignores the flag.
+_READ = os.O_RDONLY | _O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+_OPEN_DIRECTORY = os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW
+
+
+def _empty_archive() -> bytes:
     buffer = io.BytesIO()
-    # dereference: a hard link is written as its own regular file, never as a link member.
-    with tarfile.open(fileobj=buffer, mode="w:gz", dereference=True) as tar:
-        for path, name in files:
-            tar.add(path, arcname=name, recursive=False)
-    packed = buffer.getvalue()
-    if len(packed) > MAX_ARCHIVE_BYTES:
-        raise ProfileTooLargeError("the profile archive is over the cap")
-    return packed
+    with tarfile.open(fileobj=buffer, mode="w:gz"):
+        pass
+    return buffer.getvalue()
 
 
-def _profile_files(directory: Path) -> Iterator[Path]:
-    """Regular files and directories, in order; no caches, links, sockets or lock files."""
-    for path in sorted(directory.iterdir()):
-        if path.is_symlink() or path.name.startswith(_SKIPPED_PREFIXES):
-            continue
-        if path.is_dir():
-            if path.name in _SKIPPED_DIRECTORIES:
+def _entries(directory: int | Path) -> list[os.DirEntry[str]]:
+    """One directory's entries, in name order (a descriptor on Linux, a path elsewhere)."""
+    with os.scandir(directory) as listing:
+        return sorted(listing, key=lambda entry: entry.name)
+
+
+def _skipped(entry: os.DirEntry[str]) -> bool:
+    if entry.is_symlink() or entry.name.startswith(_SKIPPED_PREFIXES):
+        return True
+    return entry.is_dir(follow_symlinks=False) and entry.name in _SKIPPED_DIRECTORIES
+
+
+class _Packer:
+    def __init__(self, max_members: int, max_unpacked: int) -> None:
+        self._max_members = max_members
+        self._max_unpacked = max_unpacked
+        self._members = 0
+        self._bytes = 0
+
+    def pack(self, directory: Path) -> bytes:
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+            if _FD_WALK:  # pragma: no branch - one side per platform
+                root = os.open(directory, _OPEN_DIRECTORY)
+                try:
+                    self._walk_fd(tar, root, "")
+                finally:
+                    os.close(root)
+            else:  # pragma: no cover - developer machines without dir_fd
+                self._walk_path(tar, directory, directory.resolve(), "")
+        packed = buffer.getvalue()
+        if len(packed) > MAX_ARCHIVE_BYTES:
+            raise ProfileTooLargeError("the profile archive is over the cap")
+        return packed
+
+    def _count(self, size: int) -> None:
+        self._members += 1
+        self._bytes += size
+        if self._members > self._max_members:
+            raise ProfileTooLargeError("the profile has too many entries")
+        if self._bytes > self._max_unpacked:
+            raise ProfileTooLargeError("the profile is past the unpacked cap")
+
+    def _walk_fd(self, tar: tarfile.TarFile, parent: int, prefix: str) -> None:
+        for entry in _entries(parent):
+            if _skipped(entry):
                 continue
-            yield path
-            yield from _profile_files(path)
-        elif path.is_file():
-            yield path
+            name = prefix + entry.name
+            listed = entry.stat(follow_symlinks=False)
+            _same_kind(entry, listed)
+            if stat.S_ISDIR(listed.st_mode):
+                child = _open_at(entry.name, _OPEN_DIRECTORY, parent, listed)
+                try:
+                    self._add_directory(tar, name, listed)
+                    self._walk_fd(tar, child, name + "/")
+                finally:
+                    os.close(child)
+            elif stat.S_ISREG(listed.st_mode):
+                self._add_file(tar, name, _open_at(entry.name, _READ, parent, listed))
+
+    def _walk_path(  # pragma: no cover - developer machines without dir_fd
+        self, tar: tarfile.TarFile, directory: Path, root: Path, prefix: str
+    ) -> None:
+        for entry in _entries(directory):
+            if _skipped(entry):
+                continue
+            name = prefix + entry.name
+            path = Path(entry.path)
+            listed = path.lstat()  # Windows' listing has no inode numbers: the path's own
+            was_dir = entry.is_dir(follow_symlinks=False)
+            if stat.S_ISDIR(listed.st_mode) != was_dir or not path.resolve().is_relative_to(root):
+                raise ProfileUnsafeError("a profile entry changed while it was packed")
+            if stat.S_ISDIR(listed.st_mode):
+                self._add_directory(tar, name, listed)
+                self._walk_path(tar, path, root, name + "/")
+            elif stat.S_ISREG(listed.st_mode):
+                descriptor = os.open(path, _READ)
+                _same(descriptor, listed)
+                self._add_file(tar, name, descriptor)
+
+    def _add_directory(self, tar: tarfile.TarFile, name: str, listed: os.stat_result) -> None:
+        self._count(0)
+        info = tarfile.TarInfo(name)
+        info.type, info.mode, info.mtime = tarfile.DIRTYPE, 0o700, int(listed.st_mtime)
+        tar.addfile(info)
+
+    def _add_file(self, tar: tarfile.TarFile, name: str, descriptor: int) -> None:
+        with os.fdopen(descriptor, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            self._count(opened.st_size)
+            info = tarfile.TarInfo(name)
+            info.size, info.mode, info.mtime = opened.st_size, 0o600, int(opened.st_mtime)
+            tar.addfile(info, handle)
+
+
+def _same_kind(entry: os.DirEntry[str], listed: os.stat_result) -> None:
+    """The kind the listing saw (a regular file or a directory) is the kind there now."""
+    if (entry.is_dir(follow_symlinks=False), entry.is_file(follow_symlinks=False)) != (
+        stat.S_ISDIR(listed.st_mode),
+        stat.S_ISREG(listed.st_mode),
+    ):
+        raise ProfileUnsafeError("a profile entry changed while it was packed")
+
+
+def _open_at(name: str, flags: int, parent: int, listed: os.stat_result) -> int:
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent)
+    except OSError as error:  # a link now (ELOOP, ENOTDIR) or gone
+        raise ProfileUnsafeError("a profile entry changed while it was packed") from error
+    _same(descriptor, listed)
+    return descriptor
+
+
+def _same(descriptor: int, listed: os.stat_result) -> None:
+    opened = os.fstat(descriptor)
+    if (opened.st_dev, opened.st_ino, stat.S_IFMT(opened.st_mode)) != (
+        listed.st_dev,
+        listed.st_ino,
+        stat.S_IFMT(listed.st_mode),
+    ):
+        os.close(descriptor)
+        raise ProfileUnsafeError("a profile entry changed while it was packed")
 
 
 def _wipe(directory: Path) -> None:

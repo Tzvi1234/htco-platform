@@ -323,6 +323,8 @@ class ShopReview:
     language: str | None
     created_at: datetime
     text: str | None = field(default=None, repr=False)
+    # The order line it reviews (getReviewsByShop's `transaction_id`); links the order (6.9).
+    transaction_id: int | None = None
 
 
 @dataclass(frozen=True)

@@ -34,6 +34,20 @@ requires_capability = "receipts_read"
 breaker_key = "etsy:api"
 
 [[actions]]
+tool = "etsy.reviews.read"
+approval_policy = "R0"
+verify = "schema"
+timeout_seconds = 30
+input_schema = "etsy.reviews.read.input.json"
+output_schema = "etsy.reviews.read.output.json"
+rate_limit_key = "etsy:app"
+user_capability = "view_overview"
+[[actions.bindings]]
+channel = "api"
+recipe = "list_reviews"
+breaker_key = "etsy:api"
+
+[[actions]]
 tool = "etsy.inventory.update"
 approval_policy = "W2"
 verify = "reread"
