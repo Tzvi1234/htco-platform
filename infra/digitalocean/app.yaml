@@ -163,6 +163,11 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: ${HTCO_ETSY_WEBHOOK_SECRET}
+      # Automations (5.10, 5.11): the API creates executions for the worker (a user's trigger
+      # such as the counters rebuild, an audited admin retry); it never runs a handler.
+      - key: HTCO_AUTOMATIONS_ENABLED
+        scope: RUN_TIME
+        value: "true"
       # Slice 5.4: the order history sync ran here only as the fallback. Etsy Order Intake is active
       # (5.11, activation step 3): stale reads, the manual sync and "Re-sync selected" go to the
       # worker's queue. Rollback: "true" again.
