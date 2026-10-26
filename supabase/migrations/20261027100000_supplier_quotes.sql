@@ -71,9 +71,10 @@ create table app.supplier_quotes (
   shipping_days_min smallint not null,
   shipping_days_max smallint not null,
   valid_until date,
-  -- The quote mail's reference (a hash of its message ID), never its content.
+  -- The quote mail's reference (htco_domain.suppliers.mail_reference: "mail:" and the SHA-256 of
+  -- its message ID), never its content: the shape leaves no room for mail text.
   source_reference text not null
-    constraint supplier_quotes_source_reference_check check (char_length(source_reference) between 1 and 200),
+    constraint supplier_quotes_source_reference_check check (source_reference ~ '^mail:[0-9a-f]{64}$'),
   received_at timestamptz not null,
   created_at timestamptz not null default now(),
   constraint supplier_quotes_request_fkey foreign key (quote_request_id, organization_id)
@@ -81,6 +82,11 @@ create table app.supplier_quotes (
   constraint supplier_quotes_supplier_fkey foreign key (supplier_id, organization_id)
     references app.suppliers (id, organization_id) on delete restrict,
   constraint supplier_quotes_id_organization_key unique (id, organization_id),
+  -- The keys a choice and a mapping name, so each agrees with its quote's request and supplier.
+  constraint supplier_quotes_id_request_organization_key
+    unique (id, quote_request_id, organization_id),
+  constraint supplier_quotes_id_supplier_organization_key
+    unique (id, supplier_id, organization_id),
   constraint supplier_quotes_processing_days_check check (
     processing_days_min between 0 and 365 and processing_days_max between processing_days_min and 365
   ),
@@ -93,9 +99,22 @@ create table app.supplier_quotes (
 create index supplier_quotes_request_idx on app.supplier_quotes (quote_request_id);
 create index supplier_quotes_organization_id_idx on app.supplier_quotes (organization_id);
 
+-- A request chooses one of its own quotes, never another request's.
 alter table app.quote_requests add constraint quote_requests_chosen_quote_fkey
-  foreign key (chosen_quote_id, organization_id)
-  references app.supplier_quotes (id, organization_id) on delete restrict;
+  foreign key (chosen_quote_id, id, organization_id)
+  references app.supplier_quotes (id, quote_request_id, organization_id) on delete restrict;
+
+-- Stored quotes never change, for every role (the grants already keep the worker out).
+create function private.reject_supplier_quote_change() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  raise exception 'app.supplier_quotes: a stored quote never changes' using errcode = '42501';
+end
+$$;
+revoke all on function private.reject_supplier_quote_change() from public;
+create trigger supplier_quotes_immutable before update or delete on app.supplier_quotes
+  for each row when (pg_trigger_depth() = 0)
+  execute function private.reject_supplier_quote_change();
 
 create table app.supplier_mappings (
   id uuid primary key,
@@ -116,8 +135,9 @@ create table app.supplier_mappings (
     references app.shops (id, organization_id) on delete cascade,
   constraint supplier_mappings_supplier_fkey foreign key (supplier_id, organization_id)
     references app.suppliers (id, organization_id) on delete restrict,
-  constraint supplier_mappings_quote_fkey foreign key (quote_id, organization_id)
-    references app.supplier_quotes (id, organization_id) on delete restrict,
+  -- The quote is the mapped supplier's own (the product is checked by the trigger below).
+  constraint supplier_mappings_quote_fkey foreign key (quote_id, supplier_id, organization_id)
+    references app.supplier_quotes (id, supplier_id, organization_id) on delete restrict,
   constraint supplier_mappings_end_check check (
     (ended_at is null) = (end_reason is null) and (ended_at is null or ended_at >= active_from)
   )
@@ -179,6 +199,33 @@ $$;
 revoke all on function private.check_supplier_mapping_change() from public;
 create trigger supplier_mappings_check_change before update on app.supplier_mappings
   for each row execute function private.check_supplier_mapping_change();
+
+-- A mapping from a quote maps the product that quote's request asked for.
+create function private.check_supplier_mapping_quote() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.quote_id is not null and not exists (
+    select 1
+    from app.supplier_quotes q
+    join app.quote_requests r
+      on r.id = q.quote_request_id and r.organization_id = q.organization_id
+    where q.id = new.quote_id
+      and q.organization_id = new.organization_id
+      and r.shop_id = new.shop_id
+      and r.listing_id = new.listing_id
+      and r.variant = new.variant
+  ) then
+    raise exception 'supplier mapping: the quote is for another product'
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end
+$$;
+revoke all on function private.check_supplier_mapping_quote() from public;
+create trigger supplier_mappings_check_quote
+  before insert or update of quote_id, shop_id, listing_id, variant, organization_id
+  on app.supplier_mappings
+  for each row execute function private.check_supplier_mapping_quote();
 
 -- Row-level security ------------------------------------------------------------------------------
 

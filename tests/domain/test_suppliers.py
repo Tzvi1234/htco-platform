@@ -24,6 +24,7 @@ from htco_domain.suppliers import (
     SupplierMapping,
     SupplierQuote,
     activate_mapping,
+    mail_reference,
 )
 
 NOW = datetime(2026, 10, 27, 9, 0, tzinfo=UTC)
@@ -48,7 +49,7 @@ def quote(**changes: Any) -> SupplierQuote:
         "processing_days": (2, 4),
         "shipping_days": (7, 12),
         "valid_until": date(2026, 11, 10),
-        "source_reference": "autova-mail:4f1c2a",
+        "source_reference": mail_reference("<4f1c2a@mail.example.test>"),
         "received_at": NOW,
     } | changes
     return SupplierQuote(**values)
@@ -102,12 +103,30 @@ def test_quote__the_price_and_the_shipping_share_one_currency() -> None:
         {"shipping_days": (1, 400)},
         {"shipping_method": ""},
         {"source_reference": "x" * 201},
+        {"source_reference": "mail:4f1c2a"},
+        {"source_reference": "mail:" + "A" * 64},
+        {"source_reference": "Subject: your quote for the wallet, USD 7.40"},
+        {"source_reference": "mail:" + "0" * 64 + "\n"},
         {"received_at": datetime(2026, 10, 27, 9, 0)},  # noqa: DTZ001 - a naive time is refused
     ],
 )
 def test_quote__invalid_values__are_rejected(changes: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match=r".+"):
         quote(**changes)
+
+
+def test_mail_reference__is_a_hash_of_the_message_id_never_its_text() -> None:
+    reference = mail_reference("<4f1c2a@mail.example.test>")
+    assert reference.startswith("mail:")
+    assert len(reference) == len("mail:") + 64
+    assert "4f1c2a" not in reference
+    assert reference == mail_reference("<4f1c2a@mail.example.test>")
+    assert reference != mail_reference("<4f1c2b@mail.example.test>")
+
+
+def test_mail_reference__an_empty_message_id__is_rejected() -> None:
+    with pytest.raises(ValueError, match="message ID"):
+        mail_reference("")
 
 
 def test_quote__free_shipping_is_fine() -> None:

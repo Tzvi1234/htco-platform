@@ -18,6 +18,8 @@ One home for the supplier model from the start (docs/architecture/autova-integra
 Identifiers, money and terms only: no buyer data, and no free text from a model.
 """
 
+import hashlib
+import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -114,6 +116,18 @@ class QuoteRequest:
         return replace(self, state=target, updated_at=at)
 
 
+# A quote's source: "mail:" and the SHA-256 of the mail's message ID, so no mail text can land
+# there. The database checks the same shape (supplier_quotes_source_reference_check).
+_MAIL_REFERENCE = re.compile(r"mail:[0-9a-f]{64}")
+
+
+def mail_reference(message_id: str) -> str:
+    """The reference a quote stores for the mail it came from: a hash of its message ID."""
+    if not message_id:
+        raise ValueError("a mail reference needs the mail's message ID")
+    return "mail:" + hashlib.sha256(message_id.encode()).hexdigest()
+
+
 def _days(window: tuple[int, int], what: str) -> None:
     low, high = window
     if not (0 <= low <= high <= MAX_DAYS):
@@ -147,8 +161,11 @@ class SupplierQuote:
             raise ValueError(f"a quote's shipping method is 1 to {MAX_METHOD} characters")
         _days(self.processing_days, "a quote's processing time")
         _days(self.shipping_days, "a quote's shipping time")
-        if not (0 < len(self.source_reference) <= MAX_REFERENCE):
-            raise ValueError(f"a quote's source reference is 1 to {MAX_REFERENCE} characters")
+        if (
+            len(self.source_reference) > MAX_REFERENCE
+            or _MAIL_REFERENCE.fullmatch(self.source_reference) is None
+        ):
+            raise ValueError("a quote's source reference is mail_reference()'s hash, never text")
         _aware(self.received_at, "a quote's arrival")
 
     @property
