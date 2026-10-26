@@ -1,13 +1,16 @@
 """The local runner replays CI's `database` job from `ci.yml`, so local and CI never drift."""
 
 import contextlib
+import io
 import os
 import re
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
+from typing import override
 
 import pytest
 import yaml
@@ -15,6 +18,7 @@ import yaml
 from tools.local_db_ci import (
     Step,
     StepResult,
+    _tail,
     format_summary,
     load_job,
     local_steps,
@@ -731,3 +735,47 @@ def test_run_steps__a_detached_child_holding_the_output__does_not_hold_the_runne
     assert elapsed < 20, f"the runner waited {elapsed:.0f}s for the detached child"
     assert results[0].timed_out is (timeout_minutes is not None)
     assert "step-output" in log.read_text(encoding="utf-8")
+
+
+class _SlowSink(io.StringIO):
+    """A log that takes 5 ms per write, so the writer below always gets ahead of the reader."""
+
+    @override
+    def write(self, text: str) -> int:
+        time.sleep(0.005)
+        return super().write(text)
+
+
+def test_tail__a_writer_that_never_stops__drained_only_to_where_the_step_ended(
+    tmp_path: Path,
+) -> None:
+    """After the step ends, the output is read up to the size it had then: a leftover process
+    that keeps writing must not keep the runner reading forever (quill, #99)."""
+    output = tmp_path / "step-1.out"
+    output.write_bytes(b"step-output\n")
+    stop_writer = threading.Event()
+
+    def leftover() -> None:  # small, steady writes: about 20 KB/s, never a disk filler
+        with output.open("ab", buffering=0) as sink:
+            while not stop_writer.is_set():
+                sink.write(b"spam\n")
+                time.sleep(0.0005)
+
+    done = threading.Event()
+    log = _SlowSink()
+    writer = threading.Thread(target=leftover, daemon=True)
+    tail = threading.Thread(target=_tail, args=(output, done, log), daemon=True)
+    try:
+        writer.start()
+        tail.start()
+        time.sleep(0.2)
+        done.set()  # the step has ended
+        tail.join(timeout=10)
+        still_reading = tail.is_alive()
+    finally:
+        stop_writer.set()
+        writer.join(timeout=5)
+        tail.join(timeout=30)
+
+    assert not still_reading, "the runner kept reading a leftover process's output"
+    assert log.getvalue().startswith("step-output\n")
