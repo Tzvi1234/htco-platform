@@ -1,5 +1,5 @@
 # Order Deduplication & Verification. Automation specification (ADR-0013). All sections
-# defined (slice 5.11); readiness stays "draft" until the owner approves the activation.
+# defined (slice 5.11); readiness is "ready": the owner approved the activation (ADR-0012 rule 2).
 id = "order-dedup-verification"
 name = "Order Deduplication & Verification"
 version = 1
@@ -12,7 +12,7 @@ approval_required = false
 ai_steps = []
 # It re-reads the receipt through the Action Gateway (GET-only) to compare it with the store.
 allowed_actions = ["etsy.receipts.read"]
-readiness = "draft"
+readiness = "ready"
 activation_phase = 5
 
 [retry]

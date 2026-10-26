@@ -1,5 +1,5 @@
 # Product Sales Counters. Automation specification (ADR-0013). All sections defined
-# (slice 5.11); readiness stays "draft" until the owner approves the activation.
+# (slice 5.11); readiness is "ready": the owner approved the activation (ADR-0012 rule 2).
 id = "product-sales-counters"
 name = "Product Sales Counters"
 version = 1
@@ -12,7 +12,7 @@ timeout_seconds = 120
 side_effect = "internal"
 approval_required = false
 ai_steps = []
-readiness = "draft"
+readiness = "ready"
 activation_phase = 5
 
 [retry]
