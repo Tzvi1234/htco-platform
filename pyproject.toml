@@ -2,7 +2,8 @@
 # and library lives in packages/* or apps/*. Tool settings for the whole workspace live here.
 
 [tool.uv]
-required-version = ">=0.13,<0.14"
+# 0.13.4 drops the compromised emSign root CA (GHSA-hq85-5cpj-mr62, critical).
+required-version = ">=0.13.4,<0.14"
 # Minimum release age for every dependency (ER-SEC-09): new versions are adopted only after a week.
 exclude-newer = "7 days"
 # Exceptions for security fixes newer than a week, each with its advisory; remove once a week old.
