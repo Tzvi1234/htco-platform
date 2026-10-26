@@ -26,7 +26,9 @@ from htco_application.automation.durable import (
     EXECUTION_JOB,
     DurableAutomationEngine,
     Handler,
+    OutputCheck,
 )
+from htco_application.automation.outputs import ContractOutputs
 from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_tokens import VaultAccessTokenProvider
 from htco_application.etsy_webhooks import (
@@ -354,6 +356,7 @@ def worker_engine(
     *,
     gateway: ActionGateway | None = None,
     handlers: Mapping[str, Handler] | None = None,
+    output_check: OutputCheck | None = None,
 ) -> DurableAutomationEngine:
     """The engine on the worker's pool: definitions from the database, the deployed handlers
     (Etsy Order Intake, slice 5.4) and the Action Gateway. A deployed handler still runs only once
@@ -367,6 +370,7 @@ def worker_engine(
         jitter=random.random,
         gateway=gateway or UnavailableGateway(),
         offload=anyio.to_thread.run_sync,
+        output_check=output_check,
     )
 
 
@@ -659,7 +663,9 @@ async def _serve(settings: WorkerSettings) -> None:
     gateway = worker_gateway(settings, database, etsy.gateway_adapter)
     deployed = {} if vault is None or adapter is None else intake_handlers(database, vault)
     deployed |= fulfillment_handlers(database, None if adapter is None else vault)
-    engine = worker_engine(database, gateway=gateway, handlers=deployed)
+    # A completed run keeps its output only when its automation's contract accepts it (#127).
+    outputs = ContractOutputs(settings.automation_schemas_path)
+    engine = worker_engine(database, gateway=gateway, handlers=deployed, output_check=outputs.check)
     handlers |= outbox_handlers(
         PostgresOutbox(database),
         notification_deliverers(

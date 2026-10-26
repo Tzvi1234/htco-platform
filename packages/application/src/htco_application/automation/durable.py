@@ -104,6 +104,11 @@ class Offload(Protocol):
     def __call__[T](self, work: Callable[[], T], /) -> Awaitable[T]: ...
 
 
+# What a completed run's output may be kept as (#127): the output to store, or None to keep
+# nothing (no contract, or the contract refused it). `ContractOutputs.check` in production.
+type OutputCheck = Callable[[str, Mapping[str, JsonValue]], Mapping[str, JsonValue] | None]
+
+
 async def run_inline[T](work: Callable[[], T]) -> T:
     """Runs store calls in the event loop (tests and in-memory stores)."""
     return work()
@@ -209,6 +214,7 @@ class DurableAutomationEngine:
         gateway: ActionGateway,
         new_id: Callable[[], uuid.UUID] = uuid.uuid7,
         offload: Offload = run_inline,
+        output_check: OutputCheck | None = None,
     ) -> None:
         self._registry = registry
         self._store = store
@@ -218,6 +224,7 @@ class DurableAutomationEngine:
         self._gateway = gateway
         self._new_id = new_id
         self._offload = offload
+        self._output_check = output_check
 
     def definition(self, automation_id: str) -> AutomationDefinition | None:
         return self._registry().automations.get(automation_id)
@@ -367,7 +374,12 @@ class DurableAutomationEngine:
             )
             await self._offload(lambda: self._store.advance(running, [(waiting, change)]))
             return waiting
-        done = running.transition(ExecutionState.SUCCEEDED)
+        kept = (
+            None
+            if self._output_check is None
+            else self._output_check(definition.id, outcome.output)
+        )
+        done = replace(running.transition(ExecutionState.SUCCEEDED), output=kept)
         change = self._change(running, running.state, done.state, worker, now)
         await self._offload(lambda: self._store.advance(running, [(done, change)]))
         return done

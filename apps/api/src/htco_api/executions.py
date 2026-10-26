@@ -54,6 +54,9 @@ class ExecutionChainView(BaseModel):
     status: str
     correlation_id: str
     entries: list[ChainEntryView]
+    # A succeeded run's handler output, checked against its contract (#127): per-run IDs and
+    # counts, for the Owner and Admins; null otherwise.
+    output: dict[str, Any] | None = None
 
 
 def _reader(request: Request) -> ChainReader:
@@ -69,6 +72,7 @@ def _view(chain: ExecutionChain) -> ExecutionChainView:
         id=execution.id, automation_id=execution.automation_id, shop_id=execution.shop_id,
         state=execution.state.value, status=chain.status.value,
         correlation_id=execution.correlation_id,
+        output=None if execution.output is None else dict(execution.output),
         entries=[
             ChainEntryView(
                 kind=e.kind.value, id=e.id, at=e.at, name=e.name, state=e.state,
@@ -102,7 +106,8 @@ def executions_router(*, clock: Callable[[], datetime]) -> APIRouter:
         reader: Annotated[ChainReader, Depends(_reader)],
         organization_id: uuid.UUID | None = None,
     ) -> ExecutionChainView:
-        """In causal order; IDs, states and codes only, never payloads or buyer data."""
+        """In causal order; IDs, states and codes only, never payloads or buyer data. The run's
+        checked output (per-run counts) is shown to the Owner and Admins."""
         try:
             chain = await anyio.to_thread.run_sync(
                 lambda: execution_chain(
