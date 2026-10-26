@@ -13,6 +13,7 @@ from htco_application.access.authentication import AuthContext, Membership
 from htco_application.approvals import ApprovalResumer
 from htco_application.browser_environments import EnvironmentRegistry, MemoryEnvironmentStore
 from htco_application.execution.gateway import ActionOutcome
+from htco_application.kernel import event_payload
 from htco_application.marketplace import MarketplaceRateLimitedError
 from htco_application.status import (
     EXECUTION_STATE_CHANGED,
@@ -71,12 +72,12 @@ async def test_execution__every_state_change_emits_exactly_one_event() -> None:
 
     store = automations.store
     assert len(store.events) == len(store.changes) >= 5
-    assert [e.payload["to_state"] for e in store.events] == [
+    assert [event_payload(e)["to_state"] for e in store.events] == [
         c.to_state.value for c in store.changes
     ]
     assert {e.payload["event_type"] for e in store.events} == {EXECUTION_STATE_CHANGED}
     assert len({e.idempotency_key for e in store.events}) == len(store.events)
-    assert store.events[-1].payload["status"] == StatusKind.SUCCEEDED.value
+    assert event_payload(store.events[-1])["status"] == StatusKind.SUCCEEDED.value
 
 
 @pytest.mark.ac("AC-5.18.2")
@@ -91,7 +92,7 @@ async def test_execution__rejected__the_cancellation_has_its_event() -> None:
         shown_hash=approval.request.request_hash,
     )  # fmt: skip
 
-    assert [e.payload["to_state"] for e in automations.store.events][-1] == "cancelled"
+    assert [event_payload(e)["to_state"] for e in automations.store.events][-1] == "cancelled"
     assert len(automations.store.events) == len(automations.store.changes)
     assert isinstance(ApprovalResumer, type)
 

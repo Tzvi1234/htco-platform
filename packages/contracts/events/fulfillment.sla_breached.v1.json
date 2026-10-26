@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/events/fulfillment.sla_breached.v1.json",
+  "title": "fulfillment.sla_breached.v1",
+  "description": "An order passed its ship-by SLA without tracking. Envelope: SOFTWARE_DESIGN §8.4.",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "fulfillment.sla_breached.v1"
+      ]
+    },
+    "organization_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "shop_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "occurred_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "correlation_id": {
+      "description": "string or null"
+    },
+    "causation_id": {
+      "description": "string or null"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "employee",
+            "automation",
+            "advisor",
+            "system"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "payload_version": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "receipt_id": {
+          "type": "integer"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "integer"
+        },
+        "window": {
+          "type": "integer"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "paid_at": {
+          "type": "string"
+        },
+        "deadline": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "receipt_id",
+        "policy_id",
+        "policy_version",
+        "window",
+        "unit",
+        "paid_at",
+        "deadline"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "event_id",
+    "event_type",
+    "organization_id",
+    "shop_id",
+    "occurred_at",
+    "correlation_id",
+    "causation_id",
+    "idempotency_key",
+    "actor",
+    "payload_version",
+    "payload"
+  ],
+  "additionalProperties": false
+}

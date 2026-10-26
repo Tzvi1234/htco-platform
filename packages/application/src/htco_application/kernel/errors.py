@@ -8,6 +8,10 @@ class JobError(Exception):
     secrets. Any other exception is stored by its type name only."""
 
 
+class DeadLetterError(JobError):
+    """A failure that retrying cannot fix: the outbox message goes to the dead letters at once."""
+
+
 def describe_error(error: BaseException) -> str:
     """The `last_error` kept with a failed job."""
     name = type(error).__name__

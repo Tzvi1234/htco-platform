@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/events/orders.updated.v1.json",
+  "title": "orders.updated.v1",
+  "description": "A stored order changed. Envelope: SOFTWARE_DESIGN §8.4.",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "orders.updated.v1"
+      ]
+    },
+    "organization_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "shop_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "occurred_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "correlation_id": {
+      "description": "string or null"
+    },
+    "causation_id": {
+      "description": "string or null"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "employee",
+            "automation",
+            "advisor",
+            "system"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "payload_version": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "shop_id": {
+          "type": "string"
+        },
+        "receipt_id": {
+          "type": "integer"
+        },
+        "state": {
+          "description": "string or null"
+        },
+        "etsy_updated_at": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "shop_id",
+        "receipt_id",
+        "state",
+        "etsy_updated_at",
+        "source"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "event_id",
+    "event_type",
+    "organization_id",
+    "shop_id",
+    "occurred_at",
+    "correlation_id",
+    "causation_id",
+    "idempotency_key",
+    "actor",
+    "payload_version",
+    "payload"
+  ],
+  "additionalProperties": false
+}

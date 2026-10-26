@@ -19,6 +19,7 @@ import pytest
 from htco_application.automation.durable import Completed
 from htco_application.execution.schema import validate
 from htco_application.jobs import JobError
+from htco_application.kernel import event_payload
 from htco_application.messaging import OutboxMessage
 from htco_application.order_automations import Difference, difference_event
 from htco_application.order_ingest import (
@@ -33,6 +34,7 @@ from htco_domain.automation import TriggerKind
 from htco_domain.incidents import Cause
 from tests.application.test_sla_inspector import Inspector
 from tests.application.test_tracking_sync import Engine
+from tests.event_contracts import assert_event_contract
 from tests.log_capture import capture_logs
 from tests.order_intake_fakes import paid_receipt
 
@@ -89,8 +91,10 @@ def test_a_reconciliation_drift_event_names_its_drift_and_when_it_was_seen() -> 
     plan = plan_ingest(old, None, context, organization_id=ORG, shop_id=SHOP, now=NOW)
 
     [event] = [e for e in plan.events if e.payload["event_type"] == DRIFT_DETECTED]
-    assert event.payload["drift_id"] == str(drift_id(SHOP, RECEIPT, "missing", old.updated_at))
-    assert event.payload["detected_at"] == NOW.isoformat()
+    assert_event_contract(event)
+    facts = event_payload(event)
+    assert facts["drift_id"] == str(drift_id(SHOP, RECEIPT, "missing", old.updated_at))
+    assert facts["detected_at"] == NOW.isoformat()
 
 
 @pytest.mark.ac("AC-6.3.4")
@@ -106,8 +110,10 @@ def test_a_verification_difference_event_names_its_drift_and_when_it_was_seen() 
         detected_at=NOW,
     )
 
-    assert event.payload["drift_id"] == str(drift_id(SHOP, RECEIPT, "totals", receipt.updated_at))
-    assert event.payload["detected_at"] == NOW.isoformat()
+    assert_event_contract(event)
+    facts = event_payload(event)
+    assert facts["drift_id"] == str(drift_id(SHOP, RECEIPT, "totals", receipt.updated_at))
+    assert facts["detected_at"] == NOW.isoformat()
 
 
 # --- The trigger ------------------------------------------------------------------------------

@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/events/catalog.inventory_changed.v1.json",
+  "title": "catalog.inventory_changed.v1",
+  "description": "A listing's inventory changed on Etsy, as re-read after the webhook. Envelope: SOFTWARE_DESIGN §8.4.",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "catalog.inventory_changed.v1"
+      ]
+    },
+    "organization_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "shop_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "occurred_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "correlation_id": {
+      "description": "string or null"
+    },
+    "causation_id": {
+      "description": "string or null"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "employee",
+            "automation",
+            "advisor",
+            "system"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "payload_version": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "listing_id": {
+          "type": "integer"
+        },
+        "state": {
+          "type": "string"
+        },
+        "listing_quantity": {
+          "description": "integer or null"
+        },
+        "etsy_updated_at": {
+          "description": "string or null"
+        },
+        "webhook_event_type": {
+          "type": "string"
+        },
+        "product_id": {
+          "description": "integer or null"
+        },
+        "product_found": {
+          "type": "boolean"
+        },
+        "products": {
+          "type": "integer"
+        },
+        "total_quantity": {
+          "description": "integer or null"
+        },
+        "in_stock": {
+          "description": "boolean or null"
+        }
+      },
+      "required": [
+        "listing_id",
+        "state",
+        "listing_quantity",
+        "etsy_updated_at",
+        "webhook_event_type",
+        "product_id",
+        "product_found",
+        "products",
+        "total_quantity",
+        "in_stock"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "event_id",
+    "event_type",
+    "organization_id",
+    "shop_id",
+    "occurred_at",
+    "correlation_id",
+    "causation_id",
+    "idempotency_key",
+    "actor",
+    "payload_version",
+    "payload"
+  ],
+  "additionalProperties": false
+}

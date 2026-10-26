@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/events/incidents.escalated.v1.json",
+  "title": "incidents.escalated.v1",
+  "description": "An incident moved to escalated (once per incident). Envelope: SOFTWARE_DESIGN §8.4.",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "incidents.escalated.v1"
+      ]
+    },
+    "organization_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "shop_id": {
+      "description": "string or null: the shop, when the event is about one"
+    },
+    "occurred_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "correlation_id": {
+      "description": "string or null"
+    },
+    "causation_id": {
+      "description": "string or null"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "employee",
+            "automation",
+            "advisor",
+            "system"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "payload_version": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "incident_id": {
+          "type": "string"
+        },
+        "dedup_key": {
+          "type": "string"
+        },
+        "cause": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "resource_kind": {
+          "type": "string"
+        },
+        "resource_id": {
+          "type": "string"
+        },
+        "receipt_id": {
+          "description": "integer or null"
+        },
+        "escalated_from": {
+          "type": "string"
+        },
+        "escalated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "incident_id",
+        "dedup_key",
+        "cause",
+        "severity",
+        "resource_kind",
+        "resource_id",
+        "receipt_id",
+        "escalated_from",
+        "escalated_at"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "event_id",
+    "event_type",
+    "organization_id",
+    "shop_id",
+    "occurred_at",
+    "correlation_id",
+    "causation_id",
+    "idempotency_key",
+    "actor",
+    "payload_version",
+    "payload"
+  ],
+  "additionalProperties": false
+}

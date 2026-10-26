@@ -8,8 +8,8 @@ from typing import override
 import pytest
 
 from htco_application.incidents import INCIDENT_OPENED
-from htco_application.kernel import EVENTS_DESTINATION
-from htco_application.messaging import OutboxMessage, PendingDelivery
+from htco_application.kernel import EVENTS_DESTINATION, OutboxMessage, event_payload
+from htco_application.messaging import PendingDelivery
 from htco_application.notifications import (
     EMAIL_DESTINATION,
     NOTIFICATION_REQUESTED,
@@ -35,6 +35,7 @@ from htco_domain.notifications import (
     check_params,
     wants_email,
 )
+from tests.event_contracts import check_if_event
 from tests.notification_fakes import (
     FakeEmail,
     Member,
@@ -298,7 +299,7 @@ class NoticeStore:
         return self.agents
 
     def add(self, message: OutboxMessage, *, now: datetime) -> uuid.UUID:  # noqa: ARG002
-        self.added.append(message)
+        self.added.append(check_if_event(message))
         return uuid.uuid4()
 
 
@@ -312,9 +313,9 @@ async def test_ac_6_4_4_a_sign_in_from_a_new_device_sends_one_email_to_that_user
 
     assert sent == 1
     [event] = notice_store.added
-    assert event.payload["kind"] == "sign_in_new_device"
-    assert event.payload["user_id"] == str(OWNER)
-    assert event.payload["params"] == {"device": "Chrome on Windows"}
+    assert event_payload(event)["kind"] == "sign_in_new_device"
+    assert event_payload(event)["user_id"] == str(OWNER)
+    assert event_payload(event)["params"] == {"device": "Chrome on Windows"}
     # The worker turns the request into one notification and one email for that user only.
     store = members()
     await RequestedNotifications(NotificationService(store, clock=lambda: NOW)).handle(event)
@@ -382,7 +383,8 @@ def test_device_families_and_requests() -> None:
         NotificationRequest(ORG, NotificationKind.SIGN_IN_NEW_DEVICE, "k")
     with pytest.raises(UnsafeParameter):
         notification_requested(
-            NotificationRequest(ORG, NotificationKind.SHOP_CONNECTED, "k", {"name": FAKE_BUYER})
+            NotificationRequest(ORG, NotificationKind.SHOP_CONNECTED, "k", {"name": FAKE_BUYER}),
+            now=NOW,
         )
 
 

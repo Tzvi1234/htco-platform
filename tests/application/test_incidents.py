@@ -17,6 +17,7 @@ from htco_application.incidents import (
     drift_detection,
     order_resource,
 )
+from htco_application.kernel import event_payload
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.incidents import (
     Cause,
@@ -116,7 +117,7 @@ async def test_ac_6_3_2_evidence_resolves_through_verifying_with_the_evidence_re
     ]
     assert store.steps[-1].evidence == EVIDENCE
     [event] = store.events.of(INCIDENT_RESOLVED)
-    assert event.payload["evidence_reference"] == "t-1"
+    assert event_payload(event)["evidence_reference"] == "t-1"
 
 
 @pytest.mark.ac("AC-6.3.2")
@@ -183,10 +184,10 @@ async def test_an_escalation_is_announced_once_with_what_it_was() -> None:
 
     [event] = store.events.of(INCIDENT_ESCALATED)
     assert event.idempotency_key == f"{INCIDENT_ESCALATED}:{incident.id}"
-    assert event.payload["incident_id"] == str(incident.id)
-    assert event.payload["severity"] == "medium"
-    assert event.payload["escalated_from"] == "detected"
-    assert event.payload["receipt_id"] == 51
+    assert event_payload(event)["incident_id"] == str(incident.id)
+    assert event_payload(event)["severity"] == "medium"
+    assert event_payload(event)["escalated_from"] == "detected"
+    assert event_payload(event)["receipt_id"] == 51
 
 
 async def test_other_steps_announce_no_escalation() -> None:

@@ -18,12 +18,8 @@ from htco_application.idempotency import (
     request_fingerprint,
 )
 from htco_application.jobs import JobSpec
-from htco_application.messaging import (
-    OUTBOX_DELIVERY_JOB,
-    InboxEvent,
-    OutboxMessage,
-    RecordedEvent,
-)
+from htco_application.kernel import OutboxMessage
+from htco_application.messaging import OUTBOX_DELIVERY_JOB, InboxEvent, RecordedEvent
 from htco_domain.jobs import FailurePlan, JobState
 from htco_persistence.database import Database, tenant_scope
 from htco_persistence.idempotency import PostgresIdempotencyStore
