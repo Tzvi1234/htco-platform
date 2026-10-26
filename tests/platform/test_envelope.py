@@ -219,3 +219,46 @@ def test_reprs__show_key_ids_but_never_keys_or_plaintext() -> None:
 def test_envelope__is_a_plain_value() -> None:
     envelope = Envelope(key_id="k", wrapped_key=b"w", ciphertexts=(b"c",))
     assert envelope == Envelope(key_id="k", wrapped_key=b"w", ciphertexts=(b"c",))
+
+
+# Sealed blobs (slice 8A.1): one binary value per record, such as a browser profile archive.
+
+ARCHIVE = b"\x1f\x8b profile archive bytes \x00\xff" * 64
+
+
+def test_seal_blob__opens_with_its_context_and_never_holds_the_plaintext() -> None:
+    sealer = EnvelopeSealer(ring_a())
+    blob = sealer.seal_blob(ARCHIVE, context=b"org|shop|env")
+    assert ARCHIVE[:32] not in blob
+    assert sealer.open_blob(blob, context=b"org|shop|env") == ARCHIVE
+    assert sealer.blob_key_id(blob) == "key-a"
+
+
+def test_seal_blob__fails_in_another_context_tampered_or_truncated() -> None:
+    sealer = EnvelopeSealer(ring_a())
+    blob = sealer.seal_blob(ARCHIVE, context=b"org|shop-1|env")
+    with pytest.raises(SealingError):
+        sealer.open_blob(blob, context=b"org|shop-2|env")
+    tampered = bytearray(blob)
+    tampered[-1] ^= 0x01
+    with pytest.raises(SealingError):
+        sealer.open_blob(bytes(tampered), context=b"org|shop-1|env")
+    for broken in (b"", blob[:5], b"\x09" + blob[1:], blob[:40]):
+        with pytest.raises(SealingError):
+            sealer.open_blob(broken, context=b"org|shop-1|env")
+
+
+def test_seal_blob__opens_after_rotation_with_the_previous_key() -> None:
+    blob = EnvelopeSealer(ring_a()).seal_blob(ARCHIVE, context=b"c")
+    rotated = EnvelopeSealer(KeyRing(("key-b", KEY_B), [("key-a", KEY_A)]))
+    assert rotated.open_blob(blob, context=b"c") == ARCHIVE
+    assert rotated.blob_key_id(rotated.seal_blob(ARCHIVE, context=b"c")) == "key-b"
+
+
+@pytest.mark.parametrize("key_id", [b"\xff\xfe", b"bad id!"], ids=["not-ascii", "not-a-key-id"])
+def test_open_blob__refuses_a_malformed_key_id(key_id: bytes) -> None:
+    sealer = EnvelopeSealer(ring_a())
+    blob = sealer.seal_blob(ARCHIVE, context=b"c")
+    rest = blob[2 + blob[1] :]
+    with pytest.raises(SealingError):
+        sealer.open_blob(bytes([blob[0], len(key_id)]) + key_id + rest, context=b"c")

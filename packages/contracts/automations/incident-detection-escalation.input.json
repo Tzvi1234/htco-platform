@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ht-co.app/contracts/automations/incident-detection-escalation.input.json",
   "title": "Incident Detection & Escalation input",
-  "description": "The inspect mode (schedule) or a drift recorded by reconciliation; identifiers only.",
+  "description": "The inspect or reviews mode (schedule) or a drift recorded by reconciliation; identifiers only.",
   "type": "object",
   "properties": {
-    "mode": {"type": "string", "enum": ["inspect"]},
+    "mode": {"type": "string", "enum": ["inspect", "reviews"]},
     "drift": {
       "type": "object",
       "properties": {

@@ -183,9 +183,10 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `shop_browser_environments` | One per shop (optional; created in `20261024200000`): status (`NOT_CONFIGURED`, `PROVISIONING`, `READY`, `LOGIN_REQUIRED`, `DEGRADED`, `SUSPENDED`, `FAILED`; created `PROVISIONING`, every change checked against the transition table by a trigger), consent (text version, user, time, address hash; all or none), profile storage key and key ID (8A), last health, last session, challenge count; no proxy or fingerprint columns (ADR-0020). RLS: Owner and Admin read their organization's rows (no consent or profile columns); the worker reads its job's organization's statuses. Enabled actions follow with the scope flags (8A) | 5 (table and state machine), 8A |
+| `shop_browser_environments` | One per shop (optional; created in `20261024200000`): status (`NOT_CONFIGURED`, `PROVISIONING`, `READY`, `LOGIN_REQUIRED`, `DEGRADED`, `SUSPENDED`, `FAILED`; created `PROVISIONING`, every change checked against the transition table by a trigger), consent (text version, user, time, address hash; all or none), profile storage key and key ID (8A), last health, last session, challenge count, error count (failed sessions, 8A.2); no proxy or fingerprint columns (ADR-0020). RLS: Owner and Admin read their organization's rows (no consent or profile columns); the worker reads its job's organization's statuses. Enabled actions follow with the scope flags (8A) | 5 (table and state machine), 8A |
+| `browser_profile_archives` | One sealed profile archive per environment (created in `20261025170000`): environment, shop and organization (composite foreign key to the environment), key ID, the sealed bytes (1 byte to 25 MiB), sealed time. Only `htco_browser` reads or writes it, in its organization; no client role and not the agent-worker | 8A |
 | `browser_environment_events` | Append-only (created in `20261024200000`): `transition` rows (from, to, actor, reason, correlation ID; only the table's edges) and `health` rows (ok, problem codes) | 5, 8A |
-| `browser_sessions` | Each session: environment, execution, purpose, recipe, started and ended, outcome, preflight report, challenge kind | 8A |
+| `browser_sessions` | Each session (created in `20261025190000`): environment, shop and organization (composite foreign key to the environment), purpose code, started and ended, outcome (`running`, `succeeded`, `failed` with a failure code, `deferred`), final once ended. The browser role writes its organization's; Owner and Admin read theirs. Execution, recipe, preflight report and challenge kind follow in 8A.3 to 8A.5 | 8A |
 | `browser_artifacts` | Downloaded exports and challenge screenshots (by storage key and hash; screenshots kept 7 days) | 8A |
 | `browser_scope_flags` | Mirror of [etsy-automation-approval.md](etsy-automation-approval.md): action ID, scope version, flag state, changed by | 8A |
 | `shop_credentials` (`private`) | Sealed Etsy password per environment (envelope encryption with the token vault's key ring; DC0) | 8A |
@@ -198,8 +199,12 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 | Table | Purpose | Phase |
 |---|---|---|
 | `model_catalog` | Verified models, prices with as-of dates, health, eval scores | 9 |
-| `routing_decisions`, `model_usage` | Routing decisions (employee, policy version, tier, model, reason) and token and cost logs | 9 |
+| `model_catalog_aliases` | Stable names (`default-advanced`, `default-embedding`), each pointing to exactly one catalog row, with an as-of date and a source; changed only by pull request ([ADR-0023](../adr/0023-routing-modes-and-difficulty-assessment.md)) | 9 |
+| `employee_routing_settings` | The Owner's current routing mode per employee (`routed` or `pinned`, alias and fallback list), set only by the Owner and carried into each new profile version | 9 |
+| `routing_decisions`, `model_usage` | Routing decisions (employee, policy version, mode, alias, tier, model, difficulty and its source, the clamp and pin flags, reason) and token and cost logs | 9 |
 | `decision_records` | Decision Advisor attempts: question, provider, outcome, value, latency, cost | 9 |
+| `knowledge_sources` | One row per ingested knowledge source: organization, shop, kind (`shop_policy`, `faq`, `listing`, `product`, `approved_reply`), source reference, content hash, version, status, the conversation an approved reply derives from, `retain_until`. RLS by organization and shop ([ADR-0024](../adr/0024-knowledge-base-and-retrieval.md)) | 9 |
+| `knowledge_chunks` | Redacted chunk text, language, `tsvector`, `vector(n)` embedding with its alias and model, position; HNSW and GIN indexes; RLS by organization and shop; never DC1 or DC2 data | 9 |
 
 ### Activity, supervision and improvement
 
@@ -269,7 +274,7 @@ Data classes are written DC0–DC4 so they are never confused with requirement p
 
 | Class | Examples | Where | Default handling |
 |---|---|---|---|
-| DC0 Secret | OAuth tokens, API keys, session tokens, PKCE verifiers, shop passwords, TOTP secrets and codes, browser profiles (cookies) | `shop_integrations`, `web_sessions`, `oauth_authorizations`, `shop_credentials`, `totp_accounts`, sealed profile archives | Application-level encryption with the one key ring; never logged, never shown (a TOTP code only on the code view), never sent to a model |
+| DC0 Secret | OAuth tokens, API keys, session tokens, PKCE verifiers, shop passwords, TOTP secrets and codes, browser profiles (cookies) | `shop_integrations`, `web_sessions`, `oauth_authorizations`, `shop_credentials`, `totp_accounts`, sealed profile archives | Application-level encryption with the one key ring (browser profiles: the browser worker's own ring, ADR-0020 §8); never logged, never shown (a TOTP code only on the code view), never sent to a model |
 | DC1 Buyer contact | Buyer name, shipping address, email (if granted) | `orders`, `customers` | Masked in lists and logs; visible only to roles that need it |
 | DC2 Buyer content | Messages, emails, attachments | `customer_messages`, `email_*` | Untrusted; masked before model calls unless needed |
 | DC3 User account | Team members' names and emails | `user_profiles` | Visible inside the organization |

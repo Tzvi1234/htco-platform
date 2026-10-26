@@ -54,3 +54,38 @@ def test_dockerfile__builds_with_a_fixed_uv() -> None:
                       dockerfile, re.MULTILINE)  # fmt: skip
     assert image is not None, "UV_IMAGE must be a version pinned by digest"
     assert _version(image.group(1)) >= FIXED
+
+
+# setup-uv verifies the downloaded uv archive against `checksum` (#126). The digests come from
+# the GitHub release API (`gh api repos/astral-sh/uv/releases/tags/<version>`, field `digest`)
+# and must change together with `version:` in every workflow; every job runs on ubuntu x86_64.
+UV_LINUX_X86_64_SHA256 = {
+    "0.13.5": "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f",
+}
+
+
+def _setup_uv_steps() -> list[tuple[str, str, dict[str, object]]]:
+    """(workflow:job, runs-on, the step's `with`) for every `astral-sh/setup-uv` step."""
+    documents = {
+        workflow.name: yaml.safe_load(workflow.read_text(encoding="utf-8"))
+        for workflow in sorted((REPO_ROOT / ".github/workflows").glob("*.yml"))
+    }
+    return [
+        (f"{workflow}:{name}", str(job.get("runs-on", "")), dict(step.get("with") or {}))
+        for workflow, document in documents.items()
+        for name, job in (document.get("jobs") or {}).items()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).startswith("astral-sh/setup-uv")
+    ]
+
+
+@pytest.mark.parametrize(("job", "runs_on", "settings"), _setup_uv_steps())
+def test_workflows__verify_the_uv_archive_against_a_pinned_checksum(
+    job: str, runs_on: str, settings: dict[str, object]
+) -> None:
+    assert re.fullmatch(r"ubuntu-[0-9.]+", runs_on), f"{job}: the pin is for ubuntu x86_64 only"
+    version = str(settings["version"])
+    assert version in UV_LINUX_X86_64_SHA256, f"{job}: no known digest for uv {version}"
+    assert settings.get("checksum") == UV_LINUX_X86_64_SHA256[version], (
+        f"{job}: setup-uv must verify uv {version} against its pinned SHA-256"
+    )

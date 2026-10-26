@@ -28,13 +28,20 @@ from htco_application.access.management import (
     InvitedUser,
     InviteeAlreadyRegisteredError,
 )
-from htco_application.automation.durable import DurableAutomationEngine
+from htco_application.automation.deployed import WORKER_AUTOMATIONS
+from htco_application.automation.durable import (
+    DurableAutomationEngine,
+    DurableExecutionStore,
+    HandlerContext,
+    HandlerOutcome,
+)
 from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_tokens import VaultAccessTokenProvider
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WebhookSecret, WindowLimiter
 from htco_application.execution.gateway import UnavailableGateway
 from htco_application.incidents import IncidentService
+from htco_application.jobs import JobError
 from htco_application.marketplace import MarketplacePort
 from htco_application.mfa import Enrollment, Factor
 from htco_application.notifications import SecurityNotices
@@ -574,27 +581,38 @@ def _etsy_wiring(
     return etsy, adapter, checks, dashboard
 
 
+async def _runs_on_the_worker(ctx: HandlerContext) -> HandlerOutcome:
+    """The API's placeholder for a worker-deployed handler: the API creates executions and
+    jobs, and the worker runs them; one never runs here."""
+    raise JobError(f"{ctx.automation_id} runs on the worker, never in the API")
+
+
+def api_engine(
+    registry: Callable[[], Registry], store: DurableExecutionStore
+) -> DurableAutomationEngine:
+    """The API's create-only engine: the automations the worker deploys (`WORKER_AUTOMATIONS`)
+    pass its "deployed" check, so a user's trigger of a ready one (the counters rebuild, 5.11
+    step 2b) or an audited admin retry becomes a job for the worker; a draft or undeployed one
+    is still refused before anything is written."""
+    return DurableAutomationEngine(
+        registry,
+        store,
+        dict.fromkeys(WORKER_AUTOMATIONS, _runs_on_the_worker),
+        clock=lambda: datetime.now(UTC),
+        jitter=random.random,
+        gateway=UnavailableGateway(),
+    )
+
+
 def automation_services(database: Database, *, enabled: bool) -> AutomationServices:
-    """The catalog and executions from the database; the engine only when enabled. No handler is
-    deployed yet (no automation is ready), so every trigger is refused until one is (5.11)."""
+    """The catalog and executions from the database; the engine only when enabled."""
     catalog = PostgresAutomationCatalog(database)
     store = PostgresExecutionStore(database)
 
     def registry() -> Registry:
         return registry_from_rows(catalog.current())
 
-    engine = (
-        DurableAutomationEngine(
-            registry,
-            store,
-            {},
-            clock=lambda: datetime.now(UTC),
-            jitter=random.random,
-            gateway=UnavailableGateway(),
-        )
-        if enabled
-        else None
-    )
+    engine = api_engine(registry, store) if enabled else None
     return AutomationServices(
         definitions=lambda: list(registry().automations.values()),
         executions=PostgresExecutionReader(database),

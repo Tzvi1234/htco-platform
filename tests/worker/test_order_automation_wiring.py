@@ -1,6 +1,7 @@
 """The worker deploys the three order automations' handlers and lets order events start them
 (slice 5.11); the engine still refuses each until the owner activates it."""
 
+from htco_application.automation.deployed import WORKER_AUTOMATIONS
 from htco_application.etsy_webhooks import ORDER_INTAKE
 from htco_application.order_automations import (
     COUNTED_EVENTS,
@@ -14,6 +15,7 @@ from htco_application.sla_inspector import DriftIncidents
 from htco_persistence.database import Database
 from htco_worker.main import (
     fulfillment_event_subscribers,
+    fulfillment_handlers,
     intake_handlers,
     order_event_subscribers,
     worker_engine,
@@ -41,3 +43,12 @@ def test_a_drift_event__is_subscribed_to_start_incident_detection() -> None:
 
     assert set(subscribers) == {DRIFT_DETECTED}
     assert all(isinstance(s, DriftIncidents) for s in subscribers.values())
+
+
+def test_worker_automations__exactly_the_handlers_the_worker_deploys() -> None:
+    """The API accepts triggers for these (and only these) and leaves the running to the worker:
+    one shared list, so the two processes can never disagree (#157)."""
+    deployed = set(intake_handlers(Database(DATABASE), object()))  # type: ignore[arg-type]
+    deployed |= set(fulfillment_handlers(Database(DATABASE), object()))  # type: ignore[arg-type]
+
+    assert deployed == WORKER_AUTOMATIONS

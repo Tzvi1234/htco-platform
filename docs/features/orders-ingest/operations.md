@@ -50,7 +50,7 @@ Call budget (placeholder `etsy:app` 5,000 a day): calls per run times runs per d
 4. **Verify:** new deliveries answer 204. Reconciliation (5.5) fills any gap meanwhile.
 
 ### Orders arrive by webhook but are not stored
-Etsy Order Intake is not active until the owner approves it (5.11): the worker logs `etsy.webhook_order_not_ingested`. That is expected; reconciliation keeps the store complete.
+Etsy Order Intake is active since #157 (5.11). If it is back to `draft` (a rollback), the worker logs `etsy.webhook_order_not_ingested`; that is expected, and reconciliation keeps the store complete.
 
 ### Etsy Order Intake fails or dead-letters (slice 5.11)
 1. **Check:** Admin › Health: the Automations row (`etsy-order-intake`: success rate, retries, dead letters) and the dead letters' last error. Open the execution for its chain (`GET /v1/executions/{id}`).
@@ -72,7 +72,7 @@ Etsy Order Intake is not active until the owner approves it (5.11): the worker l
 
 ## Activation checklist (slice 5.11, for the owner)
 
-The three automations are built, tested and **`readiness = "draft"`**. The engine refuses their triggers (logged, never retried in a loop), and the API's order sync is the fallback. Activation is the owner's approval (ADR-0012 rule 2); this list is what follows it, in this order:
+The owner approved the activation (ADR-0012 rule 2), and #157 took steps 2 to 4: the three automations are **`readiness = "ready"`**, the API creates executions for the worker (`HTCO_AUTOMATIONS_ENABLED`), and the worker owns the order sync and reconciliation. Before that they were `draft`: the engine refused their triggers (logged, never retried in a loop) and the API's order sync was the fallback. The list, in order:
 
 1. **Approve.** The owner approves Etsy Order Intake, Order Deduplication & Verification and Product Sales Counters.
 2. **Ready.** In one reviewed pull request, set `readiness = "ready"` in `registry/automations/etsy-order-intake.toml`, `order-dedup-verification.toml` and `product-sales-counters.toml`. Every section is already `defined` (the loader refuses `ready` otherwise). After it merges, the migrate workflow's `htco registry sync --automations --apply` stores them.

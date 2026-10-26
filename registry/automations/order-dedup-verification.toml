@@ -1,5 +1,5 @@
 # Order Deduplication & Verification. Automation specification (ADR-0013). All sections
-# defined (slice 5.11); readiness stays "draft" until the owner approves the activation.
+# defined (slice 5.11); readiness is "ready": the owner approved the activation (ADR-0012 rule 2).
 id = "order-dedup-verification"
 name = "Order Deduplication & Verification"
 version = 1
@@ -12,7 +12,7 @@ approval_required = false
 ai_steps = []
 # It re-reads the receipt through the Action Gateway (GET-only) to compare it with the store.
 allowed_actions = ["etsy.receipts.read"]
-readiness = "draft"
+readiness = "ready"
 activation_phase = 5
 
 [retry]
@@ -70,7 +70,7 @@ text = "120 s per attempt; within a minute of the ingest at p95."
 
 [specification.permissions]
 status = "defined"
-text = "Runs as the htco_worker role inside its job's organization; reads the stored order's version, grand total and items, writes sync_drifts and the outbox; its only action is etsy.receipts.read."
+text = "Runs as the htco_worker role inside its job's organization; reads the stored order's version, grand total and items, writes sync_drifts and the outbox; its only action is etsy.receipts.read, whose order history form it receives without the buyer's name, address and tracking codes, which it does not need (AUD-06)."
 
 [specification.audit]
 status = "defined"
