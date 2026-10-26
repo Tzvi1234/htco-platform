@@ -153,12 +153,13 @@ services:
       - key: HTCO_ETSY_REDIRECT_URI
         scope: RUN_TIME
         value: https://dash.ht-co.app/integrations/etsy/callback
-      # Etsy webhooks (slice 5.3): `POST /webhooks/etsy`, off until the owner registers the endpoint
-      # in the Etsy developer portal. The signing secret comes from the GitHub secret
-      # ETSY_WEBHOOK_SECRET (docs/features/orders-ingest/operations.md); blank means unset.
+      # Etsy webhooks (slice 5.3): `POST /webhooks/etsy`, on since the owner registered the endpoint
+      # in the Etsy developer portal (activation step 5 of 5.11). The signing secret comes from the
+      # GitHub secret ETSY_WEBHOOK_SECRET (docs/features/orders-ingest/operations.md); blank means
+      # unset. Rollback: "false" (reconciliation keeps the store complete meanwhile).
       - key: HTCO_ETSY_WEBHOOKS_ENABLED
         scope: RUN_TIME
-        value: "false"
+        value: "true"
       - key: HTCO_ETSY_WEBHOOK_SECRET
         scope: RUN_TIME
         type: SECRET
