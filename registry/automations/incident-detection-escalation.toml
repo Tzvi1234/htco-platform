@@ -41,7 +41,7 @@ text = "The shop belongs to the execution's organization; a job that names no sh
 
 [specification.steps]
 status = "defined"
-text = "Read the organization's SLA policies and the shop's paid orders awaiting tracking; pick each order's most specific policy (no row: the built-in default, htco_domain.fulfillment.DEFAULT_WINDOW_DAYS business days) and, strictly past its deadline, open one tracking_missing incident with its first incident_events row, incidents.opened.v1 and fulfillment.sla_breached.v1 in one transaction. Follow up the open incidents: resolve one whose order closed (cancelled or refunded), and move one older than its severity's limit to escalated (note age_over_severity_limit). Raise the ship-by warnings of slice 6.9. The outbox subscriber turns incidents.opened.v1 and incidents.resolved.v1 into one in-app notification per Owner and Admin, and one email each (Resend, off until the owner's DNS: logged meanwhile). An escalation changes the incident's state only; it notifies nobody yet."
+text = "Read the organization's SLA policies and the shop's paid orders awaiting tracking; pick each order's most specific policy (no row: the built-in default, htco_domain.fulfillment.DEFAULT_WINDOW_DAYS business days) and, strictly past its deadline, open one tracking_missing incident with its first incident_events row, incidents.opened.v1 and fulfillment.sla_breached.v1 in one transaction. Follow up the open incidents: resolve one whose order closed (cancelled or refunded), and move one older than its severity's limit to escalated (note age_over_severity_limit). Raise the ship-by warnings of slice 6.9. The outbox subscriber turns incidents.opened.v1 and incidents.resolved.v1 into one in-app notification per Owner and Admin; an opening also sends one email each by default (a resolution does not, and a recipient's preferences can turn the email off; Resend is off until the owner's DNS: logged meanwhile). An escalation changes the incident's state only; it notifies nobody yet."
 
 [specification.output_schema]
 status = "defined"
@@ -81,7 +81,7 @@ text = "tests/application/test_sla_inspector.py (AC-6.2.1 and 6.2.2; inspecting 
 
 [specification.recovery]
 status = "defined"
-text = "Runbooks: docs/features/incidents/operations.md and docs/features/notifications/operations.md. To stop it, set readiness back to draft in this file (the engine refuses every trigger of a draft automation); taking fulfillment.inspect out of HTCO_WORKER_SCHEDULES stops the schedule; an incident opened wrongly is resolved by hand with a note (POST /v1/incidents/{incident_id}/transitions; the incident center UI is slice 6.5); retry a dead letter from Admin › Health; an email that failed for good is visible on its delivery."
+text = "Runbooks: docs/features/incidents/operations.md and docs/features/notifications/operations.md. To stop it, set readiness back to draft in this file (the engine refuses every trigger of a draft automation); taking fulfillment.inspect out of HTCO_WORKER_SCHEDULES stops the schedule; an incident resolves only on evidence: it resolves itself once its order closes (cancelled or refunded) or its tracking appears, and a person moves it only along its next states (POST /v1/incidents/{incident_id}/transitions refuses resolved with 409 evidence-required); an incident opened wrongly needs an admin's data fix until a dismiss step exists; retry a dead letter from Admin › Health; an email that failed for good is visible on its delivery."
 
 [specification.approvals]
 status = "defined"
