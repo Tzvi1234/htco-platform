@@ -141,7 +141,7 @@ At the end of every phase: re-read this page, add new elements and threats, conf
 
 | Asset or element | Threat | Control | Phase |
 |---|---|---|---|
-| Browser profile (cookies, sessions) | Theft gives a live Etsy session | Sealed at rest under the browser worker's own key ring, bound to its organization, shop and environment; kept in `app.browser_profile_archives`, which only the `htco_browser` role reaches (no Storage key in the worker); unpacked only in tmpfs for one session and wiped after it; the role has no right on `shop_integrations` or any token | 8A (8A.1 built) |
+| Browser profile (cookies, sessions) | Theft gives a live Etsy session | Sealed at rest under the browser worker's own key ring, bound to its organization, shop and environment; kept in `app.browser_profile_archives`, which only the `htco_browser` role reaches (no Storage key in the worker); unpacked only in tmpfs for one session and wiped after it; the role has no right on `shop_integrations` or any token; the browser worker logs in as its own role (a member of `htco_browser` only, password set out of band), never as `postgres` with `set role`, so a compromised browser process cannot `reset role` | 8A (8A.1 built) |
 | Shop password and TOTP secret | Exposure lets an attacker sign in as the shop | Vault sealing with associated data; grants bound to one execution; never in prompts, logs or tools | 8A, 8B |
 | TOTP code view | Shoulder-surfing, scraping by malware in the owner's browser | Step-up, per-period fetch, `no-store`, rate limits, audit | 8B |
 | Browser agent | Prompt injection from Etsy pages, buyer messages or partner sites | Recipe allowlists, quoted page content, schema-validated outputs, no secret in model input | 8A |
