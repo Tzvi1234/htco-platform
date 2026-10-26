@@ -286,6 +286,7 @@ These are unchanged:
     - the CDP endpoint, kept to a pipe or loopback inside the worker.
   - One Chromium build for the whole fleet means an update cannot be staged shop by shop. The contract suite, the canary and the kept pre-update archives cover that.
   - A shop's language sets its `Accept-Language`, which Etsy sees. It is true: the shop really works in that language.
+  - Not adopted now: per-shop container isolation, one container per shop's sessions (owner, 2026-10-26). It remains a possible later hardening option. Today shops are separated by their own profiles, locks, configuration and egress inside the browser worker.
 - **Follow-ups:**
   - 8A.2a: the contract, `ManagedChromiumProvider`, the import contracts and the async ports;
   - 8A.2b: configuration profiles and the pinned Chromium;
