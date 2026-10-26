@@ -19,7 +19,7 @@
 - [ ] 6.6 Guarded shipment write
 - [ ] 6.7 Fulfillment automations activated
 - [ ] 6.8 Owner-triggered fulfillment writes (receipt and shipment tools)
-- [ ] 6.9 Ship-by SLA, holiday calendar and low-review alerts (deterministic). Ship-by and stock alerts built on the 6.4 notification path (migration `20261025120000_fulfillment_alerts.sql`, pgTAP `26`); the holidays come from the shop's SLA-policy calendar until `etsy.holiday_preferences` is read; low-review alerts (AC-6.9.2) still open
+- [ ] 6.9 Ship-by SLA, holiday calendar and low-review alerts (deterministic). Ship-by and stock alerts built on the 6.4 notification path (migration `20261025120000_fulfillment_alerts.sql`, pgTAP `26`); the holidays come from the shop's SLA-policy calendar until `etsy.holiday_preferences` is read; low-review alerts (AC-6.9.2, #108): Incident Detection's hourly `reviews` mode reads `etsy.reviews.read` (R0, GET) through the gateway and alerts each review of 3 stars or fewer once, with its listing and order; no migration
 - [ ] 6.10 AutoVA tracking relay (copy tracking from AutoVA to Etsy)
 
 Slices 6.1 to 6.4 are built as two automations on the engine of [Phase 5](phase-05-orders-ingest.md): **Tracking Synchronization** (slice 6.1) and **Incident Detection & Escalation** (slices 6.2 to 6.4). Slice 6.7 completes their specifications and activates them.

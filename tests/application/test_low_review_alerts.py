@@ -79,6 +79,8 @@ class ScriptedGateway:
 
 def handler(
     orders: dict[int, int] | None = None,
+    *,
+    slept: list[float] | None = None,
 ) -> tuple[IncidentDetection, MemoryNotificationStore]:
     sla = MemorySlaStore(MemoryTrackingStore())
     sla.transactions[SHOP] = dict(orders or {})
@@ -88,8 +90,16 @@ def handler(
         IncidentService(MemoryIncidentStore(), clock=lambda: NOW),
         clock=lambda: NOW,
         alerts=NotificationService(notes, clock=lambda: NOW),
+        sleep=_recorder(slept if slept is not None else []),
     )
     return detection, notes
+
+
+def _recorder(slept: list[float]) -> Any:
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    return sleep
 
 
 def context(gateway: Any, *, shop: uuid.UUID | None = SHOP) -> HandlerContext:
@@ -155,12 +165,13 @@ async def test_a_deferred_read_raises_a_rate_limit_with_the_wait() -> None:
     detection, notes = handler()
     deferred = ActionResult(
         execution_id=uuid.uuid7(), outcome=ActionOutcome.DEFERRED, attempts=0,
-        error_code="rate_limited", retry_at=NOW + timedelta(seconds=9),
+        error_code="rate_limited", retry_at=NOW + timedelta(seconds=90),
     )  # fmt: skip
 
+    # Longer than the scan waits itself (a short one is waited out: see below).
     with pytest.raises(MarketplaceRateLimitedError) as raised:
         await detection(context(ScriptedGateway([deferred])))
-    assert raised.value.retry_after_seconds == 9
+    assert raised.value.retry_after_seconds == 90
     assert notes.rows == {}
 
 
@@ -303,3 +314,43 @@ async def test_paging_stops_at_the_daily_budget_and_says_so() -> None:
     assert isinstance(outcome, Completed)
     assert len(gateway.requests) == MAX_PAGES
     assert outcome.output["truncated"] is True
+
+
+def deferred_until(seconds: float) -> ActionResult:
+    return ActionResult(
+        execution_id=uuid.uuid7(), outcome=ActionOutcome.DEFERRED, attempts=0,
+        error_code="rate_limited", retry_at=NOW + timedelta(seconds=seconds),
+    )  # fmt: skip
+
+
+async def test_a_short_deferral_mid_scan_waits_and_resumes_the_same_page() -> None:
+    """Codex review of #108: the scan keeps its progress; it never restarts at page one."""
+    slept: list[float] = []
+    detection, notes = handler(slept=slept)
+    first = [review(50_000 + n, 5) for n in range(100)]
+    last = [review(60_000, 1, listing=760), *[review(60_001 + n, 5) for n in range(20)]]
+    gateway = ScriptedGateway([page_of(first, 221), deferred_until(2), page_of(last, 221)])
+
+    outcome = await detection(context(gateway))
+
+    assert isinstance(outcome, Completed)
+    assert [r.input["offset"] for r in gateway.requests] == [0, 100, 100]
+    assert slept == [2.0]
+    assert outcome.output["low_review_alerts"] == 1
+    [row] = notes.rows.values()
+    assert row.params["listing_id"] == "760"
+
+
+async def test_a_long_deferral_alerts_what_it_read_before_waiting_for_the_retry() -> None:
+    """The reviews already read raise their alerts; the retry (at the gateway's time) re-reads
+    and the dedup key keeps each alert to one."""
+    detection, notes = handler()
+    first = [review(70_000, 2, listing=770), *[review(70_001 + n, 5) for n in range(99)]]
+    gateway = ScriptedGateway([page_of(first, 250), deferred_until(3600)])
+
+    with pytest.raises(MarketplaceRateLimitedError) as raised:
+        await detection(context(gateway))
+
+    assert raised.value.retry_after_seconds == 3600
+    [row] = notes.rows.values()
+    assert row.params["listing_id"] == "770"

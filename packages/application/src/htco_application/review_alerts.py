@@ -8,8 +8,9 @@ order. The key is the review's transaction, so a review read again in the next h
 The review's text (the buyer's words) never reaches HTCO's tables: the channel leaves it out.
 """
 
+import asyncio
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
@@ -29,8 +30,20 @@ PAGE = 100
 # Pages until the window's reviews run out (Codex review of #108). The bound (SECURITY GATE item
 # 9) is the app's whole daily Etsy budget (5000 calls, `etsy:app`): no run could read further.
 MAX_PAGES = 50
+# A deferral this short (the per-second budget) is waited out inside the scan, a few times.
+MAX_INLINE_WAIT = 10.0
+MAX_INLINE_WAITS = 10
 
 type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
+
+
+class _DeferredError(Exception):
+    """The gateway deferred a read: wait `wait` seconds (its `retry_at`)."""
+
+    def __init__(self, wait: float, code: str) -> None:
+        super().__init__(f"deferred for {wait:.0f} s ({code})")
+        self.wait = wait
+        self.code = code
 
 
 class ReviewOrders(Protocol):
@@ -41,6 +54,10 @@ class ReviewOrders(Protocol):
         ...
 
 
+async def _sleep(seconds: float) -> None:
+    await asyncio.sleep(seconds)
+
+
 async def low_review_alerts(  # noqa: PLR0913 - the execution and its collaborators
     ctx: HandlerContext,
     shop_id: uuid.UUID,
@@ -49,24 +66,60 @@ async def low_review_alerts(  # noqa: PLR0913 - the execution and its collaborat
     alerts: NotificationService,
     offload: Offload,
     clock: Callable[[], datetime],
+    sleep: Callable[[float], Awaitable[None]] = _sleep,
 ) -> dict[str, JsonValue]:
+    """Page by page, each page's low reviews alerted as it arrives (Codex review of #108): a
+    deferral never throws away what was read. A short one (the shared per-second budget) is
+    waited out inside the scan and the same page read again; a long one (the daily budget) ends
+    the run with the gateway's retry time, and the retry's re-read adds no second alert."""
     start = clock() - REVIEW_LOOKBACK
     since = int(start.timestamp())
-    reviews: list[Mapping[str, JsonValue]] = []
+    read = raised = waits = 0
     truncated = False
-    for page in range(MAX_PAGES + 1):
+    page = 0
+    while True:
         if page == MAX_PAGES:
             truncated = True  # said in the output, never silent
             break
-        output = await _read(ctx, shop_id, since=since, offset=page * PAGE, clock=clock)
+        try:
+            output = await _read(ctx, shop_id, since=since, offset=page * PAGE, clock=clock)
+        except _DeferredError as deferred:
+            if deferred.wait <= MAX_INLINE_WAIT and waits < MAX_INLINE_WAITS:
+                waits += 1
+                await sleep(deferred.wait)
+                continue  # the same page again
+            raise MarketplaceRateLimitedError(
+                f"etsy.reviews.read deferred ({deferred.code})", retry_after_seconds=deferred.wait
+            ) from None
         found = output.get("reviews")
         items = [r for r in found if isinstance(r, dict)] if isinstance(found, list) else []
-        reviews += items
+        read += len(items)
+        raised += await _alert(ctx, shop_id, items, orders=orders, alerts=alerts, offload=offload)
         count = output.get("count")
         if len(items) < PAGE or not isinstance(count, int) or count <= (page + 1) * PAGE:
             break
         if _older_than(items[-1], start):  # newest first: the window's edge is reached
             break
+        page += 1
+    result: dict[str, JsonValue] = {
+        "mode": "reviews",
+        "reviews_read": read,
+        "low_review_alerts": raised,
+    }
+    if truncated:
+        result["truncated"] = True
+    return result
+
+
+async def _alert(  # noqa: PLR0913 - one page and its collaborators
+    ctx: HandlerContext,
+    shop_id: uuid.UUID,
+    reviews: Sequence[Mapping[str, JsonValue]],
+    *,
+    orders: ReviewOrders,
+    alerts: NotificationService,
+    offload: Offload,
+) -> int:
     low = [r for r in reviews if _low(r)]
     transactions = tuple(t for r in low if isinstance(t := r.get("transaction_id"), int))
     linked: Mapping[int, int] = (
@@ -99,14 +152,7 @@ async def low_review_alerts(  # noqa: PLR0913 - the execution and its collaborat
             )
             > 0
         )
-    result: dict[str, JsonValue] = {
-        "mode": "reviews",
-        "reviews_read": len(reviews),
-        "low_review_alerts": raised,
-    }
-    if truncated:
-        result["truncated"] = True
-    return result
+    return raised
 
 
 def _older_than(review: Mapping[str, JsonValue], start: datetime) -> bool:
@@ -151,10 +197,8 @@ async def _read(
     if result.outcome is ActionOutcome.SUCCEEDED and result.output is not None:
         return result.output
     if result.outcome is ActionOutcome.DEFERRED:
-        wait = None
+        wait = 1.0
         if result.retry_at is not None:
             wait = max(1.0, (result.retry_at - clock()).total_seconds())
-        raise MarketplaceRateLimitedError(
-            f"etsy.reviews.read deferred ({result.error_code})", retry_after_seconds=wait
-        )
+        raise _DeferredError(wait, result.error_code or "deferred")
     raise JobError(f"etsy.reviews.read {result.outcome.value}: {result.error_code or 'no output'}")

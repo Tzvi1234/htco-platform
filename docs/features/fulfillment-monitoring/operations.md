@@ -5,6 +5,7 @@
 | Setting | Default | Meaning |
 |---|---|---|
 | `HTCO_WORKER_SCHEDULES` contains `fulfillment.inspect` | absent (off) | The 15-minute inspection per connected shop. Removing it is the phase's rollback: incidents stay for review |
+| `HTCO_WORKER_SCHEDULES` contains `fulfillment.reviews` | absent (off) | The hourly low-review read per connected shop (AC-6.9.2, `etsy.reviews.read`, GET). Removing it stops the reads and new low-review alerts; existing alerts stay. The full stop is the automation's readiness: Incident Detection & Escalation stays `draft` until 6.7, and the engine refuses it whatever the flag |
 | `app.sla_policies` rows | none | No row: 7 business days from payment to the first tracking (the owner's decision of 2026-10-23). Add a row per shop, supplier or shipping method once the owner agrees the windows |
 
 Tracking Synchronization is deployed in the worker only when the Etsy app and the token vault are configured; Incident Detection always.

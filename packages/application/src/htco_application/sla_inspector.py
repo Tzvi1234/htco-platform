@@ -133,6 +133,8 @@ class IncidentDetection:
     # Ship-by alerts (slice 6.9) through the notification path of 6.4; None: none raised.
     alerts: NotificationService | None = None
     ship_by_warning_days: int = SHIP_BY_WARNING_DAYS
+    # Waits out a short gateway deferral inside the low-review scan (6.9); tests pass a fake.
+    sleep: Callable[[float], Awaitable[None]] | None = None
 
     async def __call__(self, ctx: HandlerContext) -> HandlerOutcome:
         drift = ctx.payload.get("drift")
@@ -155,6 +157,7 @@ class IncidentDetection:
             await low_review_alerts(
                 ctx, shop_id, orders=self.store, alerts=self.alerts,
                 offload=self.offload, clock=self.clock,
+                **({} if self.sleep is None else {"sleep": self.sleep}),
             )
         )  # fmt: skip
 
