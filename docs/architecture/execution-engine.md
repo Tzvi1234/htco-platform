@@ -217,7 +217,7 @@ class ProviderCapabilities(BaseModel):  # a claim the contract suite checks; it 
     engine_version: str  # the fleet's one pinned build (ADR-0025 §2)
     layers: frozenset[ProviderLayer]  # all seven for an enabled provider
     execution_engines: frozenset[Literal["playwright", "browser_use", "jev"]]
-    cdp_transport: Literal["pipe", "loopback"]  # never a published TCP port
+    cdp_transport: Literal["pipe"]  # --remote-debugging-pipe only; never a TCP or loopback port
     renew: bool
     recover: bool
     downloads: bool
@@ -257,8 +257,9 @@ class SessionLifecycle(Protocol):  # status changes go through ShopEnvironmentRe
 
 
 class EngineConnection(Protocol):
-    async def connect_cdp(self, handle: ProviderHandle) -> CdpEndpoint:
-        """A pipe or loopback endpoint inside the browser worker only; never published."""
+    async def connect(self, handle: ProviderHandle) -> PipeConnection:
+        """The session's CDP pipe, in the browser worker's process only: no port, no URL. Playwright
+        and Browser Use drive this object in process; no other session can reach it."""
 
 
 class EngineExecution(Protocol):  # the engines that act on a page (ADR-0025 §5)
@@ -333,14 +334,15 @@ class BrowserDispatch(Protocol):  # the agent-worker side of the Browser channel
     async def outcome_of(self, execution_id: UUID, attempt: int) -> BrowserRunOutcome | None: ...
 
 
-class BrowserRunOutcome(BaseModel):  # published once per execution and attempt by the browser worker
+class BrowserRunOutcome(BaseModel):  # one row per execution and attempt: started, then final once
     model_config = ConfigDict(frozen=True)
     execution_id: UUID
     attempt: int
-    status: Literal["succeeded", "failed", "challenge", "refused", "timeout"]
+    status: Literal["started", "succeeded", "failed", "challenge", "refused", "timeout", "interrupted"]
+    started_at: AwareDatetime | None  # committed before a write touches a page (the started marker)
     output: dict[str, JsonValue] | None  # validated against the recipe's schema; DC1 only if declared
     evidence: tuple[Evidence, ...] = ()
-    error_code: str | None = None  # "kill_switch", "flag_off", "not_ready", "deadline", ...
+    error_code: str | None = None  # "kill_switch", "flag_off", "not_ready", "deadline", "approval_revoked", ...
 
 
 class ShopEnvironmentRegistry(Protocol):
@@ -565,8 +567,9 @@ RECEIVED ─► AUTHORIZED ─► (WAITING_APPROVAL ─► AUTHORIZED) ─► RO
                                                                    ├► HANDED_TO_HUMAN ─► RUNNING (resume) | CANCELLED
                                                                    └► FAILED ─► (retry policy) ─► ROUTED | DEAD_LETTERED
 ROUTED ─► DISPATCHED (Browser channel, ADR-0025 §3) ─► RUNNING (resume: the outcome is in) ─► VERIFYING
-              ├► HANDED_TO_HUMAN (a challenge, or a write with no outcome past its deadline)
-              └► FAILED (refused at execution time, or a read past its deadline)
+              ├► HANDED_TO_HUMAN (a challenge, or a write that started with no outcome: interrupted or past its deadline)
+              ├► CANCELLED (its approval was cancelled or expired after dispatch, in the same transaction)
+              └► FAILED (refused at execution time, approval_revoked included, or a read past its deadline)
 VERIFYING ─► FAILED (verification) ─► incident
 ```
 

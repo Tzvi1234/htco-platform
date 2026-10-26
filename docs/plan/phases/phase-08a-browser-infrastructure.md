@@ -121,7 +121,7 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | ID | Acceptance criterion |
 |---|---|
 | AC-8A.2.4 | One shared contract suite runs layer by layer against fixtures and `127.0.0.1` pages only. It covers Provisioning, Lifecycle, Connection, Execution, Authentication, Networking and Monitoring, and it passes for `ManagedChromiumProvider` and for a fake provider. A capability that a provider declares but the suite cannot confirm fails the suite. The controller refuses a recipe that needs an undeclared capability before a session starts. |
-| AC-8A.2.5 | The Connection layer exposes CDP only inside the browser worker, as a pipe or as loopback in its own network namespace. A test shows the endpoint can't be reached from outside the worker, and that no port is published. |
+| AC-8A.2.5 | CDP runs on a pipe only. Tests show that:<br>- Chromium starts with `--remote-debugging-pipe` and never with `--remote-debugging-port`;<br>- no process in the worker listens on a TCP port for a browser;<br>- with two sessions running, session A, and any page loaded in A, cannot reach or drive session B's browser;<br>- a recipe URL that points at loopback or a private address is refused. |
 | AC-8A.2.6 | Only the Owner can change an environment's provider, with `aal2` and step-up, and only to a provider whose readiness is `enabled`. The change is audited. An Admin, an agent and an automation are refused (negative tests). Only `managed-chromium` is `enabled` at the end of this phase. |
 | AC-8A.2.7 | import-linter forbids `playwright` and `browser_use` outside `htco_browser_worker`, and the model SDKs outside the gateway package. An architecture test finds no provider class and no Chromium import in the domain, the application layer, the graphs, the execution engine, the gateway, the recipes or the guards. |
 | AC-8A.2.8 | Parallel profiles, tested with fixtures. On one worker, sessions for as many different profiles as the declared capacity run at once, each holding its own profile lock. One more session waits for a slot, and the same profile is never open twice. `renew` re-seals refreshed cookies under the lock. `recover` restores the last good archive and runs a health check. **The fence:** session S1's lock connection drops and S2 takes the lock. S1's write-back is then refused, because its lease is checked on its own connection, never by environment. The archive write is fenced too, on that connection or with a generation compare-and-set. Red first, on a fake lock server and on Postgres. |
@@ -138,7 +138,7 @@ The controller can fall back from Playwright to Browser Use only for employee ac
   - **Per shop:** the locale and language the shop is really operated in, and the egress assignment.
 - **Never configurable:**
   - the User-Agent, the screen resolution or the time zone;
-  - geolocation, unless a real, authorized need is recorded in a recipe's scope row, and then only the truthful location;
+  - geolocation, unless a real, authorized need is recorded in a recipe's scope row, and then only the worker's real location, never a configured coordinate;
   - any fingerprint or "stealth" setting, extensions, and proxy settings outside `NetworkProvider`.
 - **The Playwright engine adapter (#122)** gains only the typed options the baseline and the profile allow: locale, viewport, color scheme and permissions.
 - **One pinned Chromium for the fleet**, under a controlled update policy.
@@ -147,23 +147,26 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | ID | Acceptance criterion |
 |---|---|
 | AC-8A.2.10 | Saving a configuration is refused, with each issue named, if it has any of: a never-configurable key, a locale outside the shop's recorded languages, an unallocated dedicated egress, or a permission or download the baseline denies. Nothing is saved, and the same validation at session start refuses the session. Each accepted change is a new version, made by the Owner or an Admin with step-up, and audited. Agents and automations have no tool for it (negative tests). |
-| AC-8A.2.11 | In a real Chromium, on a `127.0.0.1` page:<br>- `navigator.userAgent` is the pinned build's own, and the time zone is the worker's;<br>- geolocation is denied, and nothing hides automation;<br>- the viewport and the locale equal the configuration's.<br><br>Two shops' sessions report the same User-Agent, platform, time zone and viewport. They differ only in language, where their languages differ. |
-| AC-8A.2.12 | Every browser worker runs the one pinned Chromium build, in an image pinned by digest, and a worker whose build differs from the fleet's refuses to start sessions. A profile last opened by a newer build is refused. An update rolls out only after the contract suite and a canary health check pass. Each profile's pre-update archive is kept until the new build has run cleanly for 7 days. |
+| AC-8A.2.11 | In a real Chromium, on a `127.0.0.1` page:<br>- `navigator.userAgent` is the pinned build's own, and the time zone is the worker's;<br>- geolocation is denied, and nothing hides automation;<br>- the viewport and the locale equal the configuration's.<br><br>Two shops' sessions report the same User-Agent, platform, time zone and viewport. They differ only in language, where their languages differ.<br><br>Geolocation:<br>- without a recorded need, it is denied;<br>- with one, the browser reports the worker's real location, and a configuration holding a coordinate is refused.<br><br>The pinned switch list holds the background-traffic switches and Safe Browsing off. A launch that differs from it fails the test. |
+| AC-8A.2.12 | Every browser worker runs the one pinned Chromium build, in an image pinned by digest, and a worker whose build differs from the fleet's refuses to start sessions. A profile last opened by a newer build is refused. An update rolls out only after the contract suite and a canary health check pass. Each profile's pre-update archive is kept until the new build has run cleanly for 7 days. That archive is destroyed with the environment and purged with a disconnected shop, and a restore from it takes the session's fence. |
 | AC-8A.2.13 | Every session records its configuration version, its Chromium version and its egress ID. Two sessions of one environment that differ in any of them, with no audited change in between, raise a consistency finding. |
 
 **8A.2c — Browser dispatch and resume** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §3, amending ADR-0019; audit AUD-04). This slice lands before any recipe runs through the gateway (8A.5, 8A.10).
 - **The Browser channel in the agent-worker dispatches.** It returns `DISPATCHED` with one `browser.run` job, and holds no lease, slot or connection while the run goes on.
-- **The browser worker re-checks before it acts.** It claims the job, re-checks the claim, the deadline, the status, the flag, the scope and every kill switch, runs the recipe through the controller, and publishes one outcome.
+- **The browser worker re-checks before it acts.** It claims the job and re-checks the claim, the deadline, the status, the flag, the scope and every kill switch. For a write it also re-checks the approval, read-only. Then it runs the recipe through the controller and publishes one outcome.
+- **Revoking an approval also cancels the dispatched action**, in the same transaction.
+- **A durable started marker** is committed before a write touches a page.
 - **A resume re-enters `submit` with the stored claim**, as the human hand-off already does.
-- **A write is never re-sent blindly.**
+- **A write is never re-sent blindly.** A write that started but has no outcome goes to a person for reconciliation.
 
 | ID | Acceptance criterion |
 |---|---|
 | AC-8A.2.14 | A Browser binding returns `DISPATCHED`. In the same transaction, one `browser.run` job (keyed by execution and attempt) and `actions.dispatched.v1` are written. While the run goes on, the automation execution waits without its job lease, the gateway's slot is released, and no connection is held (tested with a fake browser worker). The job's payload holds no secret, token or authority (schema test). |
-| AC-8A.2.15 | Before it touches a page, the browser worker re-checks:<br>- the claim is still `DISPATCHED`, with the same request hash;<br>- the deadline has not passed;<br>- the environment is `READY`;<br>- the flag is on and the scope row is recorded;<br>- no kill switch is on.<br><br>Each failed check ends the run `refused` with its code, and no page loads. A forged or replayed job, for an execution that is not `DISPATCHED` or that has another request hash, is refused. |
+| AC-8A.2.15 | Before it touches a page, the browser worker re-checks:<br>- the claim is still `DISPATCHED`, with the same request hash;<br>- the deadline has not passed;<br>- the environment is `READY`;<br>- the flag is on and the scope row is recorded;<br>- no kill switch is on;<br>- for a write, its approval is still `APPROVED` for this request hash and not expired.<br><br>Each failed check ends the run `refused` with its code, and no page loads. A forged or replayed job, for an execution that is not `DISPATCHED` or that has another request hash, is refused.<br><br>An approval cancelled or expired after dispatch:<br>- moves the `DISPATCHED` action to `CANCELLED` in the same transaction;<br>- even when that transition is withheld in the test, the browser worker's own read-only check refuses the run with `approval_revoked`.<br><br>No page loads either way. |
 | AC-8A.2.16 | The outcome is published once per execution and attempt: a row, and `browser.run_finished.v1`. The resume resubmits the same request. `submit` resumes the stored claim, validates the output against the action's output schema, verifies it, and records exactly one final result. It never runs the browser step again, and replaying the event changes nothing. |
 | AC-8A.2.17 | A read run that dies is retried within its policy. A write run with no outcome past its deadline and grace period is never re-sent: it becomes `HANDED_TO_HUMAN`, with one task. A challenge ends the run as `challenge`, and the resume records `HANDED_TO_HUMAN` with one Human task. |
-| AC-8A.2.18 | pgTAP: in its own organization, the `htco_browser` role claims only `browser.*` jobs, reads only a claim's state, request hash and deadline, and inserts only outcomes. It cannot write `action_executions`, approvals, or another organization's rows. |
+| AC-8A.2.18 | pgTAP, in its own organization. The `htco_browser` role can:<br>- claim only `browser.*` jobs;<br>- read only a claim's state, request hash and deadline, and an approval's state, request hash and expiry;<br>- insert a run's row and set its final status once.<br><br>It cannot write `action_executions`, approvals, or another organization's rows. `authenticated` has no access to run rows. |
+| AC-8A.2.19 | **The started marker.** Before a write touches a page, the browser worker commits its run row for that execution and attempt, with the status `started` and `started_at`. The insert is `on conflict do nothing`, so an attempt can be started only once.<br><br>A job redelivered for an attempt that has a `started` row and no final status never runs the write again: the row becomes `interrupted`, and the resume records `HANDED_TO_HUMAN` with one reconciliation task.<br><br>A write whose job died before its marker never touched a page, and may be retried within its policy.<br><br>Tested twice, red first: by killing the worker between the marker and the outcome, and by redelivering the job through `release_expired`. |
 
 ### 8A.3 — Preflight, session validation and network health
 
@@ -214,7 +217,7 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 
 ### 8A.6 — Browser Use driver for employees (moved earlier, ADR-0025 §5)
 
-- [Browser Use](https://github.com/browser-use/browser-use) (MIT) is wrapped behind `BrowserSession`. It is the **primary AI browser engine** for employees, attached through the provider's Connection layer (`connect_cdp`).
+- [Browser Use](https://github.com/browser-use/browser-use) (MIT) is wrapped behind `BrowserSession`. It is the **primary AI browser engine** for employees, driving the provider's pipe connection in process, never a TCP or WebSocket CDP endpoint (ADR-0025 §5). A Browser Use version that needs a CDP URL is not adopted.
 - **The order inside a session:**
   1. Playwright for every deterministic step (recipes, extraction, verification).
   2. Jev "Ultrafast" as an optional fast path for small structured decisions, only once its 9.6 benchmark passes. It is off before Phase 9.
@@ -360,10 +363,13 @@ AutoVA is the owner's supplier platform (`beta.autova.io`). These recipes run in
 - [ ] Browser work is dispatched (ADR-0025 §3):
   - the job carries no secret, token or authority;
   - the browser worker re-checks the claim, the flag, the scope and every kill switch before it acts;
+  - for a write, the approval is re-checked read-only, and revoking it cancels the dispatched action in the same transaction (`approval_revoked`);
+  - a durable started marker is committed before a write touches a page;
   - its role cannot write action executions or approvals;
-  - a write is never re-sent blindly.
+  - a write is never re-sent blindly: one that started without an outcome goes to a person.
 - [ ] Egress is truthful: shared, or a dedicated HTCO-owned static IP, never rotated and never hiding shop linkage. Changes are Owner-only and audited, and consistency is checked before every session.
-- [ ] CDP is reachable only inside the browser worker.
+- [ ] CDP runs on a pipe only. There is no TCP port, and no session or page can reach another session's browser (AC-8A.2.5).
+- [ ] Browser privacy defaults are pinned: the background-traffic switches are on and Safe Browsing is off (AC-8A.2.11).
 
 ## Demo
 
