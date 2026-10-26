@@ -402,3 +402,24 @@ def test_workspace__a_session_past_the_unpack_caps_keeps_the_last_good_archive(
     assert profiles.open(env) == good
     with workspaces.checkout(env) as directory:
         assert list(directory.iterdir()) == []
+
+
+def test_workspace__hard_linked_files_are_sealed_as_regular_files(tmp_path: Path) -> None:
+    """Codex on #116: a hard link must not become a link member the next checkout refuses."""
+    profiles = vault()
+    env = environment()
+    root = tmp_path / "tmpfs"
+    root.mkdir()
+    workspaces = ProfileWorkspaces(profiles, root)
+
+    def link(directory: Path) -> None:
+        (directory / "Cookies").write_bytes(COOKIE)
+        os.link(directory / "Cookies", directory / "Cookies-backup")
+
+    with workspaces.checkout(env) as directory:
+        link(directory)
+
+    with workspaces.checkout(env) as directory:
+        assert (directory / "Cookies").read_bytes() == COOKIE
+        assert (directory / "Cookies-backup").read_bytes() == COOKIE
+    assert everything_under(root) == []

@@ -244,7 +244,8 @@ class ProfileWorkspaces:
 
 def _pack(files: list[tuple[Path, str]]) -> bytes:
     buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+    # dereference: a hard link is written as its own regular file, never as a link member.
+    with tarfile.open(fileobj=buffer, mode="w:gz", dereference=True) as tar:
         for path, name in files:
             tar.add(path, arcname=name, recursive=False)
     packed = buffer.getvalue()
