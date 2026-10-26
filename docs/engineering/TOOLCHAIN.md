@@ -56,6 +56,7 @@
 | YAML | PyYAML 6.0.3 (with `types-pyyaml`) | | Renders the contract without anchors or aliases |
 | HTTP mocks | respx | Planned 0.23.x | |
 | Database | Supabase CLI | 2.120.0 (CI downloads the release and checks its SHA-256; `scripts/local-db-ci.sh` runs the same step locally, [LOCAL_DB_TESTS.md](LOCAL_DB_TESTS.md)) | Local Postgres (Docker), migrations, pgTAP (`supabase test db`); the owner-started `migrate.yml` workflow for deployed projects |
+| Vector search | pgvector (Supabase's `vector` extension, in the `extensions` schema) | Planned for slice 9.10 (version as Supabase ships it, recorded at kickoff) | The knowledge base's embeddings and HNSW index next to the rows they describe, under the same RLS ([ADR-0024](../adr/0024-knowledge-base-and-retrieval.md)); no external vector service |
 
 ## Security and supply chain
 
@@ -65,7 +66,7 @@
 | Dependencies | osv-scanner 2.6.0 (reads `uv.lock`), `uv audit` when stable | Every pull request; release binary checked by SHA-256 in CI. Binary versions and checksums in `ci.yml` are updated by hand (Renovate cannot update the checksum). |
 | Static analysis | Ruff `S` rules on every pull request; Semgrep CE weekly | Semgrep registry rules are licensed for internal use |
 | Container | Grype v0.120.1 through `anchore/scan-action` v7.4.2 (pinned by SHA) | Fails on fixable high or critical findings (`only-fixed`); unfixable base-image findings are reviewed when Renovate updates the base. Trivy's GitHub Action tags were compromised in March 2026. |
-| Workflows | zizmor 1.30.1, actionlint 1.7.12 (`actionlint-py`, which verifies the binary against pinned checksums), `tools/check_action_pins.py`, `permissions: {}` by default | Installed on demand from the `ci` dependency group (`just workflows`). Actions in use: `actions/checkout` v7.0.1, `astral-sh/setup-uv` v10.2.0 (newest release older than seven days). |
+| Workflows | zizmor 1.30.1, actionlint 1.7.12 (`actionlint-py`, which verifies the binary against pinned checksums), `tools/check_action_pins.py`, `permissions: {}` by default | Installed on demand from the `ci` dependency group (`just workflows`). Actions in use: `actions/checkout` v7.0.1, `astral-sh/setup-uv` v10.2.0 (newest release older than seven days). Every `setup-uv` step pins uv's archive by SHA-256 (`checksum:`, the x86_64 Linux digest from the uv release); change it together with `version:`, and `tests/infra/test_uv_version.py` keeps them in step (#126). |
 | CI gate | `.github/workflows/ci.yml` with one required status, `ci-gate` | Jobs: checks, tests, security, workflows, contract (oasdiff), test-integrity (`tools/test_integrity.py`), pr-title (`tools/conventional_commit.py`); the `image` job arrives with slice 1.5 |
 | Updates | Renovate (`.github/renovate.json5`: seven-day minimum release age, weekly schedule, lock-file maintenance, Actions pinned by digest); Dependabot alerts on | Needs the Renovate GitHub App installed by the owner |
 | SBOM | Syft (CycloneDX) attached to releases | |

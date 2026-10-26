@@ -7,6 +7,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -860,3 +861,88 @@ def test_wrapper__volumes_of_its_own_kept_stack__are_its_own_to_remove(tmp_path:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert calls.read_text(encoding="utf-8").splitlines()[0] == "stop --no-backup"
+
+
+# --- #128: SIGTERM stops the step like Ctrl-C; the refusal names a failed stop of our own stack
+
+
+@needs_posix_bash
+def test_main__terminated__stops_the_step_and_its_children_before_exiting(tmp_path: Path) -> None:
+    """`kill <runner>` (SIGTERM) must end the step's group too: Python's default handling would
+    exit without running any cleanup and leave the step running (Codex on #99)."""
+    pid_file = tmp_path / "child.pid"
+    workflow = tmp_path / "ci.yml"
+    workflow.write_text(
+        yaml.safe_dump(
+            {
+                "jobs": {
+                    "database": {
+                        "steps": [
+                            {
+                                "name": "Long",
+                                "run": f'sleep 300 &\necho $! > "{pid_file}"\nsleep 300\n',
+                            }
+                        ]
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner = subprocess.Popen(
+        [sys.executable, "-m", "tools.local_db_ci", "--workflow", str(workflow),
+         "--root", str(tmp_path)],
+        cwd=REPO, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )  # fmt: skip
+    child = None
+    try:
+        deadline = time.monotonic() + 30
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        child = int(pid_file.read_text(encoding="utf-8"))
+        runner.send_signal(signal.SIGTERM)
+        code = runner.wait(timeout=30)
+        deadline = time.monotonic() + 10
+        while _alive(child) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not _alive(child), "the step's child outlived the terminated runner"
+        assert code == 128 + signal.SIGTERM
+    finally:
+        runner.kill()
+        runner.wait()
+        if child is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child, signal.SIGTERM)
+
+
+@needs_flock
+@pytest.mark.parametrize("left", ["running", "saved-volume"])
+def test_wrapper__its_own_stack_that_could_not_be_stopped__said_so_and_kept_as_its_own(
+    tmp_path: Path, left: str
+) -> None:
+    """Our kept stack cannot be stopped when no Supabase CLI is found: still refuse (exit 2), but
+    say it is the script's own stack, and keep the marker so the next run tries again (quill)."""
+    repo = _wrapper_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_tool(bin_dir, "uv", "exit 0")  # no supabase anywhere on PATH
+    _fake_docker(bin_dir, tmp_path, running=left == "running", saved_volume=left != "running")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / OWNER_MARKER).write_text("", encoding="utf-8")
+    (cache / STACK_MARKER).write_text("htco-platform\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(REPO / "scripts/local-db-ci.sh"), str(repo)],  # noqa: S607
+        env={**os.environ, "PATH": f"{bin_dir}:/usr/bin:/bin", "HTCO_LOCAL_CI_CACHE": str(cache)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "own Supabase stack" in result.stderr
+    assert "could not be stopped" in result.stderr
+    assert "did not" not in result.stderr
+    assert (cache / STACK_MARKER).read_text(encoding="utf-8").strip() == "htco-platform"

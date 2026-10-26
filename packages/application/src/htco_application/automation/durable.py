@@ -9,8 +9,9 @@ execution (AC-5.10.1).
 
 `execute` runs inside the worker's job. It moves the execution to `RUNNING`, calls the handler,
 and records `SUCCEEDED`, or `FAILED` then `RETRY_SCHEDULED` with the next job at the definition's
-backoff with jitter, or `DEAD_LETTERED` with the last error (AC-5.10.4). An execution found
-`RUNNING` belongs to a worker that died (its job's lease expired): that run counts as a failed
+backoff with jitter (never sooner than an error's `retry_after_seconds`, such as the gateway's
+deferral until a quota resets), or `DEAD_LETTERED` with the last error (AC-5.10.4). An execution
+found `RUNNING` belongs to a worker that died (its job's lease expired): that run counts as a failed
 attempt and the execution goes on from there, so it succeeds once (AC-5.10.5). Every state change
 is stored with its actor and correlation ID, and the domain refuses any transition outside the
 `ExecutionState` machine (AC-5.10.6).
@@ -354,7 +355,10 @@ class DurableAutomationEngine:
             outcome = await self._handler(definition)(self._context(running, payload))
         except Exception as error:
             reason = describe_error(error)
-            return await self._offload(lambda: self._fail(definition, running, reason, worker))
+            wait = _retry_after(error)
+            return await self._offload(
+                lambda: self._fail(definition, running, reason, worker, retry_after=wait)
+            )
         now = self._clock()
         if isinstance(outcome, Waiting):
             waiting = running.transition(ExecutionState.WAITING)
@@ -452,19 +456,25 @@ class DurableAutomationEngine:
         running: AutomationExecution,
         error: str,
         worker: ActorRef,
+        *,
+        retry_after: timedelta | None = None,
     ) -> AutomationExecution:
         now = self._clock()
-        steps, job = self._failure_steps(definition, running, error, worker, now)
+        steps, job = self._failure_steps(
+            definition, running, error, worker, now, retry_after=retry_after
+        )
         self._store.advance(running, steps, job=job)
         return steps[-1][0]
 
-    def _failure_steps(
+    def _failure_steps(  # noqa: PLR0913 - the failure, and the wait it may ask for
         self,
         definition: AutomationDefinition,
         running: AutomationExecution,
         error: str,
         worker: ActorRef,
         now: datetime,
+        *,
+        retry_after: timedelta | None = None,
     ) -> tuple[list[tuple[AutomationExecution, StateChange]], JobSpec | None]:
         failed = running.transition(ExecutionState.FAILED, error=error)
         steps = [(failed, self._change(running, running.state, failed.state, worker, now, error))]
@@ -475,6 +485,8 @@ class DurableAutomationEngine:
         retry = failed.transition(ExecutionState.RETRY_SCHEDULED)
         steps.append((retry, self._change(failed, failed.state, retry.state, worker, now)))
         delay = definition.retry.jittered_backoff(failed.attempts, self._jitter())
+        if retry_after is not None:  # a deferral (a 429, the gateway's retry_at) is never cut short
+            delay = max(delay, retry_after)
         return steps, execution_job(
             retry, definition, attempt=failed.attempts + 1, run_at=now + delay
         )
@@ -530,3 +542,12 @@ def _json(payload: Mapping[str, object]) -> dict[str, JsonValue]:
             raise AutomationRefused(f"payload field {key!r} is not JSON")
         converted[key] = value
     return converted
+
+
+def _retry_after(error: Exception) -> timedelta | None:
+    """The wait an error asks for (`retry_after_seconds`, as a rate limit or the gateway's
+    deferral carries it; Codex review of #108), or None."""
+    seconds = getattr(error, "retry_after_seconds", None)
+    if isinstance(seconds, bool) or not isinstance(seconds, int | float) or seconds <= 0:
+        return None
+    return timedelta(seconds=float(seconds))

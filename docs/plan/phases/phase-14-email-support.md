@@ -5,7 +5,7 @@
 | **Milestone** | — |
 | **Repositories** | both |
 | **Size** | M |
-| **Depends on** | [Phase 10](phase-10-supervision.md) (can run in parallel with Phases 11–13); [Phase 8A](phase-08a-browser-infrastructure.md) (browser engine) and [Phase 8B](phase-08b-authenticator.md) (authenticator) for delivery A |
+| **Depends on** | [Phase 10](phase-10-supervision.md) (can run in parallel with Phases 11–13); [Phase 8A](phase-08a-browser-infrastructure.md) (browser engine) and [Phase 8B](phase-08b-authenticator.md) (authenticator) for delivery A; [Phase 9](phase-09-router-advisor.md) slice 9.10 (knowledge base and retrieval, [ADR-0024](../../adr/0024-knowledge-base-and-retrieval.md)) for Dana's drafts |
 | **Requirements** | FR-AGT-06, FR-AGT-09, FR-AUT-05, FR-EML-02, FR-EML-03, FR-MKT-02, FR-SVC-01, FR-SVC-02, FR-SVC-03 |
 | **Status** | Not started |
 
@@ -84,10 +84,10 @@ Dana follows the activation rule of [Phase 9](phase-09-router-advisor.md) slice 
 | 14.1 | Inbound pipeline: webhook, inbox, fetch, attachments, quarantine | Forged, replayed and oversized mail rejected; attachments stored safely |
 | 14.2 | Email Intake & Routing: threads, tickets, customer linking by order reference, rule-based routing | A reply lands in the right thread; no cross-shop linking; replaying a webhook creates no second ticket |
 | 14.3 | Quarantined extractor → validated ticket schema | Injection corpus in emails causes no tool call and no schema escape |
-| 14.4 | Dana's drafts and approval-to-send | Nothing is sent without approval; sends are idempotent and audited; Dana never promises refunds or compensation |
+| 14.4 | Dana's drafts and approval-to-send. She grounds her drafts in structured tools first (order, listing, tracking), then in `knowledge.search` (slice 9.10: shop policies, FAQ, listings, products, approved replies). Each approved and sent reply is ingested as an `approved_reply` after redaction | Nothing is sent without approval; sends are idempotent and audited; Dana never promises refunds or compensation; every fact in a draft cites a tool result or a chunk ID; a buyer's own message is never ingested into the knowledge base |
 | 14.5 | Etsy assisted replies | Draft copy-to-clipboard and "mark as sent" with audit |
 | 14.6 | Support UI: inbox, ticket view, SLA | Masked PII by default; role-limited access |
-| 14.7 | Dana activated | Sheet defined, evaluation passed, autonomy approved, routing measured (including the data-class limit of her policy) |
+| 14.7 | Dana activated | Sheet defined, evaluation passed, autonomy approved, routing measured (including the data-class limit of her policy); her knowledge policy is set, and the 9.10 retrieval eval passes on her shop's knowledge (AC-9.10.11) |
 
 ## Test plan
 
@@ -98,6 +98,7 @@ Webhook security tests; injection corpus; automation replay, failure and recover
 - [ ] FR-EML-03 controls; LINDDUN review for buyer messages; retention job for DC2 data.
 - [ ] Rule of Two: the extractor reads untrusted mail with no tools; Dana never sees raw HTML.
 - [ ] Instructions inside customer messages are data; Dana's grants cannot change from message content.
+- [ ] Retrieved knowledge is data too (AC-9.10.10). Only redacted, approved replies enter the knowledge base, never a buyer's message (AC-9.10.2, AC-9.10.3).
 
 ## Documentation
 

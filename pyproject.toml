@@ -122,6 +122,7 @@ markers = [
   "ac(id): the acceptance criterion (for example AC-1.2.3) that this test proves",
   "db: needs a running database (HTCO_TEST_DATABASE_URL); run with `just test-db`",
   "browser: needs Chromium (HTCO_TEST_BROWSER=1); runs against 127.0.0.1 pages only",
+  "slow: starts a real process or similar (seconds each); `just check-fast` skips it, CI runs it",
 ]
 
 [tool.coverage.run]

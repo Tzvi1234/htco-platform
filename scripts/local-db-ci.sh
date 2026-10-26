@@ -91,18 +91,34 @@ stack_marker="$cache/stack-started"
 stack_running() {
     [ -n "$(docker ps -q --filter "label=com.supabase.cli.project=$project_id" 2> /dev/null)" ]
 }
+# Why this script's own stack could not be stopped, if it could not; its marker is then kept, so
+# the next run still knows the stack is its own and tries again.
+own_stop_failed=""
 stop_stack() {
     [ "$(cat -- "$stack_marker" 2> /dev/null)" = "$project_id" ] || return 0
     local supabase="$runner_temp/supabase"
     [ -x "$supabase" ] || supabase="$(command -v supabase || true)"
-    [ -n "$supabase" ] && (cd "$repo" && "$supabase" stop --no-backup > /dev/null 2>&1 9>&-) || true
+    if [ -z "$supabase" ]; then
+        own_stop_failed="no Supabase CLI was found to stop it with"
+        return 0
+    fi
+    if ! (cd "$repo" && "$supabase" stop --no-backup > /dev/null 2>&1 9>&-); then
+        own_stop_failed="supabase stop --no-backup failed"
+        return 0
+    fi
     rm -f -- "$stack_marker"
+}
+refuse_own_stack() {
+    echo "this script's own Supabase stack for project $project_id could not be stopped" \
+        "($own_stop_failed): stop it with supabase stop --no-backup, then run again" >&2
+    exit 2
 }
 # Start from a clean stack, like a fresh CI runner: a stack left by --keep-running is removed,
 # before the runner directory (its CLI may be the only one on the machine). Anyone else's stack
 # is left alone, and the run stops: its database would clash with CI's.
 stop_stack
 if stack_running; then
+    [ -z "$own_stop_failed" ] || refuse_own_stack
     echo "a Supabase stack for project $project_id is running that this script did not start" \
         "(just db-start, or another clone): stop it yourself (supabase stop), then run again" >&2
     exit 2
@@ -112,6 +128,7 @@ fi
 saved_volumes="$(docker volume ls -q --filter "label=com.supabase.cli.project=$project_id" \
     2> /dev/null | tr '\n' ' ')"
 if [ -n "${saved_volumes// /}" ]; then
+    [ -z "$own_stop_failed" ] || refuse_own_stack
     echo "saved Supabase volumes of project $project_id that this script did not create:" \
         "$saved_volumes(a stopped stack's data, kept by just db-stop). Remove them yourself if" \
         "the data can go (supabase stop --no-backup), then run again" >&2

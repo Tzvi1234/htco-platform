@@ -36,7 +36,11 @@ Shared vocabulary for code, docs and conversations. When a term here has a code 
 | Automation execution | `automation_execution` | One run of an automation, unique per idempotency key. |
 | Tool | `tool` | A versioned capability an employee may call if granted, executed by a use case after an access check. Tools never decide objectives. |
 | Decision Advisor | `decision_advisor` | A shared structured-decision service (Jev) behind a provider-independent port; rules decide first; it never authorizes. |
-| Routing policy | `routing_policy` | An employee's versioned rules for model use: providers, capabilities, tiers, budget, data class, fallbacks, advisor use. One central router applies them all. |
+| Routing policy | `routing_policy` | An employee's versioned rules for model use: providers, capabilities, tiers, budget, data class, fallbacks, advisor use, and its routing mode. One central router applies them all. |
+| Routing mode | `routing_mode` | `routed` (the tier follows the task's difficulty, up to the employee's maximum tier) or `pinned` (one fixed model, named by a catalog alias, with explicit fallbacks or a stop). Chosen by the Owner per employee ([ADR-0023](../adr/0023-routing-modes-and-difficulty-assessment.md)). |
+| Model alias | `model_catalog_alias` | A stable catalog name, such as `default-advanced` or `default-embedding`, that points to exactly one verified model. Policies and the embedding step name aliases, never model IDs. |
+| Task difficulty | `task_difficulty` | `simple`, `normal` or `complex`: declared by the task, or assessed by rules, then by Jev once benchmarked. It only raises the tier, and never above the employee's maximum. |
+| Knowledge base | `knowledge_base` | The shop's own policies, FAQ, listings, products and redacted approved replies, chunked and embedded in Postgres (pgvector) under RLS. Searched through `knowledge.search` after the structured tools ([ADR-0024](../adr/0024-knowledge-base-and-retrieval.md)). |
 | Activity record | `activity_record` | The record of one meaningful operation by any actor, with organization, shop, task, correlation and outcome; never private model reasoning. |
 | Quality finding | `quality_finding` | A problem found by a monitor or by Noa, with evidence and a follow-up that is verified before it closes. |
 | Optimization proposal | `optimization_proposal` | Omer's structured proposal with baseline, evidence, acceptance criteria and rollback, followed from detection to verified result. |

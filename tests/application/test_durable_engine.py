@@ -15,6 +15,8 @@ from htco_application.automation.durable import (
     LEASE_EXPIRED,
     DurableAutomationEngine,
     ExecutionNotFoundError,
+    HandlerContext,
+    HandlerOutcome,
     NotDeadLetteredError,
     NotWaitingError,
     StoredExecution,
@@ -159,6 +161,48 @@ def test_trigger__payload_that_is_not_json__is_refused() -> None:
 
     with pytest.raises(AutomationRefused, match="not JSON"):
         world.engine.trigger(paid(payload={"when": NOW}))
+
+
+async def test_a_deferred_read__the_retry_waits_for_the_gateways_retry_at() -> None:
+    """Codex review of #108: a gateway deferral (for example until the daily quota resets)
+    raises a rate limit with its wait; the retry runs then, not at the engine's own backoff,
+    so the attempts are not spent before the gateway allows another call."""
+    from htco_application.marketplace import MarketplaceRateLimitedError  # noqa: PLC0415
+
+    world = World()
+
+    async def deferred(context: HandlerContext) -> HandlerOutcome:  # noqa: ARG001
+        raise MarketplaceRateLimitedError("etsy.reviews.read deferred", retry_after_seconds=3600)
+
+    world.engine = DurableAutomationEngine(
+        lambda: world.registry, world.store, {"etsy-order-intake": deferred},
+        clock=lambda: world.now, jitter=lambda: 1.0, gateway=UnavailableGateway(),
+    )  # fmt: skip
+    execution = world.engine.trigger(paid())
+
+    first = await world.engine.execute(execution.id, worker=WORKER)
+
+    assert first.state is ExecutionState.RETRY_SCHEDULED
+    assert world.store.jobs[1].run_at == NOW + timedelta(seconds=3600)
+
+
+async def test_a_shorter_retry_after_never_shortens_the_backoff() -> None:
+    from htco_application.marketplace import MarketplaceRateLimitedError  # noqa: PLC0415
+
+    world = World()
+
+    async def soon(context: HandlerContext) -> HandlerOutcome:  # noqa: ARG001
+        raise MarketplaceRateLimitedError("slow down", retry_after_seconds=1)
+
+    world.engine = DurableAutomationEngine(
+        lambda: world.registry, world.store, {"etsy-order-intake": soon},
+        clock=lambda: world.now, jitter=lambda: 1.0, gateway=UnavailableGateway(),
+    )  # fmt: skip
+    execution = world.engine.trigger(paid())
+
+    await world.engine.execute(execution.id, worker=WORKER)
+
+    assert world.store.jobs[1].run_at == NOW + timedelta(seconds=10)  # the policy's backoff
 
 
 @pytest.mark.ac("AC-5.10.4")

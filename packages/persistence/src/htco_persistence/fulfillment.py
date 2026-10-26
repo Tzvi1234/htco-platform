@@ -182,6 +182,22 @@ class PostgresSlaStore:
             ).fetchall()
         return {int(r[0]): r[1] for r in rows}
 
+    def receipts_for_transactions(
+        self, shop_id: uuid.UUID, transaction_ids: tuple[int, ...]
+    ) -> Mapping[int, int]:
+        """Low-review alerts (slice 6.9): the stored order of each reviewed transaction."""
+        if not transaction_ids:
+            return {}
+        with self._database.connection() as connection:
+            rows = connection.execute(
+                """
+                select distinct transaction_id, receipt_id from app.etsy_order_items
+                where shop_id = %s and transaction_id = any(%s)
+                """,
+                [shop_id, list(transaction_ids)],
+            ).fetchall()
+        return {int(r[0]): int(r[1]) for r in rows}
+
 
 _INCIDENT_COLUMNS = """
   id, organization_id, dedup_key, cause, resource_kind, resource_id, severity, state,
