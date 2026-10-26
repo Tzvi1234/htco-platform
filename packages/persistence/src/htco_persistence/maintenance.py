@@ -12,7 +12,7 @@ from datetime import datetime
 import anyio
 
 from htco_application.audit import AuditRecord
-from htco_application.maintenance import TenantShop
+from htco_application.kernel import TenantShop
 from htco_persistence.audit import append_audit
 from htco_persistence.database import Database
 

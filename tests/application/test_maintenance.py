@@ -13,12 +13,12 @@ from datetime import datetime, timedelta
 import pytest
 
 from htco_application.audit import AuditRecord
+from htco_application.kernel import TenantShop
 from htco_application.maintenance import (
     EXPIRY_JOB,
     PROBE_JOB,
     PURGE_JOB,
     SCHEDULER,
-    TenantShop,
     check_refresh_token,
     enqueue_capability_probes,
     enqueue_purges,

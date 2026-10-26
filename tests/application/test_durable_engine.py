@@ -23,7 +23,7 @@ from htco_application.automation.durable import (
 )
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
 from htco_application.execution.gateway import UnavailableGateway
-from htco_application.jobs import JobError
+from htco_application.kernel import JobError
 from htco_application.workforce.registry import Registry
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import AUTOMATION_SPEC_SECTIONS, ExecutionState, TriggerKind

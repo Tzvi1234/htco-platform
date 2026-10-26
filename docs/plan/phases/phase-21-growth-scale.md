@@ -24,7 +24,7 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope) and [ADR-0020](../../adr/0020-per-shop-browser-environment.md):
 
 - Multi-shop operations add shops with OAuth only. A Browser Environment stays optional per shop.
-- Shops share one honest egress IP for the browser workers. No per-shop proxy is ever added for scale.
+- Shops share the honest browser egress by default. A shop may get an optional dedicated egress that HTCO owns ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §4): truthful, never rotated, and never used to hide that shops are related. Third-party proxies are never used, for scale or otherwise.
 - The Etsy rate-limit token bucket (slice 5.15) is the shared budget across every shop.
 - A Shopify adapter is a new API-channel binding for the same actions.
 

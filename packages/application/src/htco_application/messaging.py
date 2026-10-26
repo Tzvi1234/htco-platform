@@ -21,7 +21,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
-from htco_application.jobs import ClaimedJob, JobError, JobSpec, JsonValue, describe_error
+from htco_application.jobs import ClaimedJob, JobSpec
+from htco_application.kernel import JobError, JsonValue, describe_error
 from htco_domain.jobs import check_job_kind
 
 OUTBOX_DELIVERY_JOB = "outbox.deliver"

@@ -27,8 +27,8 @@ from htco_application.fulfillment_schedule import (
     enqueue_review_checks,
 )
 from htco_application.incidents import IncidentService
-from htco_application.jobs import DEFAULT_RETRY, ClaimedJob, JobError, JsonValue
-from htco_application.maintenance import TenantShop
+from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
+from htco_application.kernel import JobError, JsonValue, TenantShop
 from htco_application.marketplace import MarketplaceRateLimitedError
 from htco_application.notifications import NotificationService, render_email
 from htco_application.review_alerts import MAX_PAGES, REVIEW_LOOKBACK, REVIEWS_READ

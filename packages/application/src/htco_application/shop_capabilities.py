@@ -34,6 +34,7 @@ from typing import Protocol
 from htco_application.access.authentication import AuthContext, NoMembershipError
 from htco_application.access.policy import Capability, Outcome, Scope, ShopRef, decide
 from htco_application.audit import AuditRecord
+from htco_application.kernel import Page
 from htco_application.marketplace import (
     AccessTokenProvider,
     Listing,
@@ -46,7 +47,6 @@ from htco_application.marketplace import (
     MarketplaceResponseError,
     MarketplaceShop,
     MarketplaceUnavailableError,
-    Page,
     QuotaDeferredError,
     ReceiptAddressCheck,
 )

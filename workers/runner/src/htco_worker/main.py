@@ -45,7 +45,6 @@ from htco_application.execution.gateway import (
 )
 from htco_application.execution.guards import Guards
 from htco_application.execution.service import (
-    EVENT_DESTINATION,
     ActionGatewayService,
     GatewayParts,
 )
@@ -67,7 +66,8 @@ from htco_application.incidents import (
     INCIDENT_RESOLVED,
     IncidentService,
 )
-from htco_application.jobs import ClaimedJob, JobError, JobQueue
+from htco_application.jobs import ClaimedJob, JobQueue
+from htco_application.kernel import EVENTS_DESTINATION, JobError, TenantShop
 from htco_application.maintenance import (
     EXPIRY_JOB,
     EXPIRY_SCHEDULE,
@@ -79,7 +79,6 @@ from htco_application.maintenance import (
     ExpiryVault,
     PurgeStore,
     ShopDirectory,
-    TenantShop,
     check_refresh_token,
     enqueue_capability_probes,
     enqueue_purges,
@@ -115,6 +114,7 @@ from htco_application.order_automations import (
     OrderVerification,
     ProductSalesCounters,
 )
+from htco_application.order_ingest import DRIFT_DETECTED
 from htco_application.order_intake import (
     ORDER_SYNC_JOB,
     RECONCILIATION_TICK,
@@ -124,7 +124,7 @@ from htco_application.order_intake import (
     enqueue_reconciliations,
 )
 from htco_application.shop_capabilities import CapabilityChecks
-from htco_application.sla_inspector import IncidentDetection
+from htco_application.sla_inspector import DriftIncidents, IncidentDetection
 from htco_application.tracking_sync import EngineTrackingSync, TrackingRecorder, TrackingSync
 from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_domain.actors import ActorKind, ActorRef
@@ -303,7 +303,7 @@ def notification_deliverers(
         PostgresNotificationStore(database), clock=_now, offload=anyio.to_thread.run_sync
     )
     return {
-        EVENT_DESTINATION: EventDeliverer(
+        EVENTS_DESTINATION: EventDeliverer(
             {
                 INCIDENT_OPENED: IncidentNotifications(service),
                 INCIDENT_RESOLVED: IncidentNotifications(service),
@@ -436,6 +436,12 @@ def order_event_subscribers(engine: DurableAutomationEngine) -> dict[str, EventS
     """The order events that start the order automations (slice 5.11)."""
     triggers = OrderEventTriggers(engine, offload=anyio.to_thread.run_sync)
     return dict.fromkeys(sorted(VERIFIED_EVENTS | COUNTED_EVENTS), triggers)
+
+
+def fulfillment_event_subscribers(engine: DurableAutomationEngine) -> dict[str, EventSubscriber]:
+    """The order events that start the fulfillment automations: a drift starts Incident
+    Detection & Escalation (AC-6.3.4, slice 6.7)."""
+    return {DRIFT_DETECTED: DriftIncidents(engine, offload=anyio.to_thread.run_sync)}
 
 
 def fulfillment_handlers(
@@ -670,7 +676,10 @@ async def _serve(settings: WorkerSettings) -> None:
     handlers |= outbox_handlers(
         PostgresOutbox(database),
         notification_deliverers(
-            settings, database, http, order_events=order_event_subscribers(engine)
+            settings,
+            database,
+            http,
+            order_events=order_event_subscribers(engine) | fulfillment_event_subscribers(engine),
         ),
     )
     handlers |= automation_handlers(engine, settings.worker_id)
