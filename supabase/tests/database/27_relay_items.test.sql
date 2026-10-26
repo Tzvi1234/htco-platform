@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_worker;
-select plan(16);
+select plan(17);
 
 insert into auth.users (id, email) values
   ('27a10000-0000-0000-0000-000000000001', 'owner-r@example.test'),
@@ -107,6 +107,10 @@ select throws_ok(
 select lives_ok(
   $$delete from app.relay_item_codes where relay_item_id = '27d10000-0000-0000-0000-000000000001'$$,
   'the worker deletes the closed item''s code'
+);
+select lives_ok(
+  $$delete from app.relay_items where id = '27d10000-0000-0000-0000-000000000001'$$,
+  'the worker deletes its organization''s relay item (the disconnect purge)'
 );
 reset role;
 select is(

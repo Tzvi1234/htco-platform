@@ -24,15 +24,20 @@ class MemoryRelayStore:
     audits: list[AuditRecord] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def open_item(self, item: RelayItem) -> bool:
+    def open_item(self, item: RelayItem) -> tuple[RelayItem, bool]:
         with self._lock:
-            if any(
-                i.shop_id == item.shop_id and i.receipt_id == item.receipt_id
-                for i in self.items.values()
-            ):
-                return False
+            found = next(
+                (
+                    i
+                    for i in self.items.values()
+                    if i.shop_id == item.shop_id and i.receipt_id == item.receipt_id
+                ),
+                None,
+            )
+            if found is not None:
+                return found, False
             self.items[item.id] = item
-            return True
+            return item, True
 
     def item(self, organization_id: uuid.UUID, item_id: uuid.UUID) -> RelayItem | None:
         found = self.items.get(item_id)
@@ -50,9 +55,14 @@ class MemoryRelayStore:
         ]
         return tuple(sorted(found, key=lambda i: i.opened_at)[:limit])
 
-    def code(self, organization_id: uuid.UUID, item_id: uuid.UUID) -> str | None:
+    def reveal_code(
+        self, organization_id: uuid.UUID, item_id: uuid.UUID, *, audit: AuditRecord
+    ) -> str | None:
         found = self.item(organization_id, item_id)
-        return None if found is None else self.codes.get(item_id)
+        code = None if found is None else self.codes.get(item_id)
+        if code is not None:
+            self.audits.append(audit)
+        return code
 
     def tracking_on_receipt(self, shop_id: uuid.UUID, receipt_id: int, fingerprint: bytes) -> bool:
         return (shop_id, receipt_id, fingerprint) in self.on_etsy

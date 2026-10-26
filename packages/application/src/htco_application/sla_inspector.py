@@ -34,7 +34,11 @@ from htco_application.incidents import (
 from htco_application.jobs import JobError, JsonValue
 from htco_application.messaging import OutboxMessage
 from htco_application.notifications import NotificationRequest, NotificationService
-from htco_application.relay import RelayStore, open_due_relay_items
+from htco_application.relay import (
+    RelayStore,
+    open_due_relay_items,
+    reconcile_relay_items,
+)
 from htco_application.review_alerts import low_review_alerts
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.fulfillment import SlaPolicy, select_policy, ship_by_at_risk
@@ -222,7 +226,14 @@ class IncidentDetection:
                     self.relay, self.alerts, organization_id=ctx.organization_id,
                     shop_id=shop_id, awaiting=awaiting, now=now,
                     correlation_id=ctx.correlation_id, offload=self.offload,
+                    calendar=select_policy(policies, shop_id=shop_id).calendar,
                 )  # fmt: skip
+                cancelled, expired = await reconcile_relay_items(
+                    self.relay, self.store.closed_orders, organization_id=ctx.organization_id,
+                    shop_id=shop_id, now=now, offload=self.offload,
+                )  # fmt: skip
+                output["relay_items_cancelled"] = cancelled
+                output["relay_items_expired"] = expired
         return Completed(output)
 
     async def _ship_by(

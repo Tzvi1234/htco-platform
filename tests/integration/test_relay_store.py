@@ -70,9 +70,11 @@ async def test_one_item_per_order_paste_once_and_close_on_etsy(
     first = item(org, shop, 61)
 
     with tenant_scope(org):
-        assert worker.open_item(first) is True
-        assert worker.open_item(item(org, shop, 61)) is False  # one per order, ever
-        assert worker.open_item(item(org, shop, 62)) is True
+        assert worker.open_item(first) == (first, True)
+        # One per order, ever: a second opening answers the stored item.
+        stored, created = worker.open_item(item(org, shop, 61))
+        assert (stored.id, created) == (first.id, False)
+        assert worker.open_item(item(org, shop, 62))[1] is True
 
     fingerprint = tracking_fingerprint(shop, CODE)
     moved = api.hand_off(

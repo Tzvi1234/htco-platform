@@ -15,9 +15,9 @@ roles, never in an audit, an event or a log.
 """
 
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 from typing import Any, Protocol
 
@@ -27,11 +27,14 @@ from htco_application.audit import AuditRecord
 from htco_application.notifications import NotificationRequest, NotificationService
 from htco_application.shops import OrganizationRequiredError
 from htco_domain.actors import ActorKind, ActorRef
-from htco_domain.fulfillment import TrackingNumber
+from htco_domain.fulfillment import BusinessCalendar, TrackingNumber
 from htco_domain.notifications import NotificationKind
 from htco_domain.relay import ClosedReason, RelayState, relay_window
 
 LIST_LIMIT = 200
+# A pasted code is kept at most this long (Sage's security review of #159): an item handed off
+# without tracking on Etsy for 30 days closes as expired, and its code goes with it.
+RELAY_CODE_TTL = timedelta(days=30)
 
 type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
 
@@ -87,8 +90,9 @@ class DuplicateTrackingError(Exception):
 class RelayStore(Protocol):
     """Synchronous (psycopg's pool): the API runs it in a worker thread, the worker offloads it."""
 
-    def open_item(self, item: RelayItem) -> bool:
-        """Insert unless the order has an item already (one per order, ever)."""
+    def open_item(self, item: RelayItem) -> tuple[RelayItem, bool]:
+        """Insert unless the order has an item already (one per order, ever): the order's
+        stored item, and whether it is new."""
         ...
 
     def item(self, organization_id: uuid.UUID, item_id: uuid.UUID) -> RelayItem | None: ...
@@ -99,8 +103,11 @@ class RelayStore(Protocol):
         """Oldest first; `shop_ids` (a shop-scoped role's grants) is applied before `limit`."""
         ...
 
-    def code(self, organization_id: uuid.UUID, item_id: uuid.UUID) -> str | None:
-        """The pasted code while the item waits for its upload; None once it closed."""
+    def reveal_code(
+        self, organization_id: uuid.UUID, item_id: uuid.UUID, *, audit: AuditRecord
+    ) -> str | None:
+        """The pasted code while the item waits for its upload, with the reveal's audit in the
+        same transaction; None (and no audit) once it closed."""
         ...
 
     def tracking_on_receipt(self, shop_id: uuid.UUID, receipt_id: int, fingerprint: bytes) -> bool:
@@ -154,10 +161,13 @@ async def open_due_relay_items(  # noqa: PLR0913 - the order list and its collab
     correlation_id: str | None,
     new_id: Callable[[], uuid.UUID] = uuid.uuid7,
     offload: Offload = _inline,
+    calendar: BusinessCalendar | None = None,
 ) -> int:
-    """One relay item per awaiting order strictly past the relay window, and one notification
-    when it opens. Runs inside Incident Detection's inspection (slice 6.10)."""
-    window = relay_window()
+    """One relay item per awaiting order strictly past the relay window, counted in the shop's
+    business days (its SLA policy's calendar), and one notification. The notification is asked
+    for again while the item waits, so one that failed is sent by the next inspection; its key
+    keeps it to one (Codex review of #159). Returns how many items opened."""
+    window = relay_window(calendar)
     opened = 0
     for order in awaiting:
         if not window.is_breached(order.paid_at, now=now):
@@ -172,21 +182,59 @@ async def open_due_relay_items(  # noqa: PLR0913 - the order list and its collab
             opened_at=now,
             updated_at=now,
         )
-        created: bool = await offload(partial(store.open_item, item))
-        if not created:
+        stored, created = await offload(partial(store.open_item, item))
+        opened += created
+        if stored.state is not RelayState.AWAITING_TRACKING:
             continue
-        opened += 1
         await alerts.notify(
             NotificationRequest(
                 organization_id=organization_id,
                 kind=NotificationKind.RELAY_TRACKING_NEEDED,
                 dedup_key=f"relay:{shop_id}:{order.receipt_id}",
-                params={"receipt_id": order.receipt_id, "relay_item_id": str(item.id)},
+                params={"receipt_id": order.receipt_id, "relay_item_id": str(stored.id)},
                 shop_id=shop_id,
                 correlation_id=correlation_id,
             )
         )
     return opened
+
+
+async def reconcile_relay_items(  # noqa: PLR0913 - the shop and its collaborators
+    store: RelayStore,
+    closed_orders: Callable[[uuid.UUID, tuple[int, ...]], Mapping[int, datetime]],
+    *,
+    organization_id: uuid.UUID,
+    shop_id: uuid.UUID,
+    now: datetime,
+    offload: Offload = _inline,
+) -> tuple[int, int]:
+    """Close the shop's open items whose order was cancelled or refunded on Etsy (`cancelled`,
+    Codex review of #159) and those handed off longer than `RELAY_CODE_TTL` (`expired`, Sage's
+    security review). Closing deletes a pasted code. Returns (cancelled, expired)."""
+    items: tuple[RelayItem, ...] = await offload(
+        partial(store.open_items, organization_id, shop_ids=frozenset({shop_id}), limit=LIST_LIMIT)
+    )
+    if not items:
+        return 0, 0
+    done: Mapping[int, datetime] = await offload(
+        partial(closed_orders, shop_id, tuple(i.receipt_id for i in items))
+    )
+    cancelled = expired = 0
+    for item in items:
+        reason = (
+            ClosedReason.CANCELLED
+            if item.receipt_id in done
+            else ClosedReason.EXPIRED
+            if item.state is RelayState.HANDED_OFF and now - item.updated_at > RELAY_CODE_TTL
+            else None
+        )
+        if reason is None:
+            continue
+        moved = await offload(partial(store.close, item.id, reason=reason, now=now))
+        if moved is not None:
+            cancelled += reason is ClosedReason.CANCELLED
+            expired += reason is ClosedReason.EXPIRED
+    return cancelled, expired
 
 
 def _organization(auth: AuthContext, organization_id: uuid.UUID | None) -> uuid.UUID:
@@ -272,17 +320,19 @@ def submit_tracking(  # noqa: PLR0913 - the caller, the item and the pasted trac
     )
 
 
-def relay_code(
+def relay_code(  # noqa: PLR0913 - the caller, the item and the request
     auth: AuthContext,
     store: RelayStore,
     *,
     organization_id: uuid.UUID | None,
     item_id: uuid.UUID,
     now: datetime,
+    correlation_id: str | None,
 ) -> str:
     """The pasted code for the person who copies it into Etsy: buyer-data roles of the shop
-    only, while the item is open. Anyone else, or a closed item, gets `RelayItemNotVisibleError`
-    (404), so the answer never says whether a code exists."""
+    only, while the item is open, and every reveal audited (`relay.code_revealed`, without the
+    code). Anyone else, or a closed item, gets `RelayItemNotVisibleError` (404), so the answer
+    never says whether a code exists."""
     organization_id = _organization(auth, organization_id)
     item = store.item(organization_id, item_id)
     if item is None or not all(
@@ -290,8 +340,19 @@ def relay_code(
         for capability in (Capability.UPDATE_INCIDENTS, Capability.VIEW_BUYER_CONTACT)
     ):
         raise RelayItemNotVisibleError("no such relay item")
-    code = store.code(organization_id, item_id)
-    if code is None or not item.state.is_open:
+    if not item.state.is_open:
+        raise RelayItemNotVisibleError("no such relay item")
+    reveal = AuditRecord.new(
+        organization_id=organization_id,
+        actor=ActorRef(ActorKind.USER, str(auth.user_id)),
+        action="relay.code_revealed",
+        entity_type="relay_item",
+        entity_id=str(item.id),
+        after={"carrier": item.carrier, "last4": item.last4, "receipt_id": item.receipt_id},
+        correlation_id=correlation_id,
+    )
+    code = store.reveal_code(organization_id, item_id, audit=reveal)
+    if code is None:
         raise RelayItemNotVisibleError("no such relay item")
     return code
 

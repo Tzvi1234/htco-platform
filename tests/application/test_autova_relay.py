@@ -9,17 +9,20 @@ used twice.
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import override
 
 import pytest
 
 from htco_application.access.authentication import AuthContext, Membership
 from htco_application.notifications import NotificationService
 from htco_application.relay import (
+    RELAY_CODE_TTL,
     DuplicateTrackingError,
     RelayItemMovedError,
     RelayItemNotVisibleError,
     list_relay_items,
     open_due_relay_items,
+    reconcile_relay_items,
     relay_code,
     submit_tracking,
 )
@@ -347,15 +350,159 @@ async def test_the_code_is_given_back_for_the_copy_to_buyer_data_roles_only() ->
         correlation_id="req-1",
     )  # fmt: skip
 
-    assert relay_code(auth(), store, organization_id=ORG, item_id=item, now=PAID) == CODE
+    assert (
+        relay_code(auth(), store, organization_id=ORG, item_id=item, now=PAID, correlation_id=None)
+        == CODE
+    )
     with pytest.raises(RelayItemNotVisibleError):  # a viewer of the shop: not even that it exists
-        relay_code(auth(Role.VIEWER), store, organization_id=ORG, item_id=item, now=PAID)
+        relay_code(
+            auth(Role.VIEWER),
+            store,
+            organization_id=ORG,
+            item_id=item,
+            now=PAID,
+            correlation_id=None,
+        )
     store.close(item, reason=ClosedReason.TRACKING_ON_ETSY, now=PAID)
     with pytest.raises(RelayItemNotVisibleError):  # closed: the code is gone
-        relay_code(auth(), store, organization_id=ORG, item_id=item, now=PAID)
+        relay_code(auth(), store, organization_id=ORG, item_id=item, now=PAID, correlation_id=None)
 
 
 async def test_one_workspace_needs_no_organization_named() -> None:
     store = MemoryRelayStore()
     await an_item(store)
     assert len(list_relay_items(auth(), store, organization_id=None, now=PAID)) == 1
+
+
+# --- Codex review of #159 ----------------------------------------------------------------------
+
+
+async def test_a_lost_notification_is_sent_by_the_next_inspection() -> None:
+    """The item stays; a notification that failed is created on the next run (deduplicated)."""
+
+    class Failing(MemoryNotificationStore):
+        @override
+        def add_notifications(self, *args: object, **kwargs: object) -> int:
+            raise ConnectionError("notification store down")
+
+    store = MemoryRelayStore()
+    now = PAID + timedelta(days=3)
+    failing = Failing([Member(OWNER, "owner", "owner@example.test")])
+    with pytest.raises(ConnectionError):
+        await open_due_relay_items(
+            store, NotificationService(failing, clock=lambda: now), organization_id=ORG,
+            shop_id=SHOP, awaiting=(AwaitingOrder(51, PAID),), now=now, correlation_id="s:1",
+        )  # fmt: skip
+    assert len(store.items) == 1
+
+    count, notes = await opened(store, now + timedelta(minutes=15))
+    again, _ = await opened(store, now + timedelta(minutes=30))
+
+    assert (count, again) == (0, 0)  # no second item
+    [row] = notes.rows.values()
+    assert row.params["relay_item_id"] == str(next(iter(store.items)))
+
+
+async def test_the_relay_window_counts_the_shops_own_business_days() -> None:
+    """A Monday payment with Tuesday a holiday opens on Thursday, not Wednesday."""
+    from htco_domain.fulfillment import BusinessCalendar  # noqa: PLC0415
+
+    holiday = BusinessCalendar(holidays=frozenset({PAID.date() + timedelta(days=1)}))
+    store = MemoryRelayStore()
+    notes = MemoryNotificationStore([Member(OWNER, "owner", "owner@example.test")])
+    wednesday = PAID + timedelta(days=2, minutes=1)
+
+    def run(now: datetime) -> object:
+        return open_due_relay_items(
+            store, NotificationService(notes, clock=lambda: now), organization_id=ORG,
+            shop_id=SHOP, awaiting=(AwaitingOrder(51, PAID),), now=now, correlation_id="s:1",
+            calendar=holiday,
+        )  # fmt: skip
+
+    assert await run(wednesday) == 0  # type: ignore[misc]
+    assert await run(wednesday + timedelta(days=1)) == 1  # type: ignore[misc]
+
+
+async def test_a_cancelled_or_refunded_order_closes_its_item_and_drops_its_code() -> None:
+    """The inspection reconciles open items with closed orders (ClosedReason.CANCELLED)."""
+    from htco_application.automation.durable import HandlerContext  # noqa: PLC0415
+    from htco_application.execution.gateway import UnavailableGateway  # noqa: PLC0415
+    from htco_application.fulfillment_schedule import INCIDENT_DETECTION  # noqa: PLC0415
+    from htco_application.incidents import IncidentService  # noqa: PLC0415
+    from htco_application.sla_inspector import IncidentDetection  # noqa: PLC0415
+    from tests.fulfillment_fakes import (  # noqa: PLC0415
+        MemoryIncidentStore,
+        MemorySlaStore,
+        MemoryTrackingStore,
+    )
+
+    store = MemoryRelayStore()
+    item = await an_item(store)
+    submit_tracking(
+        auth(), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE, now=PAID,
+        correlation_id="req-1",
+    )  # fmt: skip
+    now = PAID + timedelta(days=4)
+    sla = MemorySlaStore(MemoryTrackingStore())
+    sla.closed[SHOP] = {51: now - timedelta(hours=1)}  # cancelled on Etsy
+    notes = MemoryNotificationStore([Member(OWNER, "owner", "owner@example.test")])
+    detection = IncidentDetection(
+        sla, IncidentService(MemoryIncidentStore(), clock=lambda: now), clock=lambda: now,
+        alerts=NotificationService(notes, clock=lambda: now), relay=store,
+    )  # fmt: skip
+    ctx = HandlerContext(
+        execution_id=uuid.uuid7(), automation_id=INCIDENT_DETECTION, actor=RELAY_ACTOR,
+        organization_id=ORG, shop_id=SHOP, correlation_id="sched:2", causation_id=None,
+        attempt=1, payload={"mode": "inspect"}, gateway=UnavailableGateway(),
+    )  # fmt: skip
+
+    await detection(ctx)
+
+    assert store.items[item].closed_reason is ClosedReason.CANCELLED
+    assert store.codes == {}
+
+
+# --- Sage's SECURITY review of #159 ------------------------------------------------------------
+
+
+async def test_a_pasted_code_never_outlives_its_ttl_the_item_expires() -> None:
+    """A backstop: an item handed off 30 days ago without tracking on Etsy closes as expired,
+    and its code goes with it."""
+    store = MemoryRelayStore()
+    item = await an_item(store)
+    submit_tracking(
+        auth(), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE, now=PAID,
+        correlation_id="req-1",
+    )  # fmt: skip
+
+    early = await reconcile_relay_items(
+        store, lambda _shop, _receipts: {}, organization_id=ORG, shop_id=SHOP,
+        now=PAID + RELAY_CODE_TTL - timedelta(minutes=1),
+    )  # fmt: skip
+    late = await reconcile_relay_items(
+        store, lambda _shop, _receipts: {}, organization_id=ORG, shop_id=SHOP,
+        now=PAID + RELAY_CODE_TTL + timedelta(minutes=1),
+    )  # fmt: skip
+
+    assert (early, late) == ((0, 0), (0, 1))
+    assert store.items[item].closed_reason is ClosedReason.EXPIRED
+    assert store.codes == {}
+
+
+async def test_every_reveal_of_a_code_is_audited_without_the_code() -> None:
+    store = MemoryRelayStore()
+    item = await an_item(store)
+    submit_tracking(
+        auth(), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE, now=PAID,
+        correlation_id="req-1",
+    )  # fmt: skip
+
+    relay_code(auth(), store, organization_id=ORG, item_id=item, now=PAID, correlation_id="req-2")
+
+    reveal = store.audits[-1]
+    assert (reveal.action, reveal.entity_id, reveal.correlation_id) == (
+        "relay.code_revealed",
+        str(item),
+        "req-2",
+    )
+    assert CODE not in str(reveal.after)

@@ -113,7 +113,7 @@ class RelayItemView(BaseModel):
     state: Literal["awaiting_tracking", "handed_off", "closed"]
     carrier: str | None
     last4: str | None
-    closed_reason: Literal["tracking_on_etsy", "uploaded", "cancelled"] | None
+    closed_reason: Literal["tracking_on_etsy", "uploaded", "cancelled", "expired"] | None
     paid_at: datetime
     opened_at: datetime
     updated_at: datetime
@@ -541,21 +541,24 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
             {**relay_problems, 404: "No code for the caller (none, closed or not allowed)"}
         ),
     )
-    async def get_relay_code(
+    async def get_relay_code(  # noqa: PLR0913, PLR0917 - the route's inputs
         item_id: uuid.UUID,
+        request: Request,
         response: Response,
         auth: CurrentAuth,
         center: Center,
         organization_id: uuid.UUID | None = None,
     ) -> RelayCodeView:
-        """Buyer-data roles of the shop only; never cached."""
+        """Buyer-data roles of the shop only; every reveal audited; never cached."""
         store = _relay(center)
+        correlation = getattr(request.state, "request_id", None)
         try:
             code = await _run(
                 lambda: relay_code(
-                    auth, store, organization_id=organization_id, item_id=item_id, now=clock()
+                    auth, store, organization_id=organization_id, item_id=item_id, now=clock(),
+                    correlation_id=correlation,
                 )
-            )
+            )  # fmt: skip
         except OrganizationRequiredError:
             raise ProblemError(ORGANIZATION_REQUIRED) from None
         except RelayItemNotVisibleError, NoMembershipError:

@@ -45,16 +45,16 @@ class PostgresRelayStore:
     def __init__(self, database: Database) -> None:
         self._database = database
 
-    def open_item(self, item: RelayItem) -> bool:
-        with self._database.connection() as connection:
+    def open_item(self, item: RelayItem) -> tuple[RelayItem, bool]:
+        with self._database.connection() as connection, connection.transaction():
             row = connection.execute(
-                """
+                f"""
                 insert into app.relay_items
                   (id, organization_id, shop_id, receipt_id, state, paid_at, opened_at, updated_at)
                 values (%s, %s, %s, %s, %s, %s, %s, %s)
                 on conflict (shop_id, receipt_id) do nothing
-                returning id
-                """,
+                returning {_COLUMNS}
+                """,  # noqa: S608 - a constant column list
                 [
                     item.id,
                     item.organization_id,
@@ -66,7 +66,15 @@ class PostgresRelayStore:
                     item.updated_at,
                 ],
             ).fetchone()
-        return row is not None
+            if row is not None:
+                return _item(row), True
+            existing = connection.execute(
+                f"select {_COLUMNS} from app.relay_items where shop_id = %s and receipt_id = %s",  # noqa: S608 - a constant column list
+                [item.shop_id, item.receipt_id],
+            ).fetchone()
+        if existing is None:  # pragma: no cover - the conflict says it exists
+            raise LookupError("the order's relay item vanished")
+        return _item(existing), False
 
     def item(self, organization_id: uuid.UUID, item_id: uuid.UUID) -> RelayItem | None:
         with self._database.connection() as connection:
@@ -93,8 +101,10 @@ class PostgresRelayStore:
             ).fetchall()
         return tuple(_item(r) for r in rows)
 
-    def code(self, organization_id: uuid.UUID, item_id: uuid.UUID) -> str | None:
-        with self._database.connection() as connection:
+    def reveal_code(
+        self, organization_id: uuid.UUID, item_id: uuid.UUID, *, audit: AuditRecord
+    ) -> str | None:
+        with self._database.connection() as connection, connection.transaction():
             row = connection.execute(
                 """
                 select code from app.relay_item_codes
@@ -102,7 +112,10 @@ class PostgresRelayStore:
                 """,
                 [organization_id, item_id],
             ).fetchone()
-        return None if row is None else str(row[0])
+            if row is None:
+                return None
+            append_audit(connection, audit)
+        return str(row[0])
 
     def tracking_on_receipt(self, shop_id: uuid.UUID, receipt_id: int, fingerprint: bytes) -> bool:
         with self._database.connection() as connection:

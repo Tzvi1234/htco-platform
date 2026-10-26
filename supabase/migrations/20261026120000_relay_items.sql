@@ -7,7 +7,8 @@
 -- the same fingerprint as `tracking_events`, so a number is never used twice (AC-6.10.2).
 -- `app.relay_item_codes`: the full pasted code, buyer data (ADR-0018). It exists only while the
 -- item waits for its upload, is read only by the buyer-data roles of its shop, and is deleted
--- when the item closes.
+-- when the item closes, when its order is cancelled or refunded, after 30 days at the latest
+-- (the time to live), and with the shop's disconnect purge.
 --
 -- The API writes both through its own role; the worker opens and closes items in its job's
 -- organization and may delete a closed item's code. No Etsy write is involved (6.8 adds it).
@@ -23,7 +24,7 @@ create table app.relay_items (
     state in ('awaiting_tracking', 'handed_off', 'closed')
   ),
   closed_reason text constraint relay_items_closed_reason_check check (
-    closed_reason in ('tracking_on_etsy', 'uploaded', 'cancelled')
+    closed_reason in ('tracking_on_etsy', 'uploaded', 'cancelled', 'expired')
   ),
   carrier text constraint relay_items_carrier_check check (carrier ~ '^[a-z0-9_]{2,20}$'),
   tracking_fingerprint bytea
@@ -79,7 +80,8 @@ create policy relay_item_codes_select on app.relay_item_codes for select to auth
 
 -- The worker: its job's organization only. It opens items, closes them on evidence, and deletes
 -- a closed item's code; it never reads a code.
-grant select, insert on app.relay_items to htco_worker;
+-- Delete: the disconnect purge removes a shop's items, and their codes cascade (ADR-0018).
+grant select, insert, delete on app.relay_items to htco_worker;
 grant update (state, closed_reason, updated_at, closed_at) on app.relay_items to htco_worker;
 create policy relay_items_worker on app.relay_items for all to htco_worker
   using (organization_id = (select private.worker_organization_id()))

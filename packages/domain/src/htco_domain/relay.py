@@ -30,6 +30,8 @@ class ClosedReason(StrEnum):
     TRACKING_ON_ETSY = "tracking_on_etsy"
     UPLOADED = "uploaded"
     CANCELLED = "cancelled"
+    # Handed off longer than the code's time to live without tracking on Etsy (the backstop).
+    EXPIRED = "expired"
 
 
 def relay_window(calendar: BusinessCalendar | None = None) -> SlaPolicy:

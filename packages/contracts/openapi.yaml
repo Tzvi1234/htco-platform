@@ -6114,7 +6114,7 @@ paths:
       tags:
       - incidents
       summary: The pasted tracking number, for the person who copies it into Etsy
-      description: Buyer-data roles of the shop only; never cached.
+      description: Buyer-data roles of the shop only; every reveal audited; never cached.
       operationId: get_relay_code
       security:
       - HTTPBearer: []
@@ -8655,6 +8655,7 @@ components:
             - tracking_on_etsy
             - uploaded
             - cancelled
+            - expired
           - type: 'null'
           title: Closed Reason
         paid_at:
