@@ -233,7 +233,7 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 | `tracking_events`, `sla_policies` | First sighting of each parcel per order (fingerprint and last four only); SLA windows per organization, shop, supplier and shipping method. **Created** (slices 6.1, 6.2, `20261025100000_fulfillment_incidents.sql`) | 6 |
 | `debug_reports` | Amir's diagnoses | 19 |
 | `audit.audit_log` | Append-only audit of sensitive actions | 2 |
-| `system_alerts`, `notifications`, `notification_preferences` | Alerts and user notifications. `notifications`, `notification_preferences`, `notification_settings` and `email_deliveries` **created** (slice 6.4, `20261025110000_notifications.sql`); alerts are notifications (no `system_alerts` table, audit P2-2) | 6–7 |
+| `system_alerts`, `notifications`, `notification_preferences` | Alerts and user notifications. `notifications`, `notification_preferences`, `notification_settings` and `email_deliveries` **created** (slice 6.4, `20261025110000_notifications.sql`); `notification_severity_preferences` and `notification_shop_mutes` **created** (slice 7.6, `20261027120000_notification_preferences.sql`); alerts are notifications (no `system_alerts` table, audit P2-2) | 6–7 |
 | `jobs.worker_heartbeats` | Liveness of workers: last beat, current job, stopping. **Created** (slice 5.1, `20261023120000_job_queue.sql`) | 5 |
 
 ### Infrastructure tables

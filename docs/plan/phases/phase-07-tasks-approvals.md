@@ -16,7 +16,7 @@
 - [ ] 7.3 Approvals
 - [ ] 7.4 Step-up rules for approvals
 - [ ] 7.5 Approvals inbox and task views
-- [ ] 7.6 Notification preferences
+- [x] 7.6 Notification preferences: per severity and per shop next to the 6.4 kinds (`20261027120000_notification_preferences.sql`, pgTAP 38), `GET`/`PUT /v1/notifications/preferences`
 - [ ] 7.7 Activity record store
 - [ ] 7.8 Activity query API and view
 - [ ] 7.9 Scheduled Reporting & Notifications automation

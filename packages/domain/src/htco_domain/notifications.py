@@ -4,6 +4,12 @@ notification may say. No I/O.
 A notification carries a kind and a few parameters; the screen and the email template render the
 words in the reader's language. Parameters are identifiers only (FR-EML-01, AC-6.4.2): the
 receipt number, never a buyer's name, address or tracking code.
+
+Preferences (slice 7.6): a user chooses in-app and email per kind (6.4) and per severity, and can
+mute a shop. Every notification has a severity (`severity_of`): security kinds are critical, an
+incident carries its own, every other kind a fixed one. `delivery` decides the two channels:
+security kinds always go out on both, whatever the preferences (AC-6.4.4, AC-7.6.1); a muted
+shop's non-critical notifications go nowhere; a critical one always reaches the inbox.
 """
 
 import re
@@ -134,3 +140,64 @@ def wants_email(kind: NotificationKind, preference: Preference | None) -> bool:
 
 def wants_in_app(kind: NotificationKind, preference: Preference | None) -> bool:
     return kind.is_security or preference is None or preference.in_app
+
+
+class NotificationSeverity(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+# The severity of each kind; an incident's own severity parameter takes precedence.
+KIND_SEVERITY: Mapping[NotificationKind, NotificationSeverity] = {
+    NotificationKind.INCIDENT_OPENED: NotificationSeverity.HIGH,
+    NotificationKind.INCIDENT_RESOLVED: NotificationSeverity.LOW,
+    NotificationKind.INCIDENT_ESCALATED: NotificationSeverity.HIGH,
+    NotificationKind.ALERT_SHIP_BY: NotificationSeverity.HIGH,
+    NotificationKind.ALERT_LOW_REVIEW: NotificationSeverity.MEDIUM,
+    NotificationKind.ALERT_OUT_OF_STOCK: NotificationSeverity.MEDIUM,
+    NotificationKind.RELAY_TRACKING_NEEDED: NotificationSeverity.HIGH,
+    **dict.fromkeys(SECURITY_KINDS, NotificationSeverity.CRITICAL),
+}
+
+_CARRIES_SEVERITY = frozenset(
+    {
+        NotificationKind.INCIDENT_OPENED,
+        NotificationKind.INCIDENT_RESOLVED,
+        NotificationKind.INCIDENT_ESCALATED,
+    }
+)
+
+
+def severity_of(kind: NotificationKind, params: Mapping[str, str]) -> NotificationSeverity:
+    if kind.is_security:
+        return NotificationSeverity.CRITICAL
+    own = params.get("severity")
+    if kind in _CARRIES_SEVERITY and own is not None:
+        return NotificationSeverity(own)
+    return KIND_SEVERITY[kind]
+
+
+@dataclass(frozen=True)
+class Preferences:
+    """What one recipient chose for one notification: its kind, its severity, its shop."""
+
+    kind: Preference | None = None
+    severity: Preference | None = None
+    shop_muted: bool = False
+
+
+def delivery(
+    kind: NotificationKind, severity: NotificationSeverity, preferences: Preferences
+) -> tuple[bool, bool]:
+    """(in-app, email) for one recipient (slice 7.6)."""
+    if kind.is_security:
+        return True, True
+    critical = severity is NotificationSeverity.CRITICAL
+    if preferences.shop_muted and not critical:
+        return False, False
+    by_severity = preferences.severity or Preference()
+    in_app = critical or (wants_in_app(kind, preferences.kind) and by_severity.in_app)
+    email = wants_email(kind, preferences.kind) and by_severity.email
+    return in_app, email

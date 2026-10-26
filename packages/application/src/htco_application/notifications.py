@@ -33,10 +33,12 @@ from htco_domain.notifications import (
     Audience,
     Locale,
     NotificationKind,
+    NotificationSeverity,
     Preference,
+    Preferences,
     check_params,
-    wants_email,
-    wants_in_app,
+    delivery,
+    severity_of,
 )
 
 EMAIL_DESTINATION = "email.send"
@@ -69,7 +71,15 @@ class NotificationRequest:
 class Recipient:
     user_id: uuid.UUID
     locale: Locale = Locale.HE
-    preference: Preference | None = None
+    preference: Preference | None = None  # for the notification's kind
+    # Slice 7.6: the recipient's choice for the notification's severity, and whether they muted
+    # its shop.
+    severity_preference: Preference | None = None
+    shop_muted: bool = False
+
+    @property
+    def preferences(self) -> Preferences:
+        return Preferences(self.preference, self.severity_preference, self.shop_muted)
 
 
 @dataclass(frozen=True)
@@ -91,10 +101,13 @@ class Notification:
 class NotificationStore(Protocol):
     """Synchronous (psycopg's pool); run through `offload`."""
 
-    def recipients(
+    def recipients(  # noqa: PLR0913 - the audience and what to choose by
         self, organization_id: uuid.UUID, audience: Audience, kind: NotificationKind, *,
-        user_id: uuid.UUID | None, shop_id: uuid.UUID | None,
-    ) -> tuple[Recipient, ...]: ...  # fmt: skip
+        user_id: uuid.UUID | None, shop_id: uuid.UUID | None, severity: NotificationSeverity,
+    ) -> tuple[Recipient, ...]:  # fmt: skip
+        """The audience with each one's preferences for this kind, this severity and this shop
+        (`shop_muted` only when `shop_id` is given)."""
+        ...
 
     def add_notifications(
         self,
@@ -138,19 +151,19 @@ class NotificationService:
     async def notify(self, request: NotificationRequest) -> int:
         """Writes the notifications and emails; returns how many notifications were new."""
         params = check_params(request.params)
+        severity = severity_of(request.kind, params)
         now = self.clock()
         recipients: tuple[Recipient, ...] = await self.offload(
             lambda: self.store.recipients(
                 request.organization_id, AUDIENCE[request.kind], request.kind,
-                user_id=request.user_id, shop_id=request.shop_id,
+                user_id=request.user_id, shop_id=request.shop_id, severity=severity,
             )
         )  # fmt: skip
         notifications: list[Notification] = []
         emails: dict[uuid.UUID, OutboxMessage] = {}
         for recipient in recipients:
-            if not wants_in_app(request.kind, recipient.preference) and not wants_email(
-                request.kind, recipient.preference
-            ):
+            in_app, email = delivery(request.kind, severity, recipient.preferences)
+            if not in_app and not email:
                 continue
             notification = Notification(
                 id=self.new_id(),
@@ -162,10 +175,10 @@ class NotificationService:
                 created_at=now,
                 shop_id=request.shop_id,
                 incident_id=request.incident_id,
-                in_app=wants_in_app(request.kind, recipient.preference),
+                in_app=in_app,
             )
             notifications.append(notification)
-            if wants_email(request.kind, recipient.preference):
+            if email:
                 emails[recipient.user_id] = email_message(
                     notification, recipient.locale, request.correlation_id
                 )
