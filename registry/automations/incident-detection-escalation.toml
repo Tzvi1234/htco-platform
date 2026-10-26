@@ -1,9 +1,11 @@
-# Incident Detection & Escalation. Automation specification (ADR-0013). DRAFT: not production-ready.
+# Incident Detection & Escalation. Automation specification (ADR-0013). All sections defined
+# (slice 6.7); readiness stays "draft" until the owner approves the activation.
 id = "incident-detection-escalation"
 name = "Incident Detection & Escalation"
 version = 1
 business_owner = "amir"
-primary_trigger = "event"
+# Only the schedule is wired today; the drift event (AC-6.3.4) is handled but not yet triggered.
+primary_trigger = "schedule"
 callable_from = ["event", "schedule", "workflow"]
 timeout_seconds = 120
 side_effect = "internal"
@@ -18,73 +20,73 @@ initial_backoff_seconds = 5
 max_backoff_seconds = 900
 
 [specification.identity]
-status = "draft"
-text = "Incident Detection & Escalation (incident-detection-escalation), version 1. Deterministic: no model calls."
+status = "defined"
+text = "Incident Detection & Escalation (incident-detection-escalation), version 1. Deterministic: no model calls, no browser, no Etsy call."
 
 [specification.business_owner]
-status = "draft"
-text = "amir: accountable for the outcome; Engineering maintains the code."
+status = "defined"
+text = "amir: accountable for the outcome (the owner until Amir is active); Engineering maintains the code."
 
 [specification.trigger]
-status = "draft"
-text = "Primary: event. Also callable from: event, schedule, workflow, each through the API and authorization checks."
+status = "defined"
+text = "Primary: schedule. The fulfillment.inspect schedule (every 15 minutes, off until HTCO_WORKER_SCHEDULES names it) enqueues one fulfillment.inspect_shop job per shop and period, which starts this automation with the key incident-detection-escalation:{shop_id}:{period} (mode inspect). The handler also accepts a drift payload (AC-6.3.4), but no trigger passes one yet. Workflow goes through the engine's authorization."
 
 [specification.input_schema]
-status = "draft"
-text = "DRAFT: JSON Schema in packages/contracts/automations/incident-detection-escalation.json, written in Phase 6."
+status = "defined"
+text = "packages/contracts/automations/incident-detection-escalation.input.json: mode inspect, or a drift (its ID, kind and receipt). No buyer data."
 
 [specification.preconditions]
-status = "draft"
-text = "DRAFT: shop connected and capability verified where external systems are involved."
+status = "defined"
+text = "The shop belongs to the execution's organization; a job that names no shop, an unknown mode or a malformed drift is a job error, and an unknown shop finds nothing under RLS. It reads only HTCO's own store, so a disconnected shop is still inspected from the stored orders."
 
 [specification.steps]
-status = "draft"
-text = "Evaluate SLA rules; open exactly one incident per root cause and resource; notify; escalate by severity and age."
+status = "defined"
+text = "Read the organization's SLA policies and the shop's paid orders awaiting tracking; pick each order's most specific policy (no row: the built-in default, htco_domain.fulfillment.DEFAULT_WINDOW_DAYS business days) and, strictly past its deadline, open one tracking_missing incident with its first incident_events row, incidents.opened.v1 and fulfillment.sla_breached.v1 in one transaction. Follow up the open incidents: resolve one whose order closed (cancelled or refunded), and move one older than its severity's limit to escalated (note age_over_severity_limit). Raise the ship-by warnings of slice 6.9. The outbox subscriber turns incidents.opened.v1 and incidents.resolved.v1 into one in-app notification per Owner and Admin; an opening also sends one email each by default (a resolution does not, and a recipient's preferences can turn the email off; Resend is off until the owner's DNS: logged meanwhile). An escalation changes the incident's state only; it notifies nobody yet."
 
 [specification.output_schema]
-status = "draft"
-text = "DRAFT: defined with the input schema in Phase 6."
+status = "defined"
+text = "packages/contracts/automations/incident-detection-escalation.output.json: how many orders were checked and how many incidents were opened, resolved and escalated, the ship-by alerts raised, and for a drift its incident_id. No amounts and no buyer data."
 
 [specification.dependencies]
-status = "draft"
-text = "SLA rules, notifications"
+status = "defined"
+text = "HTCO's own store only: app.sla_policies, app.etsy_orders, app.tracking_events, app.incidents and app.incident_events, app.notifications, app.email_deliveries and the outbox; Resend for email once switched on."
 
 [specification.error_handling]
-status = "draft"
-text = "Typed errors per dependency; a capability blocked by the marketplace is recorded, never retried in a loop."
+status = "defined"
+text = "A database error raises into the retry policy; nothing half-written survives, because each opening is one transaction. A temporary email failure is retried by the outbox; a permanent one is recorded on the delivery. Errors are recorded as their type name only (a job error also keeps its safe message)."
 
 [specification.retry_policy]
-status = "draft"
-text = "Exponential backoff from the retry table; then dead-letter and an incident."
+status = "defined"
+text = "Five attempts, exponential backoff from 5 s to 15 min with jitter; then dead-lettered, visible in Admin › Health and recoverable by an audited Owner or Admin retry of the execution (POST /v1/automations/{automation_id}/executions/{execution_id}/retry; the queue's dead-letter retry refuses an execution's job with 409 retry-through-execution)."
 
 [specification.idempotency]
-status = "draft"
-text = "Key incident:{root_cause}:{resource_id}; unique per automation; a replay returns the existing execution."
+status = "defined"
+text = "The engine's unique (automation_id, idempotency_key) absorbs a repeated trigger. An open incident is unique per (organization_id, dedup_key) with dedup_key {cause}:{resource_kind}:{resource_id} (a partial unique index while not resolved), so inspecting again opens nothing new; the breach event's key is fulfillment.sla_breached.v1:{shop}:{receipt}:{policy_id}:{version}. A notification is unique per (organization_id, user_id, dedup_key) with {kind}:{incident_id}, and an email per outbox message. An incident escalates once."
 
 [specification.timeouts_and_sla]
-status = "draft"
-text = "Within 5 minutes of a rule breach"
+status = "defined"
+text = "120 s per attempt; every 15 minutes per shop once the schedule is on, so a breach is opened within 15 minutes of its deadline. Escalation after 7 days (low), 3 days (medium), 24 hours (high) or 4 hours (critical) without progress."
 
 [specification.permissions]
-status = "draft"
-text = "Runs under its own service identity with least-privilege database grants; employees trigger it only when it is in their allowed_automations."
+status = "defined"
+text = "Runs as the htco_worker role inside its job's organization: select on sla_policies and the etsy_orders columns it needs; select and insert on incidents (update of state, severity and its times only) and incident_events; select and insert on notifications and email_deliveries, select on notification_settings and notification_preferences, and execute on the security-definer functions app.worker_notification_recipients and app.worker_member_email, which read the members' email addresses for the fan-out; the outbox. No action through the Action Gateway, no Etsy call."
 
 [specification.audit]
-status = "draft"
-text = "One activity record per execution and per external side effect, with correlation and causation IDs."
+status = "defined"
+text = "Execution state changes with actor and correlation ID; every incident change is an incident_events row with its evidence and the execution's correlation ID; notifications and email deliveries keep their outbox message."
 
 [specification.tests]
-status = "draft"
-text = "DRAFT: replay, failure and recovery tests in Phase 6 (Scenario G pattern)."
+status = "defined"
+text = "tests/application/test_sla_inspector.py (AC-6.2.1 and 6.2.2; inspecting again opens nothing new, AC-6.3.1; a cancelled order resolves; an old incident escalates once; the schedule and its keys; a draft automation refused); tests/application/test_incidents.py; tests/domain/test_incidents.py (the escalation table); tests/application/test_notifications.py (one notification and one email, AC-6.4.1); tests/application/test_fulfillment_alerts.py; tests/integration/test_fulfillment_store.py and test_notification_store.py against Postgres; pgTAP 19, 25 and 26."
 
 [specification.recovery]
-status = "draft"
-text = "DRAFT: compensation or manual recovery runbook written in Phase 6."
+status = "defined"
+text = "Runbooks: docs/features/incidents/operations.md and docs/features/notifications/operations.md. To stop new runs, set readiness back to draft in this file and run the registry sync, the Migrate workflow's htco registry sync --automations --apply, because the worker reads the definitions from the database (then the engine refuses every trigger of a draft automation); taking fulfillment.inspect out of HTCO_WORKER_SCHEDULES stops the schedule. Setting readiness back to draft stops new triggers only: executions already pending or retry-scheduled still run, because the engine checks readiness when it is triggered, not when it executes. To stop those at once, stop the agent-worker deployment (all queue work pauses and resumes when it starts again). An incident resolves only on evidence: it resolves itself once its order closes (cancelled or refunded) or its tracking appears, and a person moves it only along its next states (POST /v1/incidents/{incident_id}/transitions refuses resolved with 409 evidence-required); an incident opened wrongly needs an admin's data fix until a dismiss step exists; retry a dead-lettered execution (see the retry policy); an email that failed for good is visible on its delivery."
 
 [specification.approvals]
-status = "draft"
-text = "None for internal effects; external effects go through the outbox."
+status = "defined"
+text = "None: it records incidents and notifies. A remediation outside its own records needs a person: from Phase 7 it becomes a task or an approval, and it runs nothing itself."
 
 [specification.metrics]
-status = "draft"
-text = "Executions, success rate, retries, dead letters, latency p50/p95, cost per execution."
+status = "defined"
+text = "Admin › Health (slice 5.9): executions, success rate, retries, dead letters and latency p50 and p95 over 7 days; incidents open by state and severity in the incident center."
