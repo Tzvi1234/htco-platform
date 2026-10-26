@@ -420,7 +420,7 @@ Switch the global browser kill switch on: all `browser.etsy.*` flags go off, and
 
 See [COST_MODEL §6](../../cost/COST_MODEL.md#6-architecture-upgrade-2026-10-23-execution-browser-authenticator):
 
-- `browser-worker` about $12–24/month (Chromium needs 1–2 GB);
-- a fixed egress IP $0 to $25/month, depending on the option;
+- `browser-worker` on a basic HTCO droplet of 2 GB, about $12/month. App Platform cannot apply the egress rules (AC-8A.2.22);
+- the shared browser egress is that droplet's own IP, at no extra cost (D-18 (a)). An optional per-shop egress is about $5/month per shop when enabled;
 - Grafana OSS self-hosted $0, or Grafana Cloud free tier;
 - Browser Use model calls from the employee budgets.
