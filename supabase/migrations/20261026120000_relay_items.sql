@@ -88,3 +88,7 @@ grant delete on app.relay_item_codes to htco_worker;
 grant select (relay_item_id, organization_id) on app.relay_item_codes to htco_worker;
 create policy relay_item_codes_worker on app.relay_item_codes for delete to htco_worker
   using (organization_id = (select private.worker_organization_id()));
+-- A delete that names its row needs a select policy to see it; the column grant above still keeps
+-- the code itself out of the worker's reach.
+create policy relay_item_codes_worker_select on app.relay_item_codes for select to htco_worker
+  using (organization_id = (select private.worker_organization_id()));
