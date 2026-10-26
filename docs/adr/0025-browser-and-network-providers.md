@@ -94,7 +94,7 @@ The controller refuses a recipe that needs a capability the provider does not de
   - The lease is checked on that lock's own connection. A session whose connection dropped can therefore never pass through the connection of the session that took the lock next. That is the #121 finding.
   - The archive is written on that same connection, or with a generation compare-and-set on `browser_profile_archives`. That closes the window between checking the lock and writing.
 
-  A session that lost its lock never writes the profile back.
+  A session that lost its lock never writes the profile back. The archives themselves are reached only through `security definer` functions bound to a leased `browser.*` job, never through a direct grant or the session setting (AC-8A.2.23).
 - **Choosing the provider.** Each environment names its provider in `shop_browser_environments.provider` (`managed-chromium`). Only the Owner changes it, with `aal2` and step-up, audited, and only to a provider whose readiness is `enabled`.
 - **Future providers.** No other provider is designed or built here: none that attaches to a browser run outside HTCO's browser worker, and no external-vendor adapter. **Any future provider must implement this contract and pass the same gates:** the shared contract suite, the SECURITY GATE checklist on board #95, and ADR-0020's rules. The owner's recorded choice of an external provider is in D-20: out of scope, and not enabled. An anti-detect browser fails the honesty checks of §2 by design, so it can never be `enabled` under this ADR.
 
@@ -198,17 +198,21 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
    - takes the execution, the attempt and the organization **from that job row**. It never takes them from its arguments or from a session setting, and it refuses an execution whose organization differs from the job's;
    - locks the action execution's row;
    - checks again that the action is `DISPATCHED` with its stored request hash, before its deadline, and that its approval is still `APPROVED` for that hash and not expired;
-   - inserts the run's row with the status `started` and `started_at` (`on conflict do nothing`), and commits;
-   - returns the stored request and binding the run is allowed to execute.
+   - inserts the run's row with the status `started` and `started_at` through `insert … on conflict do nothing returning`, and commits;
+   - **only if that insert returned a row** (this caller started the attempt), it returns the stored request and binding the run is allowed to execute, and a fresh **run token**: unguessable, bound to this execution and attempt, and stored only as a hash. On a conflict it returns nothing at all, so the caller gets no binding and no token, and exits.
 
-   That commit happens before any side effect, and only one worker can ever start an attempt. A job redelivered for an attempt that already has a `started` row exits without touching the page or the row (step 6). A read that needs no approval does not need the marker: its row is inserted directly with its final status.
+   That commit happens before any side effect, and only one worker can ever start an attempt. A job redelivered for an attempt that already has a `started` row never receives the binding, so it cannot touch the page, and it exits without touching the row (step 6). A read that needs no approval does not need the marker: its row is inserted directly with its final status.
+
+   **The run token and the lease heartbeat.**
+   - `private.finish_browser_run(run_token, outcome)` accepts the run token. It does not take the queue lease, so a long run can always record its outcome, even if its job lease ran out. It sets the final status once, and only on the attempt that the token names.
+   - While the run goes on, the worker renews its job's lease on a heartbeat, so the queue does not redeliver a live run. A missed heartbeat makes redelivery possible, but the redelivered job gets no binding (above), and only the watchdog marks a run lost (step 6).
 
    The function is `security definer`, so the browser role needs no right to lock or write `action_executions` itself. Because it runs with its owner's rights, RLS does not protect it, so it is hardened:
    - **it never trusts `htco.organization_id`** or any other setting the caller can choose. The organization comes from the leased job row, and so does the execution;
    - it sets `search_path = ''` and schema-qualifies every name;
    - `EXECUTE` is revoked from `PUBLIC` and granted only to `htco_browser`.
 
-   The same binding to a leased job covers everything else the browser role does with a run. It goes through two functions of the same kind: reading the claim and the approval, and `private.finish_browser_run(job_id, lease_token, outcome)` for the final status. None of it goes through RLS keyed on the session setting.
+   The same binding covers everything else the browser role does with a run. Starting, and reading the claim and the approval, go through the leased job. The final status goes through the attempt's run token (`private.finish_browser_run(run_token, outcome)`). None of it goes through RLS keyed on the session setting.
 
    What this does not change: a process that holds the browser role can still claim any queued `browser.*` job, because one shared browser worker is one trust boundary. Per-shop container isolation stays the later hardening option. This binding stops such a process from acting on an execution it has not claimed, and from choosing an organization by setting a value.
 
@@ -257,10 +261,10 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
 7. **The browser worker decides nothing about authority.** Authorization and approvals stay in the gateway. The browser worker only re-checks what can stop work.
    - **Its role can:**
      - claim `browser.*` jobs;
-     - start an attempt only through `private.start_browser_run(job_id, lease_token)` (`security definer`: the leased job, the lock, the checks and the `started` row in one transaction), which returns the stored request and binding;
-     - set a run's final status once, and insert an unapproved read's row, only through `private.finish_browser_run(job_id, lease_token, outcome)`.
+     - start an attempt only through `private.start_browser_run(job_id, lease_token)` (`security definer`: the leased job, the lock, the checks and the `started` row in one transaction). It returns the stored request, the binding and a run token only to the caller whose insert created the row;
+     - set a run's final status once only through `private.finish_browser_run(run_token, outcome)`, and insert an unapproved read's row through the same function with its leased job.
 
-     Both functions derive the execution and the organization from the job row leased with that token, never from a session setting.
+     The execution and the organization always come from the leased job or the run token, never from a session setting.
    - It cannot write `action_executions` or approvals.
    - A forged or replayed job is refused, because a job is only a locator:
      - a job the caller has not leased is refused;
@@ -297,6 +301,7 @@ The rules:
    - **No browser request ever reaches a private address.** A URL allowlist alone cannot stop that: a public page can redirect, load a subresource, open a WebSocket, use an IPv6 literal, or rebind its DNS name to a private address. So the rule is enforced on the connection, after DNS resolution, in two layers:
      - **The network.** Chromium runs as its own OS user in the browser worker. Egress rules for that user (nftables) drop every connection to loopback (`127.0.0.0/8`, `::1`), private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `fc00::/7`), link-local (`169.254.0.0/16`, which includes the cloud metadata endpoint, and `fe80::/10`) and multicast. That holds for IPv4 and IPv6, for every navigation, redirect, subresource and WebSocket. Only the browser worker's own process, a different user, reaches its exact internal endpoints: the database, the Live View relay and the model gateway.
      - **The controller.** Every request and redirect is checked against the recipe's URL allowlist. A request whose host is an IP literal in those ranges is refused, so it is visible as a refusal and not only a dropped packet.
+     - **Fail closed.** At startup and before each session, the browser worker probes from Chromium's user that those addresses are dropped. If a probe connects, or the rules cannot be applied (a platform without `NET_ADMIN`), it starts no session and reports `egress_rules_missing` (AC-8A.2.22). Where App Platform cannot apply the rules, the browser worker runs on HTCO's own droplet (D-18).
      - **Tests.** The contract suite's `127.0.0.1` fixture origin runs under a test-only network profile and a test-only allowlist, which no production configuration can load. The production profile is tested separately, with a fixture DNS server.
 
 8A.6 no longer waits for the whole of Phase 9. It needs only the **minimal Model Gateway** below, pulled forward from 9.1 and 9.2.
@@ -336,7 +341,9 @@ Each coordination need the existing ports cover today, checked one by one:
 
 Valkey is **planned, but not needed now**:
 - **Where:** behind the existing `RateLimiter` port, and an optional `Cache` port, once the threshold is reached.
-- **How it runs:** DigitalOcean's managed Valkey, in the same region, with TLS and authentication. Keys are namespaced per organization and expire.
+- **How it runs:** DigitalOcean's managed Valkey, in the same region, with TLS and authentication. Every key expires.
+  - **The limiter is keyed by the upstream bucket**, the Etsy app credential whose limit Etsy enforces, and never by organization. Every shop and organization on that credential shares one count, exactly as Etsy counts.
+  - A cache key, if a cache is ever added, is namespaced per organization.
 - **What it never holds:** buyer data, secrets, or any state whose loss would change a result.
 - **It fails closed.** If the shared limiter's backend is unavailable to a worker, that worker pauses its Etsy calls: they are `DEFERRED` with a short `retry_at`. It never falls back to a limiter of its own, because workers on two different limiters could together pass Etsy's shared limit. Switching every worker back to the Postgres window is one operator action, recorded as a single backend epoch in Postgres that all workers read, never a per-worker decision.
 
@@ -380,7 +387,7 @@ These are unchanged:
 ## Validation
 
 The acceptance criteria are in Phase 8A:
-- AC-8A.2.4 to AC-8A.2.20: the contract, configuration profiles, dispatch, the started marker, resume, and no private-network access;
+- AC-8A.2.4 to AC-8A.2.23: the contract, configuration profiles, dispatch, the started marker and run token, resume, no private-network access with fail-closed egress rules, and archives only through a leased job;
 - AC-8A.3.4 to AC-8A.3.7: egress;
 - AC-8A.6.3 to AC-8A.6.9: Browser Use through the gateway;
 - AC-8A.9.3 and AC-8A.9.4: the management screen.
@@ -403,3 +410,4 @@ The acceptance criteria are in Phase 8A:
   - the browser's background-traffic switches and an explicit decision on Safe Browsing;
   - pre-update archives treated as profiles;
   - the classification of browser run rows.
+- 2026-10-26: This is the last rewrite before merge (the owner approved the ADR). From now on, a further design-level point from a review is answered with a rationale and becomes an implementation acceptance criterion, checked again at the code pull request. That keeps the decision record stable while the 8A.2a to 8A.2c pull requests prove it.
