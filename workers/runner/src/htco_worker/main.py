@@ -115,6 +115,7 @@ from htco_application.order_automations import (
     OrderVerification,
     ProductSalesCounters,
 )
+from htco_application.order_ingest import DRIFT_DETECTED
 from htco_application.order_intake import (
     ORDER_SYNC_JOB,
     RECONCILIATION_TICK,
@@ -124,7 +125,7 @@ from htco_application.order_intake import (
     enqueue_reconciliations,
 )
 from htco_application.shop_capabilities import CapabilityChecks
-from htco_application.sla_inspector import IncidentDetection
+from htco_application.sla_inspector import DriftIncidents, IncidentDetection
 from htco_application.tracking_sync import EngineTrackingSync, TrackingRecorder, TrackingSync
 from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_domain.actors import ActorKind, ActorRef
@@ -438,6 +439,12 @@ def order_event_subscribers(engine: DurableAutomationEngine) -> dict[str, EventS
     return dict.fromkeys(sorted(VERIFIED_EVENTS | COUNTED_EVENTS), triggers)
 
 
+def fulfillment_event_subscribers(engine: DurableAutomationEngine) -> dict[str, EventSubscriber]:
+    """The order events that start the fulfillment automations: a drift starts Incident
+    Detection & Escalation (AC-6.3.4, slice 6.7)."""
+    return {DRIFT_DETECTED: DriftIncidents(engine, offload=anyio.to_thread.run_sync)}
+
+
 def fulfillment_handlers(
     database: Database, vault: PostgresTokenVault | None
 ) -> dict[str, Handler]:
@@ -670,7 +677,10 @@ async def _serve(settings: WorkerSettings) -> None:
     handlers |= outbox_handlers(
         PostgresOutbox(database),
         notification_deliverers(
-            settings, database, http, order_events=order_event_subscribers(engine)
+            settings,
+            database,
+            http,
+            order_events=order_event_subscribers(engine) | fulfillment_event_subscribers(engine),
         ),
     )
     handlers |= automation_handlers(engine, settings.worker_id)

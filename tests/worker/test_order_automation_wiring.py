@@ -10,8 +10,11 @@ from htco_application.order_automations import (
     VERIFIED_EVENTS,
     OrderEventTriggers,
 )
+from htco_application.order_ingest import DRIFT_DETECTED
+from htco_application.sla_inspector import DriftIncidents
 from htco_persistence.database import Database
 from htco_worker.main import (
+    fulfillment_event_subscribers,
     fulfillment_handlers,
     intake_handlers,
     order_event_subscribers,
@@ -32,6 +35,14 @@ def test_order_events__subscribed_to_start_the_order_automations() -> None:
 
     assert set(subscribers) == VERIFIED_EVENTS | COUNTED_EVENTS
     assert all(isinstance(s, OrderEventTriggers) for s in subscribers.values())
+
+
+def test_a_drift_event__is_subscribed_to_start_incident_detection() -> None:
+    """AC-6.3.4 (slice 6.7): `orders.drift_detected.v1` reaches Incident Detection."""
+    subscribers = fulfillment_event_subscribers(worker_engine(Database(DATABASE)))
+
+    assert set(subscribers) == {DRIFT_DETECTED}
+    assert all(isinstance(s, DriftIncidents) for s in subscribers.values())
 
 
 def test_worker_automations__exactly_the_handlers_the_worker_deploys() -> None:
