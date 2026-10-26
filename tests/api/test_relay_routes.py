@@ -150,6 +150,34 @@ async def test_refusals__a_viewer_403_an_ungranted_shop_404_and_no_code_for_the_
     assert store.codes == {}
 
 
+async def test_refusals__a_developer_updates_incidents_but_never_sees_or_pastes_a_code() -> None:
+    """Quill on #159: DEVELOPER has UPDATE_INCIDENTS on its shops but no buyer data, so it is the
+    role that tells the two rights apart. The paste is a 403, the code a 404, and no reveal is
+    audited."""
+    store = MemoryRelayStore()
+    item, pasted_by_owner = an_item(store, receipt=51), an_item(store, receipt=52)
+    async with client(store) as http:
+        await http.post(
+            f"/v1/relay-items/{pasted_by_owner.id}/tracking",
+            json={"carrier": "usps", "code": CODE},
+        )
+    audits_before = list(store.audits)
+    async with client(store, Role.DEVELOPER) as http:
+        listed = await http.get("/v1/relay-items")
+        pasted = await http.post(
+            f"/v1/relay-items/{item.id}/tracking",
+            json={"carrier": "usps", "code": "9400100000000000005678"},
+        )
+        code = await http.get(f"/v1/relay-items/{pasted_by_owner.id}/code")
+    assert listed.status_code == 200  # it may follow the relay, never its codes
+    assert pasted.status_code == 403
+    assert store.items[item.id].state is RelayState.AWAITING_TRACKING
+    assert item.id not in store.codes
+    assert code.status_code == 404
+    assert CODE not in code.text
+    assert store.audits == audits_before  # no relay.code_revealed, no paste
+
+
 async def test_unwired__503_relay_unavailable() -> None:
     async with client(None) as http:
         answer = await http.get("/v1/relay-items")
