@@ -9,6 +9,7 @@ form to any other actor). Contact data is never in it: the adapter never reads i
 """
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
@@ -22,6 +23,16 @@ from htco_application.marketplace import (
     ShippingAddress,
     display_name,
 )
+
+# The automations that receive the buyer's name and shipping address in the order history form
+# (ADR-0018). Every other caller of the form gets the same receipts without them (AUD-06).
+BUYER_DATA_AUTOMATIONS = frozenset({"etsy-order-intake"})
+
+
+def without_buyer_data(receipt: OrderReceipt) -> OrderReceipt:
+    """The same receipt without the buyer's name, display name and shipping address: the order
+    history form for every automation outside `BUYER_DATA_AUTOMATIONS`."""
+    return replace(receipt, buyer_name=None, buyer_display_name=None, shipping_address=None)
 
 
 def _money(money: MarketplaceMoney) -> dict[str, JsonValue]:

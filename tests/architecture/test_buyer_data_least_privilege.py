@@ -15,6 +15,7 @@ import pytest
 from htco_application.execution.channels import EtsyApiChannel
 from htco_application.execution.contracts import ChannelBinding
 from htco_application.execution.gateway import ActionRequest, Channel
+from htco_application.jobs import JsonValue
 from htco_application.order_intake import RECEIPTS_READ
 from htco_application.order_receipts import BUYER_DATA_AUTOMATIONS, receipt_from_json
 from htco_domain.actors import ActorKind, ActorRef
@@ -48,7 +49,7 @@ def test_only_etsy_order_intake__is_entitled_to_buyer_data() -> None:
     assert {"order-dedup-verification", "tracking-sync"} <= set(CALLERS)
 
 
-async def _order_history(automation_id: str, values: dict[str, object]) -> dict[str, object]:
+async def _order_history(automation_id: str, values: dict[str, JsonValue]) -> dict[str, JsonValue]:
     receipt = shipped(paid_receipt(RECEIPT), minutes=30)
     channel = EtsyApiChannel(FakeMarketplace(order_receipts=(receipt,)), EtsyShops())
     outcome = await channel.execute(
@@ -70,10 +71,13 @@ async def _order_history(automation_id: str, values: dict[str, object]) -> dict[
 @pytest.mark.parametrize("automation_id", CANDIDATES)
 @pytest.mark.parametrize("values", [{"receipt_id": RECEIPT}, {"limit": 100, "offset": 0}])
 async def test_order_history_form__buyer_name_and_address_reach_etsy_order_intake_only(
-    automation_id: str, values: dict[str, object]
+    automation_id: str, values: dict[str, JsonValue]
 ) -> None:
     output = await _order_history(automation_id, values)
-    [raw] = output["receipts"]  # type: ignore[misc]
+    receipts = output["receipts"]
+    assert isinstance(receipts, list)
+    [raw] = receipts
+    assert isinstance(raw, dict)
     text = json.dumps(output)
     receipt = receipt_from_json(raw)
 
