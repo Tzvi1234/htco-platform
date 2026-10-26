@@ -12,7 +12,9 @@ import psycopg
 import pytest
 
 from htco_application.browser_profiles import (
+    NO_ARCHIVE,
     ProfileRecordError,
+    ProfileStaleError,
     ProfileVault,
     ProfileWorkspaces,
     SealedArchive,
@@ -199,3 +201,51 @@ async def test_profiles__no_archive_without_its_record_and_no_record_without_its
             [environment_id],
         ).fetchone()
     assert row == (None, None, 0)
+
+
+@pytest.mark.ac("AC-8A.2.8")
+async def test_profiles__the_generation_compare_and_set_refuses_a_stale_write(
+    admin: Database, browser: Database, tmp_path: Path
+) -> None:
+    """ADR-0025 §1: a session's re-seal replaces only the generation it unpacked. A newer
+    archive written meanwhile stays, the stale write raises, and nothing of it is committed:
+    neither the archive nor the environment's record."""
+    tenant = Tenant(admin)
+    _, environment_id = an_environment(admin, tenant)
+    profiles = PostgresBrowserProfiles(browser)
+    vault = ProfileVault(
+        EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), profiles, lambda: datetime.now(UTC)
+    )
+    workspaces = ProfileWorkspaces(vault, tmp_path)
+
+    with tenant_scope(tenant.organization_id):
+        environment = profiles.by_id(environment_id)
+        assert environment is not None
+        with pytest.raises(ProfileStaleError):
+            vault.seal(environment, b"none expected", expected=1)  # nothing stored yet
+        workspaces.create(environment)
+        assert vault.read(environment)[1] == 1
+        checkout = workspaces.checkout(environment)
+        directory = checkout.__enter__()
+        (directory / "Cookies").write_bytes(b"stale")
+        vault.seal(environment, b"newer", expected=1)  # another session's write
+        with pytest.raises(ProfileStaleError):
+            checkout.__exit__(None, None, None)
+        assert vault.read(environment) == (b"newer", 2)
+        with pytest.raises(ProfileStaleError):
+            vault.seal(environment, b"stale again", expected=NO_ARCHIVE)
+
+    assert (
+        scalar(
+            admin,
+            "select generation from app.browser_profile_archives where environment_id = %s",
+            [environment_id],
+        )
+        == 2
+    )
+    with admin.connection() as connection, pytest.raises(psycopg.errors.CheckViolation):
+        connection.execute(
+            "update app.browser_profile_archives set archive = '\\x01'::bytea "
+            "where environment_id = %s",
+            [environment_id],
+        )

@@ -32,7 +32,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Protocol
@@ -77,6 +77,16 @@ class ProfileFenceLostError(Exception):
     was written (#169, ADR-0025's fenced `save_session`)."""
 
 
+class ProfileStaleError(ProfileFenceLostError):
+    """The archive changed since this session read it (its generation moved on): the
+    compare-and-set refused the write, and nothing was written (ADR-0025 §1)."""
+
+
+# A write's expected generation: `NO_ARCHIVE` when the session found no archive; `None` for an
+# unconditional write (provisioning a new profile, before any session exists).
+NO_ARCHIVE = 0
+
+
 def profile_context(environment: BrowserEnvironment) -> bytes:
     """The associated data that binds a sealed archive to one organization, shop, environment."""
     return f"{environment.organization_id}|{environment.shop_id}|{environment.id}".encode("ascii")
@@ -110,6 +120,8 @@ class SealedArchive:
     blob: bytes = field(repr=False)
     sealed_at: datetime
     storage_key: str = ""
+    # The stored row's compare-and-set counter (1 on the first write); 0 before it is stored.
+    generation: int = 0
 
 
 class ProfileArchiveStore(Protocol):
@@ -117,10 +129,16 @@ class ProfileArchiveStore(Protocol):
 
     def get(self, environment_id: uuid.UUID) -> SealedArchive | None: ...
 
-    def put(self, archive: SealedArchive, *, fence: object | None = None) -> None:
+    def put(
+        self, archive: SealedArchive, *, fence: object | None = None, expected: int | None = None
+    ) -> None:
         """In one transaction: insert or replace the archive, and record its storage key and key
         ID on the environment's row. Raises `ProfileRecordError` (and writes nothing) unless
         exactly that one row was updated.
+
+        `expected` is the generation the writer read (`NO_ARCHIVE` when there was none). The
+        write replaces only that generation and moves it up by one; any other raises
+        `ProfileStaleError` and writes nothing. `None` writes unconditionally (provisioning).
 
         `fence` is the writing session's own profile lease. With a fence, the lease's hold on
         the profile lock is checked **inside the same write** (not before it), so a session
@@ -159,10 +177,16 @@ class ProfileVault:
         self._clock = clock
 
     def seal(
-        self, environment: BrowserEnvironment, archive: bytes, *, fence: object | None = None
+        self,
+        environment: BrowserEnvironment,
+        archive: bytes,
+        *,
+        fence: object | None = None,
+        expected: int | None = None,
     ) -> SealedArchive:
         """Seal and store the archive as the environment's last good profile; with `fence`,
-        only while that session's lease still holds the profile lock (`ProfileArchiveStore`)."""
+        only while that session's lease still holds the profile lock, and with `expected`, only
+        over the generation the session read (`ProfileArchiveStore.put`)."""
         if len(archive) > MAX_ARCHIVE_BYTES:
             raise ProfileTooLargeError("the profile archive is over the cap")
         key_id = self._sealer.current_key_id
@@ -174,20 +198,25 @@ class ProfileVault:
             shop_id=environment.shop_id, key_id=key_id, blob=blob, sealed_at=self._clock(),
             storage_key=profile_storage_key(environment),
         )  # fmt: skip
-        self._store.put(sealed, fence=fence)
+        self._store.put(sealed, fence=fence, expected=expected)
         return sealed
 
     def open(self, environment: BrowserEnvironment) -> bytes | None:
         """The environment's archive, or None when it has none yet."""
+        return self.read(environment)[0]
+
+    def read(self, environment: BrowserEnvironment) -> tuple[bytes | None, int]:
+        """The archive and its generation (`NO_ARCHIVE` when there is none yet)."""
         sealed = self._store.get(environment.id)
         if sealed is None:
-            return None
+            return None, NO_ARCHIVE
         if (sealed.organization_id, sealed.shop_id) != (
             environment.organization_id,
             environment.shop_id,
         ):
             raise ProfileUnsafeError("the archive's row belongs to another shop")
-        return self._sealer.open_blob(sealed.blob, context=profile_context(environment))
+        opened = self._sealer.open_blob(sealed.blob, context=profile_context(environment))
+        return opened, sealed.generation
 
     def delete(self, environment: BrowserEnvironment) -> None:
         self._store.delete(environment.id)
@@ -225,15 +254,16 @@ class ProfileWorkspaces:
         self, environment: BrowserEnvironment, *, fence: object | None = None
     ) -> Iterator[Path]:
         """One session's unpacked profile; the clean exit's re-seal is written under `fence`,
-        the session's own lease (#169)."""
+        the session's own lease (#169), and only over the generation it unpacked (ADR-0025 §1),
+        so a newer archive written meanwhile is never replaced (`ProfileStaleError`)."""
         # mkdtemp creates the directory readable by this user only (0o700).
         directory = Path(tempfile.mkdtemp(prefix="profile-", dir=self._root))
         try:
-            archive = self._vault.open(environment)
+            archive, generation = self._vault.read(environment)
             if archive is not None:
                 self._unpack(archive, directory)
             yield directory
-            self._vault.seal(environment, self._packed(directory), fence=fence)
+            self._vault.seal(environment, self._packed(directory), fence=fence, expected=generation)
         finally:
             _wipe(directory)
 
@@ -473,7 +503,9 @@ class MemoryProfileArchiveStore:
         with self._lock:
             return self.archives.get(environment_id)
 
-    def put(self, archive: SealedArchive, *, fence: object | None = None) -> None:
+    def put(
+        self, archive: SealedArchive, *, fence: object | None = None, expected: int | None = None
+    ) -> None:
         with self._lock:
             if (
                 fence is not None
@@ -483,7 +515,11 @@ class MemoryProfileArchiveStore:
                 raise ProfileFenceLostError("the session's lease no longer holds the profile")
             if archive.environment_id in self.missing:
                 raise ProfileRecordError("no environment row to record the archive on")
-            self.archives[archive.environment_id] = archive
+            stored = self.archives.get(archive.environment_id)
+            current = NO_ARCHIVE if stored is None else stored.generation
+            if expected is not None and expected != current:
+                raise ProfileStaleError("the archive changed since the session read it")
+            self.archives[archive.environment_id] = replace(archive, generation=current + 1)
             self.profiles[archive.environment_id] = (archive.storage_key, archive.key_id)
 
     def delete(self, environment_id: uuid.UUID) -> None:

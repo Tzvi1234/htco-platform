@@ -138,6 +138,20 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.2.8 | Parallel profiles, tested with fixtures. On one worker, sessions for as many different profiles as the declared capacity run at once, each holding its own profile lock. One more session waits for a slot, and the same profile is never open twice. `renew` re-seals refreshed cookies under the lock. `recover` restores the last good archive and runs a health check. **The fence:** session S1's lock connection drops and S2 takes the lock. S1's write-back is then refused, because its lease is checked on its own connection, never by environment. The archive write is fenced too, on that connection or with a generation compare-and-set. Red first, on a fake lock server and on Postgres. |
 | AC-8A.2.9 | The provider, configuration, network and dispatch ports are async (AUD-05). A test runs a browser session while the worker's heartbeat task keeps its schedule, with no blocking database call on the event loop. |
 
+**As built (8A.2a, second part: migration `20261026150000`, pgTAP `33_browser_profile_generation`):**
+- **The generation compare-and-set.** `app.browser_profile_archives.generation` starts at 1, and a trigger refuses any update that does not name exactly the next generation.
+  - `ProfileWorkspaces.checkout` remembers the generation it unpacked. Its re-seal replaces only that generation, through `ProfileArchiveStore.put(..., expected=)`, on the lease's own connection (#169, #172).
+  - A newer archive written meanwhile is kept. The stale write raises `ProfileStaleError`, a `ProfileFenceLostError`, so the session fails as `lock_lost`, and nothing of it is committed.
+  - Provisioning writes without an expectation.
+  - The check is tested on the memory store, against Postgres, and in pgTAP.
+- **The environment's provider.** `app.shop_browser_environments.provider` defaults to `managed-chromium`, the only row of the registry `app.browser_providers`, whose readiness is `enabled`.
+  - No role can change the column or read or write the registry yet.
+  - The Owner's change, with `aal2`, step-up and audit (the rest of AC-8A.2.6), lands with its endpoint.
+- **Moved (main, 2026-10-27):**
+  - The leased-job `security definer` archive functions of AC-8A.2.23 move to 8A.2c, with the `browser.*` job lease token they bind to.
+  - The production URL-allowlist bullet of AC-8A.2.5 moves to the egress rules of AC-8A.2.20.
+- **Enabling browser runs in production requires AC-8A.2.23 (8A.2c).**
+
 **8A.2b — Browser Configuration Profiles** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §2).
 - **One versioned configuration profile per environment.** It has two parts:
   - **The platform baseline, the same for every shop:**
