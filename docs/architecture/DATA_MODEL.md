@@ -112,7 +112,7 @@ The phase column says when a table first appears.
 | `listing_audits`, `listing_findings` | Listing Health results and evidence | 11 |
 | `product_candidates` | Shon's candidates with APPROVED / REVIEW / REJECTED, reasons, sources and confidence | 12 |
 | `product_sources`, `product_assets`, `asset_provenance` | Sources and media lineage | 12 |
-| `suppliers`, `quote_requests`, `supplier_quotes`, `supplier_mappings` | Supplier onboarding and active mappings; quotes parsed from AutoVA's emails; one active mapping per product or variant ([AutoVA integration](autova-integration.md)) | 7 (moved from 13) |
+| `suppliers`, `quote_requests`, `supplier_quotes`, `supplier_mappings` | Supplier onboarding and active mappings; quotes parsed from AutoVA's emails; one active mapping per product or variant ([AutoVA integration](autova-integration.md)). **Created** (slice 7.13, `20261027100000_supplier_quotes.sql`): a product is a shop's listing or one variant of it; one open quote request per product, its machine checked again by a trigger; quotes as exact `numeric(14,4)` with an ISO 4217 currency, the same mail stored once, never updated; at most one active mapping per product (a partial unique index), and an ended mapping keeps its reason. Members read their organization's suppliers and their shops' rows; only the worker writes, in its job's organization | 7 (moved from 13) |
 | `autova_orders` | Snapshots of AutoVA orders from recipe A-01 (export or screen): AutoVA ID, receipt, supplier, status, paid, mode, carrier, tracking, profit, `source`, `observed_at` | 8A |
 
 ### Finance
