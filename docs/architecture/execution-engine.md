@@ -577,7 +577,7 @@ RECEIVED ─► AUTHORIZED ─► (WAITING_APPROVAL ─► AUTHORIZED) ─► RO
                                                                    ├► HANDED_TO_HUMAN ─► RUNNING (resume) | CANCELLED
                                                                    └► FAILED ─► (retry policy) ─► ROUTED | DEAD_LETTERED
 ROUTED ─► DISPATCHED (Browser channel, ADR-0025 §3) ─► RUNNING (resume: the outcome is in) ─► VERIFYING
-              ├► HANDED_TO_HUMAN (a challenge, or a write that started with no outcome: interrupted or past its deadline)
+              ├► HANDED_TO_HUMAN (a challenge, or a write that started with no outcome: interrupted by the watchdog)
               ├► CANCELLED (its approval was revoked or expired before the attempt started, in the same transaction)
               └► FAILED (refused at execution time, approval_revoked included, or a read past its deadline)
 VERIFYING ─► FAILED (verification) ─► incident

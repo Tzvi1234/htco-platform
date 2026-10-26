@@ -198,7 +198,7 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
    - checks again that the action is `DISPATCHED` with this request hash, before its deadline, with its approval still `APPROVED` for this hash and not expired;
    - inserts the run's row with the status `started` and `started_at` (`on conflict do nothing`), and commits.
 
-   That commit happens before any side effect, and only one worker can ever start an attempt. A job redelivered for an attempt that already has a `started` row never touches the page again (step 6).
+   That commit happens before any side effect, and only one worker can ever start an attempt. A job redelivered for an attempt that already has a `started` row exits without touching the page or the row (step 6).
 
    The function is `security definer`, so the browser role needs no right to lock or write `action_executions` itself. Because it runs with its owner's rights, RLS does not protect it, so it is hardened:
    - it checks the execution's organization itself against the browser worker's own organization (`htco.organization_id`), and refuses an execution of any other organization;
@@ -231,12 +231,22 @@ The gateway runs steps 1 to 6 as today: validate, authorize, apply the approval 
    - A read recipe whose run died is retried within its policy.
    - **A write is never re-sent blindly.**
      - A write with no `started` row never touched the page. It may be retried within its policy.
-     - A write with a `started` row and no final status may have happened. That covers a crash after the marker, and a job the queue redelivers after its lease expired (`release_expired`). Such a run is never executed again: its row is set to `interrupted`, and the resume records `HANDED_TO_HUMAN` with one reconciliation task, "check whether it happened".
-     - **`interrupted` is set only while the profile lock is held**, by the redelivered job's worker or by the watchdog through `pg_try_advisory_lock` on the profile's key. No live session can then still be acting, so a slow session can never finish a write after a person has redone it. If a session still holds the lock, the watchdog reschedules itself. The controller enforces that session's deadline, and the session publishes its own outcome.
-   - **The deadline watchdog** (step 1) resolves what is left at the deadline plus grace:
+     - A write with a `started` row and no final status may have happened. That covers a crash after the marker, and a job the queue redelivers after its lease expired (`release_expired`). Such a run is never executed again.
+     - **A redelivered job decides nothing about it.** A job that finds its attempt `started` with no final status exits at once. It touches neither the page nor the row, even if it can take the profile lock.
+
+       The lock alone does not prove that the first session has stopped. In a database partition that cuts off only the browser worker, its lock connection drops and the lock is freed, but its session can still be acting on the site. The controller checks the lock only before the write-back, and only its own deadline bounds the work.
+   - **Only the deadline watchdog** (step 1) marks a run lost, and only by time. At the deadline plus grace it resolves what is left:
      - an attempt with an outcome takes the normal resume;
      - an attempt with no `started` row never ran. The start function refuses it from then on, because its deadline has passed. The action fails as `timeout`, and a read may be retried within its policy;
-     - an attempt with a `started` row and no final status is set to `interrupted` under the profile lock, as above, and goes to a person.
+     - an attempt with a `started` row and no final status is set to `interrupted`, and the resume records `HANDED_TO_HUMAN` with one reconciliation task, "check whether it happened".
+
+     **Why this is safe.** Three facts make sure that every session of that attempt has stopped before the watchdog acts:
+     - a start after the deadline is refused;
+     - the controller enforces the deadline in process;
+     - the grace is at least the session's maximum duration.
+
+     So a slow session can never finish a write after a person has been told to redo it. The watchdog also takes the profile lock (`pg_try_advisory_lock` on the profile's key) before it marks the run. If a live session still holds the lock, the watchdog reschedules itself.
+   - **The reschedules are capped**, for example at 5. After the last one, the watchdog opens an incident and alerts the Owner, without marking the run. A process hung with its lock connection open can then never leave an execution waiting for ever unseen.
 7. **The browser worker decides nothing about authority.** Authorization and approvals stay in the gateway. The browser worker only re-checks what can stop work.
    - **Its role can:**
      - claim `browser.*` jobs;
