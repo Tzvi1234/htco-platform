@@ -18,7 +18,7 @@ from htco_application.agents.runtime import AgentRuntime, AgentSession, SessionS
 from htco_application.workforce.registry import Registry
 from htco_domain.activity import ActivityKind, ActivityOutcome, ActivityRecord
 from htco_domain.actors import ActorKind, ActorRef
-from htco_domain.tasks import BusinessTask, TaskState
+from htco_domain.tasks import BusinessTask, TaskKind, TaskState
 from htco_domain.workforce import EmployeeProfile
 from tests.application.workforce_fixtures import (
     advisor_document,
@@ -84,9 +84,11 @@ def test_profile_task_automation_and_record__work_through_any_runtime() -> None:
         id=uuid.uuid7(),
         organization_id=uuid.uuid7(),
         shop_id=None,
+        kind=TaskKind.GENERAL,
         title="Research garden sculpture suppliers",
         assignee=ActorRef(ActorKind.EMPLOYEE, shon.identity.id),
         state=TaskState.RUNNING,
+        idempotency_key="research:garden-sculpture",
         correlation_id="corr-9",
     )
     runtime = _ScriptedRuntime()
