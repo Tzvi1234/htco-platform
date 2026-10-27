@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_browser, htco_worker, authenticated;
-select plan(46);
+select plan(56);
 
 -- A scratch table for the tokens the functions hand out (the tests' own, not the schema's).
 create temp table t (k text primary key, v text);
@@ -263,6 +263,117 @@ select results_eq(
   'AC-8A.2.15: a run that needs an approval is refused with approval_unavailable'
 );
 reset role;
+
+-- Quill on #202: every other refusal of a start, each from the state that causes it. Shop A's
+-- flag is on here and no kill switch is set yet, so only the condition under test refuses.
+-- Shop C (organization A) has an environment that is still provisioning.
+insert into app.shops (id, organization_id, name, marketplace, status) values
+  ('d4a10000-0000-0000-0000-000000000003', 'd4a00000-0000-0000-0000-000000000000', 'Shop DC', 'etsy', 'active');
+insert into app.shop_browser_environments (id, organization_id, shop_id, status) values
+  ('d4a20000-0000-0000-0000-000000000003', 'd4a00000-0000-0000-0000-000000000000',
+   'd4a10000-0000-0000-0000-000000000003', 'provisioning');
+-- Execution, binding and job `x` of shop A (or C): the execution's state, the binding's request
+-- hash, deadline, scope and automation as given.
+create function pg_temp.bound(
+  x text, shop text, environment text, state text, hash text, deadline timestamptz,
+  scope text, automation text
+) returns void language sql as $$
+  insert into app.action_executions
+    (id, organization_id, shop_id, action_name, action_version, idempotency_key, request_hash,
+     state, channel, actor_kind, actor_id, correlation_id)
+  values (('d4a3000' || x || '-0000-0000-0000-000000000000')::uuid, 'd4a00000-0000-0000-0000-000000000000',
+          shop::uuid, 'autova.order.read', 1, 'key-refusal-' || x, repeat('a', 64), state, 'browser', 'system',
+          'test', 'corr-' || x);
+  insert into app.browser_run_bindings
+    (action_execution_id, attempt, organization_id, shop_id, environment_id, action_name, recipe_id,
+     recipe_version, request_hash, needs_approval, is_write, deadline, scope_id, automation_id)
+  values (('d4a3000' || x || '-0000-0000-0000-000000000000')::uuid, 1, 'd4a00000-0000-0000-0000-000000000000',
+          shop::uuid, environment::uuid, 'autova.order.read', 'autova.order_status', 1, hash, false, false,
+          deadline, scope, automation);
+  insert into jobs.jobs (id, kind, idempotency_key, organization_id, shop_id, payload, max_attempts,
+                         initial_backoff_ms, max_backoff_ms, run_at)
+  values (('d4a4000' || x || '-0000-0000-0000-000000000000')::uuid, 'browser.run', 'browser-run-' || x,
+          'd4a00000-0000-0000-0000-000000000000', shop::uuid,
+          jsonb_build_object('action_execution_id', 'd4a3000' || x || '-0000-0000-0000-000000000000', 'attempt', 1),
+          3, 1000, 1000, now() - interval '1 second');
+$$;
+-- Claims job `x` (the only one queued) and starts it: its outcome and refusal.
+create function pg_temp.start(x text) returns text language plpgsql as $$
+declare
+  token text;
+  result text;
+begin
+  set local role htco_browser;
+  select lease_token into token from browser.claim_job('worker-3', 60);
+  select outcome || ':' || coalesce(refusal, '') into result
+  from browser.start_run(('d4a4000' || x || '-0000-0000-0000-000000000000')::uuid, token);
+  reset role;
+  return result;
+end;
+$$;
+select pg_advisory_lock(hashtextextended('htco.browser_profile:d4a20000-0000-0000-0000-000000000003', 0));
+select pg_temp.bound('5', 'd4a10000-0000-0000-0000-000000000001', 'd4a20000-0000-0000-0000-000000000001',
+                     'routed', repeat('a', 64), now() + interval '1 hour', null, null);
+select is(pg_temp.start('5'), 'refused:execution_not_dispatched',
+  'AC-8A.2.26: an execution that is not dispatched is refused');
+select pg_temp.bound('6', 'd4a10000-0000-0000-0000-000000000001', 'd4a20000-0000-0000-0000-000000000001',
+                     'dispatched', repeat('b', 64), now() + interval '1 hour', null, null);
+select is(pg_temp.start('6'), 'refused:request_hash_mismatch',
+  'AC-8A.2.26: a binding whose request hash is not the execution''s is refused');
+select pg_temp.bound('7', 'd4a10000-0000-0000-0000-000000000001', 'd4a20000-0000-0000-0000-000000000001',
+                     'dispatched', repeat('a', 64), now() - interval '1 minute', null, null);
+select is(pg_temp.start('7'), 'refused:deadline_passed',
+  'AC-8A.2.26: a run past its deadline is refused');
+select pg_temp.bound('8', 'd4a10000-0000-0000-0000-000000000003', 'd4a20000-0000-0000-0000-000000000003',
+                     'dispatched', repeat('a', 64), now() + interval '1 hour', null, null);
+select is(pg_temp.start('8'), 'refused:environment_not_ready',
+  'AC-8A.2.26: a run whose environment is not ready is refused');
+select pg_temp.bound('9', 'd4a10000-0000-0000-0000-000000000001', 'd4a20000-0000-0000-0000-000000000001',
+                     'dispatched', repeat('a', 64), now() + interval '1 hour', 'AB-12', null);
+select is(pg_temp.start('9'), 'refused:scope_not_recorded',
+  'AC-8A.2.26: a run whose scope has no scope_recorded row is refused');
+select pg_temp.bound('a', 'd4a10000-0000-0000-0000-000000000001', 'd4a20000-0000-0000-0000-000000000001',
+                     'dispatched', repeat('a', 64), now() + interval '1 hour', null, 'ghost-automation');
+select is(pg_temp.start('a'), 'refused:automation_not_ready',
+  'AC-8A.2.26: a run whose automation is not active is refused');
+
+-- Quill on #202: an unapproved read passes the same checks as a start before it records.
+-- With shop A's flag on it records the worker's outcome once.
+select pg_temp.bound('b', 'd4a10000-0000-0000-0000-000000000001', 'd4a20000-0000-0000-0000-000000000001',
+                     'dispatched', repeat('a', 64), now() + interval '1 hour', null, null);
+set local role htco_browser;
+insert into t select 'jobb', lease_token from browser.claim_job('worker-3', 60);
+select is(
+  browser.record_unapproved_read('d4a4000b-0000-0000-0000-000000000000', (select v from t where k = 'jobb'),
+                                 'succeeded', null, '{"status": "paid"}', '[]'),
+  true, 'AC-8A.2.24: an unapproved read that passes the gates records its outcome'
+);
+reset role;
+select is(
+  (select status from app.browser_run_outcomes where action_execution_id = 'd4a3000b-0000-0000-0000-000000000000'),
+  'succeeded', 'and the outcome is the worker''s'
+);
+-- Shop B has no gate row at all: the read is refused with flag_off and records only the refusal.
+insert into jobs.jobs (id, kind, idempotency_key, organization_id, shop_id, payload, max_attempts,
+                       initial_backoff_ms, max_backoff_ms, run_at)
+values ('d4b40001-0000-0000-0000-000000000000', 'browser.run', 'browser-run-org-b', 'd4b00000-0000-0000-0000-000000000000',
+        'd4b10000-0000-0000-0000-000000000001',
+        jsonb_build_object('action_execution_id', 'd4b30001-0000-0000-0000-000000000000', 'attempt', 1),
+        3, 1000, 1000, now() - interval '1 second');
+select pg_advisory_lock(hashtextextended('htco.browser_profile:d4b20000-0000-0000-0000-000000000001', 0));
+set local role htco_browser;
+insert into t select 'jobB', lease_token from browser.claim_job('worker-3', 60);
+select is(
+  browser.record_unapproved_read('d4b40001-0000-0000-0000-000000000000', (select v from t where k = 'jobB'),
+                                 'succeeded', null, '{"status": "paid"}', '[]'),
+  false, 'AC-8A.2.26: with no flag row an unapproved read is refused, as a start is'
+);
+reset role;
+select is(
+  (select status || ':' || error_code from app.browser_run_outcomes
+   where action_execution_id = 'd4b30001-0000-0000-0000-000000000000'),
+  'refused:flag_off', 'the refusal is its final row, never the worker''s outcome'
+);
 
 -- A kill switch refuses a start; a gate change and a start are serialized on the gates table.
 insert into app.browser_run_gates (id, organization_id, kind, actor_id, correlation_id)

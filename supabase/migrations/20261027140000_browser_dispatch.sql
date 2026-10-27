@@ -498,6 +498,26 @@ begin
 end;
 $$;
 
+-- Why a start or an unapproved read is refused now, or null: the execution, its request, the
+-- deadline and the environment, then the gates. One list for both (Quill on #202), so a read that
+-- records itself directly is held to every check a start is.
+create function private.browser_run_refusal(
+  p_binding app.browser_run_bindings, p_execution app.action_executions, p_environment_status text
+) returns text
+language plpgsql set search_path = '' as $$
+begin
+  return coalesce(
+    case
+      when p_execution.state <> 'dispatched' then 'execution_not_dispatched'
+      when p_execution.request_hash <> p_binding.request_hash then 'request_hash_mismatch'
+      when p_binding.deadline <= now() then 'deadline_passed'
+      when p_environment_status is distinct from 'ready' then 'environment_not_ready'
+    end,
+    private.browser_run_gate_refusal(p_binding)
+  );
+end;
+$$;
+
 -- AC-8A.2.18, 2.19, 2.21, 2.25, 2.26, 2.28. Call it on the profile lock's own connection.
 -- Returns one row with `outcome = 'started'` and the binding and a fresh run token, or
 -- `outcome = 'refused'` with its code; returns no row at all when the attempt was already
@@ -545,15 +565,7 @@ begin
   ) then
     raise exception 'browser run: another run of this profile is live' using errcode = '55P03';
   end if;
-  code := case
-    when execution.state <> 'dispatched' then 'execution_not_dispatched'
-    when execution.request_hash <> binding.request_hash then 'request_hash_mismatch'
-    when binding.deadline <= now() then 'deadline_passed'
-    when environment_status is distinct from 'ready' then 'environment_not_ready'
-  end;
-  if code is null then
-    code := private.browser_run_gate_refusal(binding);
-  end if;
+  code := private.browser_run_refusal(binding, execution, environment_status);
   -- Approvals are not in Postgres before Phase 7 (7.3, 7.11): an approval-gated run fails closed.
   if code is null and binding.needs_approval then
     code := 'approval_unavailable';
@@ -621,7 +633,8 @@ end;
 $$;
 
 -- AC-8A.2.24: a read that needs no approval gets its final row directly, once, with its leased
--- job; the same checks as a start, under the profile lock.
+-- job; the same checks as a start, under the profile lock. A refused read records only its
+-- refusal (a final row with the code, once) and returns false, as a start that is refused does.
 create function browser.record_unapproved_read(
   p_job_id uuid, p_lease_token text, p_status text, p_error_code text, p_output jsonb,
   p_evidence jsonb
@@ -630,6 +643,9 @@ language plpgsql security definer set search_path = '' as $$
 declare
   job jobs.jobs := private.leased_browser_job(p_job_id, p_lease_token);
   binding app.browser_run_bindings := private.leased_browser_run_binding(job);
+  execution app.action_executions;
+  environment_status text;
+  code text;
 begin
   if binding.needs_approval or binding.is_write then
     raise exception 'browser run: only an unapproved read records directly' using errcode = '42501';
@@ -640,6 +656,20 @@ begin
   end if;
   if not private.holds_browser_profile_lock(binding.environment_id) then
     raise exception 'browser run: record it under the profile lock' using errcode = '42501';
+  end if;
+  -- The same checks as a start, on the same rows (Quill on #202): flag, kill switch, scope,
+  -- readiness, deadline, the execution's state and request, and the environment.
+  select e.* into execution from app.action_executions e
+  where e.id = binding.action_execution_id for update;
+  if execution.id is null or execution.organization_id <> job.organization_id then
+    raise exception 'browser run: the execution is not the job''s' using errcode = '42501';
+  end if;
+  select e.status into environment_status from app.shop_browser_environments e
+  where e.id = binding.environment_id for update;
+  code := private.browser_run_refusal(binding, execution, environment_status);
+  if code is not null then
+    perform private.refuse_browser_run(job, binding, code);
+    return false;
   end if;
   insert into app.browser_run_outcomes
     (action_execution_id, attempt, organization_id, shop_id, environment_id, status, error_code,
@@ -776,6 +806,7 @@ begin
     'private.refuse_browser_run(jobs.jobs, app.browser_run_bindings, text)',
     'private.leased_browser_run_binding(jobs.jobs)',
     'private.browser_run_gate_refusal(app.browser_run_bindings)',
+    'private.browser_run_refusal(app.browser_run_bindings, app.action_executions, text)',
     'private.leased_browser_environment(jobs.jobs)',
     'private.check_browser_run_outcome_change()',
     'private.reject_browser_run_binding_change()',
