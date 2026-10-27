@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_worker;
-select plan(21);
+select plan(23);
 
 insert into auth.users (id, email) values
   ('35e00000-0000-0000-0000-000000000001', 'owner-t@example.test'),
@@ -26,10 +26,14 @@ insert into app.tasks
    correlation_id, created_at, updated_at)
 values
   ('35c00000-0000-0000-0000-000000000001', '35a00000-0000-0000-0000-000000000000', 'human_channel',
-   'Log in to Etsy again', 'user', '35e00000-0000-0000-0000-000000000001', 'running', 'hc:1', 'c-1',
+   'Log in to Etsy again', 'user', '35e00000-0000-0000-0000-000000000001', 'created', 'hc:1', 'c-1',
    now(), now()),
   ('35c00000-0000-0000-0000-000000000002', '35b00000-0000-0000-0000-000000000000', 'general',
    'Weekly review', 'employee', 'maya', 'created', 'weekly:1', 'c-2', now(), now());
+-- A task is inserted created and walks the machine (the insert trigger): task 1 to running.
+update app.tasks set state = 'queued' where id = '35c00000-0000-0000-0000-000000000001';
+update app.tasks set state = 'claimed' where id = '35c00000-0000-0000-0000-000000000001';
+update app.tasks set state = 'running' where id = '35c00000-0000-0000-0000-000000000001';
 insert into app.task_events (id, organization_id, task_id, from_state, to_state, actor_kind, actor_id, occurred_at)
 values ('35f00000-0000-0000-0000-000000000001', '35a00000-0000-0000-0000-000000000000',
         '35c00000-0000-0000-0000-000000000001', null, 'created', 'system', 'test', now());
@@ -114,6 +118,20 @@ select is((select count(*)::int from app.tasks), 1, 'the worker sees its job''s 
 select throws_ok(
   $$ update app.tasks set title = 'x' where id = '35c00000-0000-0000-0000-000000000002' $$,
   '42501', null, 'the worker moves a task, never retitles it');
+-- A task starts created without evidence (quill2 on #181): never inserted already completed.
+select throws_ok(
+  $$ insert into app.tasks (id, organization_id, kind, title, assignee_kind, assignee_id, state,
+       idempotency_key, correlation_id, evidence_kind, evidence_reference, created_at, updated_at)
+     values ('35c00000-0000-0000-0000-000000000007', '35b00000-0000-0000-0000-000000000000',
+       'general', 'Done already', 'system', 's', 'completed', 'k:7', 'c', 'execution',
+       '0190a000-0000-7000-8000-0000000000ee', now(), now()) $$,
+  '23514', null, 'the worker cannot insert a task already completed, even with evidence (AC-7.1.3)');
+select throws_ok(
+  $$ insert into app.tasks (id, organization_id, kind, title, assignee_kind, assignee_id, state,
+       idempotency_key, correlation_id, created_at, updated_at)
+     values ('35c00000-0000-0000-0000-000000000006', '35b00000-0000-0000-0000-000000000000',
+       'general', 'Queued already', 'system', 's', 'queued', 'k:6', 'c', now(), now()) $$,
+  '23514', null, 'nor one past created: every state after it is a recorded step');
 reset role;
 
 select * from finish();

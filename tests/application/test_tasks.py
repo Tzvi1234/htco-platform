@@ -262,6 +262,29 @@ async def test_detail__a_stranger__is_refused_before_anything_is_read() -> None:
         task_detail(member(), Untouchable(), stored.task.id, organization_id=OTHER_ORG, now=NOW)
 
 
+@pytest.mark.parametrize("role", [Role.OPERATIONS, Role.SUPPORT])
+async def test_detail__an_organization_wide_task__does_not_exist_for_a_shop_role(
+    role: Role,
+) -> None:
+    """Quill2 on #181 (mutant A1): the detail hides an organization-wide task from shop roles."""
+    svc, tasks = service()
+    org_wide = await create(svc)
+
+    with pytest.raises(TaskNotVisibleError):
+        task_detail(member(role, frozenset({SHOP})), tasks, org_wide.task.id,
+                    organization_id=ORG, now=NOW)  # fmt: skip
+
+
+@pytest.mark.parametrize("role", [Role.OWNER, Role.ADMIN])
+async def test_detail__an_organization_wide_task__is_the_owners_and_admins(role: Role) -> None:
+    svc, tasks = service()
+    org_wide = await create(svc)
+
+    detail = task_detail(member(role), tasks, org_wide.task.id, organization_id=ORG, now=NOW)
+
+    assert detail.stored.task.id == org_wide.task.id
+
+
 async def test_detail__a_task_of_another_shop__does_not_exist_for_a_shop_role() -> None:
     svc, tasks = service()
     stored = await create(svc, shop_id=OTHER_SHOP)

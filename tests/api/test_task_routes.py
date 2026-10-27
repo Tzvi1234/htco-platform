@@ -89,6 +89,22 @@ async def test_list__a_shop_role_sees_its_granted_shops_only() -> None:
     assert hidden.status_code == 404
 
 
+@pytest.mark.parametrize(
+    ("role", "status"),
+    [(Role.OPERATIONS, 404), (Role.SUPPORT, 404), (Role.OWNER, 200), (Role.ADMIN, 200)],
+)
+async def test_detail__an_organization_wide_task_is_for_the_owner_and_admins_only(
+    role: Role, status: int
+) -> None:
+    """Quill2 on #181 (mutant A1): the detail path keeps an organization-wide task from a shop
+    role, as the list does; the API reads with its own role, so RLS is no backstop here."""
+    world = World(role, frozenset({SHOP}))
+    org_wide = await world.task("org-wide")
+    async with world.client() as http:
+        answer = await http.get(f"/v1/tasks/{org_wide.task.id}")
+    assert answer.status_code == status
+
+
 async def test_list__filters_by_state_and_pages() -> None:
     world = World()
     for key in ("a", "b", "c"):

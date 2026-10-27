@@ -111,6 +111,22 @@ revoke all on function private.check_task_state() from public;
 create trigger tasks_check_state before update of state on app.tasks
   for each row execute function private.check_task_state();
 
+-- A task starts `created`, without evidence (quill2 on #181): it reaches any other state only
+-- through recorded steps, so no insert, the worker's included, puts one in already completed.
+create function private.check_task_insert() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.state <> 'created' or new.evidence_kind is not null or new.evidence_reference is not null then
+    raise exception 'task: a task starts created without evidence, not %', new.state
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end
+$$;
+revoke all on function private.check_task_insert() from public;
+create trigger tasks_check_insert before insert on app.tasks
+  for each row execute function private.check_task_insert();
+
 create table app.task_events (
   id uuid primary key,
   organization_id uuid not null,
