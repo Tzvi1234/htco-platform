@@ -22,6 +22,10 @@
       "maxLength": 36
     },
     "shop_id": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "string or null: the shop, when the event is about one"
     },
     "occurred_at": {
@@ -29,9 +33,17 @@
       "minLength": 1
     },
     "correlation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "string or null"
     },
     "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "string or null"
     },
     "idempotency_key": {
@@ -85,12 +97,24 @@
           "type": "integer"
         },
         "waiting_execution_id": {
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "string or null"
         },
         "action_execution_id": {
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "string or null: the gateway's action execution the run waits on; the decision resumes or ends that wait only"
         },
         "decided_by": {
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "string or null"
         }
       },
