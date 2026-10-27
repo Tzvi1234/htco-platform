@@ -158,6 +158,22 @@ async def test_add__several_passkeys_each_with_its_own_name() -> None:
     assert names == ["Phone", "Phone (2)"]
 
 
+async def test_add__an_unfinished_app_with_the_same_name_gets_the_passkey_a_number() -> None:
+    """Local Codex on #171: Supabase's factor names are unique across kinds, so an authenticator
+    app left unfinished under "Phone" would make the passkey's enrollment fail; the passkey takes
+    the next free name, and the app's unfinished enrollment is left to its own flow."""
+    world = World().with_app()
+    world.mfa.factors.append(Factor("app-9", False, "Phone", TOTP))
+    session = await world.session()
+
+    await world.passkeys.start(session, friendly_name="Phone")
+
+    assert [c for c in world.provider.calls if c.startswith("enroll")] == [
+        f"enroll {session.tokens.access_token} Phone (2)"
+    ]
+    assert any(f.id == "app-9" for f in world.mfa.factors)
+
+
 async def test_add__an_unfinished_passkey_is_removed_first() -> None:
     world = World().with_app()
     session = await world.session()

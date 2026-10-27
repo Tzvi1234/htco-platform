@@ -179,16 +179,18 @@ class Passkeys:
         """Adds an unverified passkey and returns the options to create it in the browser.
 
         Unfinished passkeys (a creation cancelled in the browser) are removed first, and a name
-        already used gets a number, as for authenticator apps."""
+        already used gets a number, as for authenticator apps. Supabase's names are unique across
+        every factor, so an unfinished authenticator app's name counts as used too (local Codex on
+        #171); that enrollment stays for its own flow."""
         provider = self._on()
         _require_aal2(session)
         access_token = session.tokens.access_token
         kept: set[str | None] = set()
         for factor in await self.mfa.factors_of(access_token):
-            if factor.verified:
-                kept.add(factor.name)
-            elif factor.kind == PASSKEY:
+            if not factor.verified and factor.kind == PASSKEY:
                 await self.mfa.remove_factor(access_token, factor.id)
+            else:
+                kept.add(factor.name)
         name, number = friendly_name, 2
         while name in kept:
             name, number = f"{friendly_name} ({number})", number + 1
