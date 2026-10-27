@@ -1,0 +1,14 @@
+From: AutoVA Quotes <quotes@autova.example.com>
+Subject: הצעת מחיר חדשה מספק ל-AV-PRD-20877
+Message-ID: <q-90399@autova.example.com>
+Authentication-Results: mx.quotes.example.com; dkim=pass header.d=autova.example.com header.s=sel1; spf=pass smtp.mailfrom=autova.example.com
+
+מוצר: AV-PRD-20877
+רישום Etsy: 2234567891
+ספק: Tel Aviv Leather Studio
+משלוח: ₪ 12.00
+שיטת משלוח: דואר ישראל רשום
+זמן טיפול: 1-2 ימים
+זמן משלוח: 3-5 ימים
+בתוקף עד: 2026-11-20
+מזהה הצעה: Q-90399

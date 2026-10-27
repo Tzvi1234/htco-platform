@@ -1,0 +1,17 @@
+From: AutoVA Quotes <quotes@autova.example.com>
+Subject: New supplier quote for AV-PRD-40551
+Message-ID: <q-92004@autova.example.com>
+Authentication-Results: mx.quotes.example.com; dkim=pass header.d=autova.example.com header.s=sel1; spf=pass smtp.mailfrom=autova.example.com
+
+A supplier sent a quote for one of your products.
+
+Product: AV-PRD-40551
+Etsy listing: 4234567893
+Supplier: Leeds Stitch & Co
+Unit price: £4.80
+Shipping: £1.25
+Shipping method: Royal Mail Tracked 48
+Processing time: 1 day
+Shipping time: 2 days
+Valid until: 2026-12-01
+Quote ID: Q-92004

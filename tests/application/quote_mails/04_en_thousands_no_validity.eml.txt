@@ -1,0 +1,17 @@
+From: AutoVA Quotes <quotes@autova.example.com>
+Subject: New supplier quote for AV-PRD-31002
+Message-ID: <q-91877@autova.example.com>
+Authentication-Results: mx.quotes.example.com; dkim=pass header.d=autova.example.com header.s=sel1; spf=pass smtp.mailfrom=autova.example.com
+
+A supplier sent a quote for one of your products.
+
+Product: AV-PRD-31002
+Etsy listing: 3234567892
+SKU: BAG-TAN-XL
+Supplier: Yiwu Bag Factory
+Unit price: $1,240.00
+Shipping: $86.50
+Shipping method: DHL Express
+Processing time: 10-15 days
+Shipping time: 5-8 days
+Quote ID: Q-91877

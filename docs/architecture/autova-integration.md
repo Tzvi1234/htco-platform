@@ -73,3 +73,35 @@ AutoVA signs in with email and password and has no TOTP (A-08, 2026-10-23). The 
 | (b) Gmail read-only OAuth | `gmail.readonly` with a query filter on AutoVA's sender, polled every few minutes | No DNS change | HTCO holds a token able to read the whole mailbox; Google's verification for a restricted scope |
 
 AutoVA's sending address is still unknown (A-09). The parser accepts only mail from the confirmed sender, and anything else is quarantined.
+
+**The sender is authenticated, never taken from `From`.** Anyone can write `From: <AutoVA's address>`, so a quote mail is read only when our receiving server vouches for it (`dkim_aligned` in `htco_application.quote_parser`, RFC 8601):
+
+1. Only the Authentication-Results header whose authserv-id is our receiving server's counts (`HTCO_AUTOVA_QUOTE_AUTHSERV_ID`, configuration like the sender).
+2. It must be the topmost one, the one our server added on arrival, and the only one with our ID: a second one was written by the sender, so the mail fails.
+3. It must report `dkim=pass` with `header.d` (or else the domain of `header.i`) equal to the configured sender's domain: strict DMARC alignment. DKIM survives the mailbox's forwarding (D-23 (a)); SPF does not, so SPF and DMARC results alone never count.
+4. A header that is missing, unreadable (quoted strings, unbalanced comments) or ambiguous fails closed.
+
+Order in the parser: a mail from another `From` is quarantined with no task; a mail whose `From` is AutoVA's but fails the verdict is quarantined and opens one Human task "check this quote" (`unauthenticated_sender`, a possible forgery), naming its message ID only when that reads as a plain message ID. Both happen before the body is read, and nothing is recorded.
+
+## The quote mail's layout (slice 7.15)
+
+The parser (`htco_application.quote_parser`) reads one layout: `Label: value` lines, in English or Hebrew, with no model involved. Until the owner sends real mails, the layout is **made up** (the fixtures in `tests/application/quote_mails/`); a real mail that differs is refused and opens one Human task, never a guessed quote, and the layout is adjusted with its own golden file.
+
+| Field | English label | Hebrew label | Required | Reads |
+|---|---|---|---|---|
+| AutoVA product | Product | מוצר | Yes | `AV-…` code |
+| Etsy listing | Etsy listing | רישום Etsy | Yes | digits |
+| SKU | SKU | מק״ט | No | code |
+| Variant | Variant | וריאציה | No | code (for example `pid:5512`) |
+| Supplier | Supplier | ספק | Yes | the name AutoVA shows |
+| Unit price | Unit price | מחיר ליחידה | Yes | `7.40 USD`, `USD 7.40`, `$1,240.00`, `€9.15`, `£4.80`, `₪ 38.50` |
+| Shipping | Shipping | משלוח | Yes | money in the same currency, or Free / חינם |
+| Shipping method | Shipping method | שיטת משלוח | Yes | text |
+| Processing time | Processing time | זמן טיפול | Yes | `2-4 days`, `1 day`, `2–4 ימים` |
+| Shipping time | Shipping time | זמן משלוח | Yes | the same |
+| Valid until | Valid until | בתוקף עד | No | ISO date |
+| Quote ID | Quote ID | מזהה הצעה | Yes | `Q-88213` (the quote's source reference) |
+
+Refused: an unknown label, a field twice, a required field missing, a value that does not read exactly, a price and shipping in two currencies, or a mail over 200,000 characters.
+
+Every value is read within what its column holds, in ASCII digits only: a listing up to 2^63 - 1 (bigint), money with at most 10 digits before the point and 4 after (numeric(14,4)), a supplier name up to 200 characters and a shipping method up to 120. Anything beyond is refused like any value that does not read; should a value still fail the domain's checks, the intake opens the same Human task (`invalid_value`) instead of failing.

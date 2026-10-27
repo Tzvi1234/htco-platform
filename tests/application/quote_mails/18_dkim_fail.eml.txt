@@ -1,0 +1,16 @@
+From: AutoVA Quotes <quotes@autova.example.com>
+Subject: New supplier quote for AV-PRD-10423
+Message-ID: <forged-6@mailer.example.com>
+Authentication-Results: mx.quotes.example.com; dkim=fail (bad signature) header.d=autova.example.com header.s=sel1
+
+A supplier sent a quote for one of your products.
+
+Product: AV-PRD-10423
+Etsy listing: 1234567890
+Supplier: Guangzhou Leather Works
+Unit price: 0.99 USD
+Shipping: Free
+Shipping method: Yun Express
+Processing time: 2-4 days
+Shipping time: 7-12 days
+Quote ID: Q-99006

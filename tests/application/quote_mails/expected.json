@@ -1,0 +1,62 @@
+{
+  "01_en_usd.eml.txt": {
+    "quote": {
+      "autova_product": "AV-PRD-10423", "listing_id": 1234567890, "variant": "", "sku": "WAL-BRN-01",
+      "supplier": "Guangzhou Leather Works", "currency": "USD", "unit_price": "7.40",
+      "shipping_cost": "2.10", "shipping_method": "Yun Express", "processing_days": [2, 4],
+      "shipping_days": [7, 12], "valid_until": "2026-11-10", "autova_quote_id": "Q-88213"
+    }
+  },
+  "02_he_ils.eml.txt": {
+    "quote": {
+      "autova_product": "AV-PRD-20877", "listing_id": 2234567891, "variant": "", "sku": "KEY-BLK-02",
+      "supplier": "Tel Aviv Leather Studio", "currency": "ILS", "unit_price": "38.50",
+      "shipping_cost": "12.00", "shipping_method": "דואר ישראל רשום", "processing_days": [1, 2],
+      "shipping_days": [3, 5], "valid_until": "2026-11-20", "autova_quote_id": "Q-90311"
+    }
+  },
+  "03_en_eur_free_shipping.eml.txt": {
+    "quote": {
+      "autova_product": "AV-PRD-10423", "listing_id": 1234567890, "variant": "", "sku": null,
+      "supplier": "Porto Craft Supplies", "currency": "EUR", "unit_price": "9.15",
+      "shipping_cost": "0", "shipping_method": "CTT Expresso", "processing_days": [3, 3],
+      "shipping_days": [4, 6], "valid_until": "2026-11-30", "autova_quote_id": "Q-88240"
+    }
+  },
+  "04_en_thousands_no_validity.eml.txt": {
+    "quote": {
+      "autova_product": "AV-PRD-31002", "listing_id": 3234567892, "variant": "", "sku": "BAG-TAN-XL",
+      "supplier": "Yiwu Bag Factory", "currency": "USD", "unit_price": "1240.00",
+      "shipping_cost": "86.50", "shipping_method": "DHL Express", "processing_days": [10, 15],
+      "shipping_days": [5, 8], "valid_until": null, "autova_quote_id": "Q-91877"
+    }
+  },
+  "05_he_usd_variant.eml.txt": {
+    "quote": {
+      "autova_product": "AV-PRD-10423-V2", "listing_id": 1234567890, "variant": "pid:5512",
+      "sku": null, "supplier": "Guangzhou Leather Works", "currency": "USD", "unit_price": "6.95",
+      "shipping_cost": "2.10", "shipping_method": "Yun Express", "processing_days": [2, 4],
+      "shipping_days": [7, 12], "valid_until": "2026-11-15", "autova_quote_id": "Q-88302"
+    }
+  },
+  "06_en_gbp_one_day.eml.txt": {
+    "quote": {
+      "autova_product": "AV-PRD-40551", "listing_id": 4234567893, "variant": "", "sku": null,
+      "supplier": "Leeds Stitch & Co", "currency": "GBP", "unit_price": "4.80",
+      "shipping_cost": "1.25", "shipping_method": "Royal Mail Tracked 48", "processing_days": [1, 1],
+      "shipping_days": [2, 2], "valid_until": "2026-12-01", "autova_quote_id": "Q-92004"
+    }
+  },
+  "07_changed_layout.eml.txt": {"refused": "unknown_field"},
+  "08_mixed_currencies.eml.txt": {"refused": "mixed_currencies"},
+  "09_other_sender.eml.txt": {"quarantined": "unknown_sender"},
+  "10_duplicate_field.eml.txt": {"refused": "duplicate_field"},
+  "11_missing_price.eml.txt": {"refused": "missing_field"},
+  "12_bad_values.eml.txt": {"refused": "invalid_value"},
+  "13_forged_from_unsigned.eml.txt": {"quarantined": "unauthenticated_sender"},
+  "14_no_authentication_results.eml.txt": {"quarantined": "unauthenticated_sender"},
+  "15_forged_results_below_ours.eml.txt": {"quarantined": "unauthenticated_sender"},
+  "16_results_from_another_server.eml.txt": {"quarantined": "unauthenticated_sender"},
+  "17_dkim_pass_for_another_domain.eml.txt": {"quarantined": "unauthenticated_sender"},
+  "18_dkim_fail.eml.txt": {"quarantined": "unauthenticated_sender"}
+}
