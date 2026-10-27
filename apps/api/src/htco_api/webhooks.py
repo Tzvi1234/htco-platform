@@ -36,7 +36,7 @@ from htco_application.etsy_webhooks import (
     WebhookRejectedError,
     WindowLimiter,
 )
-from htco_application.quote_mailbox import QuoteMailboxIngress
+from htco_application.quote_mailbox import QuoteMailboxIngress, QuoteMailRateLimitedError
 
 _log = structlog.get_logger(__name__)
 
@@ -141,6 +141,7 @@ def webhooks_router() -> APIRouter:
                 401: "Signature, timestamp or headers invalid (webhook-signature-invalid)",
                 404: "The quote mailbox is not configured on this server (not-found)",
                 413: "Body over 64 KiB (webhook-too-large)",
+                429: "Over the quote mailbox's rate limit (webhook-rate-limited)",
             }.items()
         },
     )
@@ -151,6 +152,12 @@ def webhooks_router() -> APIRouter:
         try:
             body = await _body(request)
             await ingress.receive(dict(request.headers), body)
+        except QuoteMailRateLimitedError as limited:
+            _log.warning("autova.quote_mail_rejected", reason="rate_limited")
+            raise ProblemError(
+                WEBHOOK_RATE_LIMITED,
+                headers={"Retry-After": str(max(1, math.ceil(limited.wait)))},
+            ) from None
         except WebhookRejectedError as rejected:
             _log.warning("autova.quote_mail_rejected", reason=rejected.reason.value)
             raise ProblemError(

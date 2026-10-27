@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from htco_application.etsy_webhooks import Rejection, WebhookRejectedError
+from htco_application.etsy_webhooks import Rejection, WebhookRejectedError, WindowLimiter
 from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
 from htco_application.kernel import TenantShop
 from htco_application.quote_mailbox import (
@@ -30,6 +30,8 @@ from htco_application.quote_mailbox import (
     MemoryQuoteReviews,
     QuoteMailboxIngress,
     QuoteMailProcessor,
+    QuoteMailRateLimitedError,
+    RawMailTooLargeError,
     parse_notice,
 )
 from htco_application.quote_parser import QuoteMail, QuoteParser, signed_recipients
@@ -237,6 +239,8 @@ async def test_ingress__the_same_mail_twice__one_inbox_row_and_one_job() -> None
     again = notice(email_id="5ef9a417-02e9-4d39-ad75-9611e0fcc33d")
     second = await ingress(inbox).receive(svix(again, svix_id="msg_resend0002"), again)
 
+    assert first is not None
+    assert second is not None
     assert (first.duplicate, second.duplicate) == (False, True)
     assert list(inbox.rows) == [(QUOTE_SOURCE, "<q-88213@autova.example.com>")]
     [job] = inbox.queue.jobs.values()
@@ -271,21 +275,59 @@ async def test_ingress__unsigned_or_wrongly_signed__refused(tamper: Any, reason:
     assert inbox.rows == {}
 
 
-async def test_ingress__another_address__kept_with_no_job_and_counted() -> None:
+async def test_ingress__another_address__counted_and_never_stored() -> None:
+    """Anyone can mail the domain with a Message-ID of their choosing: no row, so no growth."""
     inbox = MemoryWebhookInbox()
     body = notice(received_for=["quotes@office.example.com"], to=["quotes@office.example.com"])
     gate = ingress(inbox)
-    accepted = await gate.receive(svix(body), body)
-    assert accepted.job_id is None
+    assert await gate.receive(svix(body), body) is None
+    again = notice(
+        received_for=["quotes@office.example.com"], message_id="<chosen-2@elsewhere.example.com>"
+    )
+    assert await gate.receive(svix(again, svix_id="msg_resend0002"), again) is None
+    assert inbox.rows == {}
     assert inbox.queue.jobs == {}
-    assert gate.unrouted == {"not_our_mailbox": 1}
+    assert gate.unrouted == {"not_our_mailbox": 2}
+
+
+async def test_ingress__over_the_rate_limit__refused_then_accepted_after_the_window() -> None:
+    inbox = MemoryWebhookInbox()
+    clock = [NOW]
+    gate = QuoteMailboxIngress(
+        secret=SECRET, inbox=inbox, shops=Shops(), mailbox=MAILBOX, clock=lambda: clock[0],
+        limiter=WindowLimiter(1),
+    )  # fmt: skip
+    await gate.receive(svix(notice()), notice())
+    second = notice(message_id="<q-88214@autova.example.com>")
+    with pytest.raises(QuoteMailRateLimitedError) as limited:
+        await gate.receive(svix(second, svix_id="msg_resend0002"), second)
+    assert 0 < limited.value.wait <= 1
+    assert len(inbox.rows) == 1  # nothing stored for the refused one
+
+    clock[0] = NOW + timedelta(seconds=1)
+    accepted = await gate.receive(svix(second, svix_id="msg_resend0002", at=clock[0]), second)
+    assert accepted is not None
+    assert len(inbox.rows) == 2
+
+
+async def test_ingress__the_rate_limit_counts_only_signed_notices() -> None:
+    gate = QuoteMailboxIngress(
+        secret=SECRET, inbox=MemoryWebhookInbox(), shops=Shops(), mailbox=MAILBOX,
+        clock=lambda: NOW, limiter=WindowLimiter(1),
+    )  # fmt: skip
+    for _ in range(3):
+        with pytest.raises(WebhookRejectedError):
+            await gate.receive({**svix(notice()), "svix-signature": "v1,AAAA"}, notice())
+    assert await gate.receive(svix(notice()), notice()) is not None
 
 
 async def test_ingress__no_connected_quote_shop__kept_with_no_job() -> None:
     inbox = MemoryWebhookInbox()
     gate = ingress(inbox, Shops(None))
     accepted = await gate.receive(svix(notice()), notice())
+    assert accepted is not None
     assert accepted.job_id is None
+    assert len(inbox.rows) == 1  # kept: it is ours, and runs once the shop is connected
     assert gate.unrouted == {"unknown_shop": 1}
 
 
@@ -350,3 +392,31 @@ async def test_processor__another_sender__no_quote() -> None:
     assert outcome is IntakeOutcome.QUARANTINED
     assert world.store.quotes == {}
     assert world.reviews.tasks == {}
+
+
+@dataclass
+class HugeMails:
+    asked: int = 0
+
+    async def raw_mail(self, email_id: str) -> str:  # noqa: ARG002 - the port
+        self.asked += 1
+        raise RawMailTooLargeError("resend raw mail over 1 MiB")
+
+
+async def test_processor__a_mail_over_the_cap__one_human_task_and_no_retry() -> None:
+    """AutoVA mails with inline images can pass 1 MiB: never fits, so no JobError (no retry until
+    it dead-letters) but one "check this quote" task naming the mail."""
+    world = World()
+    mails = HugeMails()
+    processor = QuoteMailProcessor(
+        mails=mails, intake=world.intake, authserv_id=AUTHSERV_ID, sender=SENDER
+    )
+    job = claimed({"email_id": EMAIL_ID, "message_id": "<q-88213@autova.example.com>"})
+
+    outcome = await processor.process(job)
+
+    assert outcome is IntakeOutcome.NEEDS_REVIEW
+    assert mails.asked == 1
+    assert world.store.quotes == {}
+    [task] = world.reviews.tasks.values()
+    assert (task.reason, task.message_id) == ("too_large", "<q-88213@autova.example.com>")

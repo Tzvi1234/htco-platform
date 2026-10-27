@@ -521,6 +521,7 @@ def quote_mailbox_ingress(settings: ApiSettings, database: Database) -> QuoteMai
         mailbox=mailbox.get_secret_value(),
         clock=lambda: datetime.now(UTC),
         offload=anyio.to_thread.run_sync,
+        limiter=WindowLimiter(settings.autova_quote_rate_per_second),
     )
 
 

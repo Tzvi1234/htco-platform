@@ -95,6 +95,8 @@ class ApiSettings(BaseSettings):
     autova_quote_webhook_secret: SecretStr | None = None
     autova_quote_mailbox: SecretStr | None = None
     autova_quote_etsy_shop_id: int | None = Field(default=None, ge=1)
+    # Verified notices per second the quote mailbox accepts, per API instance (429 beyond).
+    autova_quote_rate_per_second: int = Field(default=10, ge=1, le=1000)
 
     @property
     def token_key_ring(self) -> KeyRing | None:

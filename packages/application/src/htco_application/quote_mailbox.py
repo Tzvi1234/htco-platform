@@ -8,9 +8,12 @@ notice; `QuoteMailboxIngress.receive` takes it:
    Standard Webhooks scheme under `svix-*` header names: the same check as Etsy's (5.3), with its
    own secret (`HTCO_AUTOVA_QUOTE_WEBHOOK_SECRET`). Unsigned or wrongly signed: refused
    (AC-7.14.3).
+   Then the **rate limit** (`HTCO_AUTOVA_QUOTE_RATE_PER_SECOND`, per API instance): over it, 429
+   with `Retry-After`, and Resend retries.
 2. **Check the address.** The notice must name our quote address, which carries a secret token
    (`quotes+<token>@`, `HTCO_AUTOVA_QUOTE_MAILBOX`): mail sent straight to the domain by anyone
-   else, without the token, is kept with no job and counted.
+   else, without the token, is only counted. Its sender chooses its Message-ID, so storing it
+   would let anyone grow the inbox without bound.
 3. **Record** the notice once in the inbox (`source = "autova_quotes"`, `event_id` = the mail's
    Message-ID), with one parse job keyed by it, in one transaction. The same mail delivered or
    forwarded twice has the same Message-ID: one row, one job (AC-7.14.1). Only Resend's email ID
@@ -41,12 +44,18 @@ from htco_application.etsy_webhooks import (
     WebhookRejectedError,
     WebhookSecret,
     WebhookShops,
+    WindowLimiter,
     verify_signature,
 )
 from htco_application.jobs import ClaimedJob, JobSpec
 from htco_application.kernel import JobError, JsonValue, Offload, TenantShop, run_inline
 from htco_application.messaging import InboxEvent
-from htco_application.quote_parser import PLAIN_MESSAGE_ID, QuarantineReason, QuoteMail
+from htco_application.quote_parser import (
+    PLAIN_MESSAGE_ID,
+    QuarantineReason,
+    QuoteMail,
+    RefusalReason,
+)
 from htco_application.suppliers import IntakeOutcome, QuoteIntake, ShopForMail
 
 QUOTE_SOURCE = "autova_quotes"
@@ -57,6 +66,19 @@ _EMAIL_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 _MAX_RECIPIENTS = 50
 
 _log = logging.getLogger(__name__)
+
+
+class QuoteMailRateLimitedError(Exception):
+    """A verified notice over the quote mailbox's rate limit: 429 with `Retry-After`."""
+
+    def __init__(self, wait: float) -> None:
+        super().__init__("rate_limited")
+        self.wait = wait
+
+
+class RawMailTooLargeError(Exception):
+    """The raw mail is over the download cap. Permanent (it never fits), so never a `JobError`:
+    the job does not retry, and the mail becomes one Human task "check this quote"."""
 
 
 def standard_headers(headers: Mapping[str, str]) -> dict[str, str]:
@@ -147,16 +169,29 @@ class QuoteMailboxIngress:
     mailbox: str  # our quote address, with its token: configuration, never logged
     clock: Callable[[], datetime]
     offload: Offload = run_inline
-    # Notices stored without a job, by reason (the 5.9 metrics read these).
+    # After the signature, so only Resend's own notices count against it.
+    limiter: WindowLimiter | None = None
+    # Notices without a job, by reason (the 5.9 metrics read these).
     unrouted: Counter[str] = field(default_factory=Counter)
 
     def __post_init__(self) -> None:
         self.mailbox = self.mailbox.strip().lower()
 
-    async def receive(self, headers: Mapping[str, str], body: bytes) -> Accepted:
+    async def receive(self, headers: Mapping[str, str], body: bytes) -> Accepted | None:
+        """The accepted notice, or None for one not sent to our address (counted only)."""
         now = self.clock()
         verify_signature(self.secret, standard_headers(headers), body, now=now)
+        if self.limiter is not None:
+            wait = self.limiter.admit(QUOTE_SOURCE, now=now)
+            if wait is not None:
+                raise QuoteMailRateLimitedError(wait)
         notice = parse_notice(body)
+        if self.mailbox not in notice.recipients:
+            # Without our token anyone could have sent it, with a Message-ID of their choosing:
+            # never stored, so it cannot grow the inbox.
+            self.unrouted["not_our_mailbox"] += 1
+            _log.info("autova.quote_mail_ignored: not_our_mailbox")
+            return None
         shop = await self.shops.quote_shop()
         event = InboxEvent(
             source=QUOTE_SOURCE,
@@ -167,16 +202,12 @@ class QuoteMailboxIngress:
             organization_id=None if shop is None else shop.organization_id,
             shop_id=None if shop is None else shop.shop_id,
         )
-        reason = None
-        if self.mailbox not in notice.recipients:
-            reason = "not_our_mailbox"
-        elif shop is None:
-            reason = "unknown_shop"
-        if reason is not None or shop is None:
+        if shop is None:
+            # Our address, but the quote shop is not connected: kept to run once it is.
             inbox_id, duplicate = await self.offload(lambda: self.inbox.keep(event, now=now))
             if not duplicate:
-                self.unrouted[reason or "unknown_shop"] += 1
-            _log.info("autova.quote_mail_kept: %s duplicate=%s", reason, duplicate)
+                self.unrouted["unknown_shop"] += 1
+            _log.info("autova.quote_mail_kept: unknown_shop duplicate=%s", duplicate)
             return Accepted(inbox_id=inbox_id, duplicate=duplicate, job_id=None)
         recorded = await self.offload(
             lambda: self.inbox.record(event, quote_mail_job(notice, shop), now=now)
@@ -193,7 +224,7 @@ class QuoteMailboxIngress:
 class ReceivedMails(Protocol):
     async def raw_mail(self, email_id: str) -> str:
         """The whole mail Resend received (headers and body). Raises `JobError` when it cannot
-        be fetched; the job retries."""
+        be fetched (the job retries), and `RawMailTooLargeError` when it is over the cap."""
         ...
 
 
@@ -210,7 +241,19 @@ class QuoteMailProcessor:
             raise JobError("a quote mail job names its shop and organization")
         if not isinstance(email_id, str) or _EMAIL_ID.match(email_id) is None:
             raise JobError("a quote mail job names Resend's email ID")
-        text = await self.mails.raw_mail(email_id)
+        try:
+            text = await self.mails.raw_mail(email_id)
+        except RawMailTooLargeError:
+            # It never fits, so retrying only dead-letters it: one Human task instead.
+            stored = job.payload.get("message_id")
+            plain = isinstance(stored, str) and PLAIN_MESSAGE_ID.fullmatch(stored) is not None
+            await self.intake.reviews.check_this_quote(
+                job.organization_id,
+                job.shop_id,
+                message_id=str(stored) if plain else "",
+                reason=RefusalReason.TOO_LARGE.value,
+            )
+            return IntakeOutcome.NEEDS_REVIEW
         mail = QuoteMail.from_text(text, authserv_id=self.authserv_id, sender=self.sender)
         return await self.intake.handle(mail, ShopForMail(job.organization_id, job.shop_id))
 

@@ -97,7 +97,9 @@ owner's Gmail --forward--> quotes+<token>@office.ht-co.app (Resend inbound, MX)
 ```
 
 - **Signature.** Resend signs with Svix (`svix-id`, `svix-timestamp`, `svix-signature`), the Standard Webhooks scheme of slice 5.3 under other header names, with its own `whsec_` secret (`HTCO_AUTOVA_QUOTE_WEBHOOK_SECRET`). Unsigned, wrongly signed or outside the 5-minute window: 401 (AC-7.14.3).
-- **The address carries a secret token.** `HTCO_AUTOVA_QUOTE_MAILBOX` is `quotes+<16 or more letters or digits>@…`, a secret. A notice whose `to` or `received_for` does not name it is kept with no job and counted (`not_our_mailbox`): mail sent straight to the domain by anyone who does not know the token is never parsed, and cannot take a Message-ID ahead of AutoVA's mail.
+- **The address carries a secret token.** `HTCO_AUTOVA_QUOTE_MAILBOX` is `quotes+<16 or more letters or digits>@…`, a secret. A notice whose `to` or `received_for` does not name it is only counted (`not_our_mailbox`), never stored: mail sent straight to the domain by anyone who does not know the token is never parsed, cannot take a Message-ID ahead of AutoVA's mail, and cannot grow the inbox with Message-IDs of its sender's choosing.
+- **The rate limit.** After the signature, at most `HTCO_AUTOVA_QUOTE_RATE_PER_SECOND` notices per second per API instance (default 10); beyond it, 429 with `Retry-After`, and Resend retries.
+- **A mail over 1 MiB** (AutoVA's inline images can pass it) never fits, so it is not retried: the job opens one Human task "check this quote" (`too_large`). The raw download follows no redirect.
 - **Once.** The inbox's `event_id` is the mail's Message-ID, which Gmail's forwarding keeps, so the same mail delivered or forwarded twice is one row and one job (AC-7.14.1). Only Resend's email ID and the Message-ID are stored; the mail (DC2) is fetched by the job and never stored, logged or read by a model.
 - **The shop.** `HTCO_AUTOVA_QUOTE_ETSY_SHOP_ID` names the Etsy shop; its connected HTCO shop gets the quotes (the 5.3 lookup). Not connected: kept with no job (`unknown_shop`).
 - **The worker settings** stay in configuration: `HTCO_AUTOVA_QUOTE_SENDER`, `HTCO_AUTOVA_QUOTE_AUTHSERV_ID`, `HTCO_AUTOVA_QUOTE_OWNER_MAILBOX` and `HTCO_RESEND_API_KEY`. The `autova.quote_mail` handler (`quote_mail_handlers`) is registered once 7.1's task store backs the Human tasks; until then the jobs wait in the queue.
@@ -146,3 +148,5 @@ The parser (`htco_application.quote_parser`) reads one layout: `Label: value` li
 | Quote ID | Quote ID | מזהה הצעה | Yes | `Q-88213` (the quote's source reference) |
 
 Refused: an unknown label, a field twice, a required field missing, a value that does not read exactly, a price and shipping in two currencies, or a mail over 200,000 characters.
+
+Every value is read within what its column holds, in ASCII digits only: a listing up to 2^63 - 1 (bigint), money with at most 10 digits before the point and 4 after (numeric(14,4)), a supplier name up to 200 characters and a shipping method up to 120. Anything beyond is refused like any value that does not read; should a value still fail the domain's checks, the intake opens the same Human task (`invalid_value`) instead of failing.

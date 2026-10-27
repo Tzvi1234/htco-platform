@@ -4,6 +4,8 @@ only, the raw file is fetched over HTTPS with a size cap, and failures retry. Va
 import httpx
 import pytest
 
+from htco_application.kernel import JobError
+from htco_application.quote_mailbox import RawMailTooLargeError
 from htco_integrations.resend_inbound import (
     MAX_RAW_BYTES,
     ReceivedMailError,
@@ -49,9 +51,28 @@ async def test_raw_mail__a_url_that_is_not_https__refused() -> None:
         await mails(resend(url="http://raw.resend.example.net/mail.eml")).raw_mail(EMAIL_ID)
 
 
-async def test_raw_mail__over_the_cap__refused() -> None:
-    with pytest.raises(ReceivedMailError, match="over 1 MiB"):
+async def test_raw_mail__over_the_cap__a_permanent_error_never_a_retry() -> None:
+    with pytest.raises(RawMailTooLargeError, match="over 1 MiB") as refused:
         await mails(resend(b"x" * (MAX_RAW_BYTES + 1))).raw_mail(EMAIL_ID)
+    assert not isinstance(refused.value, JobError)  # a JobError retries until it dead-letters
+
+
+async def test_raw_mail__exactly_the_cap__read() -> None:
+    raw = b"x" * MAX_RAW_BYTES
+    assert len(await mails(resend(raw)).raw_mail(EMAIL_ID)) == MAX_RAW_BYTES
+
+
+async def test_raw_mail__a_redirect__never_followed() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.resend.com":
+            return httpx.Response(200, json={"id": EMAIL_ID, "raw": {"download_url": RAW_URL}})
+        if request.url.host == "raw.resend.example.net":
+            return httpx.Response(302, headers={"Location": "https://elsewhere.example.net/x"})
+        raise AssertionError("a redirect was followed")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle), follow_redirects=True)
+    with pytest.raises(ReceivedMailError):
+        await ResendReceivedMails(client, api_key=KEY).raw_mail(EMAIL_ID)
 
 
 async def test_raw_mail__resend_fails__a_retryable_job_error_naming_the_status() -> None:

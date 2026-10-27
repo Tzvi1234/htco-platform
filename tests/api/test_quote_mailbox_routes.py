@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from htco_api.app import AppOptions, create_app
 from htco_api.settings import ApiSettings
+from htco_application.etsy_webhooks import WindowLimiter
 from htco_application.quote_mailbox import QuoteMailboxIngress
 from tests.application.test_quote_mailbox import MAILBOX, NOW, Shops, notice, svix
 from tests.webhook_fakes import SECRET, SECRET_TEXT, MemoryWebhookInbox
@@ -58,6 +59,28 @@ async def test_a_wrongly_signed_notice__401_and_nothing_stored() -> None:
     assert response.status_code == 401
     assert response.json()["type"] == PROBLEMS + "webhook-signature-invalid"
     assert inbox.rows == {}
+
+
+async def test_over_the_rate_limit__429_with_retry_after() -> None:
+    inbox = MemoryWebhookInbox()
+    ingress = QuoteMailboxIngress(
+        secret=SECRET, inbox=inbox, shops=Shops(), mailbox=MAILBOX, clock=lambda: NOW,
+        limiter=WindowLimiter(1),
+    )  # fmt: skip
+    application = create_app(AppOptions(autova_quotes=ingress, clock=lambda: NOW))
+    assert (await post(application, notice(), svix(notice()))).status_code == 204
+    second = notice(message_id="<q-88214@autova.example.com>")
+    response = await post(application, second, svix(second, svix_id="msg_resend0002"))
+    assert response.status_code == 429
+    assert response.json()["type"] == PROBLEMS + "webhook-rate-limited"
+    assert response.headers["Retry-After"] == "1"
+    assert len(inbox.rows) == 1
+
+
+def test_settings__the_quote_mailbox_rate_limit() -> None:
+    assert settings().autova_quote_rate_per_second == 10
+    with pytest.raises(ValidationError):
+        settings(autova_quote_rate_per_second=0)
 
 
 async def test_signed_but_not_a_received_mail__400() -> None:

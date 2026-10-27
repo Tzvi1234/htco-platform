@@ -2,8 +2,10 @@
 
 `ResendReceivedMails.raw_mail` asks `GET https://api.resend.com/emails/receiving/{id}` for the
 received email, then downloads its original file from the signed `raw.download_url` it returns
-(HTTPS only, no API key sent there, at most 1 MiB). The mail is returned to the job and never
-logged; errors name the status, never the content or the URL.
+(HTTPS only, no redirects followed, no API key sent there, at most 1 MiB). The mail is returned
+to the job and never logged; errors name the status, never the content or the URL. A failed
+fetch is a `ReceivedMailError` (the job retries); a mail over the cap is `RawMailTooLargeError`,
+permanent, and the job opens a Human task instead.
 """
 
 import re
@@ -13,6 +15,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from htco_application.kernel import JobError
+from htco_application.quote_mailbox import RawMailTooLargeError
 
 RECEIVING_URL = "https://api.resend.com/emails/receiving/"
 MAX_RAW_BYTES = 1024 * 1024
@@ -46,7 +49,7 @@ class ResendReceivedMails:
             )
         except httpx.HTTPError as error:
             raise ReceivedMailError(f"resend {type(error).__name__}") from None
-        if response.is_error:
+        if not response.is_success:
             raise ReceivedMailError(f"resend {response.status_code}")
         url = _download_url(response)
         return await self._download(url)
@@ -55,13 +58,16 @@ class ResendReceivedMails:
         chunks: list[bytes] = []
         size = 0
         try:
-            async with self._http.stream("GET", url, timeout=self._timeout) as response:
-                if response.is_error:
+            async with self._http.stream(
+                "GET", url, timeout=self._timeout, follow_redirects=False
+            ) as response:
+                if not response.is_success:  # a redirect too: it is never followed
                     raise ReceivedMailError(f"resend raw {response.status_code}")
                 async for chunk in response.aiter_bytes():
                     size += len(chunk)
                     if size > MAX_RAW_BYTES:
-                        raise ReceivedMailError("resend raw mail over 1 MiB")
+                        # Permanent: retrying never makes it fit (the job opens a Human task).
+                        raise RawMailTooLargeError("resend raw mail over 1 MiB")
                     chunks.append(chunk)
         except httpx.HTTPError as error:
             raise ReceivedMailError(f"resend raw {type(error).__name__}") from None
