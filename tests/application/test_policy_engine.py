@@ -527,3 +527,13 @@ def _ready(profile: EmployeeProfile, tools: frozenset[str]) -> EmployeeProfile:
         specification=sections,
         evaluation=EvaluationResult("suite", "1", passed=True, evaluated_at=NOW),
     )
+
+
+def test_an_actor_kind_without_a_section__has_no_grants_never_a_key_error() -> None:
+    """Sage on #189: a kind the document has no section for (a future one, or a user or advisor
+    reaching this step) has no grants, so the engine answers UNKNOWN_ACTOR instead of raising."""
+    from htco_application.access.engine import _grants_of  # noqa: PLC0415
+
+    document = baseline_policy(read_registry(REGISTRY).registry())
+    for kind in (ActorKind.USER, ActorKind.ADVISOR):
+        assert _grants_of(document, ActorRef(kind, "someone")) is None

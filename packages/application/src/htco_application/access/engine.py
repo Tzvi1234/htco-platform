@@ -161,7 +161,9 @@ def _grants_of(document: PolicyDocument, actor: ActorRef) -> ActorGrants | None:
         ActorKind.AUTOMATION: document.automations,
         ActorKind.SYSTEM: document.systems,
     }
-    return sections[actor.kind].get(actor.id)
+    # A kind without a section has no grants: the caller answers UNKNOWN_ACTOR (sage, #189).
+    section = sections.get(actor.kind)
+    return None if section is None else section.get(actor.id)
 
 
 def _originating_user_reaches(
