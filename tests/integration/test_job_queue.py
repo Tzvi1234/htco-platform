@@ -601,7 +601,12 @@ async def test_purge__deletes_only_the_disconnected_shops_data_and_only_after_it
         purged = await store.purge(target, now=NOW + timedelta(days=31), audit=audit)
         again = await store.purge(target, now=NOW + timedelta(days=32), audit=audit)
 
-    assert purged == {"shop_capabilities": 2, "etsy_orders": 0, "etsy_order_sync_state": 0}
+    assert purged == {
+        "shop_capabilities": 2,
+        "etsy_orders": 0,
+        "etsy_order_sync_state": 0,
+        "relay_items": 0,
+    }
     assert again is None
     assert count_capabilities(admin, leaving) == 0
     assert count_capabilities(admin, staying) == 2
@@ -614,7 +619,14 @@ async def test_purge__deletes_only_the_disconnected_shops_data_and_only_after_it
         admin,
         "select after from audit.audit_log where id = %s",
         [audit.id],
-    ) == {"deleted": {"shop_capabilities": 2, "etsy_orders": 0, "etsy_order_sync_state": 0}}
+    ) == {
+        "deleted": {
+            "shop_capabilities": 2,
+            "etsy_orders": 0,
+            "etsy_order_sync_state": 0,
+            "relay_items": 0,
+        }
+    }
 
 
 @pytest.mark.ac("AC-5.1.6")
@@ -650,9 +662,64 @@ async def test_purge__deletes_the_shops_stored_order_history_with_its_buyer_rows
             audit=audit,
         )
 
-    assert purged == {"shop_capabilities": 0, "etsy_orders": 1, "etsy_order_sync_state": 1}
+    assert purged == {
+        "shop_capabilities": 0,
+        "etsy_orders": 1,
+        "etsy_order_sync_state": 1,
+        "relay_items": 0,
+    }
     assert [count(admin, table, leaving) for table in TABLES] == [0, 0, 0, 0, 0]
     assert [count(admin, table, staying) for table in TABLES] == [1, 1, 1, 1, 1]
+
+
+async def test_purge__deletes_the_shops_relay_items_and_their_pasted_codes(
+    worker_db: Database, admin: Database, ring: KeyRing
+) -> None:
+    """Sage's SECURITY review of #159: a pasted tracking code is buyer data (ADR-0018) and never
+    outlives the disconnect purge; the codes go with their items."""
+    from htco_application.relay import RelayItem  # noqa: PLC0415
+    from htco_domain.fulfillment import tracking_fingerprint  # noqa: PLC0415
+    from htco_domain.relay import RelayState  # noqa: PLC0415
+    from htco_persistence.relay import PostgresRelayStore  # noqa: PLC0415
+
+    tenant = Tenant(admin)
+    leaving = await connected_shop(admin, ring, tenant)
+    staying = await connected_shop(admin, ring, tenant)
+    relay = PostgresRelayStore(admin)
+    CODE = "9400100000000000001234"  # noqa: N806 - a test number
+    for shop, receipt_id in ((leaving, 81), (staying, 82)):
+        item = RelayItem(
+            id=uuid.uuid7(), organization_id=tenant.organization_id, shop_id=shop,
+            receipt_id=receipt_id, state=RelayState.AWAITING_TRACKING, paid_at=NOW,
+            opened_at=NOW, updated_at=NOW,
+        )  # fmt: skip
+        relay.open_item(item)
+        relay.hand_off(
+            item.id, carrier="usps", fingerprint=tracking_fingerprint(shop, CODE), last4="1234",
+            code=CODE, now=NOW,
+            audit=AuditRecord.new(
+                organization_id=tenant.organization_id, actor=SCHEDULER,
+                action="relay.tracking_pasted", entity_type="relay_item", entity_id=str(item.id),
+            ),
+        )  # fmt: skip
+    await PostgresTokenVault(admin, EnvelopeSealer(ring)).disconnect(
+        leaving, purge_after=NOW + timedelta(days=30)
+    )
+    audit = AuditRecord.new(
+        organization_id=tenant.organization_id, actor=SCHEDULER, action="shop.purged",
+        entity_type="shop", entity_id=str(leaving),
+    )  # fmt: skip
+
+    with tenant_scope(tenant.organization_id):
+        purged = await PostgresPurgeStore(worker_db).purge(
+            TenantShop(tenant.organization_id, leaving), now=NOW + timedelta(days=31), audit=audit
+        )
+
+    assert purged is not None
+    assert purged["relay_items"] == 1
+    codes = "select count(*) from app.relay_item_codes where shop_id = %s"
+    assert scalar(admin, codes, [leaving]) == 0
+    assert scalar(admin, codes, [staying]) == 1
 
 
 async def test_worker_role__never_reads_buyer_rows_or_another_organizations_orders(

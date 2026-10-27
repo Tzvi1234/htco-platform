@@ -9,7 +9,7 @@ from datetime import datetime
 from htco_application.incidents import IncidentRecord, IncidentStep, StaleIncident
 from htco_application.kernel import OutboxMessage
 from htco_application.sla_inspector import AwaitingOrder
-from htco_application.tracking_sync import RecordedTracking, TrackingObservation
+from htco_application.tracking_sync import RecordedTracking, TrackingObservation, TrackingSource
 from htco_domain.fulfillment import SlaPolicy
 from htco_domain.incidents import IncidentState, check_incident_transition
 from tests.event_contracts import check_if_event
@@ -89,6 +89,14 @@ class MemorySlaStore:
     ) -> Mapping[int, datetime]:
         closed = self.closed.get(shop_id, {})
         return {r: closed[r] for r in receipt_ids if r in closed}
+
+    def tracked_orders(self, shop_id: uuid.UUID, receipt_ids: tuple[int, ...]) -> frozenset[int]:
+        tracked = {
+            r
+            for (s, r, _), seen in self.tracking.rows.items()
+            if s == shop_id and seen.source is TrackingSource.ETSY
+        }
+        return frozenset(r for r in receipt_ids if r in tracked)
 
     def receipts_for_transactions(
         self, shop_id: uuid.UUID, transaction_ids: tuple[int, ...]

@@ -51,6 +51,7 @@ from htco_domain.automation import TriggerKind
 from htco_domain.fulfillment import carrier_of, normalize_tracking_code, tracking_fingerprint
 from htco_domain.incidents import Cause, Evidence, EvidenceKind, ResourceKind, dedup_key
 from htco_domain.integrations import IntegrationStatus
+from htco_domain.relay import ClosedReason
 
 TRACKING_DETECTED = "fulfillment.tracking_detected.v1"
 SCHEDULE_BATCH = 25
@@ -99,6 +100,14 @@ class RecordedTracking:
     created: bool
     first_observed_at: datetime
     source: TrackingSource
+
+
+class RelayClosing(Protocol):
+    """The relay store's closing by order (`relay.RelayStore.close_order`)."""
+
+    def close_order(
+        self, shop_id: uuid.UUID, receipt_id: int, *, reason: ClosedReason, now: datetime
+    ) -> bool: ...
 
 
 class TrackingStore(Protocol):
@@ -158,6 +167,8 @@ class TrackingRecorder:
     clock: Callable[[], datetime]
     new_id: Callable[[], uuid.UUID] = uuid.uuid7
     offload: Offload = run_inline
+    # The AutoVA relay (slice 6.10): tracking seen on the Etsy receipt closes the order's item.
+    relay: RelayClosing | None = None
 
     async def record(  # noqa: PLR0913 - one shipment's facts
         self,
@@ -213,6 +224,13 @@ class TrackingRecorder:
             actor=actor,
             correlation_id=correlation_id,
         )
+        relay = self.relay
+        if relay is not None and source is TrackingSource.ETSY:
+            await self.offload(
+                lambda: relay.close_order(
+                    shop_id, receipt_id, reason=ClosedReason.TRACKING_ON_ETSY, now=now
+                )
+            )
         return recorded
 
 

@@ -17,9 +17,15 @@ from htco_persistence.audit import append_audit
 from htco_persistence.database import Database
 
 # The shop's synced data, table by table: the probe results and the stored order history (the
-# order's items, refunds and buyer row cascade from it; post-merge review of 2026-10-23). Legal
-# retention keeps nothing of it yet (DATA_MODEL §6).
-_PURGED_TABLES = ("app.shop_capabilities", "app.etsy_orders", "app.etsy_order_sync_state")
+# order's items, refunds and buyer row cascade from it; post-merge review of 2026-10-23), and the
+# AutoVA relay's items with their pasted codes (Sage's security review of #159). Legal retention
+# keeps nothing of it yet (DATA_MODEL §6).
+_PURGED_TABLES = (
+    "app.shop_capabilities",
+    "app.etsy_orders",
+    "app.etsy_order_sync_state",
+    "app.relay_items",
+)
 
 
 class PostgresShopDirectory:

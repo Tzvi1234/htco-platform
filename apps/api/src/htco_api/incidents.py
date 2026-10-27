@@ -6,6 +6,9 @@
 - `POST /v1/incidents/{id}/transitions`: a person's step along the machine ("Open or update
   incidents"); `resolved` is refused (409 `evidence-required`): incidents resolve on evidence.
 - `GET /v1/notifications`, `POST /v1/notifications/read`: the caller's own inbox.
+- `GET /v1/relay-items`, `POST /v1/relay-items/{id}/tracking`, `GET /v1/relay-items/{id}/code`:
+  the AutoVA relay (slice 6.10): the open items, the owner's paste, and the code for the person
+  who copies it into Etsy (buyer-data roles only; never in a list, a log or an audit).
 
 Identifiers, states and codes only; never buyer data (an order is its receipt number).
 """
@@ -18,6 +21,7 @@ from typing import Annotated, Any, Literal
 
 import anyio
 from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 
 from htco_api.auth import CurrentAuth
@@ -44,6 +48,12 @@ from htco_application.incident_center import (
 )
 from htco_application.incidents import IncidentRecord, IncidentService, StaleIncident
 from htco_application.notifications import Notification
+from htco_application.relay import (
+    RelayCursorError,
+    RelayItem,
+    RelayStore,
+    list_relay_page,
+)
 from htco_application.shops import OrganizationRequiredError
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.incidents import IncidentState, ResolutionRefused
@@ -67,11 +77,61 @@ INCIDENT_MOVED = ProblemType(
 )  # fmt: skip
 
 
+RELAY_UNAVAILABLE = ProblemType(
+    "relay-unavailable", "Relay not available", 503,
+    "The AutoVA relay is not set up on this server.",
+)  # fmt: skip
+RELAY_ITEM_MOVED = ProblemType(
+    "relay-item-moved", "Relay item changed", 409,
+    "This order's tracking was pasted already, or the item closed. Reload it.",
+)  # fmt: skip
+
+
 @dataclass(frozen=True)
 class IncidentCenter:
     reader: IncidentReader
     service: IncidentService
     inbox: NotificationInbox
+    # The AutoVA relay (slice 6.10); None: its routes answer relay-unavailable.
+    relay: RelayStore | None = None
+
+
+class RelayItemView(BaseModel):
+    """No code and nothing of it (the code is buyer data, revealed by the parcels' audited
+    route)."""
+
+    id: uuid.UUID
+    shop_id: uuid.UUID
+    receipt_id: int
+    state: Literal["awaiting_tracking", "handed_off", "closed"]
+    closed_reason: Literal["tracking_on_etsy", "uploaded", "cancelled", "expired"] | None
+    paid_at: datetime
+    opened_at: datetime
+    updated_at: datetime
+
+
+class RelayItemListView(BaseModel):
+    items: list[RelayItemView]
+    # Pass it back as `cursor` for the next page; null on the last page.
+    next_cursor: str | None = None
+
+
+class RelayCodeView(BaseModel):
+    code: str
+
+
+def _invalid_cursor() -> RequestValidationError:
+    return RequestValidationError(
+        [{"loc": ("query", "cursor"), "msg": "Invalid cursor", "type": "value_error"}]
+    )
+
+
+def _relay_view(item: RelayItem) -> RelayItemView:
+    return RelayItemView(
+        id=item.id, shop_id=item.shop_id, receipt_id=item.receipt_id, state=item.state.value,
+        closed_reason=None if item.closed_reason is None else item.closed_reason.value,
+        paid_at=item.paid_at, opened_at=item.opened_at, updated_at=item.updated_at,
+    )  # fmt: skip
 
 
 class IncidentSummaryView(BaseModel):
@@ -376,5 +436,49 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
         except NoMembershipError:
             raise ProblemError(FORBIDDEN) from None
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    def _relay(center: IncidentCenter) -> RelayStore:
+        if center.relay is None:
+            raise ProblemError(RELAY_UNAVAILABLE)
+        return center.relay
+
+    relay_problems: dict[int, str | tuple[str, type[Problem]]] = {
+        **_COMMON,
+        503: "The relay is not set up on this server (relay-unavailable)",
+    }
+
+    @router.get(
+        "/relay-items",
+        summary="The open AutoVA relay items of the caller's shops",
+        responses=problem_responses({**relay_problems, 403: "The role may not act on fulfillment"}),
+    )
+    async def get_relay_items(
+        response: Response,
+        auth: CurrentAuth,
+        center: Center,
+        organization_id: uuid.UUID | None = None,
+        cursor: Annotated[str | None, Query(max_length=256)] = None,
+    ) -> RelayItemListView:
+        """Oldest first: each order waiting for its tracking from AutoVA (slice 6.10), in pages
+        of 200; pass `next_cursor` back as `cursor` for the next page."""
+        store = _relay(center)
+        after = None if cursor is None else decode_cursor(cursor)
+        try:
+            items, more = await _run(
+                lambda: list_relay_page(
+                    auth, store, organization_id=organization_id, now=clock(), after=after
+                )
+            )
+        except RelayCursorError:
+            raise _invalid_cursor() from None
+        except OrganizationRequiredError:
+            raise ProblemError(ORGANIZATION_REQUIRED) from None
+        except PermissionError, NoMembershipError:
+            raise ProblemError(FORBIDDEN) from None
+        response.headers["Cache-Control"] = "no-store"
+        return RelayItemListView(
+            items=[_relay_view(i) for i in items],
+            next_cursor=encode_cursor(items[-1].id) if more else None,
+        )
 
     return router

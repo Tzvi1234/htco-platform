@@ -10,7 +10,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from htco_application.fulfillment_schedule import FULFILLMENT_SCHEDULE, REVIEW_SCHEDULE
+from htco_application.fulfillment_schedule import (
+    FULFILLMENT_SCHEDULE,
+    RELAY_RETENTION_SCHEDULE,
+    REVIEW_SCHEDULE,
+)
 from htco_application.maintenance import EXPIRY_SCHEDULE, PROBE_SCHEDULE
 from htco_application.maintenance import SCHEDULES as MAINTENANCE_SCHEDULES
 from htco_application.order_intake import (
@@ -28,6 +32,7 @@ SCHEDULES = (
     MAINTENANCE_SCHEDULES
     | ORDER_SCHEDULES
     | {FULFILLMENT_SCHEDULE.kind: FULFILLMENT_SCHEDULE, REVIEW_SCHEDULE.kind: REVIEW_SCHEDULE}
+    | {RELAY_RETENTION_SCHEDULE.kind: RELAY_RETENTION_SCHEDULE}
 )
 
 

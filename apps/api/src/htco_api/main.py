@@ -98,6 +98,7 @@ from htco_persistence.notifications import (
 )
 from htco_persistence.operations_health import PostgresOperationsHealth
 from htco_persistence.readiness import DatabaseCheck
+from htco_persistence.relay import PostgresRelayStore
 from htco_persistence.shop_integrations import (
     PostgresCapabilityStore,
     PostgresIntegrationReader,
@@ -534,6 +535,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
                 offload=anyio.to_thread.run_sync,
             ),
             inbox=PostgresNotificationInbox(database),
+            relay=PostgresRelayStore(database),
         ),
         security_notices=SecurityNotices(
             PostgresSecurityNoticeStore(database),
