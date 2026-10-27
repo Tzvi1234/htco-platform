@@ -54,13 +54,17 @@ contract:
     uv run python -m tools.openapi --check
     uv run pytest tests/contract -q
 
-# Run all tests with branch coverage and the per-layer coverage floors
+# Run all tests except the API fuzzing (see `fuzz`) with branch coverage and the per-layer coverage floors
 test:
     uv run coverage erase
-    uv run coverage run -m pytest
+    uv run coverage run -m pytest --ignore=tests/contract/test_api_fuzzing.py
     uv run coverage report
     uv run coverage report --include="*/htco_domain/*" --fail-under=95
     uv run coverage report --include="*/htco_application/*" --fail-under=90
+
+# Schemathesis API fuzzing (the slow part of the contract tests; its own CI job so it runs in parallel with `test`)
+fuzz:
+    uv run pytest tests/contract/test_api_fuzzing.py -q
 
 # Local database (needs Docker and the Supabase CLI): start Postgres and apply every migration
 db-start:
@@ -94,4 +98,4 @@ check-fast: lint types
     uv run pytest -q -x -m "not db and not slow"
 
 # What CI checks, minus the secret and vulnerability scans: format, lint, types, contracts, workflows, tests
-check: lint types arch workflows test
+check: lint types arch workflows test fuzz
