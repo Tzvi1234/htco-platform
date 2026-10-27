@@ -103,8 +103,15 @@ class Reporting:
         )
 
     def context(
-        self, payload: dict[str, Any], *, organization_id: uuid.UUID = ORG
+        self,
+        payload: dict[str, Any],
+        *,
+        organization_id: uuid.UUID = ORG,
+        stamped: bool = True,
     ) -> HandlerContext:
+        """The execution as the scheduler enqueues it: stamped with when it was due (`as_of`)."""
+        if stamped and "as_of" not in payload:
+            payload = {**payload, "as_of": self.now.isoformat()}
         return HandlerContext(
             execution_id=uuid.uuid7(),
             automation_id=SCHEDULED_REPORTING,
@@ -229,7 +236,10 @@ async def test_the_organizations_time_zone_picks_its_day() -> None:
 @pytest.mark.parametrize(
     "payload",
     [{}, {"report_type": "monthly"}, {"report_type": "daily", "timezone": "Mars/Base"},
-     {"report_type": "daily", "timezone": 3}],
+     {"report_type": "daily", "timezone": 3},
+     {"report_type": "daily", "as_of": "yesterday"},
+     {"report_type": "daily", "as_of": "2026-10-27T06:00:00"},
+     {"report_type": "daily", "as_of": 1761544800}],
 )  # fmt: skip
 async def test_bad_payloads_are_refused(payload: dict[str, Any]) -> None:
     reporting = Reporting()
@@ -278,3 +288,44 @@ async def test_an_errors_text_never_reaches_the_report() -> None:
     figure = report.figure(SectionName.INCIDENTS_OPENED)
     assert (figure.count, figure.unavailable) == (None, "unavailable")
     assert "example.test" not in repr(report)
+
+
+@pytest.mark.ac("AC-7.9.2")
+async def test_a_retry_after_midnight_keeps_the_executions_period() -> None:
+    """Codex and quill2 on #196: the period comes from the execution's `as_of`, not from the
+    clock of each attempt, so a retry that runs after midnight (or after the Monday of a weekly
+    report) stores the same report, never a second one for the next period."""
+    reporting = Reporting(
+        delivery=Deliveries(fail_once=True), now=datetime(2026, 10, 27, 23, 59, tzinfo=UTC)
+    )
+    execution = reporting.context({"report_type": "daily"})  # stamped 23:59 on the 27th
+
+    with pytest.raises(ConnectionError):
+        await reporting.handler(execution)
+    reporting.now = datetime(2026, 10, 28, 0, 10, tzinfo=UTC)  # the retry, after midnight
+    await reporting.handler(execution)
+
+    [key] = reporting.store.reports
+    assert key.endswith(":2026-10-26")
+    assert list(reporting.delivery.sent) == [key]
+
+
+async def test_a_weekly_retry_after_monday_keeps_its_week() -> None:
+    reporting = Reporting(now=datetime(2026, 10, 25, 23, 50, tzinfo=UTC))  # a Sunday
+    execution = reporting.context({"report_type": "weekly"})
+
+    await reporting.handler(execution)
+    reporting.now = datetime(2026, 10, 26, 0, 20, tzinfo=UTC)  # Monday: a new week has begun
+    await reporting.handler(execution)
+
+    assert len(reporting.store.reports) == 1
+
+
+async def test_an_execution_without_its_as_of_is_refused() -> None:
+    """Without when it was due the period could move between attempts, so it is bad input."""
+    reporting = Reporting()
+
+    with pytest.raises(JobError, match="as_of"):
+        await reporting.handler(reporting.context({"report_type": "daily"}, stamped=False))
+
+    assert reporting.store.reports == {}

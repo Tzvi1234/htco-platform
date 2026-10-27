@@ -2,7 +2,9 @@
 Deterministic: no model, no Etsy call.
 
 One run builds the operations report of one organization for the last closed day or ISO week
-(`report_type` in the payload; the organization's `timezone`, UTC by default). Each section has
+(`report_type` in the payload; the organization's `timezone`, UTC by default) before `as_of`, the
+time the scheduler made the execution due: every attempt of one execution covers the same
+period, however late a retry runs (Codex and quill2 on #196). Each section has
 one source that returns the recorded rows of the period (activity records from slice 7.7, or the
 tables they describe); the figure is the number of those rows and keeps their references
 (AC-7.9.1). A source that cannot be read, or a section with no source yet, is shown as
@@ -97,7 +99,9 @@ class ScheduledReporting:
             raise ValueError("each section has one source")
 
     async def __call__(self, ctx: HandlerContext) -> HandlerOutcome:
-        period = _period(ctx, self.clock())
+        # The execution's own time, not this attempt's clock (Codex and quill2 on #196): a retry
+        # after midnight, or after the Monday of a weekly report, keeps its period and its key.
+        period = _period(ctx)
         by_section = {s.section: s for s in self.sources}
         figures = []
         for section in SectionName:
@@ -140,7 +144,21 @@ class ScheduledReporting:
         return SectionFigure.of(source.section, refs)
 
 
-def _period(ctx: HandlerContext, now: datetime) -> ReportPeriod:
+def _as_of(ctx: HandlerContext) -> datetime:
+    """When the scheduler made the execution due: an ISO-8601 time with its offset."""
+    raw = ctx.payload.get("as_of")
+    if not isinstance(raw, str):
+        raise JobError("a report names its as_of: when the scheduler made it due")
+    try:
+        as_of = datetime.fromisoformat(raw)
+    except ValueError:
+        raise JobError("a report's as_of is an ISO-8601 time") from None
+    if as_of.tzinfo is None:
+        raise JobError("a report's as_of names its offset")
+    return as_of
+
+
+def _period(ctx: HandlerContext) -> ReportPeriod:
     raw_type = ctx.payload.get("report_type")
     try:
         report_type = ReportType(str(raw_type))
@@ -153,4 +171,4 @@ def _period(ctx: HandlerContext, now: datetime) -> ReportPeriod:
         ZoneInfo(timezone)
     except ZoneInfoNotFoundError, ValueError:
         raise JobError("a report's time zone is unknown") from None
-    return period_for(report_type, now, timezone=timezone)
+    return period_for(report_type, _as_of(ctx), timezone=timezone)
