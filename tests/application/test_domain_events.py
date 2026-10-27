@@ -85,6 +85,16 @@ def test_publish__a_long_correlation__is_cut_to_the_outbox_column() -> None:
     assert publish(_event(correlation_id="c" * 300)).correlation_id == "c" * 200
 
 
+@pytest.mark.ac("AUD-01.1")
+def test_publish__a_long_correlation_or_causation__is_cut_in_the_envelope_too() -> None:
+    """Codex (local) on #174: the stored envelope holds the same bounded ids as the column."""
+    message = publish(_event(correlation_id="c" * 300, causation_id="k" * 300))
+
+    assert message.payload["correlation_id"] == message.correlation_id == "c" * 200
+    assert message.payload["causation_id"] == "k" * 200
+    assert read_event(message.payload).payload == {"receipt_id": 1}
+
+
 @pytest.mark.parametrize(
     "changes",
     [
@@ -165,7 +175,9 @@ _ENVELOPE_BREAKS: list[tuple[str, object]] = [
     ("idempotency_key", ""),
     ("idempotency_key", "k" * 201),
     ("correlation_id", 7),
+    ("correlation_id", "c" * 201),
     ("causation_id", ["job:1"]),
+    ("causation_id", "k" * 201),
 ]
 
 
@@ -182,6 +194,24 @@ def test_read_event__a_broken_envelope_field__is_refused(name: str, value: objec
 
     with pytest.raises(MalformedEventError, match=name):
         read_event(envelope)  # type: ignore[arg-type]
+
+
+@pytest.mark.ac("AUD-01.5")
+@pytest.mark.parametrize("marker", ["event_id", "organization_id", "payload", "idempotency_key"])
+def test_read_event__an_envelope_without_its_version__is_not_taken_for_a_legacy_row(
+    marker: str,
+) -> None:
+    """Codex (local) on #174: only a genuinely flat row is legacy version 1. A message with an
+    envelope-only field but no `payload_version` is a broken envelope, dead-lettered."""
+    envelope: dict[str, JsonValue] = {**publish(_event()).payload}
+    del envelope["payload_version"]
+    partial: dict[str, JsonValue] = {"event_type": "orders.ingested.v1", "receipt_id": 1}
+    partial[marker] = envelope[marker]
+
+    with pytest.raises(MalformedEventError, match="payload_version"):
+        read_event(partial)
+    with pytest.raises(MalformedEventError, match="payload_version"):
+        read_event(envelope)
 
 
 @pytest.mark.ac("AUD-01.4")

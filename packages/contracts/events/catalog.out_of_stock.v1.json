@@ -31,9 +31,17 @@
       "minLength": 1
     },
     "correlation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "string or null"
     },
     "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "string or null"
     },
     "idempotency_key": {
@@ -81,15 +89,27 @@
           "type": "string"
         },
         "listing_quantity": {
+          "type": [
+            "integer",
+            "null"
+          ],
           "description": "integer or null"
         },
         "etsy_updated_at": {
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "string or null"
         },
         "webhook_event_type": {
           "type": "string"
         },
         "product_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
           "description": "integer or null"
         },
         "product_found": {
@@ -99,9 +119,17 @@
           "type": "integer"
         },
         "total_quantity": {
+          "type": [
+            "integer",
+            "null"
+          ],
           "description": "integer or null"
         },
         "in_stock": {
+          "type": [
+            "boolean",
+            "null"
+          ],
           "description": "boolean or null"
         }
       },
