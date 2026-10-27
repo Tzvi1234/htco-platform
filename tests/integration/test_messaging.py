@@ -9,6 +9,7 @@ import anyio
 import psycopg
 import pytest
 
+from htco_application.automation.durable import StateChange
 from htco_application.idempotency import (
     IdempotentRequest,
     KeyReused,
@@ -20,6 +21,9 @@ from htco_application.idempotency import (
 from htco_application.jobs import JobSpec
 from htco_application.kernel import OutboxMessage
 from htco_application.messaging import OUTBOX_DELIVERY_JOB, InboxEvent, RecordedEvent
+from htco_application.status import EXECUTION_STATE_CHANGED, execution_state_event
+from htco_domain.actors import ActorKind, ActorRef
+from htco_domain.automation import ExecutionState
 from htco_domain.jobs import FailurePlan, JobState
 from htco_persistence.database import Database, tenant_scope
 from htco_persistence.idempotency import PostgresIdempotencyStore
@@ -126,6 +130,25 @@ def a_message(tenant: Tenant, key: str) -> OutboxMessage:
         idempotency_key=key,
         payload={"receipt_id": "1"},
     )
+
+
+async def test_outbox__a_replayed_state_change__one_message(admin: Database) -> None:
+    """Codex (local) on #174, P1: the same recorded change written again (a replayed
+    transaction or job) has the same key and event_id, so the outbox keeps one row."""
+    tenant = Tenant(admin)
+    change = StateChange(
+        execution_id=uuid.uuid7(), organization_id=tenant.organization_id,
+        from_state=ExecutionState.FAILED, to_state=ExecutionState.RETRY_SCHEDULED,
+        actor=ActorRef(ActorKind.SYSTEM, "w"), correlation_id="c-1", at=NOW,
+    )  # fmt: skip
+    outbox = PostgresOutbox(admin)
+
+    first = outbox.add(execution_state_event(change), now=NOW)
+    again = outbox.add(execution_state_event(change), now=NOW)
+
+    assert first == again
+    count = "select count(*) from jobs.outbox where idempotency_key = %s"
+    assert scalar(admin, count, [f"{EXECUTION_STATE_CHANGED}:{change.id}"]) == 1
 
 
 async def test_outbox__same_key_twice__one_message_and_one_delivery_job(admin: Database) -> None:

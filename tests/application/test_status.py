@@ -11,6 +11,7 @@ import pytest
 
 from htco_application.access.authentication import AuthContext, Membership
 from htco_application.approvals import ApprovalResumer
+from htco_application.automation.durable import StateChange
 from htco_application.browser_environments import EnvironmentRegistry, MemoryEnvironmentStore
 from htco_application.execution.gateway import ActionOutcome
 from htco_application.kernel import event_payload
@@ -27,6 +28,7 @@ from htco_application.status import (
     TriggerRecord,
     build_chain,
     execution_chain,
+    execution_state_event,
 )
 from htco_domain.actions import ActionState
 from htco_domain.actors import ActorKind, ActorRef
@@ -78,6 +80,31 @@ async def test_execution__every_state_change_emits_exactly_one_event() -> None:
     assert {e.payload["event_type"] for e in store.events} == {EXECUTION_STATE_CHANGED}
     assert len({e.idempotency_key for e in store.events}) == len(store.events)
     assert event_payload(store.events[-1])["status"] == StatusKind.SUCCEEDED.value
+
+
+@pytest.mark.ac("AC-5.18.2")
+def test_execution_state_event__a_replayed_change__keeps_its_key_and_event_id() -> None:
+    """Codex (local) on #174, P1: the event is keyed by the recorded change's own ID, so a
+    change written again (a replayed transaction or job) gives the same outbox key and
+    event_id, and the outbox keeps one row; two changes with the same states at the same
+    instant (a retry) stay two events."""
+    change = StateChange(
+        execution_id=uuid.uuid7(), organization_id=ORG, from_state=ExecutionState.FAILED,
+        to_state=ExecutionState.RETRY_SCHEDULED, actor=ActorRef(ActorKind.SYSTEM, "w"),
+        correlation_id="c-1", at=NOW,
+    )  # fmt: skip
+
+    first, replayed = execution_state_event(change), execution_state_event(change)
+    twin = execution_state_event(replace(change, id=uuid.uuid7()))
+
+    assert (
+        first.idempotency_key
+        == replayed.idempotency_key
+        == (f"{EXECUTION_STATE_CHANGED}:{change.id}")
+    )
+    assert first.payload["event_id"] == replayed.payload["event_id"]
+    assert twin.idempotency_key != first.idempotency_key
+    assert twin.payload["event_id"] != first.payload["event_id"]
 
 
 @pytest.mark.ac("AC-5.18.2")

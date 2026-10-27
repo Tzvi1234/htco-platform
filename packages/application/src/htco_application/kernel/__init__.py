@@ -12,6 +12,7 @@ from htco_application.kernel.errors import (
     describe_error,
 )
 from htco_application.kernel.events import (
+    ACCEPTED_VERSIONS,
     EVENTS_DESTINATION,
     DomainEvent,
     MalformedEventError,
@@ -28,6 +29,7 @@ from htco_application.kernel.ports import ConnectedShops, ShopOwners
 from htco_application.kernel.types import JsonValue, Page, TenantShop
 
 __all__ = [
+    "ACCEPTED_VERSIONS",
     "EVENTS_DESTINATION",
     "MAX_ERROR_LENGTH",
     "ConnectedShops",
