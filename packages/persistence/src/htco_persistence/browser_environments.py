@@ -13,7 +13,7 @@ from typing import Any
 
 import psycopg
 
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import OutboxMessage
 from htco_domain.actors import ActorRef
 from htco_domain.browser import (
     BrowserEnvironment,

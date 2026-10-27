@@ -19,11 +19,11 @@ from htco_application.automation.durable import (
     Waiting,
 )
 from htco_application.jobs import JobSpec
-from htco_application.kernel import JsonValue
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import JsonValue, OutboxMessage
 from htco_application.status import execution_state_event
 from htco_domain.automation import AutomationExecution
 from tests.application.workforce_fixtures import automation_document
+from tests.event_contracts import check_if_event
 
 
 def engine_document(automation_id: str = "etsy-order-intake", **changes: Any) -> dict[str, Any]:
@@ -98,7 +98,7 @@ class MemoryExecutionStore:
                     return found
             self.rows[execution.id] = StoredExecution(execution, dict(payload))
             self.changes.append(change)
-            self.events.append(execution_state_event(change))
+            self.events.append(check_if_event(execution_state_event(change)))
             self.jobs.append(job)
             return execution
 
@@ -122,7 +122,7 @@ class MemoryExecutionStore:
                 return False
             self.rows[before.id] = StoredExecution(steps[-1][0], stored.payload)
             self.changes.extend(change for _, change in steps)
-            self.events.extend(execution_state_event(change) for _, change in steps)
+            self.events.extend(check_if_event(execution_state_event(c)) for _, c in steps)
             if job is not None:
                 self.jobs.append(job)
             if audit is not None:

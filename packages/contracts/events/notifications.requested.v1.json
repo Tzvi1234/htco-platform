@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/events/notifications.requested.v1.json",
+  "title": "notifications.requested.v1",
+  "description": "A process asked the worker to notify people. Envelope: SOFTWARE_DESIGN §8.4.",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "notifications.requested.v1"
+      ]
+    },
+    "organization_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "shop_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "string or null: the shop, when the event is about one"
+    },
+    "occurred_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "correlation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "string or null"
+    },
+    "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "string or null"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "employee",
+            "automation",
+            "advisor",
+            "system"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "payload_version": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "dedup_key": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object"
+        },
+        "user_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "string or null"
+        },
+        "incident_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "string or null"
+        }
+      },
+      "required": [
+        "kind",
+        "dedup_key",
+        "params",
+        "user_id",
+        "incident_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "event_id",
+    "event_type",
+    "organization_id",
+    "shop_id",
+    "occurred_at",
+    "correlation_id",
+    "causation_id",
+    "idempotency_key",
+    "actor",
+    "payload_version",
+    "payload"
+  ],
+  "additionalProperties": false
+}

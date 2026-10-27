@@ -11,8 +11,7 @@ from htco_application.automation.durable import Completed, HandlerContext
 from htco_application.execution.gateway import UnavailableGateway
 from htco_application.fulfillment_schedule import INCIDENT_DETECTION
 from htco_application.incidents import IncidentService
-from htco_application.kernel import EVENTS_DESTINATION
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import EVENTS_DESTINATION, OutboxMessage
 from htco_application.notifications import NotificationService
 from htco_application.sla_inspector import AwaitingOrder, IncidentDetection
 from htco_domain.actors import ActorKind, ActorRef

@@ -14,7 +14,7 @@ from psycopg.types.json import Jsonb
 
 from htco_application.incident_center import IncidentDetail, IncidentHistoryEntry
 from htco_application.incidents import IncidentRecord, IncidentStep, StaleIncident
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import OutboxMessage
 from htco_application.sla_inspector import AwaitingOrder
 from htco_application.tracking_sync import RecordedTracking, TrackingObservation, TrackingSource
 from htco_domain.fulfillment import BusinessCalendar, SlaPolicy, WindowUnit

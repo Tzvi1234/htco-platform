@@ -14,12 +14,14 @@ import pytest
 
 from htco_application.automation.durable import StateChange
 from htco_application.incidents import INCIDENT_OPENED, DeadLetterIncidents, IncidentService
+from htco_application.kernel import event_payload
 from htco_application.messaging import OutboxMessage
 from htco_application.status import EXECUTION_STATE_CHANGED, execution_state_event
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import ExecutionState
 from htco_domain.incidents import Cause, ResourceKind, Severity
 from tests.application.test_durable_engine import WORKER, World, paid
+from tests.event_contracts import assert_event_contract
 from tests.fulfillment_fakes import MemoryIncidentStore
 from tests.log_capture import capture_logs
 
@@ -52,10 +54,14 @@ def subscriber() -> tuple[DeadLetterIncidents, MemoryIncidentStore]:
 
 
 def test_the_state_change_event_names_its_automation() -> None:
+    """After #174 the facts sit under the envelope's payload (quill2 on #173), and the event
+    matches its schema, which now lists `automation_id`."""
     event = execution_state_event(change(ExecutionState.DEAD_LETTERED))
 
-    assert event.payload["automation_id"] == "order-dedup-verification"
-    assert event.payload["to_state"] == "dead_lettered"
+    assert "payload_version" in event.payload  # an envelope, built through publish
+    assert event_payload(event)["automation_id"] == "order-dedup-verification"
+    assert event_payload(event)["to_state"] == "dead_lettered"
+    assert_event_contract(event)
 
 
 @pytest.mark.ac("AC-6.7.4")
@@ -132,3 +138,19 @@ async def test_anything_else__opens_nothing(event: Any) -> None:
     await incidents.handle(event())
 
     assert store.incidents == {}
+
+
+@pytest.mark.ac("AC-6.7.4")
+async def test_a_dead_letter_published_as_an_envelope_opens_its_incident() -> None:
+    """Quill2 on #173: the subscriber reads the event through `event_payload`, so the message
+    `publish` builds (the facts under the envelope's payload) opens the incident."""
+    incidents, store = subscriber()
+    message = execution_state_event(
+        change(ExecutionState.DEAD_LETTERED, automation_id="tracking-sync")
+    )
+    assert "automation_id" not in message.payload  # not flat: only under the envelope's payload
+
+    await incidents.handle(message)
+
+    [incident] = store.incidents.values()
+    assert incident.resource_id == "tracking-sync"
