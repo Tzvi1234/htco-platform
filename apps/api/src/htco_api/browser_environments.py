@@ -31,6 +31,7 @@ from htco_api.identity import problem_responses
 from htco_api.policy_guard import FORBIDDEN, MFA_REQUIRED, STEP_UP_REQUIRED
 from htco_api.problems import (
     NOT_FOUND,
+    FieldError,
     Problem,
     ProblemError,
     ProblemType,
@@ -179,7 +180,11 @@ class ConfigurationIssueView(BaseModel):
 
 
 class ConfigurationRefusedProblem(Problem):
-    issues: list[ConfigurationIssueView]
+    """`browser-configuration-invalid` names its `issues`; a malformed request is a
+    `validation-error` with `errors` instead, on the same status."""
+
+    issues: list[ConfigurationIssueView] | None = None
+    errors: list[FieldError] | None = None
 
 
 class StaleConfigurationProblem(Problem):
@@ -312,6 +317,7 @@ def browser_environments_router(*, clock: Callable[[], datetime]) -> APIRouter:
         responses=problem_responses(
             {
                 **_COMMON,
+                400: "The body is not valid JSON",
                 403: "Not the Owner or an Admin, no second factor, or no recent step-up "
                 "(forbidden, mfa-required, step-up-required), or the request did not come "
                 "from the web app (csrf-failed)",
