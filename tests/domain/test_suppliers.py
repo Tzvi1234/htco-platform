@@ -15,6 +15,7 @@ import pytest
 from htco_domain.orders import Money
 from htco_domain.state_machine import IllegalTransition
 from htco_domain.suppliers import (
+    HOLDS_A_CHOICE,
     QUOTE_REQUEST_TRANSITIONS,
     MappingEndReason,
     ProductRef,
@@ -24,6 +25,7 @@ from htco_domain.suppliers import (
     SupplierMapping,
     SupplierQuote,
     activate_mapping,
+    autova_quote_reference,
     mail_reference,
 )
 
@@ -107,6 +109,14 @@ def test_quote__the_price_and_the_shipping_share_one_currency() -> None:
         {"source_reference": "mail:" + "A" * 64},
         {"source_reference": "Subject: your quote for the wallet, USD 7.40"},
         {"source_reference": "mail:" + "0" * 64 + "\n"},
+        {"source_reference": "autova-quote:Q-88213\n"},
+        {"source_reference": "autova-quote:q-88213"},
+        {"source_reference": "autova-quote:QUOTE-1"},
+        {"source_reference": "autova-quote:Q-" + "1" * 13},
+        {"source_reference": "autova-quote:Q-88213 USD 7.40"},
+        {"source_reference": "autova-quote:" + "0" * 64},
+        {"source_reference": "mail:Q-88213"},
+        {"source_reference": "autova-quote:Q-88213mail:" + "0" * 64},
         {"received_at": datetime(2026, 10, 27, 9, 0)},  # noqa: DTZ001 - a naive time is refused
     ],
 )
@@ -129,6 +139,31 @@ def test_mail_reference__an_empty_message_id__is_rejected() -> None:
         mail_reference("")
 
 
+def test_autova_quote_reference__is_the_quote_id_that_survives_a_resend() -> None:
+    assert autova_quote_reference("Q-88213") == "autova-quote:Q-88213"
+    assert autova_quote_reference("ABCD-123456789012") == "autova-quote:ABCD-123456789012"
+
+
+@pytest.mark.parametrize(
+    "quote_id", ["", "q-1", "Q-", "QUOTE-1", "Q-1234567890123", "Q-1 ", "Q-1\n", "Q-1;drop"]
+)
+def test_autova_quote_reference__anything_but_a_strict_id__is_rejected(quote_id: str) -> None:
+    with pytest.raises(ValueError, match="AutoVA quote ID"):
+        autova_quote_reference(quote_id)
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        autova_quote_reference("Q-88213"),
+        autova_quote_reference("ABCD-123456789012"),
+        mail_reference("<4f1c2a@mail.example.test>"),
+    ],
+)
+def test_quote__both_reference_forms__are_accepted(reference: str) -> None:
+    assert quote(source_reference=reference).source_reference == reference
+
+
 def test_quote__free_shipping_is_fine() -> None:
     assert quote(shipping_cost=usd("0")).landed_cost == usd("7.40")
 
@@ -143,6 +178,20 @@ def test_quote__valid_until_a_day__expires_after_it() -> None:
 # --- The quote request's machine ----------------------------------------------------------------
 
 
+CHOSEN_QUOTE = uuid.UUID("71300000-0000-0000-0000-0000000000c1")
+
+
+def request_in(state: QuoteRequestState) -> QuoteRequest:
+    chosen = CHOSEN_QUOTE if state in HOLDS_A_CHOICE else None
+    return QuoteRequest(uuid.uuid7(), ORG, PRODUCT, state, NOW, chosen_quote_id=chosen)
+
+
+def move(request: QuoteRequest, target: QuoteRequestState) -> QuoteRequest:
+    if target is QuoteRequestState.CHOSEN:
+        return request.choose(CHOSEN_QUOTE, at=NOW)
+    return request.transition(target, at=NOW)
+
+
 @pytest.mark.parametrize(
     ("state", "target"),
     [(s, t) for s in QuoteRequestState for t in QuoteRequestState],
@@ -150,33 +199,58 @@ def test_quote__valid_until_a_day__expires_after_it() -> None:
 def test_quote_request__only_the_machines_edges_are_allowed(
     state: QuoteRequestState, target: QuoteRequestState
 ) -> None:
-    request = QuoteRequest(uuid.uuid7(), ORG, PRODUCT, state, NOW)
+    request = request_in(state)
     if target in QUOTE_REQUEST_TRANSITIONS[state]:
-        assert request.transition(target, at=NOW).state is target
+        assert move(request, target).state is target
     else:
         with pytest.raises(IllegalTransition):
-            request.transition(target, at=NOW)
+            move(request, target)
 
 
 def test_quote_request__the_happy_path_from_waiting_to_mapped() -> None:
-    request = QuoteRequest(uuid.uuid7(), ORG, PRODUCT, QuoteRequestState.WAITING_FOR_QUOTES, NOW)
+    request = request_in(QuoteRequestState.WAITING_FOR_QUOTES)
     for state in (
         QuoteRequestState.QUOTES_RECEIVED,
         QuoteRequestState.CHOSEN,
         QuoteRequestState.CONFIRMED_IN_AUTOVA,
         QuoteRequestState.MAPPED,
     ):
-        request = request.transition(state, at=NOW)
+        request = move(request, state)
     assert request.state is QuoteRequestState.MAPPED
+    assert request.chosen_quote_id == CHOSEN_QUOTE
     assert request.is_final
 
 
 def test_quote_request__a_rejected_choice_goes_back_to_the_quotes() -> None:
     """The owner's approval of a choice is rejected or expires (7.17): he chooses again."""
-    request = QuoteRequest(uuid.uuid7(), ORG, PRODUCT, QuoteRequestState.CHOSEN, NOW)
-    assert request.transition(QuoteRequestState.QUOTES_RECEIVED, at=NOW).state is (
-        QuoteRequestState.QUOTES_RECEIVED
+    back = request_in(QuoteRequestState.CHOSEN).transition(
+        QuoteRequestState.QUOTES_RECEIVED, at=NOW
     )
+    assert back.state is QuoteRequestState.QUOTES_RECEIVED
+    assert back.chosen_quote_id is None
+
+
+def test_quote_request__a_choice_names_its_quote() -> None:
+    request = request_in(QuoteRequestState.QUOTES_RECEIVED)
+    with pytest.raises(ValueError, match="choose"):
+        request.transition(QuoteRequestState.CHOSEN, at=NOW)
+    chosen = request.choose(CHOSEN_QUOTE, at=NOW)
+    assert (chosen.state, chosen.chosen_quote_id) == (QuoteRequestState.CHOSEN, CHOSEN_QUOTE)
+
+
+def test_quote_request__cancelling_a_choice_clears_it() -> None:
+    cancelled = request_in(QuoteRequestState.CONFIRMED_IN_AUTOVA).transition(
+        QuoteRequestState.CANCELLED, at=NOW
+    )
+    assert cancelled.chosen_quote_id is None
+
+
+@pytest.mark.parametrize("state", list(QuoteRequestState))
+def test_quote_request__the_chosen_quote_exactly_from_chosen_on(state: QuoteRequestState) -> None:
+    """The database's quote_requests_chosen_check, the same rule in the domain."""
+    wrong = None if state in HOLDS_A_CHOICE else CHOSEN_QUOTE
+    with pytest.raises(ValueError, match="chosen quote"):
+        QuoteRequest(uuid.uuid7(), ORG, PRODUCT, state, NOW, chosen_quote_id=wrong)
 
 
 def test_quote_request__mapped_and_cancelled_are_final() -> None:
@@ -243,6 +317,15 @@ def test_mapping__an_ended_one_cannot_be_ended_again_or_activated() -> None:
         activate_mapping(ended, mapping(), at=NOW)
     with pytest.raises(ValueError, match="active"):
         activate_mapping(None, ended, at=NOW)
+
+
+@pytest.mark.ac("AC-7.13.1")
+def test_mapping__the_new_one_never_starts_before_the_old_one_ends() -> None:
+    old = mapping(active_from=NOW - timedelta(days=30))
+    with pytest.raises(ValueError, match="overlapping"):
+        activate_mapping(old, mapping(active_from=NOW - timedelta(seconds=1)), at=NOW)
+    later = mapping(active_from=NOW + timedelta(hours=1))
+    assert activate_mapping(old, later, at=NOW)[1] == later
 
 
 def test_mapping__an_end_needs_its_reason_and_the_other_way_round() -> None:

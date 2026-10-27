@@ -71,16 +71,22 @@ create table app.supplier_quotes (
   shipping_days_min smallint not null,
   shipping_days_max smallint not null,
   valid_until date,
-  -- The quote mail's reference (htco_domain.suppliers.mail_reference: "mail:" and the SHA-256 of
-  -- its message ID), never its content: the shape leaves no room for mail text.
+  -- Where the quote came from, never the mail's content; both shapes leave no room for text
+  -- (htco_domain.suppliers): AutoVA's quote ID, which stays the same when AutoVA sends the quote
+  -- again ("autova-quote:Q-88213"), or, for a mail without one, "mail:" and the SHA-256 of its
+  -- message ID.
   source_reference text not null
-    constraint supplier_quotes_source_reference_check check (source_reference ~ '^mail:[0-9a-f]{64}$'),
+    constraint supplier_quotes_source_reference_check check (
+      source_reference ~ '^(autova-quote:[A-Z]{1,4}-[0-9]{1,12}|mail:[0-9a-f]{64})$'
+    ),
   received_at timestamptz not null,
   created_at timestamptz not null default now(),
   constraint supplier_quotes_request_fkey foreign key (quote_request_id, organization_id)
     references app.quote_requests (id, organization_id) on delete cascade,
+  -- A supplier with quotes is never removed on its own. The check waits for the commit, so
+  -- removing the whole organization, which cascades into both tables, still works.
   constraint supplier_quotes_supplier_fkey foreign key (supplier_id, organization_id)
-    references app.suppliers (id, organization_id) on delete restrict,
+    references app.suppliers (id, organization_id) deferrable initially deferred,
   constraint supplier_quotes_id_organization_key unique (id, organization_id),
   -- The keys a choice and a mapping name, so each agrees with its quote's request and supplier.
   constraint supplier_quotes_id_request_organization_key
@@ -99,10 +105,13 @@ create table app.supplier_quotes (
 create index supplier_quotes_request_idx on app.supplier_quotes (quote_request_id);
 create index supplier_quotes_organization_id_idx on app.supplier_quotes (organization_id);
 
--- A request chooses one of its own quotes, never another request's.
+-- A request chooses one of its own quotes, never another request's. Deferred to the commit, as
+-- every link inside a shop's or an organization's cascade is: RESTRICT cannot wait, so removing
+-- a shop would fail whenever Postgres cascaded into a quote before the row naming it.
 alter table app.quote_requests add constraint quote_requests_chosen_quote_fkey
   foreign key (chosen_quote_id, id, organization_id)
-  references app.supplier_quotes (id, quote_request_id, organization_id) on delete restrict;
+  references app.supplier_quotes (id, quote_request_id, organization_id)
+  deferrable initially deferred;
 
 -- Stored quotes never change, for every role (the grants already keep the worker out).
 create function private.reject_supplier_quote_change() returns trigger
@@ -133,11 +142,14 @@ create table app.supplier_mappings (
   created_at timestamptz not null default now(),
   constraint supplier_mappings_shop_fkey foreign key (shop_id, organization_id)
     references app.shops (id, organization_id) on delete cascade,
+  -- Both checked at the commit, so a shop's or an organization's cascade can remove the rows in
+  -- any order; a supplier or a quote is still never removed under a mapping that names it.
   constraint supplier_mappings_supplier_fkey foreign key (supplier_id, organization_id)
-    references app.suppliers (id, organization_id) on delete restrict,
+    references app.suppliers (id, organization_id) deferrable initially deferred,
   -- The quote is the mapped supplier's own (the product is checked by the trigger below).
   constraint supplier_mappings_quote_fkey foreign key (quote_id, supplier_id, organization_id)
-    references app.supplier_quotes (id, supplier_id, organization_id) on delete restrict,
+    references app.supplier_quotes (id, supplier_id, organization_id)
+    deferrable initially deferred,
   constraint supplier_mappings_end_check check (
     (ended_at is null) = (end_reason is null) and (ended_at is null or ended_at >= active_from)
   )
@@ -164,7 +176,8 @@ language plpgsql security definer set search_path = '' as $$
 begin
   if tg_op = 'INSERT' then
     if new.state <> 'waiting_for_quotes' and new.state <> 'quotes_received' then
-      raise exception 'quote request: a request starts waiting for quotes, not %', new.state
+      raise exception 'quote request: a request starts waiting for quotes or with its first quotes, not %',
+        new.state
         using errcode = 'check_violation';
     end if;
     return new;

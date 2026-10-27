@@ -3,10 +3,16 @@
 -- security for members and the worker. Organization S has two shops; its Owner sees both, its
 -- Support member is granted one, and organization T's Owner sees none of S's rows. The worker,
 -- running a job of S, sees and writes S's rows only. A choice and a mapping agree with their quote.
+-- Removing a shop or the organization removes its requests, quotes and mappings in one cascade.
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_worker;
-select plan(50);
+select plan(60);
+
+-- The links to quotes and suppliers are checked at the commit, which a test never reaches: check
+-- each statement at once here, and at the end, the cascades with the commit-time check forced.
+set constraints app.supplier_quotes_supplier_fkey, app.quote_requests_chosen_quote_fkey,
+  app.supplier_mappings_supplier_fkey, app.supplier_mappings_quote_fkey immediate;
 
 insert into auth.users (id, email) values
   ('36e00000-0000-0000-0000-000000000001', 'owner-s@example.test'),
@@ -93,6 +99,32 @@ select throws_ok($$
           '36100000-0000-0000-0000-000000000001', 'USD', 7, 1, 'Post', 1, 2, 3, 4,
           'Subject: our quote for your wallet', now())
 $$, '23514', null, 'a source reference is a mail hash, never mail text');
+select lives_ok($$
+  insert into app.supplier_quotes
+    (id, organization_id, quote_request_id, supplier_id, currency, unit_price, shipping_cost,
+     shipping_method, processing_days_min, processing_days_max, shipping_days_min,
+     shipping_days_max, source_reference, received_at)
+  values ('36300000-0000-0000-0000-000000000004', '36a00000-0000-0000-0000-000000000000', '36200000-0000-0000-0000-000000000001',
+          '36100000-0000-0000-0000-000000000002', 'USD', 6, 1, 'Post', 1, 2, 3, 4, 'autova-quote:Q-88213', now())
+$$, 'a source reference may be AutoVA''s quote ID');
+select throws_ok($$
+  insert into app.supplier_quotes
+    (id, organization_id, quote_request_id, supplier_id, currency, unit_price, shipping_cost,
+     shipping_method, processing_days_min, processing_days_max, shipping_days_min,
+     shipping_days_max, source_reference, received_at)
+  values (gen_random_uuid(), '36a00000-0000-0000-0000-000000000000', '36200000-0000-0000-0000-000000000001',
+          '36100000-0000-0000-0000-000000000002', 'USD', 6, 1, 'Post', 1, 2, 3, 4,
+          'autova-quote:' || repeat('a', 64), now())
+$$, '23514', null, 'the two reference forms never mix');
+select throws_ok($$
+  insert into app.supplier_quotes
+    (id, organization_id, quote_request_id, supplier_id, currency, unit_price, shipping_cost,
+     shipping_method, processing_days_min, processing_days_max, shipping_days_min,
+     shipping_days_max, source_reference, received_at)
+  values (gen_random_uuid(), '36a00000-0000-0000-0000-000000000000', '36200000-0000-0000-0000-000000000001',
+          '36100000-0000-0000-0000-000000000002', 'USD', 6, 1, 'Post', 1, 2, 3, 4,
+          E'autova-quote:Q-88214\nUSD 6.00', now())
+$$, '23514', null, 'a quote ID never carries a second line');
 select throws_ok($$
   update app.supplier_quotes set unit_price = 1 where id = '36300000-0000-0000-0000-000000000001'
 $$, '42501', null, 'a stored quote never changes, for any role');
@@ -195,7 +227,8 @@ set local role authenticated;
 select results_eq($$ select listing_id from app.quote_requests order by 1 $$,
   $$ values (3601::bigint), (3602::bigint) $$, 'Owner S: the quote requests of both S shops');
 select results_eq($$ select source_reference from app.supplier_quotes order by 1 $$,
-  $$ values ('mail:' || repeat('a', 64)), ('mail:' || repeat('b', 64)) $$, 'Owner S: the quotes of both S shops');
+  $$ values ('autova-quote:Q-88213'), ('mail:' || repeat('a', 64)), ('mail:' || repeat('b', 64)) $$,
+  'Owner S: the quotes of both S shops');
 select is((select count(*)::int from app.suppliers), 2, 'Owner S: the organization''s suppliers');
 select throws_ok($$ insert into app.suppliers (id, organization_id, name)
   values (gen_random_uuid(), '36a00000-0000-0000-0000-000000000000', 'By hand') $$,
@@ -231,7 +264,8 @@ select results_eq($$ select name from app.suppliers order by 1 $$,
 select results_eq($$ select listing_id from app.quote_requests order by 1 $$,
   $$ values (3601::bigint), (3602::bigint) $$, 'worker for S: S''s quote requests only');
 select results_eq($$ select id from app.supplier_quotes order by 1 $$,
-  $$ values ('36300000-0000-0000-0000-000000000001'::uuid), ('36300000-0000-0000-0000-000000000002'::uuid) $$,
+  $$ values ('36300000-0000-0000-0000-000000000001'::uuid), ('36300000-0000-0000-0000-000000000002'::uuid),
+            ('36300000-0000-0000-0000-000000000004'::uuid) $$,
   'worker for S: S''s quotes only');
 select results_eq($$ select id from app.supplier_mappings order by 1 $$,
   $$ values ('36400000-0000-0000-0000-000000000001'::uuid), ('36400000-0000-0000-0000-000000000002'::uuid) $$,
@@ -274,6 +308,47 @@ select is((select state from app.quote_requests where id = '36200000-0000-0000-0
   'waiting_for_quotes', 'T''s request is unchanged by S''s worker');
 select is((select ended_at from app.supplier_mappings where id = '36400000-0000-0000-0000-000000000003'),
   null, 'T''s mapping is unchanged by S''s worker');
+
+-- Removing a shop, then the organization, removes the requests, quotes and mappings ------------
+-- Shop S2: a chosen request, its quote, and an active mapping from that quote.
+update app.quote_requests set state = 'chosen', chosen_quote_id = '36300000-0000-0000-0000-000000000002'
+  where id = '36200000-0000-0000-0000-000000000002';
+insert into app.supplier_mappings
+  (id, organization_id, shop_id, listing_id, supplier_id, quote_id, active_from)
+values ('36400000-0000-0000-0000-000000000004', '36a00000-0000-0000-0000-000000000000',
+        '36c00000-0000-0000-0000-000000000002', 3602, '36100000-0000-0000-0000-000000000002',
+        '36300000-0000-0000-0000-000000000002', now());
+set constraints app.supplier_quotes_supplier_fkey, app.quote_requests_chosen_quote_fkey,
+  app.supplier_mappings_supplier_fkey, app.supplier_mappings_quote_fkey deferred;
+
+select lives_ok($$ delete from app.shops where id = '36c00000-0000-0000-0000-000000000002' $$,
+  'removing a shop with a chosen request, its quote and a mapping from it works');
+select lives_ok($$ set constraints all immediate $$,
+  'and the links checked at the commit still hold');
+select is(
+  (select count(*)::int from app.quote_requests where shop_id = '36c00000-0000-0000-0000-000000000002')
+  + (select count(*)::int from app.supplier_quotes where id = '36300000-0000-0000-0000-000000000002')
+  + (select count(*)::int from app.supplier_mappings where shop_id = '36c00000-0000-0000-0000-000000000002'),
+  0, 'the shop''s requests, quotes and mappings are gone');
+
+set constraints app.supplier_quotes_supplier_fkey, app.quote_requests_chosen_quote_fkey,
+  app.supplier_mappings_supplier_fkey, app.supplier_mappings_quote_fkey deferred;
+select lives_ok($$ delete from app.organizations where id = '36a00000-0000-0000-0000-000000000000' $$,
+  'removing an organization with suppliers, a chosen request, its quotes and mappings works');
+select lives_ok($$ set constraints all immediate $$,
+  'and the links checked at the commit still hold');
+select is(
+  (select count(*)::int from app.suppliers where organization_id = '36a00000-0000-0000-0000-000000000000')
+  + (select count(*)::int from app.quote_requests where organization_id = '36a00000-0000-0000-0000-000000000000')
+  + (select count(*)::int from app.supplier_quotes where organization_id = '36a00000-0000-0000-0000-000000000000')
+  + (select count(*)::int from app.supplier_mappings where organization_id = '36a00000-0000-0000-0000-000000000000'),
+  0, 'the organization''s suppliers, requests, quotes and mappings are gone');
+select is(
+  (select count(*)::int from app.suppliers where organization_id = '36b00000-0000-0000-0000-000000000000')
+  + (select count(*)::int from app.quote_requests where organization_id = '36b00000-0000-0000-0000-000000000000')
+  + (select count(*)::int from app.supplier_quotes where organization_id = '36b00000-0000-0000-0000-000000000000')
+  + (select count(*)::int from app.supplier_mappings where organization_id = '36b00000-0000-0000-0000-000000000000'),
+  4, 'organization T keeps its rows');
 
 select * from finish();
 rollback;

@@ -93,6 +93,10 @@ QUOTE_REQUEST_TRANSITIONS: Mapping[QuoteRequestState, frozenset[QuoteRequestStat
     _S.MAPPED: frozenset(),
     _S.CANCELLED: frozenset(),
 }
+# The states that name the chosen quote.
+HOLDS_A_CHOICE: frozenset[QuoteRequestState] = frozenset(
+    {_S.CHOSEN, _S.CONFIRMED_IN_AUTOVA, _S.MAPPED}
+)
 
 
 @dataclass(frozen=True)
@@ -106,23 +110,50 @@ class QuoteRequest:
 
     def __post_init__(self) -> None:
         _aware(self.updated_at, "a quote request's time")
+        # The database's quote_requests_chosen_check, the same rule.
+        if (self.state in HOLDS_A_CHOICE) != (self.chosen_quote_id is not None):
+            raise ValueError("a request names its chosen quote from CHOSEN on, and only then")
 
     @property
     def is_final(self) -> bool:
         return not QUOTE_REQUEST_TRANSITIONS[self.state]
 
     def transition(self, target: QuoteRequestState, *, at: datetime) -> QuoteRequest:
+        """Any edge but the choice; going back to the quotes, or cancelling, clears the choice."""
         check_transition("quote request", QUOTE_REQUEST_TRANSITIONS, self.state, target)
-        return replace(self, state=target, updated_at=at)
+        if target is QuoteRequestState.CHOSEN:
+            raise ValueError("a choice names its quote: use choose()")
+        chosen = self.chosen_quote_id if target in HOLDS_A_CHOICE else None
+        return replace(self, state=target, updated_at=at, chosen_quote_id=chosen)
+
+    def choose(self, quote_id: uuid.UUID, *, at: datetime) -> QuoteRequest:
+        """QUOTES_RECEIVED -> CHOSEN, naming the chosen quote (one of this request's own)."""
+        check_transition(
+            "quote request", QUOTE_REQUEST_TRANSITIONS, self.state, QuoteRequestState.CHOSEN
+        )
+        return replace(
+            self, state=QuoteRequestState.CHOSEN, updated_at=at, chosen_quote_id=quote_id
+        )
 
 
-# A quote's source: "mail:" and the SHA-256 of the mail's message ID, so no mail text can land
-# there. The database checks the same shape (supplier_quotes_source_reference_check).
-_MAIL_REFERENCE = re.compile(r"mail:[0-9a-f]{64}")
+# A quote's source, in one of two strict shapes so no mail text can land there:
+# - "autova-quote:" and AutoVA's quote ID (preferred: it stays the same when AutoVA sends the
+#   quote again in a new mail);
+# - "mail:" and the SHA-256 of the mail's message ID, when the mail carries no quote ID.
+# The database checks the same shapes (supplier_quotes_source_reference_check).
+_AUTOVA_QUOTE_ID = re.compile(r"[A-Z]{1,4}-[0-9]{1,12}")
+_SOURCE_REFERENCE = re.compile(r"autova-quote:[A-Z]{1,4}-[0-9]{1,12}|mail:[0-9a-f]{64}")
+
+
+def autova_quote_reference(quote_id: str) -> str:
+    """The reference a quote stores for AutoVA's quote ID (for example `Q-88213`)."""
+    if _AUTOVA_QUOTE_ID.fullmatch(quote_id) is None:
+        raise ValueError("an AutoVA quote ID is 1 to 4 capitals, a dash and 1 to 12 digits")
+    return f"autova-quote:{quote_id}"
 
 
 def mail_reference(message_id: str) -> str:
-    """The reference a quote stores for the mail it came from: a hash of its message ID."""
+    """The reference a quote stores for a mail without a quote ID: a hash of its message ID."""
     if not message_id:
         raise ValueError("a mail reference needs the mail's message ID")
     return "mail:" + hashlib.sha256(message_id.encode()).hexdigest()
@@ -146,7 +177,7 @@ class SupplierQuote:
     processing_days: tuple[int, int]
     shipping_days: tuple[int, int]
     valid_until: date | None
-    # Where it came from: the quote mail's reference (a message ID's hash), never its content.
+    # Where it came from: autova_quote_reference() or mail_reference(), never the mail's content.
     source_reference: str
     received_at: datetime
 
@@ -163,9 +194,11 @@ class SupplierQuote:
         _days(self.shipping_days, "a quote's shipping time")
         if (
             len(self.source_reference) > MAX_REFERENCE
-            or _MAIL_REFERENCE.fullmatch(self.source_reference) is None
+            or _SOURCE_REFERENCE.fullmatch(self.source_reference) is None
         ):
-            raise ValueError("a quote's source reference is mail_reference()'s hash, never text")
+            raise ValueError(
+                "a quote's source reference is an AutoVA quote ID or a mail hash, never text"
+            )
         _aware(self.received_at, "a quote's arrival")
 
     @property
@@ -225,4 +258,6 @@ def activate_mapping(
         raise ValueError("a mapping replaces only the same product's mapping")
     if not current.is_active:
         raise ValueError("that mapping has already ended")
+    if new.active_from < at:
+        raise ValueError("the new mapping starts when the old one ends or later, never overlapping")
     return replace(current, ended_at=at, end_reason=reason), new
