@@ -595,7 +595,7 @@ class EmailDeliverer:
             # The address owns the workspace (clients #48): a member of several lands on it.
             return f"{base}/incidents/{incident}?workspace={organization_id}"
         if kind is NotificationKind.NEW_PRODUCT_QUOTE:
-            return f"{base}/quotes?workspace={organization_id}"
+            return f"{base}/commerce/quotes"
         if kind.is_security:
             return f"{base}/settings/security"
         return f"{base}/notifications"
