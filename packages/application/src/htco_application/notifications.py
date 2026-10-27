@@ -364,6 +364,14 @@ _TEMPLATES: Mapping[tuple[NotificationKind, Locale], tuple[str, str]] = {
         "הזמנה {receipt_id}: להעתיק מספר מעקב",
         "להזמנה {receipt_id} עדיין אין מספר מעקב ב-Etsy. העתיקו אותו מ-AutoVA למשרד.",
     ),
+    (NotificationKind.NEW_PRODUCT_QUOTE, Locale.EN): (
+        "Listing {listing_id}: a new supplier quote",
+        "A supplier quote arrived for listing {listing_id}. Compare the quotes in the office.",
+    ),
+    (NotificationKind.NEW_PRODUCT_QUOTE, Locale.HE): (
+        "מוצר {listing_id}: הצעת מחיר חדשה מספק",
+        "הגיעה הצעת מחיר מספק למוצר {listing_id}. השוו את ההצעות במשרד.",
+    ),
     (NotificationKind.SIGN_IN_NEW_DEVICE, Locale.EN): (
         "New sign-in to HTCO Office",
         "Your account signed in from a new device ({device}). If this was not you, change your"
@@ -586,6 +594,8 @@ class EmailDeliverer:
         ):
             # The address owns the workspace (clients #48): a member of several lands on it.
             return f"{base}/incidents/{incident}?workspace={organization_id}"
+        if kind is NotificationKind.NEW_PRODUCT_QUOTE:
+            return f"{base}/commerce/quotes"
         if kind.is_security:
             return f"{base}/settings/security"
         return f"{base}/notifications"
