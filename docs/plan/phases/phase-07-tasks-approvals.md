@@ -18,7 +18,7 @@
 - [ ] 7.5 Approvals inbox and task views
 - [ ] 7.6 Notification preferences
 - [ ] 7.7 Activity record store
-- [ ] 7.8 Activity query API and view
+- [ ] 7.8 Activity query API and view. API built (`GET /v1/activity`, `GET /v1/tasks/{id}/activity`; `htco_application.activity_query`, `PostgresActivityReader`; no migration). Open: the department filter, saved queries, AC-7.8.2's link to the execution and its dead-letter state, and the web view in `htco-clients`
 - [ ] 7.9 Scheduled Reporting & Notifications automation
 - [ ] 7.10 Agent Task Scheduling & Recovery automation
 - [ ] 7.11 Approvals and the Human channel on Postgres (the Phase 5 contract)
