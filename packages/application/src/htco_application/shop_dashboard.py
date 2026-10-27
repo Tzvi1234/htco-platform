@@ -618,6 +618,16 @@ async def shop_overview(
     )
 
 
+async def shop_languages(
+    dashboard: ShopDashboard, auth: AuthContext, shop_id: uuid.UUID, *, now: datetime
+) -> tuple[str, ...]:
+    """The languages the shop is operated in, from its profile (cached like the shop card's).
+    The browser configuration profile's locale must be one of them (slice 8A.2b)."""
+    opened = await _open(dashboard, auth, shop_id, Capability.VIEW_OVERVIEW, now)
+    profile = await opened.get("profile", opened.profile)
+    return tuple(profile.value.languages)
+
+
 async def shop_order(
     dashboard: ShopDashboard,
     auth: AuthContext,
