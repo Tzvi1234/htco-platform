@@ -218,7 +218,7 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 
 | Table | Purpose | Phase |
 |---|---|---|
-| `activity_records` | One per meaningful operation of any actor: kind, action, outcome, business summary, organization, shop, task, correlation and causation IDs; append-only | 7 |
+| `activity_records` | One per meaningful operation of any actor: kind, action, outcome, business summary with the code template that produced it, organization, shop, task, correlation and causation IDs. Append-only for every role, partitioned by month on `occurred_at` with a default partition. RLS by organization and shop; the worker writes its job's organization. **Created** (slice 7.7, `20261027150000_activity_records.sql`) | 7 |
 | `quality_findings` | Noa's and the monitors' findings with evidence, severity, follow-up task and verification | 10 |
 | `reconciliation_runs` | Evidence of comparisons with external systems | 10 |
 | `daily_operations_reports` | The nightly supervisor's report | 10 |

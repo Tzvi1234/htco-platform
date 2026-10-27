@@ -26,4 +26,5 @@ Every feature has its own folder here, created from [`_template/`](_template/) a
 | [fulfillment-monitoring](fulfillment-monitoring/overview.md) | 6 | 6.1 tracking detection and 6.2 SLA inspector built (draft until 6.7) |
 | [incidents](incidents/overview.md) | 6 | 6.3 incident machine and deduplication built; the incident center API with 6.4 |
 | [notifications](notifications/overview.md) | 6 | 6.4 built; email on the log adapter until the owner's Resend DNS |
+| [activity-records](activity-records/overview.md) | 7 | 7.7 store, writer and templates built; the use cases start writing as their locks clear |
 | [browser-environments](browser-environments/overview.md) | 5, 8A | 5.16 contracts, table and state machine built; the browser in 8A |
