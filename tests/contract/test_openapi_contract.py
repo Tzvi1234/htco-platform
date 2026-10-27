@@ -113,6 +113,7 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "move_incident",
         "get_notifications",
         "read_notifications",
+        "get_relay_items",
         "start_passkey",
         "verify_passkey",
         "challenge_passkey",

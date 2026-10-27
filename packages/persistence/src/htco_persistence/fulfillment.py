@@ -66,6 +66,8 @@ class PostgresTrackingStore:
                     o.correlation_id,
                 ],
             ).fetchone()
+            if o.source is TrackingSource.ETSY:
+                _close_relay_item(connection, o.shop_id, o.receipt_id, now=now)
             if row is not None:
                 add_outbox_in(connection, event, now=now)
                 return RecordedTracking(o.id, True, o.observed_at, o.source)
@@ -112,6 +114,25 @@ class PostgresTrackingStore:
                 """,
                 [now, shop_id, receipt_id],
             )
+
+
+def _close_relay_item(
+    connection: psycopg.Connection[Any], shop_id: uuid.UUID, receipt_id: int, *, now: datetime
+) -> None:
+    """Tracking on Etsy's receipt closes the order's relay item and deletes its code, in the
+    tracking event's own transaction (local Codex on #159): a crash between the two can no
+    longer leave a code behind. The update locks the item, so a paste waits for it."""
+    closed = connection.execute(
+        """
+        update app.relay_items
+        set state = 'closed', closed_reason = 'tracking_on_etsy', closed_at = %s, updated_at = %s
+        where shop_id = %s and receipt_id = %s and state <> 'closed'
+        returning id
+        """,
+        [now, now, shop_id, receipt_id],
+    ).fetchone()
+    if closed is not None:
+        connection.execute("delete from app.relay_item_codes where relay_item_id = %s", [closed[0]])
 
 
 def _policy(row: tuple[Any, ...]) -> SlaPolicy:
@@ -181,6 +202,19 @@ class PostgresSlaStore:
                 [shop_id, list(receipt_ids)],
             ).fetchall()
         return {int(r[0]): r[1] for r in rows}
+
+    def tracked_orders(self, shop_id: uuid.UUID, receipt_ids: tuple[int, ...]) -> frozenset[int]:
+        if not receipt_ids:
+            return frozenset()
+        with self._database.connection() as connection:
+            rows = connection.execute(
+                """
+                select distinct receipt_id from app.tracking_events
+                where shop_id = %s and receipt_id = any(%s) and source = 'etsy'
+                """,
+                [shop_id, list(receipt_ids)],
+            ).fetchall()
+        return frozenset(int(r[0]) for r in rows)
 
     def receipts_for_transactions(
         self, shop_id: uuid.UUID, transaction_ids: tuple[int, ...]

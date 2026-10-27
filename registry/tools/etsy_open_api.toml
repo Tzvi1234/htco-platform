@@ -125,6 +125,30 @@ readiness = "draft"
 description = "Read receipts, their transactions and shipments (buyer name and address masked by role; contact data never read). Endpoints: getShopReceipts, getShopReceipt, getShopReceiptTransactionsByReceipt, getShopReceiptTransactionsByShop, getShopReceiptTransaction, getShopReceiptTransactionsByListing. Approval policy R1."
 
 [[tools]]
+name = "etsy.order_history.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "confidential"
+audit_required = false
+readiness = "draft"
+description = "Read receipts in their order history form, with the buyer data Order Intake stores (contact data never read); automations only, granted to etsy-order-intake alone (AUD-06). Endpoints: getShopReceipts, getShopReceipt. Approval policy R1."
+
+[[tools]]
+name = "etsy.shipments.read"
+version = 1
+family = "commerce_catalog"
+owner = "iris"
+side_effect = "none"
+risk = "low"
+data_scope = "confidential"
+audit_required = false
+readiness = "draft"
+description = "Read the shipments of receipts with their tracking codes and carriers, no buyer data; automations only, granted to tracking-sync alone (AUD-06). Endpoints: getShopReceipts, getShopReceipt. Approval policy R1."
+
+[[tools]]
 name = "etsy.payments.read"
 version = 1
 family = "commerce_catalog"

@@ -42,8 +42,6 @@ UNPUBLISHED_EVENT = "OutboxMessage(destination=events)"
 # own follow-up PR once the lock clears; the entry goes with it, and nothing may be added.
 PENDING_COPIES = frozenset(
     {
-        ("automation/durable.py", "Offload"),
-        ("automation/durable.py", "run_inline"),
         ("execution/service.py", "ShopOwners"),
         ("execution/service.py", EVENTS_DESTINATION_VALUE),
         ("execution/service.py", UNPUBLISHED_EVENT),

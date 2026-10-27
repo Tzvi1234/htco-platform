@@ -7,6 +7,7 @@ import pytest
 from htco_application.alerts import OUT_OF_STOCK_EVENT
 from htco_application.incidents import INCIDENT_ESCALATED, INCIDENT_OPENED, INCIDENT_RESOLVED
 from htco_application.notifications import EMAIL_DESTINATION, NOTIFICATION_REQUESTED, EventDeliverer
+from htco_application.status import EXECUTION_STATE_CHANGED
 from htco_integrations.email import LogEmailAdapter, ResendEmailAdapter
 from htco_platform.settings import ConfigurationError, load_settings
 from htco_worker.main import email_port, notification_deliverers
@@ -25,6 +26,7 @@ def test_events_and_email_are_delivered_by_default_with_the_log_adapter() -> Non
     events = deliverers["events.publish"]
     assert isinstance(events, EventDeliverer)
     assert set(events.subscribers) == {
+        EXECUTION_STATE_CHANGED,
         INCIDENT_ESCALATED,
         INCIDENT_OPENED,
         INCIDENT_RESOLVED,

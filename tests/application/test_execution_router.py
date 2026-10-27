@@ -614,13 +614,15 @@ async def test_api__a_write__refused_before_any_call() -> None:
     )
     binding = real_catalog(office()).actions["etsy.inventory.update"].bindings[0]
 
-    with pytest.raises(MarketplaceWriteRefusedError, match="writes stay disabled"):
+    with pytest.raises(MarketplaceWriteRefusedError, match="no recipe"):
         await adapter.execute(request, binding)
 
     assert marketplace.calls == []
 
 
-async def test_api__a_refused_write__failed_and_not_a_breaker_failure() -> None:
+async def test_api__a_disabled_write__never_routed_and_not_a_breaker_failure() -> None:
+    """The inventory write is a disabled binding until its recipe is built (#147): it is never
+    routed, so it never reaches Etsy and never counts against the breaker."""
     clock_now = NOW
     breakers = MemoryBreakers()
     office_ = Office(real_catalog(office()), EtsyApiChannel(FakeMarketplace(), EtsyShops()),
@@ -636,10 +638,7 @@ async def test_api__a_refused_write__failed_and_not_a_breaker_failure() -> None:
 
     for n in range(5):  # as many refusals as failures would open the breaker
         result = await office_.gateway.submit(replace(write, idempotency_key=f"inventory:{n}"))
-        assert (result.outcome, result.error_code) == (
-            ActionOutcome.FAILED,
-            "MarketplaceWriteRefusedError",
-        )
+        assert (result.outcome, result.error_code) == (ActionOutcome.DENIED, "no_channel")
 
     assert breakers.admit("etsy:api", now=clock_now) is None
 
