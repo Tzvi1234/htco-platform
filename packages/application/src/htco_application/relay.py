@@ -372,8 +372,8 @@ def submit_tracking(  # noqa: PLR0913 - the caller, the item and the pasted trac
     correlation_id: str | None,
 ) -> RelayItem:
     """The owner pastes the number from AutoVA. Raises `RelayItemNotVisibleError` (404),
-    `PermissionError` (403), `SecondFactorRequiredError` (403 mfa-required), `TrackingFormatError` (422), `RelayItemMovedError` and
-    `DuplicateTrackingError` (409)."""
+    `PermissionError` (403), `SecondFactorRequiredError` (403 mfa-required),
+    `TrackingFormatError` (422), `RelayItemMovedError` and `DuplicateTrackingError` (409)."""
     organization_id = _organization(auth, organization_id)
     item = store.item(organization_id, item_id)
     if item is None or not _allowed(
@@ -415,9 +415,9 @@ def relay_code(  # noqa: PLR0913 - the caller, the item and the request
     now: datetime,
     correlation_id: str | None,
 ) -> str:
-    """The pasted code for the person who copies it into Etsy: an Owner or Admin with a second factor
-    only, while the item is open, and every reveal audited (`relay.code_revealed`, without the
-    code). Anyone else, or a closed item, gets `RelayItemNotVisibleError` (404), so the answer
+    """The pasted code for the person who copies it into Etsy: an Owner or Admin with a second
+    factor only, while the item is open, and every reveal audited (`relay.code_revealed`, without
+    the code). Anyone else, or a closed item, gets `RelayItemNotVisibleError` (404), so the answer
     never says whether a code exists."""
     organization_id = _organization(auth, organization_id)
     item = store.item(organization_id, item_id)
