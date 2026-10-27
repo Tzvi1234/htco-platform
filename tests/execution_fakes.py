@@ -4,7 +4,7 @@ approvals, a channel adapter, principals and capabilities. Shared by the gateway
 import threading
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -26,8 +26,18 @@ REGISTRY = ROOT / "registry"
 SCHEMAS = ROOT / "packages" / "contracts" / "actions"
 
 
-def real_catalog(registry: Registry | None = None) -> ActionCatalog:
-    return read_action_catalog(REGISTRY, SCHEMAS, registry or read_registry(REGISTRY).registry())
+def real_catalog(registry: Registry | None = None, *, built: bool = False) -> ActionCatalog:
+    """The registry's catalog. `built` enables every disabled binding, as if its recipe were
+    built: for tests of the gateway's flow (approvals, guards) through a fake channel, which
+    use a declared write such as the inventory update as their example (#147)."""
+    catalog = read_action_catalog(REGISTRY, SCHEMAS, registry or read_registry(REGISTRY).registry())
+    if not built:
+        return catalog
+    actions = {
+        name: replace(action, bindings=tuple(replace(b, disabled=False) for b in action.bindings))
+        for name, action in catalog.actions.items()
+    }
+    return replace(catalog, actions=actions)
 
 
 @dataclass
