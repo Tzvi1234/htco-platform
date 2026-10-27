@@ -37,7 +37,11 @@ from pathlib import Path
 from typing import Protocol
 
 from htco_application.browser_environments import EnvironmentNotFoundError
-from htco_application.browser_profiles import ProfileRecords, ProfileWorkspaces
+from htco_application.browser_profiles import (
+    ProfileFenceLostError,
+    ProfileRecords,
+    ProfileWorkspaces,
+)
 from htco_domain.browser import BrowserEnvironment, EnvironmentStatus
 
 _PURPOSE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
@@ -215,7 +219,7 @@ class BrowserController:
                 # The deadline covers the engine and the work. Unpacking and the clean exit's
                 # re-seal are bounded by the archive caps instead, so a session that finished
                 # its work in time and committed its profile is never reported as timed out.
-                async with self._profile(environment) as directory, limit:
+                async with self._profile(environment, lease) as directory, limit:
                     # The unpack may have used up the time: never begin starting a browser
                     # past the deadline.
                     if deadline <= self._clock():
@@ -232,6 +236,10 @@ class BrowserController:
             except SessionLockLostError:
                 failure = LOCK_LOST
                 raise
+            except ProfileFenceLostError:
+                # The lock was lost between the check and the write: the fenced write refused.
+                failure = LOCK_LOST
+                raise SessionLockLostError("the profile lock was lost") from None
             except TimeoutError:
                 if not limit.expired():
                     raise
@@ -276,10 +284,13 @@ class BrowserController:
         return environment
 
     @asynccontextmanager
-    async def _profile(self, environment: BrowserEnvironment) -> AsyncIterator[Path]:
+    async def _profile(
+        self, environment: BrowserEnvironment, lease: ProfileLease
+    ) -> AsyncIterator[Path]:
         """The workspace's checkout with its blocking work in threads that always run to
-        their end, even under cancellation: unpack, then re-seal on success and wipe always."""
-        checkout = self._workspaces.checkout(environment)
+        their end, even under cancellation: unpack, then re-seal on success and wipe always.
+        The re-seal is fenced by this session's own lease, checked inside the write (#169)."""
+        checkout = self._workspaces.checkout(environment, fence=lease)
         entering = asyncio.ensure_future(asyncio.to_thread(checkout.__enter__))
         try:
             # Cancelled meanwhile: the unpack still finishes, and is exited below, before the
@@ -375,8 +386,17 @@ class MemoryProfileLocks:
                 self.held.discard(environment_id)
 
     async def still_held(self, lease: ProfileLease) -> bool:
-        environment = lease.environment_id
-        return environment in self.held and self._owners.get(environment) is lease
+        return self.owns(lease, lease.environment_id)
+
+    def owns(self, lease: object, environment_id: uuid.UUID) -> bool:
+        """The fenced write's check (`MemoryProfileArchiveStore.fenced`): this very lease holds
+        this environment's lock now."""
+        return (
+            isinstance(lease, MemoryLease)
+            and lease.environment_id == environment_id
+            and environment_id in self.held
+            and self._owners.get(environment_id) is lease
+        )
 
     async def _wait(self, environment_id: uuid.UUID, until: datetime) -> bool:
         while environment_id in self.held:

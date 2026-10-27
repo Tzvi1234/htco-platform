@@ -65,6 +65,12 @@ There is no email provider (custom SMTP) yet, and Supabase's built-in email deli
 
 The link is a bearer credential for the invitee's new account: it is shown once to an Owner or Admin who signed in with MFA, the response is `no-store`, it is never logged or audited (and hidden from `repr`), and it is not stored by HTCO, so it cannot be fetched again (inviting again issues a new link). It expires with Supabase's email OTP expiry (Auth settings) and works once. The redirect URL must be in Supabase Auth's redirect allow-list. When an email provider arrives, Supabase can send the same invitation by email instead.
 
+## Passkeys as a second factor (issue #113)
+
+Next to the authenticator app (TOTP), a user can add passkeys (Face ID, Touch ID, Windows Hello, Android biometrics) as Supabase Auth WebAuthn MFA factors, name each one and remove them; either factor makes the session `aal2`. Adding or removing a factor needs an `aal2` session, the last authenticator app always stays, and both changes are audited. It is built behind `HTCO_PASSKEYS_ENABLED` and is **off on the hosted project** until the owner enables Supabase's WebAuthn MFA add-on and sets the production RP (`ht-co.app`, `https://dash.ht-co.app`). Locally, `supabase/config.toml` enables it for RP ID `localhost`. Details, routes and the switch-on steps: [passkeys](passkeys.md).
+
+[ADR-0021](../../adr/0021-authenticator-service.md) is a different thing: the Authenticator that holds the TOTP secrets of the **shops'** accounts (Etsy, partners) for the browser worker. HTCO's own sign-in factors stay in Supabase Auth.
+
 ## Known limits
 
 - The two-person rule for high-risk approvals is a later policy option (the matrix note): today high-risk approvals rely on the owner's step-up.

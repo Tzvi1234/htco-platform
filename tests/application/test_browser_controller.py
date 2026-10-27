@@ -37,9 +37,11 @@ from htco_application.browser_environments import EnvironmentNotFoundError
 from htco_application.browser_profiles import (
     MemoryProfileArchiveStore,
     MemoryProfileRecords,
+    ProfileFenceLostError,
     ProfileUnsafeError,
     ProfileVault,
     ProfileWorkspaces,
+    SealedArchive,
 )
 from htco_domain.browser import BrowserEnvironment, EnvironmentStatus
 from htco_platform.crypto import EnvelopeSealer, KeyRing
@@ -391,9 +393,11 @@ class SlowWorkspaces(ProfileWorkspaces):
 
     @override
     @contextmanager
-    def checkout(self, environment: BrowserEnvironment) -> Iterator[Path]:
+    def checkout(
+        self, environment: BrowserEnvironment, *, fence: object | None = None
+    ) -> Iterator[Path]:
         time.sleep(self._enter)
-        with super().checkout(environment) as directory:
+        with super().checkout(environment, fence=fence) as directory:
             self.unpacked = True
             yield directory
             time.sleep(self._leave)
@@ -641,6 +645,62 @@ async def test_session__a_lost_lock_never_writes_the_profile_back(tmp_path: Path
     assert on_disk(tmp_path) == []
     lost = [r for r in s.log.records.values() if r.purpose == "test.lost"]
     assert [(r.outcome, r.failure) for r in lost] == [(SessionOutcome.FAILED, "lock_lost")]
+
+
+@pytest.mark.ac("AC-8A.2.2")
+async def test_session__a_lock_lost_between_the_check_and_the_write_never_writes_back(
+    tmp_path: Path,
+) -> None:
+    """Codex on #122 (#169): the lock drops after the fence check passed, while the profile is
+    packed. The write itself takes the session's lease and refuses, so the stale profile never
+    replaces the archive, and the session fails as `lock_lost`."""
+    env = environment()
+    locks = MemoryProfileLocks()
+
+    class DropsDuringTheWrite(MemoryProfileArchiveStore):
+        drop = False
+
+        @override
+        def put(self, archive: SealedArchive, *, fence: object | None = None) -> None:
+            if self.drop:
+                locks.held.discard(env.id)  # the lock's connection drops mid-write
+            super().put(archive, fence=fence)
+
+    store = DropsDuringTheWrite(fenced=locks.owns)
+    vault = ProfileVault(EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), store, now)
+    engine, log = FakeEngine(), MemorySessionLog()
+    controller = BrowserController(
+        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(vault, tmp_path), engine, locks,
+        log, clock=now,
+    )  # fmt: skip
+    async with controller.session(env.id, purpose="test.good", deadline=soon()):
+        (engine.handles[0].profile / "Cookies").write_bytes(b"good")
+    good = vault.open(env)
+
+    store.drop = True
+    with pytest.raises(SessionLockLostError):
+        async with controller.session(env.id, purpose="test.stale", deadline=soon()):
+            (engine.handles[1].profile / "Cookies").write_bytes(b"stale")
+    assert vault.open(env) == good
+    assert on_disk(tmp_path) == []
+    stale = [r for r in log.records.values() if r.purpose == "test.stale"]
+    assert [(r.outcome, r.failure) for r in stale] == [(SessionOutcome.FAILED, "lock_lost")]
+
+
+async def test_store__a_fenced_write_needs_a_lease_that_still_holds() -> None:
+    """The memory store's fence: a write with a lost or foreign lease writes nothing."""
+    env = environment()
+    locks = MemoryProfileLocks()
+    store = MemoryProfileArchiveStore(fenced=locks.owns)
+    vault = ProfileVault(EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), store, now)
+    async with locks.hold(env.id, until=soon()) as lease:
+        vault.seal(env, b"held", fence=lease)
+        locks.held.discard(env.id)
+        with pytest.raises(ProfileFenceLostError):
+            vault.seal(env, b"stale", fence=lease)
+    with pytest.raises(ProfileFenceLostError):
+        vault.seal(env, b"after", fence=MemoryLease(env.id, held=True))
+    assert vault.open(env) == b"held"
 
 
 async def test_session__cancelled_while_recording_its_start_still_ends_the_record(
