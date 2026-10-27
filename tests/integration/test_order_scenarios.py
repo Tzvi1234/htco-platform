@@ -12,6 +12,8 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import anyio
@@ -22,9 +24,11 @@ from htco_application.automation.durable import (
     DurableAutomationEngine,
     Handler,
     HandlerContext,
+    HandlerOutcome,
 )
 from htco_application.automation.engine import TriggerRequest
 from htco_application.automation.records import registry_from_rows
+from htco_application.etsy_webhooks import ORDER_INTAKE
 from htco_application.execution.gateway import Channel
 from htco_application.execution.service import ActionGatewayService, GatewayParts
 from htco_application.marketplace import OrderReceipt
@@ -38,7 +42,8 @@ from htco_application.order_ingest import INGESTED, IngestContext, IngestPlan, I
 from htco_application.order_intake import OrderIntake
 from htco_application.order_receipts import receipt_to_json
 from htco_application.shop_integrations import ShopIntegration
-from htco_application.workforce.registry import Registry
+from htco_application.workforce.files import read_registry
+from htco_application.workforce.registry import Registry, parse_automation
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import ExecutionState, TriggerKind
 from htco_domain.orders import OrderState
@@ -54,6 +59,7 @@ from tests.integration.test_order_history import connected, order
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
+REGISTRY = Path(__file__).resolve().parents[2] / "registry"
 NOW = datetime.now(UTC).replace(microsecond=0)
 WORKER = ActorRef(ActorKind.SYSTEM, "agent-worker:scenario")
 ADMIN = ActorRef(ActorKind.USER, "6a100000-0000-0000-0000-000000000009")
@@ -135,15 +141,21 @@ class World:
 
         gateway = ActionGatewayService(
             GatewayParts(
-                catalog=real_catalog(office()), registry=registry,
+                catalog=real_catalog(office()), registry=intake_registry,
                 store=PostgresActionStore(database), principals=Principals(), shops=Shops(),
                 approvals=Approvals(), adapters={Channel.API: self.channel},
                 capabilities=Capabilities({(self.integration.shop_id, "receipts_read")}),
                 clock=lambda: NOW,
             )
         )  # fmt: skip
-        handler: Handler = OrderIntake(store=self.store, shops=OneShop(self.integration),
-                                       clock=lambda: NOW)  # fmt: skip
+        intake = OrderIntake(store=self.store, shops=OneShop(self.integration), clock=lambda: NOW)
+
+        async def as_intake(ctx: HandlerContext) -> HandlerOutcome:
+            # The stand-in's run, as Etsy Order Intake: its reads are the restricted
+            # `etsy.order_history.read`, granted to `etsy-order-intake` alone (AUD-06).
+            return await intake(replace(ctx, automation_id=ORDER_INTAKE))
+
+        handler: Handler = as_intake
         return DurableAutomationEngine(
             registry, PostgresExecutionStore(database), {self.automation: handler},
             clock=lambda: NOW, jitter=lambda: 1.0, gateway=gateway,
@@ -166,8 +178,23 @@ class World:
 
 async def world(admin: Database, worker_db: Database, receipt_id: int, **changes: Any) -> World:
     tenant, integration = await connected(admin)
-    automation = register(admin, allowed_actions=["etsy.receipts.read"], **changes)
+    # An active stand-in with the test retry policy (two attempts); its handler runs as Etsy
+    # Order Intake, whose restricted read no other automation id may be granted.
+    automation = register(admin, **changes)
     return World(admin, worker_db, tenant, integration, order(receipt_id), automation)
+
+
+def intake_registry() -> Registry:
+    """The gateway's view: Etsy Order Intake as `htco registry sync --automations` stores it,
+    so the scenarios exercise the production grant, not a test one."""
+    (document,) = (d for d in read_registry(REGISTRY).automations if d["id"] == ORDER_INTAKE)
+    automation = parse_automation(document)
+    return Registry(
+        employees=MappingProxyType({}),
+        tools=MappingProxyType({}),
+        automations=MappingProxyType({automation.id: automation}),
+        advisors=MappingProxyType({}),
+    )
 
 
 def count(admin: Database, sql: str, params: list[object]) -> int:
@@ -228,7 +255,7 @@ async def test_scenario_g__one_receipt_replayed_concurrently_and_out_of_order__o
     # One action row per business effect: each execution read the receipt once.
     assert count(
         admin,
-        "select count(*) from app.action_executions where organization_id = %s and action_name = 'etsy.receipts.read' and correlation_id like %s",  # noqa: E501
+        "select count(*) from app.action_executions where organization_id = %s and action_name = 'etsy.order_history.read' and correlation_id like %s",  # noqa: E501
         [w.tenant.organization_id, f"corr-etsy:{shop}:{receipt_id}:%"],
     ) == 2  # fmt: skip
     # No duplicate outbox message for the same effect.
