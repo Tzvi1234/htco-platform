@@ -62,9 +62,10 @@ test:
     uv run coverage report --include="*/htco_domain/*" --fail-under=95
     uv run coverage report --include="*/htco_application/*" --fail-under=90
 
-# Schemathesis API fuzzing (the slow part of the contract tests; its own CI job so it runs in parallel with `test`)
-fuzz:
-    uv run pytest tests/contract/test_api_fuzzing.py -q
+# Schemathesis API fuzzing (the slow part of the contract tests; its own CI job so it runs in parallel with `test`).
+# No argument fuzzes every operation; CI passes `INDEX/COUNT` (e.g. 0/4) for one stable crc32 shard.
+fuzz shard='':
+    uv run pytest tests/contract/test_api_fuzzing.py -q {{ if shard == '' { '' } else { '--fuzz-shard=' + shard } }}
 
 # Local database (needs Docker and the Supabase CLI): start Postgres and apply every migration
 db-start:

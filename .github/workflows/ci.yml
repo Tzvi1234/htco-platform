@@ -66,12 +66,21 @@ jobs:
       - name: Tests with coverage floors
         run: uv run just test
 
-  # The Schemathesis API fuzzing (tests/contract/test_api_fuzzing.py) takes 11-18+ minutes, so it runs
-  # beside `tests` instead of inside it; `just test` ignores that file.
+  # The Schemathesis API fuzzing (tests/contract/test_api_fuzzing.py) takes about 17 minutes in one piece, so it
+  # runs beside `tests` instead of inside it, split into 4 parallel shards of the operations (a
+  # stable crc32 of each test id, `tests/sharding.py`); `just test` ignores that file. A failed
+  # shard fails `fuzz` as `ci-gate` sees it.
   fuzz:
-    name: fuzz
+    name: fuzz (shard ${{ matrix.shard }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # `total` is the shard count passed to `just fuzz`; tests/tools/test_fuzz_sharding.py fails
+        # if it differs from the number of shards listed here.
+        shard: [0, 1, 2, 3]
+        total: [4]
     permissions:
       contents: read
     steps:
@@ -85,7 +94,7 @@ jobs:
           enable-cache: true
           cache-python: true
       - name: API fuzzing
-        run: uv run just fuzz
+        run: uv run just fuzz "${{ matrix.shard }}/${{ matrix.total }}"
   # A real Chromium against pages served on 127.0.0.1 only, never a live site (Phase 8A).
   browser:
     name: browser
