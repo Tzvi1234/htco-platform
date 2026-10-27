@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ht-co.app/contracts/events/approvals.decided.v1.json",
   "title": "approvals.decided.v1",
-  "description": "An approval was approved, rejected or expired; the waiting execution resumes or ends from it (IDs and the outcome only). Envelope: SOFTWARE_DESIGN §8.4.",
+  "description": "An approval was approved, rejected or expired (one event per decided state: an approved approval may later expire); the waiting execution resumes or ends from it, for the action it waits on only (IDs and the outcome only). Envelope: SOFTWARE_DESIGN §8.4.",
   "type": "object",
   "properties": {
     "event_id": {
@@ -87,6 +87,9 @@
         "waiting_execution_id": {
           "description": "string or null"
         },
+        "action_execution_id": {
+          "description": "string or null: the gateway's action execution the run waits on; the decision resumes or ends that wait only"
+        },
         "decided_by": {
           "description": "string or null"
         }
@@ -97,6 +100,7 @@
         "action",
         "action_version",
         "waiting_execution_id",
+        "action_execution_id",
         "decided_by"
       ],
       "additionalProperties": false

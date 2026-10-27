@@ -178,7 +178,7 @@ The Phase 5 in-memory approval and Human-task contracts get their Postgres store
 
 **Across processes (AUD-03).** The API process decides, while the worker holds the waiting execution, so nothing resumes in-process:
 - **(a) The decision is an event.** A decision or an expiry writes `approvals.decided.v1` through the outbox (`decision_event`, the AUD-01 envelope), in the same transaction as the decision itself.
-- **(b) One job resumes the execution.** The worker's `events.publish` delivery job hands the event to `ApprovalResumer`, which resumes or cancels the waiting execution exactly once. A replayed delivery moves nothing twice. A completed or cancelled Human task follows the same path, through `tasks.state_changed.v1`.
+- **(b) One job resumes the execution.** The worker's `events.publish` delivery job hands the event to `ApprovalResumer`, which resumes or cancels the waiting execution exactly once. A replayed delivery moves nothing twice, and a decision moves only the wait it was taken for (the execution's `waiting_for`), so a replay after a later wait is ignored. A completed or cancelled Human task follows the same path, through `tasks.state_changed.v1`.
 - **(c) One task model.** A Human-channel hand-off is a `BusinessTask` of kind `human_channel` (slice 7.1). It is not a second task shape.
 
 Until this slice ships, the worker's gateway uses the `NoApprovals` gate: a write is recorded as pending and waits, and nothing in the worker can approve it.

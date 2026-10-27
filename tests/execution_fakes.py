@@ -93,6 +93,7 @@ class Approvals:
         *,
         request_hash: str,
         definition: ActionDefinition,  # noqa: ARG002
+        action_execution_id: uuid.UUID,  # noqa: ARG002
     ) -> uuid.UUID:
         approval_id = uuid.uuid7()
         self.requested.append((approval_id, request_hash))

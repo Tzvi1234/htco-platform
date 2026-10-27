@@ -307,6 +307,25 @@ class BrowserProvider(
     capabilities: ProviderCapabilities
 
 
+class LiveSession(Protocol):  # ADR-0026 §3, in the browser worker only, on the session's pipe
+    async def start_screencast(self, limits: FrameLimits) -> AsyncIterator[Frame]: ...
+    async def stop_screencast(self) -> None: ...
+    async def pause_frames(self) -> None: ...  # before a secret is typed; drops the cached frame
+    async def resume_frames(self) -> None: ...  # after a navigation or a verified mask only
+    async def dispatch(self, event: ControllerInput, *, lease: ControlLease) -> None:
+        """The closed set only (mouse, wheel, keys, insertText), through the one input gate:
+        refused while the agent runs, or for anyone but the lease holder."""
+
+
+class BrowserTakeover(Protocol):  # ADR-0026 §2: one leased Controller per session
+    async def request_control(
+        self, session_id: UUID, *, by: AuthContext, purpose: TakeoverPurpose
+    ) -> ControlLease: ...  # CONTROL_BROWSER_SESSION, aal2, step-up; compare-and-set
+    async def renew(self, lease: ControlLease) -> ControlLease: ...  # the holder only
+    async def release(self, lease: ControlLease) -> ReturnChecks: ...  # re-checks, then resume
+    async def state(self, session_id: UUID) -> ControlState: ...
+
+
 class BrowserConfigurations(Protocol):  # ADR-0025 §2: one versioned profile per environment
     async def current(self, environment_id: UUID) -> BrowserConfiguration: ...
     async def change(
@@ -500,8 +519,9 @@ class ApprovalState(StrEnum):
 **As built (slice 5.14):** frozen dataclasses in `htco_application.approvals` (the layer rule, as in §2), the states and decision rules in `htco_domain.approvals`. `ApprovalService` also has `executed(approval_id, *, execution_id)`: the gateway calls it when the approved request succeeded, so the approval is `EXECUTED` and bound to that execution. A resubmission without `approval_id` uses the approval already requested for that very request (same hash), so a resumed automation simply submits again. An automation names its own execution as the request's `causation_id`; the approval keeps it as `waiting_execution_id`, and `ApprovalResumer` resumes that execution once on approval, or cancels it (`approval_rejected`, `approval_expired`).
 
 **Across processes (AUD-03):**
-- **The decision.** A decision or an expiry writes `approvals.decided.v1` to the outbox with the change (`decision_event`). The service calls no listener.
+- **The decision.** A decision or an expiry writes `approvals.decided.v1` to the outbox with the change (`decision_event`). The service calls no listener. Each decided state is its own event, keyed `approvals.decided.v1:<approval>:<state>`: an approved approval that lapses before it runs also writes `expired`, and the outbox never drops it as a duplicate.
 - **The resume.** `ApprovalResumer` is the subscriber of that event on the worker's `events.publish`, so it does not matter which process decided. A replayed delivery resumes nothing twice.
+- **The wait it resumes.** The approval keeps the gateway's action execution that waits (`action_execution_id`); a handler's `Waiting` names the same action, and the engine stores it as the execution's `waiting_for`. A decision resumes or ends only that wait. The engine's optimistic update checks `waiting_for` with the state and the attempts, so a replay delivered after the run reached a later wait changes nothing.
 - **The worker's gate.** Until the Postgres store (7.11), the worker's gateway uses `NoApprovals`: a write is recorded as pending, and nothing in the worker can approve it.
 
 Rules, from Phase 7 (AC-7.3.x):
@@ -591,6 +611,18 @@ VERIFYING ─► FAILED (verification) ─► incident
 ```
 
 A `DISPATCHED` action holds no lease, slot or connection while the browser worker runs it. A deadline watchdog (`browser.resume` at the deadline plus grace), enqueued at dispatch, makes sure it never waits for ever. A resubmission with the same key resumes the stored claim: with no outcome yet it answers `DISPATCHED`, and with one it validates and verifies the output and records one final result. The browser step never runs twice.
+
+### Browser session control (`browser_sessions.control_state`, ADR-0026)
+
+| From | To | When |
+|---|---|---|
+| `AGENT` | `PAUSING` | A Controller's lease is granted (Take Control). The bounded deadline extension is recorded on the run's stored claim in the same transaction |
+| `PAUSING` | `HUMAN_CONTROLLING` | The agent or automation stopped at its safe point. From now on, the input gate takes only the Controller's events |
+| `HUMAN_CONTROLLING` | `RETURNING` | The lease holder returns control. An expired lease never causes this |
+| `RETURNING` | `AGENT` | Every return check passed, and the same attempt resumes from its checkpoint |
+| `PAUSING`, `HUMAN_CONTROLLING`, `RETURNING` | *(the session ends)* | The run ended before its safe point; a return check failed (`HANDED_TO_HUMAN` or `FAILED`); the maximum duration passed (`HANDED_TO_HUMAN`); or the worker crashed, and the started marker and the watchdog resolve the attempt |
+
+While `PAUSING`, the agent finishes its current step and the input gate still refuses the Controller. While `RETURNING`, it refuses both sides. An expired lease changes nothing here: the session stays `HUMAN_CONTROLLING`, with no holder, until a Controller takes control again or the maximum duration ends it. Throughout, the action stays `DISPATCHED`. The status layer reports one more waiting reason for it, `waiting_for_human_control`, in place of `waiting_for_browser` while the session is `HUMAN_CONTROLLING`. The database refuses any transition outside the table (a trigger), as for the environment's status.
 
 ### Business task (`tasks.state`, Phase 7; existing `htco_domain.tasks.TaskState`)
 

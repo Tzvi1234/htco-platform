@@ -38,7 +38,7 @@ from htco_application.automation.durable import (
 from htco_application.automation.engine import TriggerRequest
 from htco_application.execution.gateway import ActionOutcome, ActionRef, ActionRequest, Channel
 from htco_application.execution.service import ActionGatewayService, GatewayParts, request_hash
-from htco_application.kernel import event_payload
+from htco_application.kernel import event_payload, read_event
 from htco_application.messaging import PendingDelivery
 from htco_application.notifications import EventDeliverer
 from htco_application.workforce.files import read_registry
@@ -421,11 +421,37 @@ class WritingHandler:
         return Completed({"listing_id": 1})
 
 
+@dataclass
+class TwoWritesHandler:
+    """A step that writes twice, each write waiting for its own approval (Codex on #175)."""
+
+    outcomes: list[ActionOutcome] = field(default_factory=list)
+
+    async def handle(self, context: HandlerContext) -> HandlerOutcome:
+        for key in ("inventory:first", "inventory:second"):
+            result = await context.gateway.submit(
+                ActionRequest(
+                    action=ActionRef("etsy.inventory.update", 1),
+                    actor=ActorRef(ActorKind.AUTOMATION, INTAKE),
+                    organization_id=context.organization_id,
+                    shop_id=context.shop_id,
+                    idempotency_key=key,
+                    correlation_id=context.correlation_id,
+                    causation_id=str(context.execution_id),
+                    input=WRITE_INPUT,
+                )
+            )
+            self.outcomes.append(result.outcome)
+            if result.outcome.waits:
+                return Waiting(result.outcome.value, result.execution_id)
+        return Completed({"listing_id": 1})
+
+
 class Automations:
-    def __init__(self) -> None:
+    def __init__(self, handler: WritingHandler | TwoWritesHandler | None = None) -> None:
         self.world = World()
         self.store = MemoryExecutionStore(shops={SHOP: ORG})
-        self.handler = WritingHandler()
+        self.handler = handler or WritingHandler()
         self.engine = DurableAutomationEngine(
             lambda: self.world.registry,
             self.store,
@@ -590,6 +616,72 @@ async def test_a_decision_through_another_service_instance__resumes_the_held_exe
 
 
 @pytest.mark.ac("AUD-03.2")
+async def test_a_replayed_decision__never_resumes_a_later_wait() -> None:
+    """Codex on #175: the first decision is delivered, the resumed run reaches a second approval
+    and waits again, then the first decision is replayed (a crash before its acknowledgement).
+    The replay names the first wait, so the second one stays waiting and no job is added."""
+    automations = Automations(TwoWritesHandler())
+    execution_id = await automations.waiting()
+    automations.world.approve()
+    await automations.deliver()
+    worker = ActorRef(ActorKind.SYSTEM, "w")
+    second = await automations.engine.execute(execution_id, worker=worker)
+    assert second.state is ExecutionState.WAITING
+    assert automations.handler.outcomes == [
+        ActionOutcome.PENDING_APPROVAL, ActionOutcome.SUCCEEDED, ActionOutcome.PENDING_APPROVAL,
+    ]  # fmt: skip
+    jobs = len(automations.store.jobs)
+
+    await automations.deliver(again=True)  # the first decision, replayed
+
+    assert automations.state(execution_id) is ExecutionState.WAITING
+    assert len(automations.store.jobs) == jobs
+    assert [r for _, r in automations.reasons()].count("approval_approved") == 1
+
+
+@pytest.mark.ac("AUD-03.2")
+async def test_a_replayed_rejection__never_cancels_a_later_wait() -> None:
+    """The same binding for an ending: a decision ends only the wait it was taken for."""
+    automations = Automations(TwoWritesHandler())
+    execution_id = await automations.waiting()
+    automations.world.approve()
+    await automations.deliver()
+    await automations.engine.execute(execution_id, worker=ActorRef(ActorKind.SYSTEM, "w"))
+    first = automations.world.approvals.outbox[0]
+    stale = replace(
+        first,
+        payload={**first.payload, "payload": {**event_payload(first), "state": "rejected"}},
+    )
+
+    await automations.events.deliver(PendingDelivery(uuid.uuid4(), stale, 0, delivered=False))
+
+    assert automations.state(execution_id) is ExecutionState.WAITING
+
+
+@pytest.mark.ac("AUD-03.2")
+def test_decision_event__approved_then_expired__two_events_with_their_own_keys() -> None:
+    """Codex on #175: an approved approval that lapses before it runs is EXPIRED, and that
+    second event must not share the first one's key, or the outbox (`on conflict
+    (idempotency_key) do nothing`) drops it and the waiting execution is never cancelled."""
+    clock = Clock()
+    service = MemoryApprovalService(clock)
+    approval = service.request(approval_of(write(), ttl=timedelta(hours=1)))
+    service.decide(approval.id, Decision.APPROVE, by=person(),
+                   shown_hash=approval.request.request_hash)  # fmt: skip
+    clock.now = NOW + timedelta(hours=1)
+
+    assert service.status(approval.id).state is ApprovalState.EXPIRED
+    approved, expired = service.outbox
+    assert [event_payload(m)["state"] for m in (approved, expired)] == ["approved", "expired"]
+    assert approved.idempotency_key != expired.idempotency_key
+    assert read_event(approved.payload).event_id != read_event(expired.payload).event_id
+    # The same decision built again (a retried transaction) keeps its key and its event ID.
+    again = decision_event(service.status(approval.id), at=clock.now)
+    assert again.idempotency_key == expired.idempotency_key
+    assert read_event(again.payload).event_id == read_event(expired.payload).event_id
+
+
+@pytest.mark.ac("AUD-03.2")
 @pytest.mark.parametrize("decision", [Decision.APPROVE, Decision.REJECT])
 def test_decision_event__ids_and_outcome_only__matches_its_contract(decision: Decision) -> None:
     service = MemoryApprovalService(Clock())
@@ -601,13 +693,14 @@ def test_decision_event__ids_and_outcome_only__matches_its_contract(decision: De
     [event] = service.outbox
     assert event == decision_event(decided, at=NOW)
     assert_event_contract(event)
-    assert event.idempotency_key == f"{APPROVAL_DECIDED}:{approval.id}"
+    assert event.idempotency_key == f"{APPROVAL_DECIDED}:{approval.id}:{decided.state.value}"
     assert event_payload(event) == {
         "approval_id": str(approval.id),
         "state": decided.state.value,
         "action": "etsy.inventory.update",
         "action_version": 1,
         "waiting_execution_id": None,
+        "action_execution_id": None,
         "decided_by": str(OWNER),
     }
     assert "listing_id" not in str(event.payload)  # never the parameters
@@ -663,9 +756,20 @@ async def test_no_approvals__a_write_waits_and_runs_nothing() -> None:
 @pytest.mark.ac("AUD-03.3")
 def test_no_approvals__never_approves_and_never_binds_an_execution() -> None:
     gate = NoApprovals()
-    approval_id = gate.request(write(), request_hash="a" * 64, definition=None)  # type: ignore[arg-type]
+    approval_id = gate.request(
+        write(),
+        request_hash="a" * 64,
+        definition=None,  # type: ignore[arg-type]
+        action_execution_id=uuid.uuid7(),
+    )
 
-    assert gate.request(write(), request_hash="a" * 64, definition=None) == approval_id  # type: ignore[arg-type]
+    again = gate.request(
+        write(),
+        request_hash="a" * 64,
+        definition=None,  # type: ignore[arg-type]
+        action_execution_id=uuid.uuid7(),
+    )
+    assert again == approval_id
     assert gate.is_approved(approval_id, request_hash="a" * 64) is False
     with pytest.raises(NeverApprovedError):
         gate.executed(approval_id, execution_id=uuid.uuid4())
