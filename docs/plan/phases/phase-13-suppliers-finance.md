@@ -67,6 +67,8 @@ Supplier quotes are collected and approved once per product or variant, and beco
 
 No scraping of etsy.com.
 
+**Placement (2026-10-27).** The Shop Manager CSV upload is built in Phase 11 (AC-11.8.3), which comes before this phase in [EXECUTION_ORDER](../EXECUTION_ORDER.md) (row 31) and matches FEATURE_BACKLOG. At this phase's kickoff, only an App Marketplace tool's API or export is still evaluated, as an extra source.
+
 
 **In:** quote requests, quotes and mappings; the Supplier Quote Request & Follow-up automation (records the request, waits in `WAITING_FOR_QUOTES` without model calls, collects quotes, applies hard rules, notifies Tom); hard-rule filtering in code; Tom's evaluation of valid quotes, with optional ranking through the Decision Advisor only after a benchmark on 200+ labelled cases; approval by risk; supplier mappings; Inventory & Supplier Price Monitoring opening re-sourcing tasks; `AutoVaPort` adapters (manual first; API if AutoVA provides one); Finance Ledger Ingestion from Etsy payment and ledger endpoints, refunds, payouts, cost snapshots, AI and infrastructure costs (from `model_usage`); P&L views; unit costs per listing, ticket, inspected order, repair, shop, employee and department; CSV export with audit; Roni's monthly narrative and anomaly review (explains, never records).
 

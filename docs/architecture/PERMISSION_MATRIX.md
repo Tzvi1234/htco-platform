@@ -52,6 +52,9 @@ These rows come from [ADR-0020](../adr/0020-per-shop-browser-environment.md) to 
 | Switch a browser scope flag on (only when its scope row is recorded) | ✓ MFA RA | — | — | — | — | — | — |
 | Enrol, rotate or remove a TOTP account | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
 | View a TOTP code (`view_totp_code`, per shop) | ✓ MFA RA | S MFA RA | — | — | — | — | — |
+| Switch a kill switch off: global, an employee, an automation, a provider or Browser Use (emergency stop; 8.6, 9.8) | ✓ MFA | ✓ MFA | — | — | — | — | — |
+| Switch a kill switch on again (8.6, 9.8) | ✓ MFA RA | — | — | — | — | — | — |
+| Edit a shop's SLA policy, audited (AC-6.5.4) | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
 
 ## 2. Automations
 

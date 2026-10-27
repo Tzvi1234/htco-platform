@@ -16,7 +16,7 @@
 - [x] 4.3 OAuth connect flow ([connect flow](../../features/etsy-integration/connect-flow.md))
 - [x] 4.4 Token refresh (platform; the shop card warning and overview banner are shown by slice 4.6)
 - [x] 4.5 Capability probes (platform; the shop card shows them in `htco-clients`; [operations](../../features/etsy-integration/operations.md#capability-probes))
-- [x] 4.6 Shops UI (the shop card in `htco-clients`), and the shop's live data on the dashboard: Shops, Home, Orders, Products, Shipping and Customers read Etsy through read-only endpoints ([dashboard data](../../features/etsy-integration/dashboard-data.md))
+- [ ] 4.6 (reopened 2026-10-27 for its web step, AC-4.6.3) Shops UI (the shop card in `htco-clients`), and the shop's live data on the dashboard: Shops, Home, Orders, Products, Shipping and Customers read Etsy through read-only endpoints ([dashboard data](../../features/etsy-integration/dashboard-data.md))
 - [ ] 4.7 Disconnect and data protection baseline (disconnect done at the platform; the restore rehearsal waits for the owner, see [operations](../../features/etsy-integration/operations.md#rehearsal-record))
 
 ## Goal

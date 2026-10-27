@@ -34,7 +34,7 @@
 | Feature (backend slice) | What the user sees or does | Web step | Phase |
 |---|---|---|---|
 | 6.1 Tracking detection | The order's tracking, its source, first sighting | **AC-6.5.3 (new):** tracking on the order timeline | 6 |
-| 6.2 SLA policies | The windows and the business-day calendar | **AC-6.5.4 (new):** SLA policies and the calendar | 6 |
+| 6.2 SLA policies | The windows and the business-day calendar, edited by the Owner or an Admin, audited (PERMISSION_MATRIX 1a) | **AC-6.5.4 (new):** SLA policies and the calendar | 6 |
 | 6.3 Incidents | Incidents, and moving one along | 6.5, AC-6.5.1; **AC-6.5.5 (new)** | 6 |
 | 6.4 Notifications and email | The bell, emails, delivery failures | 6.5, AC-6.5.2; **AC-6.5.6 (new):** email failures | 6 |
 | 6.6 Guarded shipment write | Confirm a tracking number | 6.6, AC-6.6.1 | 6 |
@@ -52,12 +52,12 @@
 | 7.15 Quote parser | "Check this quote" | **AC-7.15.4 (new)** | 7 |
 | 8.2 Registry API | Version history | 8.9; **AC-8.9.3 (new)** | 8 |
 | 8.5 Messages and handoffs | Messages and handoffs | AC-8.5.3 (7.8); 15.8 | 7, 15 |
-| 8.6 Kill switches | Every switch and its state | 8.9, AC-8.9.2; **AC-8.9.4 (new)** | 8 |
+| 8.6 Kill switches | Every switch and its state: off by the Owner or an Admin, on again by the Owner only (PERMISSION_MATRIX 1a) | 8.9, AC-8.9.2; **AC-8.9.4 (new)** | 8 |
 | 8.7 Evaluation harness | Evaluation results | 15.4, 15.6 | 15 |
 | 8A.2a, 8A.2b Provider and configuration profiles | Provider, configuration, versions | 8A.9, AC-8A.9.3 | 8A |
 | 8A.2c Browser dispatch | Worker startup checks | **AC-8A.8.3 (new):** browser workers on Admin › Health | 8A |
 | 8A.3 Preflight and health | Failed checks, diagnostics | 8A.9; **AC-8A.9.5 (new):** health in words | 8A |
-| 8A.4 Challenge handler | The Human task, the screenshot | **AC-8A.4.4 (new)** | 8A |
+| 8A.4 Challenge handler and sign-in details | The Human task, the screenshot; the site's sign-in, written once and stored sealed | **AC-8A.4.4, 8A.4.5, 8A.9.7 (new)** | 8A |
 | 8A.5 Recipes | Exported stats and Ads rows; action flags | **AC-8A.5.4, 8A.9.6 (new)** | 8A |
 | 8A.6 Browser Use for employees | Caps, spend, switches | 8.9, 9.8; **AC-9.8.10 (new)** | 9 |
 | 8A.8 Monitoring and DLQ | Figures, the browser DLQ, alerts | **AC-8A.8.4 (new):** the same figures in the web app | 8A |

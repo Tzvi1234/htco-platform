@@ -222,6 +222,7 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.4.2 | The second challenge in 24 hours suspends the environment and switches its `browser.etsy.*` flags off for that shop. |
 | AC-8A.4.3 | After a person completes the login, the waiting execution resumes exactly once. |
 | AC-8A.4.4 | **The challenge on the web.** Its Human task names the shop, the kind of challenge and the run, and links to Sign in now (Live View, 8A.11). The screenshot is shown only to users with `VIEW_BUYER_CONTACT` on that shop, until it is deleted after 7 days, and the environment's history keeps its hash. |
+| AC-8A.4.5 | **Sign-in details are stored sealed** (`private.shop_credentials`, DATA_MODEL, main's decision of 2026-10-27). Each environment's site sign-in, the Etsy or AutoVA email and password, is sealed with the token vault's key ring (DC0) the moment the write-only form of AC-8A.9.7 sends it. Only the Secret Broker opens it, for a grant bound to one execution (5.17), and it is never returned, logged or sent to a model. Replacing or removing it is audited, and deleting the environment deletes it. Tested: no API response, log line, audit row or model input holds the password, and a removed one can no longer be granted. |
 
 ### 8A.5 — Recipes, structured extraction and result verification
 
