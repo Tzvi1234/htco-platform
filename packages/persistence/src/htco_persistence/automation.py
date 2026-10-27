@@ -69,7 +69,7 @@ def _insert_change(connection: psycopg.Connection[Any], change: StateChange) -> 
         values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         [
-            uuid.uuid7(),
+            change.id,  # the change's own ID, which also keys its outbox event (Codex, #174)
             change.organization_id,
             change.execution_id,
             None if change.from_state is None else change.from_state.value,

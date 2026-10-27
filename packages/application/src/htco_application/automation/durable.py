@@ -129,6 +129,9 @@ class StateChange:
     correlation_id: str
     at: datetime
     reason: str | None = None
+    # The change's own ID: stored as its event row's ID, and the key of its outbox event, so
+    # the same change written again is the same event (Codex on #174).
+    id: uuid.UUID = field(default_factory=uuid.uuid7)
 
 
 @dataclass(frozen=True)

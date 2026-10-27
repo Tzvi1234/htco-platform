@@ -56,8 +56,9 @@ def execution_state_event(change: StateChange) -> OutboxMessage:
             event_type=EXECUTION_STATE_CHANGED,
             organization_id=change.organization_id,
             # One message per recorded change: the same state can be reached twice at one
-            # instant (a retry), so the key names the change itself, not the state and the time.
-            idempotency_key=f"{EXECUTION_STATE_CHANGED}:{change.execution_id}:{uuid.uuid7()}",
+            # instant (a retry), so the key names the change itself, by its stored ID, never
+            # the state and the time; the change written again is the same event (Codex, #174).
+            idempotency_key=f"{EXECUTION_STATE_CHANGED}:{change.id}",
             occurred_at=change.at,
             actor=change.actor,
             payload=payload,

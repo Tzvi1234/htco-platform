@@ -7,8 +7,10 @@ EVENT_CATALOG lists it.
 
 Consumers read a delivered message with `read_event`. A row written before the envelope existed
 (a flat payload with `event_type` beside the facts) reads as version 1, so old outbox rows are
-still delivered. A version the consumer does not accept is refused with a `DeadLetterError`,
-which sends the message to the dead letters at once: retrying cannot make it readable.
+still delivered. A version the consumer does not accept, or an envelope with a missing or
+malformed field, is refused with a `DeadLetterError`, which sends the message to the dead
+letters at once: retrying cannot make it readable. A subscriber of `EventDeliverer` declares the
+versions it reads as `accepted_versions` (default `ACCEPTED_VERSIONS`).
 """
 
 import re
@@ -20,7 +22,7 @@ from datetime import datetime
 from htco_application.kernel.errors import DeadLetterError
 from htco_application.kernel.outbox import MAX_OUTBOX_KEY_LENGTH, OutboxMessage
 from htco_application.kernel.types import JsonValue
-from htco_domain.actors import ActorRef
+from htco_domain.actors import ActorKind, ActorRef
 
 # The outbox destination that hands domain events to their subscribers.
 EVENTS_DESTINATION = "events.publish"
@@ -106,27 +108,76 @@ class ReceivedEvent:
     event_id: str | None  # None for a row written before the envelope
 
 
+# The versions a consumer reads unless it declares others (`accepted_versions`).
+ACCEPTED_VERSIONS: tuple[int, ...] = (1,)
+_ACTOR_KINDS = frozenset(kind.value for kind in ActorKind)
+
+
 def read_event(
-    message: Mapping[str, JsonValue], *, accepted: Collection[int] = (1,)
+    message: Mapping[str, JsonValue], *, accepted: Collection[int] | None = ACCEPTED_VERSIONS
 ) -> ReceivedEvent:
-    """The event in a delivered `events.publish` payload, in a version the consumer accepts."""
+    """The event in a delivered `events.publish` payload, in a version the consumer accepts
+    (`accepted=None`: any version, for a reader that only records the event)."""
     event_type = message.get("event_type")
     if not isinstance(event_type, str) or not EVENT_TYPE.match(event_type):
         raise MalformedEventError("the message names no event type")
     if "payload_version" not in message:
         # Written before the envelope: the facts sit beside the type (version 1).
+        if accepted is not None and 1 not in accepted:
+            raise UnknownEventVersionError(f"{event_type} version 1 is not accepted")
         facts = {k: v for k, v in message.items() if k != "event_type"}
         return ReceivedEvent(event_type, 1, facts, None)
     version = message.get("payload_version")
     payload = message.get("payload")
-    event_id = message.get("event_id")
     if isinstance(version, bool) or not isinstance(version, int) or not isinstance(payload, dict):
         raise MalformedEventError(f"{event_type} has a broken envelope")
-    if version not in accepted:
+    broken = _broken_envelope_field(message)
+    if broken is not None:
+        # Codex (local) on #174: never processed, dead-lettered with the field that broke.
+        raise MalformedEventError(f"{event_type} has a broken envelope: {broken}")
+    if accepted is not None and version not in accepted:
         raise UnknownEventVersionError(f"{event_type} version {version} is not accepted")
-    return ReceivedEvent(
-        event_type, version, payload, event_id if isinstance(event_id, str) else None
-    )
+    return ReceivedEvent(event_type, version, payload, str(message["event_id"]))
+
+
+def _is_uuid(value: JsonValue) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_aware_time(value: JsonValue) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return datetime.fromisoformat(value).tzinfo is not None
+    except ValueError:
+        return False
+
+
+def _broken_envelope_field(message: Mapping[str, JsonValue]) -> str | None:
+    """The first envelope field that is missing or of the wrong shape, or None."""
+    actor = message.get("actor")
+    key = message.get("idempotency_key")
+    checks: tuple[tuple[str, bool], ...] = (
+        ("event_id", _is_uuid(message.get("event_id"))),
+        ("organization_id", _is_uuid(message.get("organization_id"))),
+        ("shop_id", "shop_id" in message and (
+            message["shop_id"] is None or _is_uuid(message["shop_id"])
+        )),
+        ("occurred_at", _is_aware_time(message.get("occurred_at"))),
+        ("actor", isinstance(actor, dict) and actor.get("type") in _ACTOR_KINDS
+            and isinstance(actor.get("id"), str) and bool(str(actor.get("id")).strip())),
+        ("idempotency_key", isinstance(key, str) and bool(key.strip())
+            and len(key) <= MAX_OUTBOX_KEY_LENGTH),
+        ("correlation_id", isinstance(message.get("correlation_id", 0), str | None)),
+        ("causation_id", isinstance(message.get("causation_id", 0), str | None)),
+    )  # fmt: skip
+    return next((name for name, ok in checks if not ok), None)
 
 
 def event_payload(message: OutboxMessage) -> Mapping[str, JsonValue]:
