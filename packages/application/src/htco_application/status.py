@@ -27,8 +27,12 @@ from typing import Protocol
 from htco_application.access.authentication import AuthContext
 from htco_application.access.policy import Capability, Outcome, Scope, ShopRef, decide
 from htco_application.automation.durable import StateChange
-from htco_application.kernel import EVENTS_DESTINATION, JsonValue
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import (
+    DomainEvent,
+    JsonValue,
+    OutboxMessage,
+    publish,
+)
 from htco_application.shops import OrganizationRequiredError
 from htco_domain.actions import ActionState
 from htco_domain.automation import ExecutionState
@@ -40,7 +44,6 @@ EXECUTION_STATE_CHANGED = "automations.execution_state_changed.v1"
 def execution_state_event(change: StateChange) -> OutboxMessage:
     """IDs and states only (EVENT_CATALOG rule 3): never the payload or the error text."""
     payload: dict[str, JsonValue] = {
-        "event_type": EXECUTION_STATE_CHANGED,
         "execution_id": str(change.execution_id),
         "from_state": None if change.from_state is None else change.from_state.value,
         "to_state": change.to_state.value,
@@ -48,14 +51,19 @@ def execution_state_event(change: StateChange) -> OutboxMessage:
         "actor": str(change.actor),
         "occurred_at": change.at.isoformat(),
     }
-    return OutboxMessage(
-        organization_id=change.organization_id,
-        destination=EVENTS_DESTINATION,
-        # One message per recorded change: the same state can be reached twice at one instant
-        # (a retry), so the key names the change itself rather than the state and the time.
-        idempotency_key=f"{EXECUTION_STATE_CHANGED}:{change.execution_id}:{uuid.uuid7()}",
-        payload=payload,
-        correlation_id=change.correlation_id,
+    return publish(
+        DomainEvent(
+            event_type=EXECUTION_STATE_CHANGED,
+            organization_id=change.organization_id,
+            # One message per recorded change: the same state can be reached twice at one
+            # instant (a retry), so the key names the change itself, by its stored ID, never
+            # the state and the time; the change written again is the same event (Codex, #174).
+            idempotency_key=f"{EXECUTION_STATE_CHANGED}:{change.id}",
+            occurred_at=change.at,
+            actor=change.actor,
+            payload=payload,
+            correlation_id=change.correlation_id,
+        )
     )
 
 

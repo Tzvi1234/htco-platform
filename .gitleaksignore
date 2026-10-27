@@ -1,0 +1,6 @@
+# gitleaks false positives, one fingerprint per line (commit:file:rule:line), each with its reason.
+# Never list a real secret here: rotate it, and remove it from the history instead.
+
+# #181: a test correlation ID (`correlation_id="corr-db-tasks"`) next to the word "key", not a
+# secret. The line is a module constant since, so later commits do not match.
+d680e3a6d1390e135e2ea073768635e933150eed:tests/integration/test_task_store.py:generic-api-key:63

@@ -1,7 +1,8 @@
 """A small JSON Schema (2020-12) checker for action inputs and outputs (slice 5.12).
 
 The application layer imports only the standard library (ER-ARCH-01), so the gateway validates
-with this subset: `type` (object, string, integer, number, boolean, array, null), `properties`,
+with this subset: `type` (object, string, integer, number, boolean, array, null, or a list of
+them such as `["integer", "null"]` for a nullable field), `properties`,
 `required`, `additionalProperties: false`, `enum`, `minLength`, `maxLength`, `pattern`,
 `minimum`, `maximum`, `items`, `maxItems`. `check_schema` refuses any other keyword, so a contract
 never silently relies on a rule this checker does not apply.
@@ -29,12 +30,22 @@ _TYPES: Mapping[str, tuple[type, ...]] = {
 }
 
 
+def _kinds(kind: Any) -> list[Any]:
+    """`type` as a list: one name, or a union such as `["integer", "null"]` (`check_schema`
+    checks that every item is a known type name)."""
+    return [kind] if isinstance(kind, str) else list(kind)
+
+
 def check_schema(schema: Mapping[str, Any], path: str = "$") -> None:
     unknown = sorted(set(schema) - _KNOWN)
     if unknown:
         raise ValueError(f"{path}: unsupported schema keywords {unknown}")
     kind = schema.get("type")
-    if kind is not None and kind not in _TYPES:
+    if kind is not None and (
+        not isinstance(kind, str | list)
+        or not kind
+        or any(not isinstance(k, str) or k not in _TYPES for k in _kinds(kind))
+    ):
         raise ValueError(f"{path}: unsupported type {kind!r}")
     for name, child in schema.get("properties", {}).items():
         check_schema(child, f"{path}.{name}")
@@ -51,8 +62,8 @@ def _is_type(value: Any, kind: str) -> bool:
 def validate(value: Any, schema: Mapping[str, Any], path: str = "$") -> list[str]:  # noqa: PLR0912 - one branch per keyword
     """Every violation, each as `path: message`; never the value itself (it may be personal)."""
     kind = schema.get("type")
-    if kind is not None and not _is_type(value, kind):
-        return [f"{path}: expected {kind}"]
+    if kind is not None and not any(_is_type(value, k) for k in _kinds(kind)):
+        return [f"{path}: expected {' or '.join(_kinds(kind))}"]
     problems: list[str] = []
     if "enum" in schema and value not in schema["enum"]:
         problems.append(f"{path}: not one of the allowed values")

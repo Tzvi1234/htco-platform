@@ -59,7 +59,7 @@ async def test_a_missing_order__one_drift_and_one_event_however_often_reconciled
         )
         == "missing"
     )
-    events = "select count(*) from jobs.outbox where payload ->> 'event_type' = %s and payload ->> 'receipt_id' = %s"  # noqa: E501 - one query
+    events = "select count(*) from jobs.outbox where payload ->> 'event_type' = %s and payload -> 'payload' ->> 'receipt_id' = %s"  # noqa: E501 - one query
     assert scalar(database, events, [DRIFT_DETECTED, "81"]) == 1
 
 

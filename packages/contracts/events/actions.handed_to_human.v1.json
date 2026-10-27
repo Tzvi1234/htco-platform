@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/events/actions.handed_to_human.v1.json",
+  "title": "actions.handed_to_human.v1",
+  "description": "An action was handed to a person (the Human channel). TEMPORARY: the flat v1 shape the Action Gateway writes today (`event_type` beside the facts, no envelope); remove after migration to publish() (#205).",
+  "type": "object",
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "actions.handed_to_human.v1"
+      ]
+    },
+    "action_execution_id": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "succeeded",
+        "failed",
+        "denied",
+        "pending_approval",
+        "handed_to_human",
+        "deferred"
+      ]
+    },
+    "error_code": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 100
+    },
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 200
+    }
+  },
+  "required": [
+    "event_type",
+    "action_execution_id",
+    "action",
+    "version",
+    "outcome",
+    "error_code",
+    "actor",
+    "causation_id"
+  ],
+  "additionalProperties": false
+}

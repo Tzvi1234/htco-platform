@@ -155,7 +155,9 @@ class PostgresChainReader:
             """
             select id, payload ->> 'event_type', action_execution_id, created_at from jobs.outbox
             where organization_id = %s and destination = %s
-              and (action_execution_id = any(%s) or payload ->> 'execution_id' = %s)
+              and (action_execution_id = any(%s)
+                   or coalesce(payload -> 'payload' ->> 'execution_id', payload ->> 'execution_id')
+                      = %s)
             order by created_at limit %s
             """,
             [

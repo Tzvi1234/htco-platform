@@ -38,6 +38,7 @@
 | Rank | Task | Depends on | Key acceptance | Can run in parallel with |
 |---|---|---|---|---|
 | 23 | Phase 6 (tracking, incidents, ship-by and low-review alerts, owner-triggered shipment writes 6.8) | 22 | AC-6.x, AC-6.8.x, AC-6.9.x | — |
+| 23a | **Passkeys as a second factor (#113, owner 2026-10-25):** WebAuthn MFA through Supabase Auth next to TOTP, behind `HTCO_PASSKEYS_ENABLED`; the platform part, then Settings › Security and the sign-in step on the web | 6.10; the owner's WebAuthn MFA add-on decision (production only) | #113's ACs | 24 |
 | 24 | Phase 7 (tasks, approvals on Postgres 7.11, activity, the owner's first writes 7.12) | 23 | AC-7.x, M2 gate | — |
 | 24a | **AutoVA quotes (Phase 7, slices 7.13–7.17):** supplier and quote model, quote mailbox intake, deterministic parser, "New product quotes" screen, the owner's choice, and the hand-off to AutoVA as a Human task until A-02 exists | 7.11 (approvals), D-23 (mailbox), A-09 (sender and sample mails) | AC-7.13.x to AC-7.17.x | 24 |
 | 25 | Phase 8 (registry tables, LangGraph checkpointer, tool bridge on the gateway 8.10) | 24 | AC-8.x | 26, 27 |

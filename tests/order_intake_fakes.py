@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import override
 
+from htco_application.kernel import OutboxMessage
 from htco_application.marketplace import (
     MarketplaceMoney,
     OrderLine,
@@ -17,7 +18,6 @@ from htco_application.marketplace import (
     OrderShipment,
     ShippingAddress,
 )
-from htco_application.messaging import OutboxMessage
 from htco_application.order_ingest import (
     BACKFILL,
     SYNC,

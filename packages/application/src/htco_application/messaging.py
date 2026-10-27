@@ -17,13 +17,15 @@ import hashlib
 import json
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
 from htco_application.jobs import ClaimedJob, JobSpec
-from htco_application.kernel import JobError, JsonValue, describe_error
-from htco_domain.jobs import check_job_kind
+from htco_application.kernel import DeadLetterError, JobError, JsonValue, describe_error
+
+# Re-exported for the locked `execution/` until its follow-up imports it from the kernel.
+from htco_application.kernel import OutboxMessage as OutboxMessage  # noqa: PLC0414
 
 OUTBOX_DELIVERY_JOB = "outbox.deliver"
 
@@ -63,27 +65,6 @@ class Inbox(Protocol):
         """In one transaction: keep the event unless `(source, event_id)` exists, and enqueue
         `job` for it. A duplicate returns the first row and its job."""
         ...
-
-
-@dataclass(frozen=True)
-class OutboxMessage:
-    organization_id: uuid.UUID
-    destination: str  # `<system>.<effect>`, the deliverer that sends it
-    idempotency_key: str
-    payload: Mapping[str, JsonValue] = field(default_factory=dict)
-    shop_id: uuid.UUID | None = None
-    # The gateway's action this effect belongs to (ADR-0019): when the delivery succeeds or dies,
-    # the action moves to VERIFYING or FAILED (slice 5.12). By convention an Etsy write's
-    # `destination` is its action name, for example `etsy.inventory.update`.
-    action_execution_id: uuid.UUID | None = None
-    correlation_id: str | None = None
-
-    def __post_init__(self) -> None:
-        check_job_kind(self.destination)
-        if self.correlation_id is not None and not 0 < len(self.correlation_id) <= 200:  # noqa: PLR2004
-            raise ValueError("a correlation ID is 1 to 200 characters")
-        if not self.idempotency_key.strip() or len(self.idempotency_key) > 200:  # noqa: PLR2004
-            raise ValueError("an outbox message needs an idempotency key of 1 to 200 characters")
 
 
 @dataclass(frozen=True)
@@ -140,8 +121,9 @@ async def deliver_outbox_message(
     now: datetime,
 ) -> bool:
     """The `outbox.deliver` job. True when this run delivered; False when it was delivered
-    before (a replayed job). A failure is recorded on the message and re-raised, so the job
-    retries; on the job's last attempt the message is marked dead as well."""
+    before (a replayed job) or is undeliverable. A failure is recorded on the message and
+    re-raised, so the job retries; on the job's last attempt the message is marked dead as well.
+    A `DeadLetterError` marks it dead at once, and the job ends without retrying."""
     raw = job.payload.get("outbox_id")
     if not isinstance(raw, str):
         raise JobError("an outbox job names its message")
@@ -153,6 +135,10 @@ async def deliver_outbox_message(
         return False
     try:
         await _deliverer_for(deliverers, pending).deliver(pending)
+    except DeadLetterError as error:
+        # Retrying cannot fix it (an event version no consumer accepts): dead at once.
+        await store.record_failure(message_id, error=describe_error(error), dead=True, now=now)
+        return False
     except Exception as error:
         await store.record_failure(
             message_id,
