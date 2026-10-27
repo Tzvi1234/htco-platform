@@ -33,6 +33,7 @@ from htco_application.access.management import AccessStore, Inviter
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WindowLimiter
 from htco_application.notifications import SecurityNotices
+from htco_application.quote_mailbox import QuoteMailboxIngress
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
 from htco_application.shop_integrations import (
@@ -138,6 +139,8 @@ class AppOptions:
     # Etsy webhooks (slice 5.3): without the ingress, `POST /webhooks/etsy` answers 404.
     etsy_webhooks: EtsyWebhookIngress | None = None
     etsy_webhook_limiter: WindowLimiter | None = None
+    # The quote mailbox (slice 7.14): without it, `POST /webhooks/autova-quotes` answers 404.
+    autova_quotes: QuoteMailboxIngress | None = None
     # Browser environment statuses (slice 5.16), read only; without it, that route answers 503.
     browser_environments: BrowserEnvironmentServices | None = None
     # The chain view of one execution (slice 5.18); without it, that route answers 503.
@@ -194,6 +197,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.automations = options.automations
     app.state.etsy_webhooks = options.etsy_webhooks
     app.state.etsy_webhook_limiter = options.etsy_webhook_limiter
+    app.state.autova_quotes = options.autova_quotes
     app.state.browser_environments = options.browser_environments
     app.state.execution_chain = options.execution_chain
     app.state.incident_center = options.incident_center

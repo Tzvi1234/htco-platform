@@ -6,10 +6,12 @@ the shop the mailbox serves) and:
 1. parses it with the deterministic `QuoteParser` (no model, AC-7.15.2);
 2. a quarantined mail records nothing. Another sender opens no task; a mail whose `From` names
    AutoVA but which our receiving server did not see signed by AutoVA's domain (an aligned DKIM
-   pass) opens one Human task "check this quote", as a possible forgery;
+   pass) is counted as a possible forgery in one Human task per shop per day (#192);
 3. a refused mail (not the known layout) opens one Human task "check this quote", naming the mail
    and the reason; nothing is guessed (AC-7.15.1);
-4. a parsed quote is recorded in one transaction: its supplier (found by the name AutoVA shows, or
+4. a parsed quote whose DKIM-signed `To` is not the owner's mailbox may be another AutoVA
+   customer's mail, replayed to us (#192): one Human task `unknown_listing`, nothing recorded;
+5. a parsed quote is recorded in one transaction: its supplier (found by the name AutoVA shows, or
    added), its product's open quote request (created for the product's first quote, moved to
    `quotes_received`) and the quote, stored once per request and AutoVA quote (AC-7.14.1). A
    product that already has an active supplier mapping gets the quote as an alternative and no
@@ -19,12 +21,13 @@ the shop the mailbox serves) and:
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Protocol
 
 from htco_application.kernel import Offload, run_inline
 from htco_application.quote_parser import (
+    PLAIN_MESSAGE_ID,
     ParsedQuote,
     Quarantined,
     QuoteMail,
@@ -80,6 +83,24 @@ class QuoteReviews(Protocol):
         mail). The mail itself is shown only in the task's sandboxed view."""
         ...
 
+    async def possible_forgery(
+        self, organization_id: uuid.UUID, shop_id: uuid.UUID, *, day: date
+    ) -> None:
+        """Counts one mail whose `From` names AutoVA but that our server did not see signed by
+        AutoVA (`unauthenticated_sender`): one Human task per shop and day carries the count, so
+        a flood of forgeries cannot bury the queue (#192). Nothing of the mail is kept."""
+        ...
+
+
+# The Human task's reason for a quote whose signed `To` is not the owner's mailbox (#192): it
+# may be another AutoVA customer's quote, replayed to us.
+UNKNOWN_LISTING = "unknown_listing"
+
+
+def result_message_id(mail: QuoteMail) -> str:
+    """The mail's Message-ID for its Human task, only when it reads as a plain one."""
+    return mail.message_id if PLAIN_MESSAGE_ID.fullmatch(mail.message_id) else ""
+
 
 def _supplier_quote(
     parsed: ParsedQuote, organization_id: uuid.UUID, now: datetime
@@ -106,19 +127,38 @@ class QuoteIntake:
     store: SupplierQuoteStore
     reviews: QuoteReviews
     clock: Callable[[], datetime]
+    # The owner's mailbox, the one AutoVA writes to (`HTCO_AUTOVA_QUOTE_OWNER_MAILBOX`): a quote
+    # is recorded only when the sender's DKIM signature covers a `To` naming it (#192).
+    owner_mailbox: str
     offload: Offload = run_inline
 
-    async def handle(self, mail: QuoteMail, target: ShopForMail) -> IntakeOutcome:
+    def __post_init__(self) -> None:
+        mailbox = self.owner_mailbox.strip().lower()
+        if "@" not in mailbox or any(c.isspace() or c in "<>" for c in mailbox):
+            raise ValueError("the owner's mailbox must be an email address")
+        object.__setattr__(self, "owner_mailbox", mailbox)
+
+    async def handle(  # noqa: PLR0911 - one return per outcome
+        self, mail: QuoteMail, target: ShopForMail
+    ) -> IntakeOutcome:
         result = self.parser.parse(mail)
         if isinstance(result, Quarantined):
             if result.needs_review:
-                await self.reviews.check_this_quote(
-                    target.organization_id,
-                    target.shop_id,
-                    message_id=result.message_id,
-                    reason=result.reason.value,
+                # A forgery flood must not bury the queue (#192): one task per shop per day.
+                await self.reviews.possible_forgery(
+                    target.organization_id, target.shop_id, day=self.clock().date()
                 )
             return IntakeOutcome.QUARANTINED
+        if isinstance(result, ParsedQuote) and self.owner_mailbox not in mail.signed_recipients:
+            # A genuine AutoVA mail replayed to our mailbox (#192): its signed To is not the
+            # owner's, so it may be someone else's quote. Nothing is recorded.
+            await self.reviews.check_this_quote(
+                target.organization_id,
+                target.shop_id,
+                message_id=result_message_id(mail),
+                reason=UNKNOWN_LISTING,
+            )
+            return IntakeOutcome.NEEDS_REVIEW
         if not isinstance(result, ParsedQuote):
             await self.reviews.check_this_quote(
                 target.organization_id,
@@ -138,7 +178,7 @@ class QuoteIntake:
             await self.reviews.check_this_quote(
                 target.organization_id,
                 target.shop_id,
-                message_id=mail.message_id,
+                message_id=result_message_id(mail),
                 reason=RefusalReason.INVALID_VALUE.value,
             )
             return IntakeOutcome.NEEDS_REVIEW

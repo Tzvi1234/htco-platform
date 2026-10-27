@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import re
 from enum import StrEnum
 from typing import Literal, Self
 from urllib.parse import urlsplit
@@ -11,6 +12,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from htco_application.etsy_webhooks import WebhookSecret
 from htco_platform.crypto import KeyRing
+
+# The quote address carries a secret token after `+` (slice 7.14, D-23 (a)).
+_QUOTE_MAILBOX = re.compile(r"^[a-z0-9._-]{1,32}\+[A-Za-z0-9]{16,64}@[a-z0-9-]+(\.[a-z0-9-]+)+$")
 
 
 class Environment(StrEnum):
@@ -83,6 +87,16 @@ class ApiSettings(BaseSettings):
     # until Etsy Order Intake is activated, slice 5.11): a stale read starts it here as before.
     # Off: a stale read or the manual sync enqueues `etsy.order_sync` for the worker and returns.
     order_sync_in_api: bool = True
+    # Slice 7.14: AutoVA's quote mails, forwarded to Resend inbound, arrive at
+    # `POST /webhooks/autova-quotes`. Off (404) unless all three are set: Resend's webhook signing
+    # secret (`whsec_...`), our quote address with its secret token (`quotes+<token>@...`, at
+    # least 16 letters or digits; mail without the token is kept with no job) and the Etsy shop
+    # the quotes are for (its connected HTCO shop gets them).
+    autova_quote_webhook_secret: SecretStr | None = None
+    autova_quote_mailbox: SecretStr | None = None
+    autova_quote_etsy_shop_id: int | None = Field(default=None, ge=1)
+    # Verified notices per second the quote mailbox accepts, per API instance (429 beyond).
+    autova_quote_rate_per_second: int = Field(default=10, ge=1, le=1000)
 
     @property
     def token_key_ring(self) -> KeyRing | None:
@@ -118,6 +132,8 @@ class ApiSettings(BaseSettings):
         "token_vault_key",
         "token_vault_previous_keys",
         "etsy_webhook_secret",
+        "autova_quote_webhook_secret",
+        "autova_quote_mailbox",
         mode="before",
     )
     @classmethod
@@ -187,6 +203,39 @@ class ApiSettings(BaseSettings):
                 ) from None
         if self.etsy_webhooks_enabled and self.etsy_webhook_secret is None:
             raise ValueError("HTCO_ETSY_WEBHOOKS_ENABLED needs HTCO_ETSY_WEBHOOK_SECRET")
+        return self
+
+    @property
+    def autova_quote_intake_enabled(self) -> bool:
+        return self.autova_quote_webhook_secret is not None
+
+    @model_validator(mode="after")
+    def _autova_quote_intake_is_complete(self) -> Self:
+        parts = (
+            self.autova_quote_webhook_secret,
+            self.autova_quote_mailbox,
+            self.autova_quote_etsy_shop_id,
+        )
+        if all(part is None for part in parts):
+            return self
+        if any(part is None for part in parts):
+            raise ValueError(
+                "the quote mailbox needs HTCO_AUTOVA_QUOTE_WEBHOOK_SECRET, "
+                "HTCO_AUTOVA_QUOTE_MAILBOX and HTCO_AUTOVA_QUOTE_ETSY_SHOP_ID together"
+            )
+        assert self.autova_quote_webhook_secret is not None  # noqa: S101 - narrowed above
+        assert self.autova_quote_mailbox is not None  # noqa: S101
+        try:
+            WebhookSecret.parse(self.autova_quote_webhook_secret.get_secret_value())
+        except ValueError:
+            raise ValueError(
+                "HTCO_AUTOVA_QUOTE_WEBHOOK_SECRET must be Resend's whsec_ signing secret"
+            ) from None
+        if _QUOTE_MAILBOX.match(self.autova_quote_mailbox.get_secret_value().strip()) is None:
+            raise ValueError(
+                "HTCO_AUTOVA_QUOTE_MAILBOX must be an address with a secret token, "
+                "local+<16 or more letters or digits>@domain"
+            )
         return self
 
     @model_validator(mode="after")

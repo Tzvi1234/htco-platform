@@ -28,8 +28,9 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from email import message_from_string
+from email.message import EmailMessage
 from email.policy import default as default_policy
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 from enum import StrEnum
 from typing import NamedTuple
 
@@ -40,7 +41,8 @@ MAX_MAIL_CHARACTERS = 200_000
 MAX_DAYS = 365
 
 _ADDRESS = re.compile(r"^[^@\s<>]{1,64}@[a-z0-9-]+(\.[a-z0-9-]+)+$")
-_MESSAGE_ID = re.compile(r"<[A-Za-z0-9._%+=$#-]{1,128}@[A-Za-z0-9.-]{1,128}>")
+PLAIN_MESSAGE_ID = re.compile(r"<[A-Za-z0-9._%+=$#-]{1,128}@[A-Za-z0-9.-]{1,128}>")
+_MESSAGE_ID = PLAIN_MESSAGE_ID
 
 
 _AUTHSERV_ID = re.compile(r"^[a-z0-9]([a-z0-9-]{0,62})(\.[a-z0-9]([a-z0-9-]{0,62}))*$")
@@ -115,22 +117,90 @@ class QuoteMail(NamedTuple):
     message_id: str
     body: str
     sender_authenticated: bool
+    # The `To` addresses the sender's DKIM signature covers (`signed_recipients`): the replay
+    # guard (#192) reads a quote only when the owner's mailbox is one of them.
+    signed_recipients: tuple[str, ...] = ()
 
     @classmethod
     def from_text(cls, text: str, *, authserv_id: str, sender: str) -> QuoteMail:
-        """A plain-text mail (headers, a blank line, the body), as in the fixtures; the verdict
-        comes from its Authentication-Results headers for our server and the configured
+        """A whole mail (headers, a blank line, the body; MIME or plain), as the quote mailbox
+        fetches it (slice 7.14) and as in the fixtures. The body is the plain-text part; the
+        verdict comes from its Authentication-Results headers for our server and the configured
         sender."""
         parsed = message_from_string(text, policy=default_policy)
-        body = parsed.get_payload()
         results = [str(value) for value in parsed.get_all("Authentication-Results", [])]
         return cls(
             sender=str(parsed.get("From", "")),
             subject=str(parsed.get("Subject", "")),
             message_id=str(parsed.get("Message-ID", "")),
-            body=body if isinstance(body, str) else "",
+            body=_plain_text(parsed),
             sender_authenticated=dkim_aligned(results, authserv_id=authserv_id, sender=sender),
+            signed_recipients=_signed_recipients(parsed, sender=sender),
         )
+
+
+def _plain_text(message: EmailMessage) -> str:
+    """The mail's plain-text body; empty when it has none (the parser then refuses it)."""
+    part = message.get_body(preferencelist=("plain",))
+    if not isinstance(part, EmailMessage):
+        return ""
+    if part.get_content_charset() is None and "Content-Transfer-Encoding" not in part:
+        # Text as it came (no charset, no encoding: nothing to decode), as in the fixtures.
+        payload = part.get_payload()
+        return payload if isinstance(payload, str) else ""
+    try:
+        content = part.get_content()
+    except LookupError, ValueError:  # an unknown charset or a broken transfer encoding
+        return ""
+    return content if isinstance(content, str) else ""
+
+
+def _dkim_tags(value: str) -> dict[str, str] | None:
+    """A DKIM-Signature's tags (RFC 6376 3.2), whitespace removed; None when unreadable."""
+    tags: dict[str, str] = {}
+    for part in value.split(";"):
+        if not part.strip():
+            continue
+        name, equals, tag_value = part.partition("=")
+        name = name.strip().casefold()
+        if not equals or not name or name in tags:
+            return None
+        tags[name] = "".join(tag_value.split())
+    return tags
+
+
+def signed_recipients(text: str, *, sender: str) -> tuple[str, ...]:
+    """The `To` addresses covered by the configured sender's DKIM signature (#192, the replay
+    guard): a genuine AutoVA mail, validly signed, can be replayed to our mailbox, but its signed
+    `To` still names whoever AutoVA sent it to.
+
+    Our receiving server reports the signature's verdict (`dkim_aligned`); this reads only what
+    the signature covers. Empty unless all of these hold:
+
+    1. every DKIM-Signature reads, and exactly one has `d=` the sender's domain;
+    2. its `h=` lists `from` and `to`;
+    3. the mail has exactly one `To` header (a verifier checks the bottom-most one only, so a
+       second `To` added on top would be unsigned and could name anyone).
+    """
+    return _signed_recipients(message_from_string(text, policy=default_policy), sender=sender)
+
+
+def _signed_recipients(parsed: EmailMessage, *, sender: str) -> tuple[str, ...]:
+    domain = _domain(_address(sender))
+    signatures = [_dkim_tags(str(value)) for value in parsed.get_all("DKIM-Signature", [])]
+    if not domain or any(tags is None for tags in signatures):
+        return ()
+    ours = [t for t in signatures if t is not None and t.get("d", "").casefold() == domain]
+    if len(ours) != 1:
+        return ()
+    covered = {name.casefold() for name in ours[0].get("h", "").split(":")}
+    if not {"from", "to"} <= covered:
+        return ()
+    to = parsed.get_all("To", [])
+    if len(to) != 1:
+        return ()
+    addresses = [address.strip().lower() for _, address in getaddresses([str(to[0])])]
+    return tuple(address for address in addresses if _ADDRESS.match(address))
 
 
 class RefusalReason(StrEnum):

@@ -47,6 +47,7 @@ from htco_application.mfa import Enrollment, Factor
 from htco_application.notifications import SecurityNotices
 from htco_application.order_history import OrderSync
 from htco_application.order_intake import QueuedSyncRequests
+from htco_application.quote_mailbox import ConnectedQuoteShop, QuoteMailboxIngress
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
 from htco_application.shop_data_cache import ShopDataCache
@@ -178,6 +179,8 @@ def main(
         # Off without HTCO_AUTOMATIONS_ENABLED: automations are listed, never started (5.10).
         # Off without HTCO_ETSY_WEBHOOKS_ENABLED and HTCO_ETSY_WEBHOOK_SECRET (slice 5.3).
         etsy_webhooks="on" if wiring.etsy_webhooks is not None else "off",
+        # Off without the three HTCO_AUTOVA_QUOTE_* mailbox settings (slice 7.14).
+        autova_quotes="on" if wiring.autova_quotes is not None else "off",
         automation_triggers="on"
         if wiring.automations is not None and wiring.automations.engine is not None
         else "off",
@@ -205,6 +208,7 @@ def main(
         dashboard=wiring.dashboard,
         automations=wiring.automations,
         etsy_webhooks=wiring.etsy_webhooks,
+        autova_quotes=wiring.autova_quotes,
         etsy_webhook_limiter=None
         if wiring.etsy_webhooks is None
         else WindowLimiter(settings.etsy_webhook_rate_per_second),
@@ -371,6 +375,9 @@ class _Wiring:
     automations: AutomationServices | None = None
     # Etsy webhooks (slice 5.3): on with HTCO_ETSY_WEBHOOKS_ENABLED and the signing secret.
     etsy_webhooks: EtsyWebhookIngress | None = None
+    # The quote mailbox (slice 7.14): on with HTCO_AUTOVA_QUOTE_WEBHOOK_SECRET, _MAILBOX and
+    # _ETSY_SHOP_ID.
+    autova_quotes: QuoteMailboxIngress | None = None
     browser_environments: BrowserEnvironmentServices | None = None
     execution_chain: PostgresChainReader | None = None
     incident_center: IncidentCenter | None = None
@@ -462,6 +469,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         inviter=inviter,
         automations=automation_services(database, enabled=settings.automations_enabled),
         etsy_webhooks=etsy_webhook_ingress(settings, database),
+        autova_quotes=quote_mailbox_ingress(settings, database),
         browser_environments=BrowserEnvironmentServices(
             PostgresEnvironmentReader(database), PostgresEnvironmentStore(database)
         ),
@@ -496,6 +504,24 @@ def etsy_webhook_ingress(settings: ApiSettings, database: Database) -> EtsyWebho
         shops=PostgresWebhookShops(database),
         clock=lambda: datetime.now(UTC),
         offload=anyio.to_thread.run_sync,
+    )
+
+
+def quote_mailbox_ingress(settings: ApiSettings, database: Database) -> QuoteMailboxIngress | None:
+    """The quote mailbox (slice 7.14) when configured (validated, all or nothing, with the
+    settings)."""
+    secret, mailbox = settings.autova_quote_webhook_secret, settings.autova_quote_mailbox
+    etsy_shop_id = settings.autova_quote_etsy_shop_id
+    if secret is None or mailbox is None or etsy_shop_id is None:
+        return None
+    return QuoteMailboxIngress(
+        secret=WebhookSecret.parse(secret.get_secret_value()),
+        inbox=PostgresWebhookInbox(database),
+        shops=ConnectedQuoteShop(PostgresWebhookShops(database), etsy_shop_id),
+        mailbox=mailbox.get_secret_value(),
+        clock=lambda: datetime.now(UTC),
+        offload=anyio.to_thread.run_sync,
+        limiter=WindowLimiter(settings.autova_quote_rate_per_second),
     )
 
 

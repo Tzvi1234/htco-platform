@@ -1,4 +1,6 @@
 From: AutoVA Quotes <quotes@autova.example.com>
+To: Shop Owner <owner@shop.example.com>
+DKIM-Signature: v=1; a=rsa-sha256; d=autova.example.com; s=sel1; h=from:to:subject:message-id; bh=ZmFrZQ==; b=ZmFrZQ==
 Subject: New supplier quote for AV-PRD-10423
 Message-ID: <q-88430@autova.example.com>
 Authentication-Results: mx.quotes.example.com; dkim=pass header.d=autova.example.com header.s=sel1; spf=pass smtp.mailfrom=autova.example.com

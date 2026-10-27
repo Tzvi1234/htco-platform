@@ -81,7 +81,52 @@ AutoVA's sending address is still unknown (A-09). The parser accepts only mail f
 3. It must report `dkim=pass` with `header.d` (or else the domain of `header.i`) equal to the configured sender's domain: strict DMARC alignment. DKIM survives the mailbox's forwarding (D-23 (a)); SPF does not, so SPF and DMARC results alone never count.
 4. A header that is missing, unreadable (quoted strings, unbalanced comments) or ambiguous fails closed.
 
-Order in the parser: a mail from another `From` is quarantined with no task; a mail whose `From` is AutoVA's but fails the verdict is quarantined and opens one Human task "check this quote" (`unauthenticated_sender`, a possible forgery), naming its message ID only when that reads as a plain message ID. Both happen before the body is read, and nothing is recorded.
+Order in the parser: a mail from another `From` is quarantined with no task; a mail whose `From` is AutoVA's but fails the verdict is quarantined and counted in the shop's forgery roll-up (below). Both happen before the body is read, and nothing is recorded.
+
+## The quote mailbox intake (slice 7.14)
+
+The owner chose option (a): a Gmail rule forwards AutoVA's quote mails to Resend inbound.
+
+```
+owner's Gmail --forward--> quotes+<token>@office.ht-co.app (Resend inbound, MX)
+  --> POST /webhooks/autova-quotes   (Svix-signed email.received notice: metadata only)
+        verify signature -> check the address -> jobs.inbox (source autova_quotes,
+        event_id = Message-ID) + job autova.quote_mail, one transaction
+  --> worker: GET /emails/receiving/{id} -> raw.download_url (HTTPS, <= 1 MiB)
+        -> QuoteMail.from_text (our server's DKIM verdict, the signed To) -> QuoteIntake (7.15)
+```
+
+- **Signature.** Resend signs with Svix (`svix-id`, `svix-timestamp`, `svix-signature`), the Standard Webhooks scheme of slice 5.3 under other header names, with its own `whsec_` secret (`HTCO_AUTOVA_QUOTE_WEBHOOK_SECRET`). Unsigned, wrongly signed or outside the 5-minute window: 401 (AC-7.14.3).
+- **The address carries a secret token.** `HTCO_AUTOVA_QUOTE_MAILBOX` is `quotes+<16 or more letters or digits>@…`, a secret. A notice whose `to` or `received_for` does not name it is only counted (`not_our_mailbox`), never stored: mail sent straight to the domain by anyone who does not know the token is never parsed, cannot take a Message-ID ahead of AutoVA's mail, and cannot grow the inbox with Message-IDs of its sender's choosing.
+- **The rate limit.** After the signature, at most `HTCO_AUTOVA_QUOTE_RATE_PER_SECOND` notices per second per API instance (default 10); beyond it, 429 with `Retry-After`, and Resend retries.
+- **A mail over 1 MiB** (AutoVA's inline images can pass it) never fits, so it is not retried: the job opens one Human task "check this quote" (`too_large`). The raw download follows no redirect.
+- **Once.** The inbox's `event_id` is the mail's Message-ID, which Gmail's forwarding keeps, so the same mail delivered or forwarded twice is one row and one job (AC-7.14.1). Only Resend's email ID and the Message-ID are stored; the mail (DC2) is fetched by the job and never stored, logged or read by a model.
+- **The shop.** `HTCO_AUTOVA_QUOTE_ETSY_SHOP_ID` names the Etsy shop; its connected HTCO shop gets the quotes (the 5.3 lookup). Not connected: kept with no job (`unknown_shop`).
+- **The worker settings** stay in configuration: `HTCO_AUTOVA_QUOTE_SENDER`, `HTCO_AUTOVA_QUOTE_AUTHSERV_ID`, `HTCO_AUTOVA_QUOTE_OWNER_MAILBOX` and `HTCO_RESEND_API_KEY`. The `autova.quote_mail` handler (`quote_mail_handlers`) is registered once 7.1's task store backs the Human tasks; until then the jobs wait in the queue.
+
+### The receiver's authserv-id (#192.1): not confirmed yet
+
+Resend's documentation (read 2026-10-27) does not say whether inbound mail gets an `Authentication-Results` header, or under which authserv-id. The received-email API returns the receiver's verdict in a separate `authentication` object (`spf`, `dkim`, `dmarc`) whose format is not documented, and the example `headers` hold no `Authentication-Results`. So the ID cannot be confirmed from the documentation. **`HTCO_AUTOVA_QUOTE_AUTHSERV_ID` stays unset until it is confirmed from a real mail**, and until then `dkim_aligned` fails closed and every quote mail is quarantined.
+
+How to confirm it, once the MX records and the forwarding rule exist: forward one real AutoVA quote mail, download its raw file (`GET /emails/receiving/{id}`, then `raw.download_url`), and read the topmost `Authentication-Results` header. Record the authserv-id, the date and the mail's Message-ID here, then set the variable.
+
+- If Resend adds its own header (topmost, with its own ID), that ID is the one to configure.
+- If the topmost one is Gmail's (`mx.google.com`), written when the mail reached the owner's mailbox, it may be configured only because the address token keeps everyone but the owner's forwarding out: anyone who could write to the address directly could also write that header.
+- If there is none, the intake stays off. The fallback is to read Resend's `authentication` object instead, once its format is confirmed. That is a separate change with its own tests.
+
+### Forgeries roll up (#192.2)
+
+A mail whose `From` names AutoVA but fails the verdict is counted in **one Human task per shop per day** (`unauthenticated_sender`, carrying the count; `QuoteReviews.possible_forgery`), not one task per mail, so a forgery flood cannot bury the queue. Nothing of the mail is kept. The day is the UTC date.
+
+### DKIM replay (#192.3)
+
+A genuine AutoVA mail, validly signed, could be replayed to our mailbox, for example another AutoVA customer's quote. A parsed quote is recorded only when **the `To` covered by AutoVA's DKIM signature is the owner's mailbox** (`HTCO_AUTOVA_QUOTE_OWNER_MAILBOX`, `signed_recipients`):
+
+1. every `DKIM-Signature` reads, and exactly one has `d=` AutoVA's domain;
+2. its `h=` lists `from` and `to`;
+3. the mail has exactly one `To` header. A verifier checks only the bottom-most instance of a signed header, so a second `To` added on top would be unsigned.
+
+Otherwise the intake opens one Human task "check this quote" with the reason `unknown_listing` and records nothing. The other option #192 allows (the listing belongs to the target shop) needs a listings catalogue that HTCO does not keep yet; it can be added as a second way to pass later.
 
 ## The quote mail's layout (slice 7.15)
 
