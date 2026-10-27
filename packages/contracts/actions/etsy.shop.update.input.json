@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.shop.update.input.json",
+  "title": "etsy.shop.update input",
+  "type": "object",
+  "required": [
+    "is_vacation"
+  ],
+  "properties": {
+    "is_vacation": {
+      "type": "boolean"
+    },
+    "vacation_message": {
+      "type": "string",
+      "maxLength": 500
+    }
+  },
+  "additionalProperties": false
+}

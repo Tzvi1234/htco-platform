@@ -92,6 +92,13 @@ CALL_SITES: frozenset[tuple[str, str, str]] = frozenset(
         # Low-review alerts (6.9): the API channel's own read, behind `etsy.reviews.read`.
         ("execution/channels.py", "EtsyApiChannel._reviews", "list_reviews"),
         ("execution/channels.py", "EtsyApiChannel._get_shop", "get_shop"),
+        # The owner's writes (6.6, 6.8): re-read before, send once, re-read to verify.
+        ("execution/channels.py", "EtsyApiChannel._write", "get_order_receipt"),
+        ("execution/channels.py", "EtsyApiChannel._write", "create_receipt_shipment"),
+        ("execution/channels.py", "EtsyApiChannel._write", "get_shop"),
+        ("execution/channels.py", "EtsyApiChannel._write", "update_shop_vacation"),
+        ("execution/channels.py", "EtsyApiChannel.verify", "get_order_receipt"),
+        ("execution/channels.py", "EtsyApiChannel.verify", "get_shop"),
         ("order_history.py", "AdapterReceiptPages.page", "list_order_receipts"),
         ("shop_capabilities.py", "_probe", "check_receipt_addresses"),
         ("shop_capabilities.py", "_probe", "get_shop"),

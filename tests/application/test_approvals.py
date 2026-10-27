@@ -128,6 +128,8 @@ class World:
                 approvals=GatewayApprovals(self.approvals, self.clock),
                 adapters={Channel.API: self.channel},
                 capabilities=Capabilities(),
+                # These tests run the inventory write: its flag is on (writes are off by default).
+                write_flags=frozenset({"etsy.inventory.update"}),
                 clock=self.clock,
             )
         )

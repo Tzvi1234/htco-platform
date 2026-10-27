@@ -120,6 +120,8 @@ class World:
                 capabilities=self.capabilities,
                 clock=lambda: NOW,
                 human=self.human,
+                # Writes are off unless their flag is on (W2, slice 6.6): these tests run one.
+                write_flags=frozenset({"etsy.inventory.update"}),
             )
         )
 

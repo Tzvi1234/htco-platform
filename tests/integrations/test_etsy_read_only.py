@@ -209,22 +209,26 @@ async def test_write_refusal__is_logged_without_a_token_or_payload(
 
 
 @pytest.mark.ac("AC-4.5.2")
-def test_source__no_code_path_allows_a_write() -> None:
-    """The allow flag exists for a future, owner-approved write path; nothing sets it today, and
-    the adapter calls the client only through the guarded `request`."""
+def test_source__only_the_two_owner_triggered_writes_allow_a_write() -> None:
+    """The allow flag is set by exactly the owner's two writes (slices 6.6 and 6.8): the
+    tracking upload and vacation mode, in the adapter. Nothing else sets it, and the adapter calls
+    the client only through the guarded `request`."""
     sources = [
         *ROOT.joinpath("packages").rglob("*.py"),
         *ROOT.joinpath("apps").rglob("*.py"),
         *ROOT.joinpath("workers").rglob("*.py"),
     ]
+    adapter = ROOT / "packages" / "integrations" / "src" / "htco_integrations" / "etsy.py"
     offenders = [
         str(path.relative_to(ROOT))
         for path in sources
-        if ".venv" not in path.parts and WRITE_ALLOWED.search(path.read_text("utf-8"))
+        if ".venv" not in path.parts
+        and path.resolve() != adapter.resolve()
+        and WRITE_ALLOWED.search(path.read_text("utf-8"))
     ]
     assert offenders == []
-    adapter = ROOT / "packages" / "integrations" / "src" / "htco_integrations" / "etsy.py"
     source = adapter.read_text("utf-8")
+    assert len(WRITE_ALLOWED.findall(source)) == 2  # create_receipt_shipment, update_shop_vacation
     assert re.findall(r"self\._client\.(\w+)\(", source) == ["request"]
 
 

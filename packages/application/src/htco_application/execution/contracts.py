@@ -13,7 +13,7 @@ from datetime import timedelta
 from types import MappingProxyType
 from typing import Any
 
-from htco_application.access.policy import Capability
+from htco_application.access.policy import PERMISSIONS, Capability
 from htco_application.execution.gateway import Channel
 from htco_application.execution.guards import RateBudget
 from htco_application.execution.schema import check_schema
@@ -21,6 +21,7 @@ from htco_application.jobs import JsonValue
 from htco_application.secrets import secret_carrying_fields, secret_tool_names
 from htco_domain.actions import ApprovalPolicy, VerifyMode
 from htco_domain.actors import ActorKind
+from htco_domain.identity import Role
 from htco_domain.tooling import ToolDefinition
 
 
@@ -36,6 +37,9 @@ class ChannelBinding:
     channel: Channel
     recipe: str | None = None  # api: the adapter method; browser: the recipe ID
     requires_capability: str | None = None  # a shop capability, for example "receipts_read"
+    # An Etsy OAuth scope the shop's grant must hold, for example "transactions_w" (ADR-0022 §4):
+    # without it the action is refused before any call, and the owner is told to reconnect.
+    requires_scope: str | None = None
     browser_scope_id: str | None = None
     deterministic: bool = True  # False only for Browser Use recipes (employees only)
     breaker_key: str | None = None  # the circuit breaker it shares: "etsy:api", "etsy:web"
@@ -90,6 +94,7 @@ def _binding(raw: Mapping[str, Any]) -> ChannelBinding:
         channel=Channel(str(raw["channel"])),
         recipe=raw.get("recipe"),
         requires_capability=raw.get("requires_capability"),
+        requires_scope=raw.get("requires_scope"),
         browser_scope_id=raw.get("browser_scope_id"),
         deterministic=bool(raw.get("deterministic", True)),
         breaker_key=raw.get("breaker_key"),
@@ -183,7 +188,17 @@ def _parse(
         raise ValueError(
             f"the output could carry a secret or a code: {', '.join(leaks) or tool.name}"
         )
-    capability = document.get("user_capability")
+    capability = (
+        None
+        if document.get("user_capability") is None
+        else Capability(str(document["user_capability"]))
+    )
+    if policy is ApprovalPolicy.W3:
+        grant = None if capability is None else PERMISSIONS[capability].get(Role.OWNER)
+        if grant is None or not grant.step_up:
+            # W3 needs a step-up (ADR-0022 §2): the Owner's own press is checked through the
+            # action's capability, so it must ask for one.
+            raise ValueError("a W3 write needs a capability with the Owner's step-up")
     return ActionDefinition(
         tool=tool,
         input_schema=input_schema,
@@ -194,7 +209,7 @@ def _parse(
         timeout=timedelta(seconds=int(document["timeout_seconds"])),
         rate_limit_key=document.get("rate_limit_key"),
         concurrency_key=document.get("concurrency_key"),
-        user_capability=None if capability is None else Capability(str(capability)),
+        user_capability=capability,
         actor_kinds=None
         if "actor_kinds" not in document
         else frozenset(ActorKind(str(kind)) for kind in document["actor_kinds"]),

@@ -151,6 +151,8 @@ def gateway(  # noqa: PLR0913 - a test world with optional parts
             ),
             clock=clock,
             guards=shared,
+            # These tests run the inventory write: writes are off unless their flag is on (6.6).
+            write_flags=frozenset({"etsy.inventory.update"}),
         )
     )
 
@@ -300,7 +302,8 @@ async def test_half_open__only_one_call_goes_through_at_a_time() -> None:
 
     async with anyio.create_task_group() as group:
         group.start_soon(probe)
-        await channel.entered.wait()
+        with anyio.fail_after(10):
+            await channel.entered.wait()
         results["other"] = await service.submit(ask(key="receipts:other"))
         channel.hold.set()
 
@@ -447,7 +450,8 @@ async def test_two_writes_to_one_shop__never_at_the_same_time() -> None:
 
     async with anyio.create_task_group() as group:
         group.start_soon(first)
-        await channel.entered.wait()
+        with anyio.fail_after(10):
+            await channel.entered.wait()
         results["second"] = await second_worker.submit(write("inventory:2"))
         assert channel.hold is not None
         channel.hold.set()
