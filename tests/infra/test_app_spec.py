@@ -341,3 +341,8 @@ def test_api__starts_automation_executions_for_the_worker() -> None:
     """Activation step 2b and the audited admin retry (5.10, 5.11): the API's engine creates
     executions and jobs, and never runs a handler."""
     assert _envs()["HTCO_AUTOMATIONS_ENABLED"]["value"] == "true"
+
+
+def test_spec__passkeys_stay_off_until_the_owner_enables_the_supabase_add_on() -> None:
+    """Issue #113: hosted Supabase needs the paid WebAuthn MFA add-on and the RP config first."""
+    assert _envs()["HTCO_PASSKEYS_ENABLED"]["value"] == "false"

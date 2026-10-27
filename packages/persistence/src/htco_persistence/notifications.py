@@ -10,7 +10,7 @@ from datetime import datetime
 
 from psycopg.types.json import Jsonb
 
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import OutboxMessage
 from htco_application.notifications import Notification, Recipient
 from htco_domain.notifications import Audience, Locale, NotificationKind, Preference
 from htco_persistence.database import Database

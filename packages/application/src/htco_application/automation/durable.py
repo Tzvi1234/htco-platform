@@ -10,11 +10,14 @@ execution (AC-5.10.1).
 `execute` runs inside the worker's job. It moves the execution to `RUNNING`, calls the handler,
 and records `SUCCEEDED`, or `FAILED` then `RETRY_SCHEDULED` with the next job at the definition's
 backoff with jitter (never sooner than an error's `retry_after_seconds`, such as the gateway's
-deferral until a quota resets), or `DEAD_LETTERED` with the last error (AC-5.10.4). An execution
-found `RUNNING` belongs to a worker that died (its job's lease expired): that run counts as a failed
-attempt and the execution goes on from there, so it succeeds once (AC-5.10.5). Every state change
-is stored with its actor and correlation ID, and the domain refuses any transition outside the
-`ExecutionState` machine (AC-5.10.6).
+deferral until a quota resets), or `DEAD_LETTERED` with the last error (AC-5.10.4). Before it
+runs, it checks the automation's readiness again (#126, the kill switch): an automation set back
+to draft or deprecated stops the executions already queued, scheduled for a retry or resumed, not
+only new triggers. Such an execution ends `CANCELLED` (`stopped:<readiness>`) without its handler.
+An execution found `RUNNING` belongs to a worker that died (its job's lease expired): that run
+counts as a failed attempt and the execution goes on from there, so it succeeds once
+(AC-5.10.5). Every state change is stored with its actor and correlation ID, and the domain
+refuses any transition outside the `ExecutionState` machine (AC-5.10.6).
 
 Handlers (ADR-0019) receive a `HandlerContext`: the execution's identity, tenant, actor,
 correlation and causation IDs, its payload, and an `ActionGateway` client. Business effects go
@@ -38,6 +41,7 @@ from htco_application.audit import AuditRecord
 from htco_application.automation.engine import AutomationRefused, TriggerRequest, authorize
 from htco_application.execution.gateway import ActionGateway
 from htco_application.jobs import JobError, JobSpec, JsonValue, describe_error
+from htco_application.kernel import Offload, run_inline
 from htco_application.workforce.registry import Registry
 from htco_domain.actors import ActorRef
 from htco_domain.automation import (
@@ -46,6 +50,7 @@ from htco_domain.automation import (
     ExecutionState,
     RetryPolicy,
 )
+from htco_domain.workforce import PRODUCTION_READINESS
 
 EXECUTION_JOB = "automation.execute"
 # The job only carries an execution; crashes are retried by the queue, failures of the handler
@@ -98,20 +103,9 @@ type HandlerOutcome = Completed | Waiting
 type Handler = Callable[[HandlerContext], Awaitable[HandlerOutcome]]
 
 
-class Offload(Protocol):
-    """Runs a blocking call off the event loop (`anyio.to_thread.run_sync` in production)."""
-
-    def __call__[T](self, work: Callable[[], T], /) -> Awaitable[T]: ...
-
-
 # What a completed run's output may be kept as (#127): the output to store, or None to keep
 # nothing. `TypedOutputs.check` in production.
 type OutputCheck = Callable[[str, Mapping[str, JsonValue]], Mapping[str, JsonValue] | None]
-
-
-async def run_inline[T](work: Callable[[], T]) -> T:
-    """Runs store calls in the event loop (tests and in-memory stores)."""
-    return work()
 
 
 _log = logging.getLogger(__name__)
@@ -129,6 +123,10 @@ class StateChange:
     correlation_id: str
     at: datetime
     reason: str | None = None
+    automation_id: str | None = None  # which automation (6.7: a dead letter names it)
+    # The change's own ID: stored as its event row's ID, and the key of its outbox event, so
+    # the same change written again is the same event (Codex on #174).
+    id: uuid.UUID = field(default_factory=uuid.uuid7)
 
 
 @dataclass(frozen=True)
@@ -344,12 +342,57 @@ class DurableAutomationEngine:
             if recovered is None or recovered.state is not ExecutionState.RETRY_SCHEDULED:
                 return await self._reload(execution_id)
             execution = recovered
+        if definition.readiness not in PRODUCTION_READINESS:
+            return await self._stop(definition, execution, worker, now)
         before = execution
         running = before.transition(ExecutionState.RUNNING)
         change = self._change(before, before.state, running.state, worker, now)
         if not await self._offload(lambda: self._store.advance(before, [(running, change)])):
             return await self._reload(execution_id)
         return await self._run(definition, running, stored.payload, worker)
+
+    async def _stop(
+        self,
+        definition: AutomationDefinition,
+        execution: AutomationExecution,
+        worker: ActorRef,
+        now: datetime,
+    ) -> AutomationExecution:
+        """The kill switch at execution time (#126): the automation is no longer active, so the
+        queued, scheduled or resumed execution ends `CANCELLED` and its handler never runs."""
+        readiness = definition.readiness.value
+        _log.warning(
+            "automation.stopped",
+            extra={
+                "automation_id": definition.id,
+                "execution_id": str(execution.id),
+                "reason": readiness,
+                "correlation_id": execution.correlation_id,
+            },
+        )
+        cancelled = execution.transition(ExecutionState.CANCELLED)
+        change = self._change(
+            execution, execution.state, cancelled.state, worker, now, f"stopped:{readiness}"
+        )
+        # Audited in the same write (sage on #180, THREAT_MODEL T15): the Owner sees which
+        # queued runs a readiness change stopped.
+        if execution.organization_id is None:  # pragma: no cover - refused at the trigger
+            raise ValueError("a durable execution belongs to an organization")
+        audit = AuditRecord.new(
+            organization_id=execution.organization_id,
+            actor=worker,
+            action="automation.execution_stopped",
+            entity_type="automation_execution",
+            entity_id=str(execution.id),
+            before={"state": execution.state.value},
+            after={"state": cancelled.state.value, "reason": f"stopped:{readiness}"},
+            correlation_id=execution.correlation_id,
+        )
+        if not await self._offload(
+            lambda: self._store.advance(execution, [(cancelled, change)], audit=audit)
+        ):
+            return await self._reload(execution.id)
+        return cancelled
 
     async def _run(
         self,
@@ -515,6 +558,13 @@ class DurableAutomationEngine:
         if failed.attempts >= definition.retry.max_attempts:
             dead = failed.transition(ExecutionState.DEAD_LETTERED)
             steps.append((dead, self._change(failed, failed.state, dead.state, worker, now)))
+            # The Phase 1 alert rules see errors (Sentry); the type name only, never the text.
+            _log.error(
+                "automation.dead_lettered: %s execution=%s error=%s",
+                running.automation_id,
+                running.id,
+                error,
+            )
             return steps, None
         retry = failed.transition(ExecutionState.RETRY_SCHEDULED)
         steps.append((retry, self._change(failed, failed.state, retry.state, worker, now)))
@@ -565,6 +615,7 @@ class DurableAutomationEngine:
             correlation_id=execution.correlation_id,
             at=at,
             reason=reason,
+            automation_id=execution.automation_id,
         )
 
 

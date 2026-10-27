@@ -27,11 +27,13 @@ from htco_application.browser_environments import (
 from htco_application.execution.contracts import ChannelBinding
 from htco_application.execution.gateway import ActionRef, ActionRequest, Channel
 from htco_application.execution.router import ExecutionRouter, NoRoute, Route
+from htco_application.kernel import event_payload
 from htco_application.shops import ShopAccessDeniedError, ShopNotFoundError
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.browser import ConsentRecord, EnvironmentStatus, HealthReport
 from htco_domain.identity import AssuranceLevel, Role
 from htco_domain.state_machine import IllegalTransition
+from tests.event_contracts import assert_event_contract
 from tests.execution_fakes import Capabilities, FakeChannel, real_catalog
 
 _E = EnvironmentStatus
@@ -134,6 +136,7 @@ def test_create__provisions_and_records_the_first_change() -> None:
         "corr-create",
     )
     [event] = store.events
+    assert_event_contract(event)
     assert event.payload["event_type"] == STATUS_CHANGED_EVENT
     assert (event.organization_id, event.shop_id, event.correlation_id) == (
         ORG,
@@ -268,9 +271,9 @@ def test_every_change__has_actor_reason_correlation_and_one_event() -> None:
     assert len(store.changes) == len(store.events) == 5
     assert all(c.actor == OWNER and c.reason and c.correlation_id for c in store.changes)
     assert len({e.idempotency_key for e in store.events}) == 5
-    assert [(e.payload["from_status"], e.payload["to_status"]) for e in store.events] == [
-        (c.from_status.value, c.to_status.value) for c in store.changes
-    ]
+    assert [
+        (event_payload(e)["from_status"], event_payload(e)["to_status"]) for e in store.events
+    ] == [(c.from_status.value, c.to_status.value) for c in store.changes]
 
 
 def test_status_event__carries_ids_and_statuses_only() -> None:
@@ -280,9 +283,9 @@ def test_status_event__carries_ids_and_statuses_only() -> None:
 
     event = store.events[-1]
 
-    assert set(event.payload) == {
-        "event_type", "environment_id", "shop_id", "from_status", "to_status", "actor",
-        "occurred_at",
+    assert event.payload["event_type"] == STATUS_CHANGED_EVENT
+    assert set(event_payload(event)) == {
+        "environment_id", "shop_id", "from_status", "to_status", "actor", "occurred_at",
     }  # fmt: skip
     assert "to_failed" not in str(event.payload)  # the reason text stays in the history
 

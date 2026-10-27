@@ -13,8 +13,14 @@ from hypothesis import strategies as st
 
 from htco_application.automation.durable import Completed, HandlerContext
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
-from htco_application.kernel import JobError
-from htco_application.messaging import OutboxMessage, PendingDelivery
+from htco_application.kernel import (
+    DomainEvent,
+    JobError,
+    OutboxMessage,
+    UnknownEventVersionError,
+    publish,
+)
+from htco_application.messaging import PendingDelivery
 from htco_application.order_automations import (
     ORDER_DEDUP,
     SALES_COUNTERS,
@@ -311,6 +317,48 @@ async def test_events__start_the_order_automations(event_type: str, started: lis
         assert (request.organization_id, request.shop_id) == (ORG, SHOP)
         assert request.payload["receipt_id"] == 7
         assert request.correlation_id == "corr-ev"
+
+
+def enveloped(event_type: str, *, version: int = 1) -> PendingDelivery:
+    """The same order event as `event()`, in the envelope that producers now publish."""
+    message = publish(
+        DomainEvent(
+            event_type=event_type,
+            organization_id=ORG,
+            shop_id=SHOP,
+            idempotency_key=f"{event_type}:7",
+            occurred_at=NOW,
+            actor=ActorRef(ActorKind.AUTOMATION, "etsy-order-intake"),
+            payload={"shop_id": str(SHOP), "receipt_id": 7, "state": "paid",
+                     "etsy_updated_at": "2026-10-23T10:00:00+00:00", "source": "webhook"},
+            correlation_id="corr-ev",
+            payload_version=version,
+        )
+    )  # fmt: skip
+    return PendingDelivery(id=uuid.uuid4(), message=message, attempts=0, delivered=False)
+
+
+@pytest.mark.ac("AUD-01.4")
+async def test_events__an_enveloped_event__starts_what_the_flat_row_starts() -> None:
+    flat, envelope = Engine(), Engine()
+
+    await OrderEventTriggers(flat).deliver(event(INGESTED))
+    await OrderEventTriggers(envelope).deliver(enveloped(INGESTED))
+
+    assert [(r.automation_id, r.idempotency_key, r.payload) for r in envelope.requests] == [
+        (r.automation_id, r.idempotency_key, r.payload) for r in flat.requests
+    ]
+    assert len(envelope.requests) == 2
+
+
+@pytest.mark.ac("AUD-01.4")
+async def test_events__an_unknown_version__is_refused_and_starts_nothing() -> None:
+    engine = Engine()
+
+    with pytest.raises(UnknownEventVersionError, match=INGESTED):
+        await OrderEventTriggers(engine).deliver(enveloped(INGESTED, version=2))
+
+    assert engine.requests == []
 
 
 async def test_events__verification_is_a_workflow_step_of_intake() -> None:

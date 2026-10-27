@@ -62,3 +62,10 @@ def test_the_review_schedule_is_off_unless_named_on_its_own() -> None:
     assert REVIEW_SHOP_JOB not in inspect_only
     assert set(reviews) == {REVIEW_SCHEDULE.kind, REVIEW_SHOP_JOB}
     assert SCHEDULES[REVIEW_SCHEDULE.kind] == REVIEW_SCHEDULE
+
+
+def test_the_relay_retention_is_a_known_schedule() -> None:
+    """Local Codex on #159: named in HTCO_WORKER_SCHEDULES, it runs on its own."""
+    from htco_worker.settings import SCHEDULES  # noqa: PLC0415
+
+    assert "relay.code_retention" in SCHEDULES

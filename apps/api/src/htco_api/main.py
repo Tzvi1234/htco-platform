@@ -3,9 +3,10 @@
 import contextlib
 import random
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import anyio
 import httpx
@@ -47,6 +48,14 @@ from htco_application.mfa import Enrollment, Factor
 from htco_application.notifications import SecurityNotices
 from htco_application.order_history import OrderSync, adapter_pages
 from htco_application.order_intake import QueuedSyncRequests
+from htco_application.passkeys import (
+    PASSKEY,
+    TOTP,
+    Ceremony,
+    FactorAuditLog,
+    PasskeyChallenge,
+    PasskeysUnavailableError,
+)
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
 from htco_application.shop_data_cache import ShopDataCache
@@ -89,6 +98,7 @@ from htco_persistence.notifications import (
 )
 from htco_persistence.operations_health import PostgresOperationsHealth
 from htco_persistence.readiness import DatabaseCheck
+from htco_persistence.relay import PostgresRelayStore
 from htco_persistence.shop_integrations import (
     PostgresCapabilityStore,
     PostgresIntegrationReader,
@@ -116,6 +126,7 @@ from htco_platform.supabase_auth import (
     MfaRequiredError,
     RateLimitedError,
     SupabaseAuth,
+    WebAuthnDisabledError,
 )
 from htco_platform.supabase_auth import SamePasswordError as SupabaseSamePasswordError
 from htco_platform.supabase_auth import WeakPasswordError as SupabaseWeakPasswordError
@@ -325,9 +336,9 @@ class _AuthProvider:
         except AuthServiceError, InvalidCredentialsError, RateLimitedError:
             raise ProblemError(AUTH_UNAVAILABLE) from None
         return [
-            Factor(id=f.id, verified=f.verified, name=f.friendly_name)
+            Factor(id=f.id, verified=f.verified, name=f.friendly_name, kind=f.factor_type)
             for f in found
-            if f.factor_type == "totp"
+            if f.factor_type in {TOTP, PASSKEY}
         ]
 
     async def remove_factor(self, access_token: str, factor_id: str) -> None:
@@ -335,6 +346,49 @@ class _AuthProvider:
             await self._auth.unenroll(access_token, factor_id)
         except AuthServiceError, InvalidCredentialsError, RateLimitedError:
             raise ProblemError(AUTH_UNAVAILABLE) from None
+
+    # Passkeys (issue #113): Supabase Auth's WebAuthn MFA factor.
+
+    async def enroll_passkey(self, access_token: str, *, friendly_name: str) -> str:
+        try:
+            return await self._auth.enroll_webauthn(access_token, friendly_name=friendly_name)
+        except WebAuthnDisabledError:
+            raise PasskeysUnavailableError("WebAuthn MFA is off in Supabase Auth") from None
+        except AuthServiceError, InvalidCredentialsError, RateLimitedError:
+            raise ProblemError(AUTH_UNAVAILABLE) from None
+
+    async def challenge_passkey(self, access_token: str, factor_id: str) -> PasskeyChallenge:
+        try:
+            found = await self._auth.challenge_webauthn(access_token, factor_id)
+        except WebAuthnDisabledError:
+            raise PasskeysUnavailableError("WebAuthn MFA is off in Supabase Auth") from None
+        except AuthServiceError, InvalidCredentialsError, RateLimitedError:
+            raise ProblemError(AUTH_UNAVAILABLE) from None
+        return PasskeyChallenge(
+            factor_id, found.challenge_id, Ceremony(found.ceremony), found.options
+        )
+
+    async def verify_passkey(
+        self,
+        access_token: str,
+        factor_id: str,
+        challenge_id: str,
+        ceremony: Ceremony,
+        credential: Mapping[str, Any],
+    ) -> IssuedTokens:
+        try:
+            tokens = await self._auth.verify_webauthn(
+                access_token, factor_id, challenge_id, ceremony.value, dict(credential)
+            )
+        except WebAuthnDisabledError:
+            raise PasskeysUnavailableError("WebAuthn MFA is off in Supabase Auth") from None
+        except InvalidCredentialsError:
+            raise CredentialsRefusedError from None
+        except RateLimitedError:
+            raise TooManyAttemptsError("the sign-in service is rate limiting") from None
+        except AuthServiceError:
+            raise ProblemError(AUTH_UNAVAILABLE) from None
+        return IssuedTokens(tokens.access_token, tokens.refresh_token, tokens.expires_at)
 
     @staticmethod
     async def _call(pending: Awaitable[AuthTokens]) -> IssuedTokens:
@@ -427,6 +481,13 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
             password_reset_redirect=None
             if settings.password_reset_redirect_url is None
             else str(settings.password_reset_redirect_url),
+            # Off unless the owner switches passkeys on (issue #113): the add-on and the RP config.
+            passkeys=provider if settings.passkeys_enabled else None,
+            factor_audit=FactorAuditLog(
+                organizations_of=PostgresSecurityNoticeStore(database).organizations_of,
+                log=PostgresAuditLog(database),
+                offload=anyio.to_thread.run_sync,
+            ),
         )
     key_ring = settings.token_key_ring
     app_key = (
@@ -474,6 +535,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
                 offload=anyio.to_thread.run_sync,
             ),
             inbox=PostgresNotificationInbox(database),
+            relay=PostgresRelayStore(database),
         ),
         security_notices=SecurityNotices(
             PostgresSecurityNoticeStore(database),

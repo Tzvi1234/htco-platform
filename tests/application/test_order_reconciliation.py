@@ -19,7 +19,7 @@ from htco_application.execution.channels import EtsyApiChannel
 from htco_application.execution.gateway import ActionOutcome, ActionRequest, Channel
 from htco_application.execution.guards import Guards, MemoryBreakers, MemoryRateLimiter, MemorySlots
 from htco_application.execution.service import ActionGatewayService, GatewayParts
-from htco_application.kernel import Page, TenantShop
+from htco_application.kernel import Page, TenantShop, event_payload
 from htco_application.marketplace import OrderReceipt
 from htco_application.order_ingest import (
     DRIFT_DETECTED,
@@ -153,7 +153,7 @@ def test_drift_event__orders_drift_detected_with_no_buyer_data() -> None:
     plan = plan_ingest(old, None, context, organization_id=ORG, shop_id=SHOP, now=NOW)
 
     [drift_event] = [e for e in plan.events if e.payload["event_type"] == DRIFT_DETECTED]
-    assert drift_event.payload["kind"] == "missing"
+    assert event_payload(drift_event)["kind"] == "missing"
     text = json.dumps([e.payload for e in plan.events])
     for secret in (FAKE_NAME, FAKE_LINE, FAKE_TRACKING):
         assert secret not in text

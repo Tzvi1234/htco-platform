@@ -36,21 +36,23 @@ from htco_application.etsy_webhooks import WEBHOOK_ACTOR, TriggersAutomations
 from htco_application.fulfillment_schedule import TRACKING_SYNC
 from htco_application.incidents import IncidentService, order_resource
 from htco_application.kernel import (
-    EVENTS_DESTINATION,
+    DomainEvent,
     JobError,
     JsonValue,
     Offload,
+    OutboxMessage,
     TenantShop,
+    publish,
     run_inline,
 )
 from htco_application.marketplace import OrderShipment
-from htco_application.messaging import OutboxMessage
 from htco_application.order_intake import IntakeShops
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import TriggerKind
 from htco_domain.fulfillment import carrier_of, normalize_tracking_code, tracking_fingerprint
 from htco_domain.incidents import Cause, Evidence, EvidenceKind, ResourceKind, dedup_key
 from htco_domain.integrations import IntegrationStatus
+from htco_domain.relay import ClosedReason
 
 TRACKING_DETECTED = "fulfillment.tracking_detected.v1"
 SCHEDULE_BATCH = 25
@@ -101,6 +103,14 @@ class RecordedTracking:
     source: TrackingSource
 
 
+class RelayClosing(Protocol):
+    """The relay store's closing by order (`relay.RelayStore.close_order`)."""
+
+    def close_order(
+        self, shop_id: uuid.UUID, receipt_id: int, *, reason: ClosedReason, now: datetime
+    ) -> bool: ...
+
+
 class TrackingStore(Protocol):
     """Synchronous (psycopg's pool); run through `offload`."""
 
@@ -124,7 +134,6 @@ class TrackingStore(Protocol):
 
 def tracking_event(observation: TrackingObservation) -> OutboxMessage:
     payload: dict[str, JsonValue] = {
-        "event_type": TRACKING_DETECTED,
         "tracking_event_id": str(observation.id),
         "receipt_id": observation.receipt_id,
         "carrier": observation.carrier,
@@ -132,18 +141,20 @@ def tracking_event(observation: TrackingObservation) -> OutboxMessage:
         "observed_via": observation.observed_via.value,
         "observed_at": observation.observed_at.isoformat(),
     }
-    return OutboxMessage(
-        organization_id=observation.organization_id,
-        shop_id=observation.shop_id,
-        destination=EVENTS_DESTINATION,
-        idempotency_key=(
-            f"{TRACKING_DETECTED}:{observation.shop_id}:{observation.receipt_id}:"
-            f"{observation.fingerprint.hex()[:32]}"
-        ),
-        payload=payload,
-        correlation_id=None
-        if observation.correlation_id is None
-        else observation.correlation_id[:200],
+    return publish(
+        DomainEvent(
+            event_type=TRACKING_DETECTED,
+            organization_id=observation.organization_id,
+            shop_id=observation.shop_id,
+            idempotency_key=(
+                f"{TRACKING_DETECTED}:{observation.shop_id}:{observation.receipt_id}:"
+                f"{observation.fingerprint.hex()[:32]}"
+            ),
+            occurred_at=observation.observed_at,
+            actor=ActorRef(ActorKind.AUTOMATION, TRACKING_SYNC),
+            payload=payload,
+            correlation_id=observation.correlation_id,
+        )
     )
 
 
@@ -157,6 +168,8 @@ class TrackingRecorder:
     clock: Callable[[], datetime]
     new_id: Callable[[], uuid.UUID] = uuid.uuid7
     offload: Offload = run_inline
+    # The AutoVA relay (slice 6.10): tracking seen on the Etsy receipt closes the order's item.
+    relay: RelayClosing | None = None
 
     async def record(  # noqa: PLR0913 - one shipment's facts
         self,
@@ -212,6 +225,13 @@ class TrackingRecorder:
             actor=actor,
             correlation_id=correlation_id,
         )
+        relay = self.relay
+        if relay is not None and source is TrackingSource.ETSY:
+            await self.offload(
+                lambda: relay.close_order(
+                    shop_id, receipt_id, reason=ClosedReason.TRACKING_ON_ETSY, now=now
+                )
+            )
         return recorded
 
 

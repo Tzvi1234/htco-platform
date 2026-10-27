@@ -265,6 +265,12 @@ A Postgres-native queue with atomic claims (`FOR UPDATE SKIP LOCKED`), visibilit
 
 Every event type has a JSON Schema in `packages/contracts/events/` and an entry in the [event catalog](EVENT_CATALOG.md). Schemas are versioned; consumers accept the versions they declare.
 
+In code, the envelope is `DomainEvent` in `htco_application.kernel`.
+- **Publishing.** `publish(event)` returns the outbox message for `events.publish`. The `event_id` is derived from `organization_id` and `idempotency_key`, so producing the same event twice gives the same ID.
+- **Reading.** `read_event(payload, accepted=...)` gives the type, the version and the payload.
+  - A row written before the envelope reads as version 1.
+  - An unaccepted version, or a message that is not an event, raises a `DeadLetterError`. The outbox delivery then marks the message dead at once instead of retrying it.
+
 ### 8.5 Scheduling
 
 Recurring work (reconciliation, SLA inspection, token refresh, retention) is enqueued as jobs by the queue's scheduler or by `pg_cron`; DigitalOcean cron jobs are not used for frequent work (their minimum interval is 15 minutes). Only one scheduler instance enqueues a given schedule (unique keys per period).
