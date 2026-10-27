@@ -48,6 +48,7 @@ class FakeHandle:
     state: dict[str, str] = field(default_factory=dict)
     running: bool = True
     finished: bool = False
+    healthy: bool = True
 
     @property
     def environment_id(self) -> uuid.UUID:
@@ -66,6 +67,7 @@ class FakeBrowserProvider:
         self._capabilities = capabilities or fake_capabilities()
         self._open_delay = open_delay
         self.archives: dict[uuid.UUID, dict[str, str]] = {}
+        self.saves = 0  # every write back, for the suite's "writes nothing" checks
         self.running = 0
         self._guard = threading.Lock()
 
@@ -120,6 +122,7 @@ class FakeBrowserProvider:
             if fence is not fake.fence or not self._fenced(fence, fake.environment_id):
                 raise ProfileFenceLostError("the session's lease no longer holds the profile")
             self.archives[fake.environment_id] = dict(fake.state)
+            self.saves += 1
 
     async def renew(self, handle: ProviderHandle, *, fence: ProfileFence) -> HealthReport:
         report = await self.health_check(handle)
@@ -155,7 +158,8 @@ class FakeBrowserProvider:
         return await steps(self._live(handle).state)
 
     async def health_check(self, handle: ProviderHandle) -> HealthReport:
-        self._live(handle)
+        if not self._live(handle).healthy:
+            return HealthReport(ok=False, code="engine_unreachable")
         return HealthReport(ok=True, engine_version=FAKE_VERSION)
 
     async def engine_version(self) -> str:

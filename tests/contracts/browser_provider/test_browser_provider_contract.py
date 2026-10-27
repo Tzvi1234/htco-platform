@@ -40,6 +40,7 @@ from htco_application.browser_profiles import (
     ProfileFenceLostError,
     ProfileVault,
     ProfileWorkspaces,
+    SealedArchive,
 )
 from htco_application.browser_provider import (
     BrowserProvider,
@@ -60,7 +61,7 @@ from htco_browser_worker.managed_chromium import (
 )
 from htco_domain.browser import BrowserEnvironment, EnvironmentStatus
 from htco_platform.crypto import EnvelopeSealer, KeyRing
-from tests.contracts.browser_provider.fake_provider import FakeBrowserProvider
+from tests.contracts.browser_provider.fake_provider import FakeBrowserProvider, FakeHandle
 
 pytestmark = pytest.mark.anyio
 
@@ -100,6 +101,10 @@ class Harness:
     write: Callable[[object, str], Awaitable[None]]
     read: Callable[[object], Awaitable[str | None]]
     directory: Callable[[ProviderHandle], Path | None] = lambda _: None
+    # How many times a profile was written back so far (quill on #183: "writes nothing").
+    writes: Callable[[], int] = lambda: 0
+    # Makes the session's health check fail, where the harness can (quill on #183).
+    break_check: Callable[[ProviderHandle], None] | None = None
     environments: list[BrowserEnvironment] = field(default_factory=list)
 
     def environment(self) -> BrowserEnvironment:
@@ -122,19 +127,29 @@ def _fake(_: Path, __: str) -> Harness:
         assert isinstance(connection, dict)
         return connection.get("marker")
 
-    return Harness("fake", FakeBrowserProvider(locks.owns), locks, write, read)
+    provider = FakeBrowserProvider(locks.owns)
+
+    def break_check(handle: ProviderHandle) -> None:
+        assert isinstance(handle, FakeHandle)
+        handle.healthy = False
+
+    return Harness(
+        "fake", provider, locks, write, read,
+        writes=lambda: provider.saves, break_check=break_check,
+    )  # fmt: skip
 
 
 @dataclass
 class FileHandle:
     profile: Path
     closed: bool = False
+    broken: bool = False
 
     async def close(self) -> None:
         self.closed = True
 
     async def probe(self) -> str:
-        if self.closed:
+        if self.closed or self.broken:
             raise RuntimeError("closed")
         return "0.0.0-fake"
 
@@ -144,10 +159,24 @@ class FileEngine:
         return FileHandle(profile_directory)
 
 
-def _workspaces(root: Path, locks: MemoryProfileLocks) -> ProfileWorkspaces:
+@dataclass
+class CountingStore(MemoryProfileArchiveStore):
+    """The archives, counting every write (a re-seal of the same profile is still a write)."""
+
+    puts: int = 0
+
+    @override
+    def put(self, archive: SealedArchive, *, fence: object | None = None) -> None:
+        super().put(archive, fence=fence)
+        self.puts += 1
+
+
+def _workspaces(
+    root: Path, locks: MemoryProfileLocks, store: CountingStore | None = None
+) -> ProfileWorkspaces:
     vault = ProfileVault(
         EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))),
-        MemoryProfileArchiveStore(fenced=locks.owns),
+        store if store is not None else CountingStore(fenced=locks.owns),
         lambda: datetime.now(UTC),
     )
     root.mkdir(exist_ok=True)
@@ -160,8 +189,9 @@ def _directory(handle: ProviderHandle) -> Path | None:
 
 def _managed(root: Path, _: str) -> Harness:
     locks = MemoryProfileLocks()
+    store = CountingStore(fenced=locks.owns)
     provider = ManagedChromiumProvider(
-        _workspaces(root / "tmpfs", locks), FileEngine(),
+        _workspaces(root / "tmpfs", locks, store), FileEngine(),
         managed_chromium_capabilities("0.0.0-fake"),
     )  # fmt: skip
 
@@ -174,7 +204,15 @@ def _managed(root: Path, _: str) -> Harness:
         marker = connection.profile / "marker"
         return marker.read_text(encoding="utf-8") if marker.exists() else None
 
-    return Harness("managed", provider, locks, write, read, _directory)
+    def break_check(handle: ProviderHandle) -> None:
+        assert isinstance(handle, ManagedHandle)
+        assert isinstance(handle.engine, FileHandle)
+        handle.engine.broken = True
+
+    return Harness(
+        "managed", provider, locks, write, read, _directory,
+        writes=lambda: store.puts, break_check=break_check,
+    )  # fmt: skip
 
 
 def _real_engine() -> PlaywrightEngine:
@@ -432,10 +470,36 @@ async def test_recover__checks_the_last_good_archive_and_writes_nothing(h: Harne
         await h.provider.close(handle)
         crashed = await session(h, env, lease, "crashed-mid-way")
         await h.provider.close(crashed)  # a crash: never saved
+        written = h.writes()
         report = await h.provider.recover(env, fence=lease)
+        # quill on #183 (M8): recover checks the last good archive and writes nothing back.
+        assert h.writes() == written
     assert report.ok
     assert report.engine_version == h.provider.capabilities.engine_version
     assert await marker_of(h, env) == "last-good"
+
+
+@pytest.mark.ac("AC-8A.2.8")
+async def test_renew__a_failed_check_writes_nothing_back(h: Harness) -> None:
+    """quill on #183 (M9): renew re-seals only after a passing check; a failing one leaves the
+    last good profile as it was."""
+    if not h.provider.capabilities.renew:
+        pytest.skip("renew is not declared")
+    if h.break_check is None:
+        pytest.skip("this harness cannot fail the check on purpose")
+    env = h.environments[0]
+    async with h.locks.hold(env.id, until=soon()) as lease:
+        handle = await session(h, env, lease, "kept")
+        await h.provider.save_session(handle, fence=lease)
+    async with h.locks.hold(env.id, until=soon()) as lease:
+        handle = await session(h, env, lease, "unchecked")
+        h.break_check(handle)
+        written = h.writes()
+        report = await h.provider.renew(handle, fence=lease)
+        assert not report.ok
+        assert h.writes() == written
+        await h.provider.close(handle)
+    assert await marker_of(h, env) == "kept"
 
 
 # --- Connection and execution -------------------------------------------------------------------
