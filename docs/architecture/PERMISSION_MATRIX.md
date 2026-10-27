@@ -55,6 +55,8 @@ These rows come from [ADR-0020](../adr/0020-per-shop-browser-environment.md) to 
 | Switch a kill switch off: global, an employee, an automation, a provider or Browser Use (emergency stop; 8.6, 9.8) | ✓ MFA | ✓ MFA | — | — | — | — | — |
 | Switch a kill switch on again (8.6, 9.8) | ✓ MFA RA | — | — | — | — | — | — |
 | Edit a shop's SLA policy, audited (AC-6.5.4) | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| Set or replace a shop's Etsy sign-in details, write-only (AC-8A.4.5, AC-8A.9.7) | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| Set or replace the owner's AutoVA sign-in details, write-only (AC-8A.4.5, AC-8A.9.7) | ✓ MFA RA | — | — | — | — | — | — |
 
 ## 2. Automations
 
