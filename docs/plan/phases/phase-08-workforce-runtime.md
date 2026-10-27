@@ -150,12 +150,12 @@ Each gate is an automated test in CI; all six must pass.
 
 ### 8.9 — Workforce directory UI
 
-Read-only directory in the web app: departments, employees with readiness (`draft` or `ready`), autonomy, current profile version and kill switch state; tools with family, risk and readiness; automations with readiness and recent executions; controls for the kill switches (off for the Owner and Admins, on again for the Owner only) (step-up required). The full office experience is [Phase 15](phase-15-office-executive.md).
+Read-only directory in the web app: departments, employees with readiness (`draft` or `ready`), autonomy, current profile version and kill switch state; tools with family, risk and readiness; automations with readiness and recent executions; controls for the kill switches (off for the Owner and Admins, on again for the Owner only) (switching one on again requires step-up). The full office experience is [Phase 15](phase-15-office-executive.md).
 
 | ID | Acceptance criterion |
 |---|---|
 | AC-8.9.1 | A `draft` employee is never shown as working or available; states shown come only from recorded sessions and activity. |
-| AC-8.9.2 | Kill switch controls are hidden for roles without the capability and require step-up for those with it. |
+| AC-8.9.2 | Kill switch controls are hidden for roles without the capability, and require step-up to switch one on again (switching one off needs MFA only, PERMISSION_MATRIX 1a). |
 | AC-8.9.3 | **Versions on the web.** Each employee and automation opens its version history from the routes of 8.2, newest first: the version, the registry commit and readiness. Tool versions follow in 15.5. |
 | AC-8.9.4 | **Every kill switch on the web.** The directory shows the global switch, and each employee's and each automation's switch on its row, with its state and its last change (who and when). The Owner and Admins switch one off there, and only the Owner switches one on again (AC-8.9.2, PERMISSION_MATRIX 1a), and a switched-off automation shows whether its running executions finish or are cancelled. |
 
