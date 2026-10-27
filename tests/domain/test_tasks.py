@@ -91,10 +91,17 @@ def test_completing_without_evidence__is_refused() -> None:
         task(_S.RUNNING).transition(_S.COMPLETED)
 
 
+_REFERENCES = {
+    EvidenceKind.RESOURCE: "order:3412987711",
+    EvidenceKind.EXECUTION: "0190a000-0000-7000-8000-0000000000ee",
+    EvidenceKind.APPROVAL: "0190a000-0000-7000-8000-0000000000ef",
+}
+
+
 @pytest.mark.ac("AC-7.1.3")
 @pytest.mark.parametrize("kind", list(EvidenceKind))
 def test_completing__keeps_the_evidence_it_references(kind: EvidenceKind) -> None:
-    evidence = TaskEvidence(kind, "ref-1")
+    evidence = TaskEvidence(kind, _REFERENCES[kind])
 
     done = task(_S.RUNNING).transition(_S.COMPLETED, evidence=evidence)
 
@@ -104,10 +111,34 @@ def test_completing__keeps_the_evidence_it_references(kind: EvidenceKind) -> Non
 @pytest.mark.ac("AC-7.1.3")
 def test_evidence__is_a_resource_an_execution_or_an_approval_never_text() -> None:
     assert {k.value for k in EvidenceKind} == {"resource", "execution", "approval"}
+    assert TaskEvidence(EvidenceKind.RESOURCE, "listing_variant:a-1B").reference
+
+
+@pytest.mark.ac("AC-7.1.3")
+@pytest.mark.parametrize(
+    ("kind", "reference"),
+    [
+        (EvidenceKind.RESOURCE, " "),
+        (EvidenceKind.RESOURCE, "order 3412987711"),  # spaces: free text
+        (EvidenceKind.RESOURCE, "order:3412 987711"),
+        (EvidenceKind.RESOURCE, "the buyer said it arrived"),
+        (EvidenceKind.RESOURCE, "Order:1"),  # the kind is lower case
+        (EvidenceKind.RESOURCE, "order:"),
+        (EvidenceKind.RESOURCE, "order:" + "1" * 101),
+        (EvidenceKind.RESOURCE, "order:1\n"),
+        (EvidenceKind.EXECUTION, "exec-1"),  # not a UUID
+        (EvidenceKind.EXECUTION, "0190A000-0000-7000-8000-0000000000EE"),  # not canonical
+        (EvidenceKind.EXECUTION, "{0190a000-0000-7000-8000-0000000000ee}"),
+        (EvidenceKind.APPROVAL, "order:1"),
+        (EvidenceKind.APPROVAL, "0190a0000000700080000000000000ef"),
+    ],
+)
+def test_evidence__a_reference_of_another_shape__is_refused(
+    kind: EvidenceKind, reference: str
+) -> None:
+    """Sage-arch on #181: a strict shape, never free text."""
     with pytest.raises(ValueError, match="reference"):
-        TaskEvidence(EvidenceKind.RESOURCE, " ")
-    with pytest.raises(ValueError, match="reference"):
-        TaskEvidence(EvidenceKind.RESOURCE, "r" * 201)
+        TaskEvidence(kind, reference)
 
 
 def test_evidence_on_another_transition__is_refused() -> None:

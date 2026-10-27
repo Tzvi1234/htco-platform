@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from htco_application.access.authentication import AuthContext
+from htco_application.access.authentication import AuthContext, NoMembershipError
 from htco_application.access.policy import Capability, Outcome, Scope, ShopRef, decide
 from htco_application.kernel import (
     DomainEvent,
@@ -281,6 +281,14 @@ def task_detail(
     now: datetime,
 ) -> TaskDetail:
     organization = _organization(auth, organization_id)
+    # Membership and the role first, before anything is read (sage-arch on #181): a stranger or
+    # a role without the view never reaches the store, and learns nothing about the ID.
+    try:
+        principal = auth.principal_for(organization)
+    except NoMembershipError:
+        raise TaskNotVisibleError(str(task_id)) from None
+    if decide(principal, Capability.VIEW_TASKS, shop=None, now=now).outcome is not Outcome.ALLOW:
+        raise TaskNotVisibleError(str(task_id))
     detail = reader.task_detail(organization, task_id)
     if detail is None or not _visible(auth, organization, detail.stored.task.shop_id, now=now):
         raise TaskNotVisibleError(str(task_id))

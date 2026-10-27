@@ -4,11 +4,12 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_worker;
-select plan(16);
+select plan(21);
 
 insert into auth.users (id, email) values
   ('35e00000-0000-0000-0000-000000000001', 'owner-t@example.test'),
-  ('35e00000-0000-0000-0000-000000000002', 'owner-u@example.test');
+  ('35e00000-0000-0000-0000-000000000002', 'owner-u@example.test'),
+  ('35e00000-0000-0000-0000-000000000003', 'ops-t@example.test');
 insert into app.organizations (id, name) values
   ('35a00000-0000-0000-0000-000000000000', 'Organization T'),
   ('35b00000-0000-0000-0000-000000000000', 'Organization U');
@@ -16,7 +17,9 @@ insert into app.memberships (id, organization_id, user_id, role) values
   ('35d00000-0000-0000-0000-000000000001', '35a00000-0000-0000-0000-000000000000',
    '35e00000-0000-0000-0000-000000000001', 'owner'),
   ('35d00000-0000-0000-0000-000000000002', '35b00000-0000-0000-0000-000000000000',
-   '35e00000-0000-0000-0000-000000000002', 'owner');
+   '35e00000-0000-0000-0000-000000000002', 'owner'),
+  ('35d00000-0000-0000-0000-000000000003', '35a00000-0000-0000-0000-000000000000',
+   '35e00000-0000-0000-0000-000000000003', 'operations');
 
 insert into app.tasks
   (id, organization_id, kind, title, assignee_kind, assignee_id, state, idempotency_key,
@@ -48,9 +51,19 @@ select throws_ok(
 select throws_ok(
   $$ update app.tasks set state = 'completed' where id = '35c00000-0000-0000-0000-000000000001' $$,
   '23514', null, 'completed only with its evidence (AC-7.1.3)');
-select lives_ok(
+select throws_ok(
+  $$ update app.tasks set state = 'completed', evidence_kind = 'resource',
+       evidence_reference = 'the buyer said it arrived'
+     where id = '35c00000-0000-0000-0000-000000000001' $$,
+  '23514', null, 'evidence is never free text: a reference with spaces is refused (AC-7.1.3)');
+select throws_ok(
   $$ update app.tasks set state = 'completed', evidence_kind = 'execution',
        evidence_reference = 'exec-1' where id = '35c00000-0000-0000-0000-000000000001' $$,
+  '23514', null, 'an execution is named by its UUID (AC-7.1.3)');
+select lives_ok(
+  $$ update app.tasks set state = 'completed', evidence_kind = 'execution',
+       evidence_reference = '0190a000-0000-7000-8000-0000000000ee'
+     where id = '35c00000-0000-0000-0000-000000000001' $$,
   'completed with its evidence');
 select throws_ok(
   $$ update app.tasks set state = 'running' where id = '35c00000-0000-0000-0000-000000000001' $$,
@@ -63,6 +76,11 @@ select throws_ok(
      values ('35f00000-0000-0000-0000-000000000002', '35a00000-0000-0000-0000-000000000000',
        '35c00000-0000-0000-0000-000000000001', 'created', 'running', 'system', 't', now()) $$,
   '23514', null, 'an event follows the machine');
+select throws_ok(
+  $$ insert into app.task_events (id, organization_id, task_id, from_state, to_state, actor_kind, actor_id, occurred_at)
+     values ('35f00000-0000-0000-0000-000000000004', '35b00000-0000-0000-0000-000000000000',
+       '35c00000-0000-0000-0000-000000000002', 'queued', 'claimed', 'system', 't', now()) $$,
+  '23514', null, 'an event starts at the task''s state (the task is created, not queued)');
 select throws_ok(
   $$ insert into app.task_events (id, organization_id, task_id, from_state, to_state, actor_kind, actor_id, occurred_at)
      values ('35f00000-0000-0000-0000-000000000003', '35b00000-0000-0000-0000-000000000000',
@@ -79,6 +97,14 @@ select is((select count(*)::int from app.tasks), 1, 'a member sees their organiz
 select is((select count(*)::int from app.task_events), 1, 'and its events');
 select throws_ok(
   $$ update app.tasks set title = 'x' $$, '42501', null, 'a member never writes a task directly');
+reset role;
+
+-- An organization-wide task (no shop) is for the Owners and Admins only.
+select set_config('request.jwt.claims', '{"sub":"35e00000-0000-0000-0000-000000000003","role":"authenticated","aal":"aal1"}', true);
+set local role authenticated;
+select is((select count(*)::int from app.tasks), 0,
+  'an Operations member does not see an organization-wide task');
+select is((select count(*)::int from app.task_events), 0, 'nor its events');
 reset role;
 
 -- The worker: its job's organization only.

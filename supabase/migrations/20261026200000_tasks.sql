@@ -14,6 +14,10 @@
 --
 -- Safe on the live database: new tables, functions and policies.
 
+-- Evidence (AC-7.1.3, sage-arch on #181) names an execution or an approval by its UUID, and a
+-- resource as `<kind>:<id>`: the rule of `htco_domain.tasks.TaskEvidence`, inlined in each
+-- table's check (the worker has no access to the private schema's helpers).
+
 create table app.tasks (
   id uuid primary key,
   organization_id uuid not null references app.organizations (id) on delete cascade,
@@ -43,14 +47,20 @@ create table app.tasks (
   due_at timestamptz,
   evidence_kind text
     constraint tasks_evidence_kind_check check (evidence_kind in ('resource', 'execution', 'approval')),
-  evidence_reference text
-    constraint tasks_evidence_reference_check check (char_length(btrim(evidence_reference)) between 1 and 200),
+  evidence_reference text,
   created_at timestamptz not null,
   updated_at timestamptz not null,
   constraint tasks_shop_fkey foreign key (shop_id, organization_id)
     references app.shops (id, organization_id) on delete cascade,
   constraint tasks_owner_check check ((owner_kind is null) = (owner_id is null)),
   constraint tasks_evidence_pair_check check ((evidence_kind is null) = (evidence_reference is null)),
+  -- AC-7.1.3: a strict shape, never free text (htco_domain.tasks.TaskEvidence).
+  constraint tasks_evidence_reference_check check (
+    evidence_reference is null
+    or (evidence_kind = 'resource' and evidence_reference ~ '^[a-z][a-z_]{0,40}:[A-Za-z0-9-]{1,100}$')
+    or (evidence_kind in ('execution', 'approval')
+        and evidence_reference ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+  ),
   -- AC-7.1.3: completed exactly when the evidence is recorded.
   constraint tasks_completed_evidence_check check ((state = 'completed') = (evidence_kind is not null)),
   constraint tasks_idempotency_key unique (organization_id, idempotency_key),
@@ -114,14 +124,19 @@ create table app.task_events (
   occurred_at timestamptz not null,
   evidence_kind text
     constraint task_events_evidence_kind_check check (evidence_kind in ('resource', 'execution', 'approval')),
-  evidence_reference text
-    constraint task_events_evidence_reference_check check (char_length(btrim(evidence_reference)) between 1 and 200),
+  evidence_reference text,
   correlation_id text
     constraint task_events_correlation_id_check check (char_length(correlation_id) <= 200),
   created_at timestamptz not null default now(),
   constraint task_events_task_fkey foreign key (task_id, organization_id)
     references app.tasks (id, organization_id) on delete cascade,
   constraint task_events_evidence_pair_check check ((evidence_kind is null) = (evidence_reference is null)),
+  constraint task_events_evidence_reference_check check (
+    evidence_reference is null
+    or (evidence_kind = 'resource' and evidence_reference ~ '^[a-z][a-z_]{0,40}:[A-Za-z0-9-]{1,100}$')
+    or (evidence_kind in ('execution', 'approval')
+        and evidence_reference ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+  ),
   constraint task_events_completed_evidence_check check ((to_state = 'completed') = (evidence_kind is not null))
 );
 create index task_events_task_idx on app.task_events (task_id, occurred_at);
@@ -137,6 +152,14 @@ begin
     end if;
   elsif not private.task_edge_allowed(new.from_state, new.to_state) then
     raise exception 'task: % -> % is not allowed', new.from_state, new.to_state
+      using errcode = 'check_violation';
+  -- A step starts where the task is (sage-arch on #181): the store writes it before it moves the
+  -- task, so a step from any other state is a forged or stale history.
+  elsif new.from_state is distinct from (
+    select t.state from app.tasks t
+    where t.id = new.task_id and t.organization_id = new.organization_id
+  ) then
+    raise exception 'task: a step from % does not start at the task''s state', new.from_state
       using errcode = 'check_violation';
   end if;
   return new;
@@ -161,12 +184,16 @@ alter table app.tasks enable row level security;
 alter table app.task_events enable row level security;
 revoke all on app.tasks, app.task_events from public, anon, authenticated, service_role;
 
--- Members: their organization's tasks; a shop's task only with that shop.
+-- Members: their organization's shop tasks only with that shop; an organization-wide task (no
+-- shop) only for its Owners and Admins (sage-arch on #181).
 grant select on app.tasks, app.task_events to authenticated;
 create policy tasks_select on app.tasks for select to authenticated
   using (
     organization_id = any (array(select private.user_org_ids()))
-    and (shop_id is null or shop_id = any (array(select private.user_shop_ids())))
+    and (
+      (shop_id is null and organization_id = any (array(select private.user_admin_org_ids())))
+      or shop_id = any (array(select private.user_shop_ids()))
+    )
   );
 create policy task_events_select on app.task_events for select to authenticated
   using (
@@ -174,7 +201,12 @@ create policy task_events_select on app.task_events for select to authenticated
     and exists (
       select 1 from app.tasks t
       where t.id = task_id
-        and (t.shop_id is null or t.shop_id = any (array(select private.user_shop_ids())))
+        and t.organization_id = task_events.organization_id
+        and (
+          (t.shop_id is null
+           and t.organization_id = any (array(select private.user_admin_org_ids())))
+          or t.shop_id = any (array(select private.user_shop_ids()))
+        )
     )
   );
 

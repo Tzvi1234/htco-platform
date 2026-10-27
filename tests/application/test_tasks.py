@@ -3,6 +3,7 @@ evidence, and reading by role."""
 
 import uuid
 from datetime import UTC, datetime
+from typing import override
 
 import pytest
 
@@ -13,6 +14,7 @@ from htco_application.tasks import (
     TASK_STATE_CHANGED,
     StaleTask,
     StoredTask,
+    TaskDetail,
     TaskNotVisibleError,
     TaskService,
     list_tasks,
@@ -33,7 +35,7 @@ SHOP = uuid.UUID("07100000-0000-7000-8000-000000000001")
 OTHER_SHOP = uuid.UUID("07100000-0000-7000-8000-000000000002")
 OWNER = uuid.UUID("07100000-0000-7000-8000-0000000000e1")
 SYSTEM = ActorRef(ActorKind.SYSTEM, "test")
-EVIDENCE = TaskEvidence(EvidenceKind.EXECUTION, "exec-1")
+EVIDENCE = TaskEvidence(EvidenceKind.EXECUTION, "0190a000-0000-7000-8000-0000000000ee")
 
 
 def member(role: Role = Role.OWNER, shops: frozenset[uuid.UUID] = frozenset()) -> AuthContext:
@@ -244,6 +246,20 @@ async def test_detail__the_task_with_its_history() -> None:
     detail = task_detail(member(), tasks, stored.task.id, organization_id=ORG, now=NOW)
 
     assert [s.to_state for s in detail.history] == [TaskState.CREATED, TaskState.QUEUED]
+
+
+async def test_detail__a_stranger__is_refused_before_anything_is_read() -> None:
+    """Sage-arch on #181: membership first; the store is never asked."""
+    svc, _ = service()
+    stored = await create(svc, organization_id=OTHER_ORG)
+
+    class Untouchable(MemoryTasks):
+        @override
+        def task_detail(self, organization_id: uuid.UUID, task_id: uuid.UUID) -> TaskDetail | None:
+            raise AssertionError("the store was read for a stranger")
+
+    with pytest.raises(TaskNotVisibleError):
+        task_detail(member(), Untouchable(), stored.task.id, organization_id=OTHER_ORG, now=NOW)
 
 
 async def test_detail__a_task_of_another_shop__does_not_exist_for_a_shop_role() -> None:

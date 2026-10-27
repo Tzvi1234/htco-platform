@@ -13,6 +13,7 @@ names its `TaskEvidence`: a resource, an execution or an approval. No message or
 text is evidence.
 """
 
+import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -75,14 +76,32 @@ class EvidenceKind(StrEnum):
     APPROVAL = "approval"
 
 
+# A resource reference is `<kind>:<id>`, for example `order:3412987711` (sage-arch on #181);
+# the database's checks on app.tasks and app.task_events use the same pattern.
+RESOURCE_REFERENCE = re.compile(r"^[a-z][a-z_]{0,40}:[A-Za-z0-9-]{1,100}$")
+
+
 @dataclass(frozen=True)
 class TaskEvidence:
+    """What shows the work is done. A strict shape, never free text (AC-7.1.3): an execution or
+    an approval is its UUID, and a resource is `<kind>:<id>`."""
+
     kind: EvidenceKind
-    reference: str  # the resource, execution or approval it names; never free text
+    reference: str
 
     def __post_init__(self) -> None:
-        if not self.reference.strip() or len(self.reference) > MAX_KEY_LENGTH:
-            raise ValueError(f"evidence names its reference in 1 to {MAX_KEY_LENGTH} characters")
+        if self.kind is EvidenceKind.RESOURCE:
+            if not RESOURCE_REFERENCE.fullmatch(self.reference):
+                raise ValueError(
+                    "a resource reference is <kind>:<id>, for example order:3412987711"
+                )
+            return
+        try:
+            canonical = str(uuid.UUID(self.reference))
+        except ValueError:
+            canonical = None
+        if canonical != self.reference:
+            raise ValueError(f"an {self.kind.value} reference is its UUID, in canonical form")
 
 
 class MissingEvidenceError(ValueError):

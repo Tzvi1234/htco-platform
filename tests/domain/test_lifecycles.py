@@ -197,7 +197,9 @@ def test_task__moves_through_its_lifecycle() -> None:
         TaskState.RUNNING,
     ):
         task = task.transition(state)
-    task = task.transition(TaskState.COMPLETED, evidence=TaskEvidence(EvidenceKind.RESOURCE, "r-1"))
+    task = task.transition(
+        TaskState.COMPLETED, evidence=TaskEvidence(EvidenceKind.RESOURCE, "order:1")
+    )
 
     assert task.state is TaskState.COMPLETED
 
