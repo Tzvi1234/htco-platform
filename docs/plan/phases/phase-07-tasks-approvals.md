@@ -19,7 +19,7 @@
 - [ ] 7.6 Notification preferences
 - [ ] 7.7 Activity record store
 - [ ] 7.8 Activity query API and view
-- [ ] 7.9 Scheduled Reporting & Notifications automation
+- [ ] 7.9 Scheduled Reporting & Notifications automation. Part 1: the report model (`htco_domain.reports`: periods in the organization's time zone, the key per organization, type and period, a figure that is the count of the rows it links to or says its source is unavailable) and the `scheduled-reporting` handler over source, store and delivery ports (`htco_application.scheduled_reporting`); AC-7.9.1 and AC-7.9.2 tested in memory. Open: the sources over activity records (7.7, 7.8) and the tables, the reports table and its store, the delivery through the 6.4 notification path with preferences (7.6), the worker schedule, the report view in the web client (ER-UX-07), and the specification's 18 sections (AC-7.9.3)
 - [ ] 7.10 Agent Task Scheduling & Recovery automation
 - [ ] 7.11 Approvals and the Human channel on Postgres (the Phase 5 contract)
 - [ ] 7.12 Owner's first Etsy writes: shop, sections, holiday tools
