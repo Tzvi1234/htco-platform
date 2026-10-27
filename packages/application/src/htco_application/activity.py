@@ -83,7 +83,9 @@ def summarize(template: str, **params: str) -> Summary:
 
 @dataclass(frozen=True)
 class ActivityEntry:
-    """One record to write, with the template that produced its summary."""
+    """One record to write, with the template that produced its summary. Every entry is
+    checked here, however it was made (`new_activity`, the constructor or `replace`): the
+    writer stores only what these checks allow (quill2 on #191)."""
 
     record: ActivityRecord
     summary: Summary
@@ -93,6 +95,19 @@ class ActivityEntry:
             raise TypeError("an activity summary must be a Summary from summarize()")
         if self.record.summary != self.summary.text:
             raise ValueError("the record's summary must be the rendered template")
+        record = self.record
+        if not _ACTION.fullmatch(record.action):
+            raise ValueError(f"an activity action is a dotted name, not {record.action[:40]!r}")
+        # Identifiers only (sage2 on #191): never a buyer's message, an address or model output.
+        for name, value in (
+            ("actor", record.actor.id),
+            ("correlation", record.correlation_id),
+            ("causation", record.causation_id),
+        ):
+            if value is not None and not _ID.fullmatch(value):
+                raise ValueError(
+                    f"a {name} id is an identifier of 1 to {MAX_CORRELATION_ID} characters"
+                )
 
 
 def new_activity(  # noqa: PLR0913 - one argument per field of the record
@@ -112,18 +127,6 @@ def new_activity(  # noqa: PLR0913 - one argument per field of the record
 ) -> ActivityEntry:
     if not isinstance(summary, Summary):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise TypeError("an activity summary must be a Summary from summarize()")
-    if not _ACTION.fullmatch(action):
-        raise ValueError(f"an activity action is a dotted name, not {action[:40]!r}")
-    # Identifiers only (sage2 on #191): never a buyer's message, an address or model output.
-    for name, value in (
-        ("actor", actor.id),
-        ("correlation", correlation_id),
-        ("causation", causation_id),
-    ):
-        if value is not None and not _ID.fullmatch(value):
-            raise ValueError(
-                f"a {name} id is an identifier of 1 to {MAX_CORRELATION_ID} characters"
-            )
     record = ActivityRecord(
         id=ids(),
         kind=kind,

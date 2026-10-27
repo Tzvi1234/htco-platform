@@ -30,7 +30,8 @@ def append_activity(connection: psycopg.Connection[Any], entry: ActivityEntry) -
         _INSERT,
         [
             r.id, r.organization_id, r.shop_id, r.kind.value, r.actor.kind.value, r.actor.id,
-            r.action, r.outcome.value, entry.summary.template, r.summary, r.occurred_at,
+            # The summary's own rendering, never the record's copy of it (quill2 on #191).
+            r.action, r.outcome.value, entry.summary.template, entry.summary.text, r.occurred_at,
             r.correlation_id, r.causation_id, r.task_id,
         ],
     )  # fmt: skip

@@ -126,6 +126,45 @@ def test_summary__a_valid_copy_renders_its_own_text() -> None:
 
 
 @pytest.mark.ac("AC-7.7.4")
+def test_entry__built_directly_with_a_free_text_record_summary__is_refused() -> None:
+    """Quill2 on #191: the entry is the writer's only guard, so it holds however it is made."""
+    entry = an_entry()
+    record = dataclasses.replace(entry.record, summary="Dana wrote: where is my order?")
+
+    with pytest.raises(ValueError, match="rendered template"):
+        ActivityEntry(record, entry.summary)
+
+
+@pytest.mark.ac("AC-7.7.4")
+def test_entry__built_directly_with_a_string_summary__is_refused() -> None:
+    entry = an_entry()
+
+    with pytest.raises(TypeError, match="Summary"):
+        ActivityEntry(entry.record, entry.record.summary)  # type: ignore[arg-type]
+
+
+@pytest.mark.ac("AC-7.7.4")
+@pytest.mark.parametrize(
+    ("changes", "match"),
+    [
+        ({"summary": "Dana wrote: where is my order?"}, "rendered template"),
+        ({"correlation_id": "dana@example.test"}, "correlation"),
+        ({"causation_id": "a b"}, "causation"),
+        ({"action": "incidents.opened\n"}, "action"),
+        ({"actor": ActorRef(ActorKind.USER, "dana@example.test")}, "actor"),
+    ],
+)
+def test_entry__replace_on_its_record__is_checked_again(
+    changes: dict[str, object], match: str
+) -> None:
+    entry = an_entry()
+    record = dataclasses.replace(entry.record, **changes)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match=match):
+        dataclasses.replace(entry, record=record)
+
+
+@pytest.mark.ac("AC-7.7.4")
 def test_entry__a_plain_string_summary_is_refused() -> None:
     with pytest.raises(TypeError, match="Summary"):
         an_entry(summary="Opened incident for a buyer named Dana")
