@@ -110,16 +110,17 @@ async def mfa_status(session: ActiveSession, mfa: MfaProvider) -> MfaStatus:
 async def start_enrollment(
     session: ActiveSession, mfa: MfaProvider, *, friendly_name: str
 ) -> Enrollment:
-    """Unfinished factors (a QR code shown but never confirmed) are removed first: Supabase refuses
-    a second factor with the same name, which would block every later attempt. A name already
-    used by a verified factor gets a number."""
+    """Unfinished authenticator apps (a QR code shown but never confirmed) are removed first:
+    Supabase refuses a second factor with the same name, which would block every later attempt.
+    Only the user's own unverified TOTP factors go (Codex on #171): a passkey being created keeps
+    its factor, and its name, like a verified factor's, gets the new app a number."""
     access_token = session.tokens.access_token
     kept: set[str | None] = set()
-    for factor in await mfa.factors_of(access_token):
-        if factor.verified:
-            kept.add(factor.name)
-        else:
+    for factor in await mfa.factors_of(access_token):  # the session's own user only
+        if not factor.verified and factor.kind == "totp":  # Factor.kind of an authenticator app
             await mfa.remove_factor(access_token, factor.id)
+        else:
+            kept.add(factor.name)
     name, number = friendly_name, 2
     while name in kept:
         name, number = f"{friendly_name} ({number})", number + 1
