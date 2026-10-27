@@ -5,6 +5,7 @@ run against Postgres in tests/integration/test_durable_engine.py."""
 import logging
 import threading
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, override
 
@@ -435,6 +436,38 @@ async def test_waiting_action__rejected__the_execution_is_cancelled() -> None:
 
     assert cancelled.state is ExecutionState.CANCELLED
     assert cancelled.is_terminal
+
+
+async def test_waiting_action__a_decision_for_another_action__moves_nothing() -> None:
+    """Codex on #175: the wait names its action; a resume or a cancel naming another one (a
+    replayed decision after a later wait) is refused, the named one resumes, and the resumed
+    execution waits for nothing."""
+    world = World()
+    action, other = uuid.uuid7(), uuid.uuid7()
+    world.book.wait_for_approval = True
+    world.book.waits_for = action
+    execution = world.engine.trigger(paid())
+    waiting = await world.engine.execute(execution.id, worker=WORKER)
+    assert waiting.waiting_for == action
+
+    with pytest.raises(NotWaitingError):
+        world.engine.resume(ORG, execution.id, actor=ADMIN, reason="x", waiting_for=other)
+    with pytest.raises(NotWaitingError):
+        world.engine.cancel_waiting(ORG, execution.id, actor=ADMIN, reason="x", waiting_for=other)
+    jobs = len(world.store.jobs)
+    resumed = world.engine.resume(ORG, execution.id, actor=ADMIN, reason="x", waiting_for=action)
+
+    assert resumed.state is ExecutionState.RETRY_SCHEDULED
+    assert resumed.waiting_for is None
+    assert len(world.store.jobs) == jobs + 1
+
+
+def test_execution__only_a_waiting_one_names_a_wait() -> None:
+    world = World()
+    execution = world.engine.trigger(paid())
+
+    with pytest.raises(ValueError, match="waiting"):
+        replace(execution, waiting_for=uuid.uuid7())
 
 
 def test_resume__an_execution_that_is_not_waiting__is_refused() -> None:

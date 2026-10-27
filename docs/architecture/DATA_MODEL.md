@@ -162,7 +162,7 @@ These tables hold the reviewed documents of `registry/` (synced by a migration o
 | Table | Purpose | Phase |
 |---|---|---|
 | `automation_definitions` | Versioned automation definitions (`(id, version)`) with their 18-section specification, the whole reviewed document, its SHA-256 and the registry commit; written only by `htco registry sync --automations`. **Created** (slice 5.10, `20261023140000_automation_engine.sql`) | 5 |
-| `automation_executions` | One per `(automation_id, idempotency_key)`: organization, shop, definition version, state (machine enforced by a trigger), attempts, trigger, actor, correlation and causation IDs, last error, payload. **Created** (slice 5.10) | 5 |
+| `automation_executions` | One per `(automation_id, idempotency_key)`: organization, shop, definition version, state (machine enforced by a trigger), attempts, trigger, actor, correlation and causation IDs, last error, payload, and while `waiting` the action execution it waits for (`waiting_for`, AUD-03: a decision resumes only that wait). **Created** (slice 5.10) | 5 |
 | `automation_execution_events` | Every execution state change with its actor and correlation ID; append-only. **Created** (slice 5.10) | 5 |
 | `tool_definitions` | Versioned tool definitions: family, owner, side effect, risk, data scope, readiness | 8 |
 | `tool_invocations` | Every tool call: employee, profile and tool versions, access decision, outcome, cost | 8 |

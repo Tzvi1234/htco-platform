@@ -20,6 +20,7 @@ from htco_application.automation.durable import (
     EXECUTION_JOB,
     DurableAutomationEngine,
     Handler,
+    NotWaitingError,
 )
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
 from htco_application.automation.records import (
@@ -351,6 +352,51 @@ async def test_waiting__on_postgres_the_job_ends_and_a_resume_runs_it_once(
     path = [(row[0], row[1]) for row in events(admin, execution.id)]
     assert ("running", "waiting") in path
     assert ("waiting", "retry_scheduled") in path
+
+
+async def test_waiting__on_postgres_a_decision_for_another_action_never_resumes_it(
+    admin: Database, worker_db: Database
+) -> None:
+    """Codex on #175: the stored wait names its action; a resume or a cancel that names another
+    one (a replayed decision after a later wait) changes nothing, the right one resumes, and
+    leaving WAITING clears the column."""
+    tenant = Tenant(admin)
+    action, other = uuid.uuid7(), uuid.uuid7()
+    book = EffectBook(wait_for_approval=True, waits_for=action)
+    automation = register(admin)
+    api = engine_on(admin, automation, book.handle)
+    execution = api.trigger(trigger(automation, tenant))
+    worker = engine_on(worker_db, automation, book.handle)
+    await in_scope(tenant, worker, execution.id, worker=WORKER)
+
+    def stored_wait() -> tuple[Any, ...] | None:
+        with admin.connection() as connection:
+            return connection.execute(
+                "select state, waiting_for from app.automation_executions where id = %s",
+                [execution.id],
+            ).fetchone()
+
+    assert stored_wait() == ("waiting", action)
+    org = tenant.organization_id
+    with pytest.raises(NotWaitingError):
+        api.resume(org, execution.id, actor=ADMIN, reason="approval_approved", waiting_for=other)
+    with pytest.raises(NotWaitingError):
+        api.cancel_waiting(
+            org, execution.id, actor=ADMIN, reason="approval_rejected", waiting_for=other
+        )
+    assert stored_wait() == ("waiting", action)
+
+    resumed = api.resume(
+        org, execution.id, actor=ADMIN, reason="approval_approved", waiting_for=action
+    )
+
+    assert resumed.state is ExecutionState.RETRY_SCHEDULED
+    assert stored_wait() == ("retry_scheduled", None)
+    with admin.connection() as connection, pytest.raises(psycopg.errors.CheckViolation):
+        connection.execute(
+            "update app.automation_executions set waiting_for = %s where id = %s",
+            [action, execution.id],
+        )
 
 
 async def test_succeeded__the_checked_output__stored_and_read_back_for_the_chain(

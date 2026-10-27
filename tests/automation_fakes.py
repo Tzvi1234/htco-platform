@@ -52,6 +52,8 @@ class EffectBook:
     contexts: list[HandlerContext] = field(default_factory=list)
     # When set, the handler's action waits for an approval instead of completing.
     wait_for_approval: bool = False
+    # The action execution the wait names (the gateway's result), if any.
+    waits_for: uuid.UUID | None = None
 
     async def handle(self, context: HandlerContext) -> HandlerOutcome:
         with self._guard:
@@ -62,7 +64,7 @@ class EffectBook:
                 raise ConnectionError("CRM write failed")
             if self.wait_for_approval:
                 self.wait_for_approval = False
-                return Waiting("pending_approval")
+                return Waiting("pending_approval", self.waits_for)
             receipt = str(context.payload["receipt_id"])
             self.effects.setdefault(receipt, 0)
             self.effects[receipt] = 1
@@ -115,10 +117,11 @@ class MemoryExecutionStore:
     ) -> bool:
         with self._guard:
             stored = self.rows.get(before.id)
-            if stored is None or (stored.execution.state, stored.execution.attempts) != (
-                before.state,
-                before.attempts,
-            ):
+            if stored is None or (
+                stored.execution.state,
+                stored.execution.attempts,
+                stored.execution.waiting_for,
+            ) != (before.state, before.attempts, before.waiting_for):
                 return False
             self.rows[before.id] = StoredExecution(steps[-1][0], stored.payload)
             self.changes.extend(change for _, change in steps)

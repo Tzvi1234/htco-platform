@@ -22,8 +22,11 @@ the Postgres store, the inbox UI and notifications are Phase 7.
 - **Across processes** (AUD-03): the API decides while the worker holds the waiting execution, so
   a decision never calls the resumer itself. It writes `approvals.decided.v1` to the outbox in the
   decision's own transaction (`decision_event`), and `ApprovalResumer` is that event's subscriber
-  on the worker's `events.publish` deliverer. A replayed delivery resumes nothing twice: the
-  engine moves a waiting execution once.
+  on the worker's `events.publish` deliverer. Each decided state is its own event (an approved
+  approval that lapses before it runs also sends `expired`). A replayed delivery resumes nothing
+  twice: the event names the gateway's action execution the run waits on, the engine records it
+  as the execution's `waiting_for`, and a decision moves only that wait, so a replay after the
+  run reached a later wait is ignored.
 - `GatewayApprovals` adapts the service to the gateway's `ApprovalGate` port. Until the Postgres
   store (slice 7.11), the worker's gateway uses `NoApprovals`: a write waits, and nothing in the
   worker can approve it.
@@ -91,6 +94,8 @@ class ApprovalRequest:
     evidence: tuple[Evidence, ...] = ()
     # The automation execution that waits for the decision (the request's causation_id).
     waiting_execution_id: uuid.UUID | None = None
+    # The gateway's action execution it waits on: the decision resumes that wait only.
+    action_execution_id: uuid.UUID | None = None
 
     def __post_init__(self) -> None:
         if not _SHA256.match(self.request_hash):
@@ -254,13 +259,16 @@ def decision_event(approval: Approval, *, at: datetime) -> OutboxMessage:
     request = approval.request
     decider = approval.decided_by
     waiting = request.waiting_execution_id
+    action = request.action_execution_id
     return publish(
         DomainEvent(
             event_type=APPROVAL_DECIDED,
             organization_id=request.organization_id,
             shop_id=request.shop_id,
-            # One decision per approval: approved, rejected and expired are all final for it.
-            idempotency_key=f"{APPROVAL_DECIDED}:{approval.id}",
+            # One event per decided state (Codex on #175): an approved approval may still expire
+            # before it runs, and that second event needs its own key (and event ID), or the
+            # outbox's `on conflict (idempotency_key) do nothing` drops it.
+            idempotency_key=f"{APPROVAL_DECIDED}:{approval.id}:{approval.state.value}",
             occurred_at=at,
             actor=APPROVALS_ACTOR if decider is None else ActorRef(ActorKind.USER, str(decider)),
             payload={
@@ -269,19 +277,21 @@ def decision_event(approval: Approval, *, at: datetime) -> OutboxMessage:
                 "action": request.action.name,
                 "action_version": request.action.version,
                 "waiting_execution_id": None if waiting is None else str(waiting),
+                "action_execution_id": None if action is None else str(action),
                 "decided_by": None if decider is None else str(decider),
             },
         )
     )
 
 
-def approval_request_for(
+def approval_request_for(  # noqa: PLR0913 - the request, its checks and the action that waits
     request: ActionRequest,
     *,
     request_hash: str,
     definition: ActionDefinition,
     now: datetime,
     ttl: timedelta = DEFAULT_TTL,
+    action_execution_id: uuid.UUID | None = None,
 ) -> ApprovalRequest:
     """The approval for a gateway request; every text is a template, never model output."""
     policy = definition.approval_policy
@@ -308,6 +318,7 @@ def approval_request_for(
         decided_by_roles=decider_roles(policy),
         requires_step_up=needs_step_up(policy),
         waiting_execution_id=waiting,
+        action_execution_id=action_execution_id,
     )
 
 
@@ -319,11 +330,20 @@ class GatewayApprovals:
         self._clock = clock
 
     def request(
-        self, request: ActionRequest, *, request_hash: str, definition: ActionDefinition
+        self,
+        request: ActionRequest,
+        *,
+        request_hash: str,
+        definition: ActionDefinition,
+        action_execution_id: uuid.UUID,
     ) -> uuid.UUID:
         return self._service.request(
             approval_request_for(
-                request, request_hash=request_hash, definition=definition, now=self._clock()
+                request,
+                request_hash=request_hash,
+                definition=definition,
+                now=self._clock(),
+                action_execution_id=action_execution_id,
             )
         ).id
 
@@ -354,6 +374,7 @@ class NoApprovals:
         *,
         request_hash: str,
         definition: ActionDefinition,  # noqa: ARG002 - the port
+        action_execution_id: uuid.UUID,  # noqa: ARG002 - the port
     ) -> uuid.UUID:
         approval_id = uuid.uuid5(_NO_APPROVALS, request_hash)
         with self._lock:
@@ -376,11 +397,23 @@ class WaitingExecutions(Protocol):
     """What the resumer needs of the durable engine."""
 
     def resume(
-        self, organization_id: uuid.UUID, execution_id: uuid.UUID, *, actor: ActorRef, reason: str
+        self,
+        organization_id: uuid.UUID,
+        execution_id: uuid.UUID,
+        *,
+        actor: ActorRef,
+        reason: str,
+        waiting_for: uuid.UUID | None = None,
     ) -> object: ...
 
     def cancel_waiting(
-        self, organization_id: uuid.UUID, execution_id: uuid.UUID, *, actor: ActorRef, reason: str
+        self,
+        organization_id: uuid.UUID,
+        execution_id: uuid.UUID,
+        *,
+        actor: ActorRef,
+        reason: str,
+        waiting_for: uuid.UUID | None = None,
     ) -> object: ...
 
 
@@ -401,30 +434,46 @@ class ApprovalResumer:
         raw_execution, raw_state = facts.get("waiting_execution_id"), facts.get("state")
         if not isinstance(raw_execution, str) or not isinstance(raw_state, str):
             return  # nothing waits for this approval
+        raw_action = facts.get("action_execution_id")
         try:
             execution_id, state = uuid.UUID(raw_execution), ApprovalState(raw_state)
+            # The wait the decision was taken for (Codex on #175): never another one.
+            action_id = uuid.UUID(raw_action) if isinstance(raw_action, str) else None
         except ValueError:
             raise MalformedEventError(f"{APPROVAL_DECIDED} names no execution or state") from None
+        if action_id is None:
+            raise MalformedEventError(f"{APPROVAL_DECIDED} names no action the execution waits on")
         decider = facts.get("decided_by")
         actor = ActorRef(ActorKind.USER, decider) if isinstance(decider, str) else APPROVALS_ACTOR
         organization = message.organization_id
-        await self._offload(lambda: self._move(organization, execution_id, state, actor))
+        await self._offload(lambda: self._move(organization, execution_id, action_id, state, actor))
 
     def _move(
         self,
         organization: uuid.UUID,
         execution_id: uuid.UUID,
+        action_id: uuid.UUID,
         state: ApprovalState,
         actor: ActorRef,
     ) -> None:
         try:
             if state is _A.APPROVED:
                 self._engine.resume(
-                    organization, execution_id, actor=actor, reason="approval_approved"
+                    organization,
+                    execution_id,
+                    actor=actor,
+                    reason="approval_approved",
+                    waiting_for=action_id,
                 )
             elif state in _ENDINGS:
                 self._engine.cancel_waiting(
-                    organization, execution_id, actor=actor, reason=_ENDINGS[state]
+                    organization,
+                    execution_id,
+                    actor=actor,
+                    reason=_ENDINGS[state],
+                    waiting_for=action_id,
                 )
         except NotWaitingError, ExecutionNotFoundError:
-            return  # resumed or ended already: a decision moves a waiting execution once
+            # Resumed or ended already, or waiting for another action now (a replay after a
+            # later wait): a decision moves the wait it was taken for, once.
+            return

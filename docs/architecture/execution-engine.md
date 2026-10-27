@@ -519,8 +519,9 @@ class ApprovalState(StrEnum):
 **As built (slice 5.14):** frozen dataclasses in `htco_application.approvals` (the layer rule, as in §2), the states and decision rules in `htco_domain.approvals`. `ApprovalService` also has `executed(approval_id, *, execution_id)`: the gateway calls it when the approved request succeeded, so the approval is `EXECUTED` and bound to that execution. A resubmission without `approval_id` uses the approval already requested for that very request (same hash), so a resumed automation simply submits again. An automation names its own execution as the request's `causation_id`; the approval keeps it as `waiting_execution_id`, and `ApprovalResumer` resumes that execution once on approval, or cancels it (`approval_rejected`, `approval_expired`).
 
 **Across processes (AUD-03):**
-- **The decision.** A decision or an expiry writes `approvals.decided.v1` to the outbox with the change (`decision_event`). The service calls no listener.
+- **The decision.** A decision or an expiry writes `approvals.decided.v1` to the outbox with the change (`decision_event`). The service calls no listener. Each decided state is its own event, keyed `approvals.decided.v1:<approval>:<state>`: an approved approval that lapses before it runs also writes `expired`, and the outbox never drops it as a duplicate.
 - **The resume.** `ApprovalResumer` is the subscriber of that event on the worker's `events.publish`, so it does not matter which process decided. A replayed delivery resumes nothing twice.
+- **The wait it resumes.** The approval keeps the gateway's action execution that waits (`action_execution_id`); a handler's `Waiting` names the same action, and the engine stores it as the execution's `waiting_for`. A decision resumes or ends only that wait. The engine's optimistic update checks `waiting_for` with the state and the attempts, so a replay delivered after the run reached a later wait changes nothing.
 - **The worker's gate.** Until the Postgres store (7.11), the worker's gateway uses `NoApprovals`: a write is recorded as pending, and nothing in the worker can approve it.
 
 Rules, from Phase 7 (AC-7.3.x):
