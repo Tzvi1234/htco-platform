@@ -77,14 +77,13 @@ async def test_profiles__sealed_in_postgres_bound_to_their_shop_and_organization
 ) -> None:
     tenant, other = Tenant(admin), Tenant(admin)
     shop, environment_id = an_environment(admin, tenant)
-    _, second_id = an_environment(admin, tenant)
+    second_shop, second_id = an_environment(admin, tenant)
     foreign_shop, foreign_id = an_environment(admin, other)
     profiles = PostgresBrowserProfiles(
         browser, await lease_for(admin, browser, tenant.organization_id, shop)
     )
-    vault = ProfileVault(
-        EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), profiles, lambda: datetime.now(UTC)
-    )
+    sealer = EnvelopeSealer(KeyRing(("browser-1", os.urandom(32))))
+    vault = ProfileVault(sealer, profiles, lambda: datetime.now(UTC))
     workspaces = ProfileWorkspaces(vault, tmp_path)
 
     with tenant_scope(tenant.organization_id):
@@ -123,11 +122,16 @@ async def test_profiles__sealed_in_postgres_bound_to_their_shop_and_organization
             """,
             [second_id, second_id, environment_id],
         )
+    # Read through a job leased for the second shop, as a session of it would.
+    second_profiles = PostgresBrowserProfiles(
+        browser, await lease_for(admin, browser, tenant.organization_id, second_shop)
+    )
+    second_vault = ProfileVault(sealer, second_profiles, lambda: datetime.now(UTC))
     with tenant_scope(tenant.organization_id):
-        second = profiles.by_id(second_id)
+        second = second_profiles.by_id(second_id)
         assert second is not None
         with pytest.raises(SealingError):
-            vault.open(second)
+            second_vault.open(second)
 
     # A job leased for another organization's shop never reaches this archive (AC-8A.2.23),
     # and the browser role cannot read the shop integrations.
