@@ -6,3 +6,5 @@
 /packages/application/ @Tzvi1234
 /infra/ @Tzvi1234
 /.github/ @Tzvi1234
+# A PR must never whitelist its own leak unseen: every ignored secret-scan finding is the owner's.
+/.gitleaksignore @Tzvi1234
