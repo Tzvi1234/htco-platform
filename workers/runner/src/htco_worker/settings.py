@@ -91,6 +91,12 @@ class WorkerSettings(BaseSettings):
     autova_quote_authserv_id: str | None = Field(
         default=None, pattern=r"^[a-z0-9]([a-z0-9-]{0,62})(\.[a-z0-9]([a-z0-9-]{0,62}))*$"
     )
+    # The owner's mailbox, the one AutoVA writes to and that forwards to the quote mailbox (slice
+    # 7.14, #192): a quote is recorded only when AutoVA's DKIM signature covers a `To` naming
+    # it, so a genuine mail to another AutoVA customer, replayed to us, records nothing.
+    autova_quote_owner_mailbox: str | None = Field(
+        default=None, pattern=r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$"
+    )
 
     @field_validator(
         "etsy_keystring",

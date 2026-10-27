@@ -24,7 +24,7 @@
 - [ ] 7.11 Approvals and the Human channel on Postgres (the Phase 5 contract)
 - [ ] 7.12 Owner's first Etsy writes: shop, sections, holiday tools
 - [x] 7.13 Supplier and quote model (moved from 13.1): `htco_domain.suppliers`, `20261027100000_supplier_quotes.sql`, pgTAP 36; the stores come with their first writers (7.15, 7.17)
-- [ ] 7.14 Quote mailbox intake
+- [x] 7.14 Quote mailbox intake: option (a), Gmail forwarding to Resend inbound (owner); `POST /webhooks/autova-quotes` (Svix signature, a secret token in the address), `htco_application.quote_mailbox`, `htco_integrations.resend_inbound`; #192's forgery roll-up and DKIM-replay guard (signed `To` = the owner's mailbox) in the intake; the authserv-id is **not confirmed** (fails closed until a real mail shows it, autova-integration.md); the worker handler is registered with 7.1's task store
 - [x] 7.15 Deterministic AutoVA quote parser: `htco_application.quote_parser` and the intake (`htco_application.suppliers`, `htco_persistence.suppliers`), golden-tested on **made-up** sample mails (owner, 2026-10-27; the real ones are added when he sends them); the sender is configuration (`HTCO_AUTOVA_QUOTE_SENDER`); the Human task "check this quote" is a port until 7.1's tasks, and the intake runs once 7.14 delivers mail
 - [ ] 7.16 "New product quotes" screen and notification
 - [ ] 7.17 The owner's choice of a quote, and the hand-off to AutoVA

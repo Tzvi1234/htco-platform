@@ -106,6 +106,7 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "start_automation_execution",
         "retry_automation_execution",
         "receive_etsy_webhook",
+        "receive_quote_mail",
         "get_browser_environment",
         "get_execution_chain",
         "get_incidents",

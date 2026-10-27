@@ -5,6 +5,7 @@ product's quote is an alternative."""
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,12 @@ class NoReviews:
         del organization_id, shop_id, message_id
         raise AssertionError(f"no review expected: {reason}")
 
+    async def possible_forgery(
+        self, organization_id: uuid.UUID, shop_id: uuid.UUID, *, day: date
+    ) -> None:
+        del organization_id, shop_id, day
+        raise AssertionError("no forgery expected")
+
 
 def from_text(text: str) -> QuoteMail:
     return QuoteMail.from_text(
@@ -71,6 +78,7 @@ async def test_worker__quotes_recorded_once_under_one_request_and_alternatives_m
         PostgresSupplierQuoteStore(worker_db),
         NoReviews(),
         clock=lambda: NOW,
+        owner_mailbox="owner@shop.example.com",
     )
     target = ShopForMail(org, shop)
 

@@ -123,6 +123,7 @@ from htco_application.order_intake import (
     due_reconciliations,
     enqueue_reconciliations,
 )
+from htco_application.quote_mailbox import QUOTE_MAIL_JOB, QuoteMailProcessor
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.sla_inspector import DriftIncidents, IncidentDetection
 from htco_application.tracking_sync import EngineTrackingSync, TrackingRecorder, TrackingSync
@@ -559,6 +560,20 @@ def webhook_handlers(processor: WebhookProcessor) -> dict[str, JobHandler]:
         _log.info("etsy.webhook_processed", outcome=outcome, job_id=str(job.id))
 
     return {WEBHOOK_JOB: process}
+
+
+def quote_mail_handlers(processor: QuoteMailProcessor) -> dict[str, JobHandler]:
+    """The `autova.quote_mail` job (slice 7.14): fetch the quote mail and run 7.15's intake.
+
+    Registered once 7.1's task store backs `QuoteReviews` (Human tasks "check this quote" and the
+    forgery roll-up) and the owner has set the HTCO_AUTOVA_QUOTE_* settings; until then the
+    API's inbox keeps the jobs queued and nothing is parsed."""
+
+    async def process(job: ClaimedJob) -> None:
+        outcome = await processor.process(job)
+        _log.info("autova.quote_mail_processed", outcome=outcome.value, job_id=str(job.id))
+
+    return {QUOTE_MAIL_JOB: process}
 
 
 def webhook_processor(
