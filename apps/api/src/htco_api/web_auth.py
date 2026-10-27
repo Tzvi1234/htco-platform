@@ -17,7 +17,7 @@ new password (and, for a user with an authenticator app, a code) to `/v1/auth/pa
 """
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -47,6 +47,7 @@ from htco_application.mfa import (
     step_up,
     verify_enrollment,
 )
+from htco_application.passkeys import PASSKEY, TOTP, FactorAudit, PasskeyProvider
 from htco_application.password_reset import admit_password_reset, send_password_reset
 from htco_application.password_reset import reset_password as reset_password_from_link
 from htco_application.web_sessions import (
@@ -124,6 +125,21 @@ SESSION_ENDED = ProblemType(
 )
 
 
+class _Unaudited:
+    """No audit log wired (tests, a server without a database): records nothing."""
+
+    async def factor_changed(
+        self,
+        user_id: uuid.UUID,
+        *,
+        factor_id: str,
+        kind: str,
+        change: str,
+    ) -> None:
+        del user_id, factor_id  # identifiers stay out of the log
+        _log.info("auth.factor_changed_unaudited", kind=kind, change=change)
+
+
 @dataclass(frozen=True)
 class WebAuth:
     auth: AuthProvider
@@ -135,6 +151,16 @@ class WebAuth:
     mfa: MfaProvider | None = None
     # Where emailed password reset links land; without it, asking for one answers 503.
     password_reset_redirect: str | None = None
+    # Passkeys (issue #113): Supabase Auth's WebAuthn factor. None (the default) switches them off.
+    passkeys: PasskeyProvider | None = None
+    # Records factors enrolled and removed (no credential material).
+    factor_audit: FactorAudit = field(default_factory=_Unaudited)
+
+
+def mfa_provider_of(web: WebAuth) -> MfaProvider:
+    if web.mfa is None:
+        raise ProblemError(AUTH_UNAVAILABLE)
+    return web.mfa
 
 
 MFA_CODE_REFUSED = ProblemType(
@@ -175,12 +201,16 @@ class FactorView(BaseModel):
     id: str
     name: str | None
     verified: bool
+    # "totp" (an authenticator app) or "webauthn" (a passkey).
+    kind: str
 
 
 class MfaView(BaseModel):
     assurance: str
     enrolled: bool
     factors: list[FactorView]
+    # Whether this server offers passkeys (issue #113); off until the owner switches them on.
+    passkeys: bool
 
 
 class AssuranceView(BaseModel):
@@ -520,10 +550,7 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
         clear_cookie(response)
         return response
 
-    def mfa_of(web: WebAuth) -> MfaProvider:
-        if web.mfa is None:
-            raise ProblemError(AUTH_UNAVAILABLE)
-        return web.mfa
+    mfa_of = mfa_provider_of
 
     @router.get(
         "/mfa",
@@ -531,15 +558,18 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
         responses={401: _problem("Not signed in"), 503: _problem("Sign-in is unavailable")},
     )
     async def get_mfa_status(request: Request, web: Web) -> MfaView:
-        """The session's assurance and the user's authenticator apps."""
+        """The session's assurance and the user's authenticator apps and passkeys."""
         active = await resume(request, web, clock())
         status_ = await mfa_status(active, mfa_of(web))
         return MfaView(
             assurance=status_.assurance.value,
             enrolled=status_.enrolled,
             factors=[
-                FactorView(id=f.id, name=f.name, verified=f.verified) for f in status_.factors
+                FactorView(id=f.id, name=f.name, verified=f.verified, kind=f.kind)
+                for f in status_.factors
+                if f.kind in {TOTP, PASSKEY}
             ],
+            passkeys=web.passkeys is not None,
         )
 
     @router.post(
@@ -598,6 +628,9 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
             raise ProblemError(MFA_CODE_REFUSED) from None
         except TooManyAttemptsError:
             raise _too_many() from None
+        await web.factor_audit.factor_changed(
+            active.user.user_id, factor_id=body.factor_id, kind=TOTP, change="enrolled"
+        )
         await notices.mfa_enrolled(request, active.user.user_id, body.factor_id)
         return AssuranceView(assurance="aal2")
 
@@ -679,3 +712,9 @@ def _too_many() -> ProblemError:
     return ProblemError(
         TOO_MANY_ATTEMPTS, headers={"Retry-After": str(int(THROTTLE_WINDOW.total_seconds()))}
     )
+
+
+# Shared with the passkey routes (issue #113).
+problem_doc = _problem
+validation_doc = _validation
+too_many = _too_many

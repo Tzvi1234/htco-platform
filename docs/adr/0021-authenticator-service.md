@@ -5,6 +5,8 @@
 - **Deciders:** Owner, engineering
 - **Related:** [Token vault](../features/etsy-integration/token-vault.md) (AES-256-GCM envelope encryption), [ADR-0020](0020-per-shop-browser-environment.md), [ADR-0019](0019-unified-execution-engine-and-action-gateway.md), [THREAT_MODEL](../architecture/THREAT_MODEL.md)
 
+> **Scope note (2026-10-26, #113).** This ADR is about the shops' accounts (Etsy, partners), whose TOTP secrets the browser worker needs. It does not cover HTCO's own sign-in: users' second factors (the authenticator app and passkeys) live in Supabase Auth ([passkeys](../features/identity-access/passkeys.md)).
+
 ## Context
 
 A shop's Browser Environment needs to sign in to accounts protected by time-based one-time passwords (TOTP, RFC 6238): the shop's Etsy account and, later, POD partners, suppliers and email. The owner also wants to see a current code in the dashboard, for example when he signs in himself. Today the codes live on someone's phone, which blocks unattended sessions and keeps the shops dependent on one person's device.
