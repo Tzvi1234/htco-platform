@@ -27,6 +27,19 @@ from htco_application.kernel import Offload, run_inline
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.policy import PolicyDecision, PolicyDocument, PolicyVersion, Reason
 
+# The service is the engine's only entry point (tests/architecture/test_policy_engine_entry.py),
+# so it re-exports the request callers build (quill2 on #189).
+__all__ = [
+    "BASELINE_ACTOR",
+    "MAX_CORRELATION_ID",
+    "POLICY_PUBLISHED",
+    "PolicyEditDeniedError",
+    "PolicyRequest",
+    "PolicyService",
+    "PolicyStore",
+    "RecordedDecision",
+]
+
 POLICY_PUBLISHED = "policies.published"
 BASELINE_ACTOR = ActorRef(ActorKind.SYSTEM, "policy-baseline")
 MAX_CORRELATION_ID = 200
@@ -145,6 +158,7 @@ class PolicyService:
                 action=POLICY_PUBLISHED,
                 entity_type="policy",
                 entity_id=str(version),
+                before=None if version == 1 else {"version": version - 1},
                 after={"version": version},
                 correlation_id=correlation_id,
             )

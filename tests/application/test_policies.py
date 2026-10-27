@@ -14,12 +14,12 @@ from datetime import datetime, timedelta
 import pytest
 
 from htco_application.access.authentication import AuthContext, Membership
-from htco_application.access.engine import PolicyRequest
 from htco_application.access.policy import ShopRef
 from htco_application.audit import AuditRecord
 from htco_application.policies import (
     POLICY_PUBLISHED,
     PolicyEditDeniedError,
+    PolicyRequest,
     PolicyService,
     RecordedDecision,
 )
@@ -244,7 +244,7 @@ async def test_publish__is_audited_with_the_old_and_new_version(
     assert (audit.action, audit.entity_type, audit.entity_id) == (POLICY_PUBLISHED, "policy", "2")
     assert audit.actor == ActorRef(ActorKind.USER, str(OWNER_ID))
     assert audit.organization_id == ORG
-    assert audit.after == {"version": 2}
+    assert (audit.before, audit.after) == ({"version": 1}, {"version": 2})
     assert audit.correlation_id == "req-1"
 
 

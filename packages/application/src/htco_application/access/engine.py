@@ -10,12 +10,19 @@ version of the organization's policy (`htco_domain.policy`), in this order:
    an `A` cell asks for an approval, MFA and step-up deny with their reason.
 3. An `employee`, an `automation` or a `system` component uses only its own grants in the policy,
    never a user's (FR-IAM-07, AC-7.2.4). An automation or a system component acts under its
-   service identity on any shop of its organization. An employee acting on a shop is narrowed by
-   the originating user's shop access, and without an originating user it reaches no shop.
+   service identity on any shop of its organization. An employee is narrowed by the originating
+   user's shop access, and without an originating user it reaches no shop.
 4. For those identities the capability's side effect and risk decide last (ADR-0014, ER-AI-04):
    an L0 employee only reads; a critical capability always needs an approval; an external or
    financial one needs an approval unless the policy pre-approves it for that identity (an L3
    employee, an automation or a system component).
+
+Every decision also says what it reaches (`PolicyDecision.shops` and `masked`, quill2 on #189):
+a request on a shop reaches that shop; one without a shop (a list) reaches what the identity may
+list. For a user that is v0's scope (every shop for an organization-wide cell, the granted shops
+for an `S` cell) with v0's masking; for an employee, what the originating user reaches (every
+shop for an Owner or Admin, the granted shops otherwise, none without an originating user); for
+an automation or a system component, every shop of its organization. A denial reaches nothing.
 
 `baseline_policy` builds an organization's first policy from the registry. The engine does not
 yet replace the Action Gateway's own checks in `execution/` (follow-up, see the feature docs).
@@ -32,6 +39,7 @@ from htco_application.access.policy import (
     Capability,
     Outcome,
     Principal,
+    Scope,
     ShopRef,
     decide,
 )
@@ -45,6 +53,7 @@ from htco_domain.policy import (
     PolicyDocument,
     PolicyVersion,
     Reason,
+    Verdict,
 )
 from htco_domain.tooling import RiskLevel, SideEffect
 from htco_domain.workforce import PRODUCTION_READINESS, AutonomyLevel
@@ -102,7 +111,37 @@ def evaluate(policy: PolicyVersion | None, request: PolicyRequest) -> PolicyDeci
         raise ValueError("evaluate needs a timezone-aware clock")
     version = None if policy is None else policy.version
     reason = _reason(policy, request)
-    return PolicyDecision(reason, request.capability, request.actor, version)
+    if reason.verdict is Verdict.DENY:
+        return PolicyDecision(reason, request.capability, request.actor, version)
+    shops, masked = _reach(request)
+    return PolicyDecision(
+        reason, request.capability, request.actor, version, shops=shops, masked=masked
+    )
+
+
+def _reach(request: PolicyRequest) -> tuple[frozenset[uuid.UUID] | None, bool]:
+    """What an allowed or approvable request reaches: its shop, or without one what the
+    identity may list, and whether buyer details stay masked."""
+    principal = request.principal
+    masked = False
+    if request.actor.kind is ActorKind.USER and principal is not None:
+        # Reached only once `_user` allowed it: the capability is a human one.
+        decision = decide(
+            principal, Capability(request.capability), shop=request.shop, now=request.now
+        )
+        masked = decision.masked
+        if request.shop is None:
+            reaches = None if decision.scope is Scope.ORGANIZATION else principal.granted_shops
+            return reaches, masked
+    if request.shop is not None:
+        return frozenset({request.shop.id}), masked
+    if request.actor.kind is ActorKind.EMPLOYEE:
+        if principal is None:
+            return frozenset(), False
+        if principal.role in _ORGANIZATION_ROLES:
+            return None, False
+        return principal.granted_shops, False
+    return None, False  # an automation or a system component: every shop of its organization
 
 
 def _reason(policy: PolicyVersion | None, request: PolicyRequest) -> Reason:  # noqa: PLR0911 - one return per rule, in order
@@ -125,7 +164,7 @@ def _reason(policy: PolicyVersion | None, request: PolicyRequest) -> Reason:  # 
         return Reason.UNKNOWN_ACTOR
     if request.capability not in grants.capabilities:
         return Reason.NOT_GRANTED
-    if request.actor.kind is ActorKind.EMPLOYEE and shop is not None:
+    if request.actor.kind is ActorKind.EMPLOYEE:
         narrowed = _originating_user_reaches(request.principal, request.organization_id, shop)
         if narrowed is not None:
             return narrowed
@@ -167,9 +206,14 @@ def _grants_of(document: PolicyDocument, actor: ActorRef) -> ActorGrants | None:
 
 
 def _originating_user_reaches(
-    principal: Principal | None, organization_id: uuid.UUID, shop: ShopRef
+    principal: Principal | None, organization_id: uuid.UUID, shop: ShopRef | None
 ) -> Reason | None:
-    """Why the originating user's shop access stops an employee, or None when it reaches."""
+    """Why the originating user's shop access stops an employee, or None when it reaches. Without
+    a shop only the user's organization is checked; `_reach` then narrows the list."""
+    if shop is None:
+        if principal is not None and principal.organization_id != organization_id:
+            return Reason.OTHER_ORGANIZATION
+        return None
     if principal is None:
         return Reason.NO_ORIGINATING_USER
     if principal.organization_id != organization_id:

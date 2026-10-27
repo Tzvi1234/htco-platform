@@ -19,13 +19,20 @@ from htco_application.access.engine import (
     baseline_policy,
     evaluate,
 )
-from htco_application.access.policy import STEP_UP_WINDOW, Capability, Principal, ShopRef
+from htco_application.access.policy import (
+    STEP_UP_WINDOW,
+    Capability,
+    Principal,
+    Scope,
+    ShopRef,
+)
 from htco_application.workforce.files import read_registry
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.identity import AssuranceLevel, Role
 from htco_domain.policy import (
     ActorGrants,
     CapabilitySpec,
+    PolicyDecision,
     PolicyDocument,
     PolicyVersion,
     Reason,
@@ -109,6 +116,23 @@ def ask(  # noqa: PLR0913 - one argument per field of the request
     organization_id: uuid.UUID = ORG,
     now: datetime = NOW,
 ) -> Reason:
+    return answer(
+        kind, actor_id, capability, shop=shop, principal=principal, policy=policy,
+        organization_id=organization_id, now=now,
+    ).reason  # fmt: skip
+
+
+def answer(  # noqa: PLR0913 - one argument per field of the request
+    kind: ActorKind,
+    actor_id: str,
+    capability: str,
+    *,
+    shop: ShopRef | None = SHOP_A,
+    principal: Principal | None = None,
+    policy: PolicyVersion | None = POLICY,
+    organization_id: uuid.UUID = ORG,
+    now: datetime = NOW,
+) -> PolicyDecision:
     request = PolicyRequest(
         organization_id=organization_id,
         actor=ActorRef(kind, actor_id),
@@ -121,7 +145,9 @@ def ask(  # noqa: PLR0913 - one argument per field of the request
     assert decision.capability == capability
     assert decision.actor == request.actor
     assert decision.policy_version == (None if policy is None else policy.version)
-    return decision.reason
+    if decision.verdict is Verdict.DENY:  # a denial reaches nothing (quill2 on #189)
+        assert (decision.shops, decision.masked) == (frozenset(), False)
+    return decision
 
 
 # --- AC-7.2.2: users, every row and column of PERMISSION_MATRIX section 1 -----------------
@@ -131,15 +157,46 @@ def ask(  # noqa: PLR0913 - one argument per field of the request
 @pytest.mark.parametrize("role", ROLE_COLUMNS)
 @pytest.mark.parametrize("capability", list(Capability))
 def test_user__every_cell_of_the_human_matrix(role: Role, capability: Capability) -> None:
-    reason = ask(ActorKind.USER, "u-1", capability.value, principal=a_principal(role))
+    decision = answer(ActorKind.USER, "u-1", capability.value, principal=a_principal(role))
 
     grant = DOCUMENTED[capability].get(role)
     if grant is None:
-        assert reason is Reason.NOT_GRANTED
-    elif grant.via_approval:
-        assert reason is Reason.ROLE_REQUIRES_APPROVAL
+        assert decision.reason is Reason.NOT_GRANTED
     else:
-        assert reason is Reason.GRANTED
+        assert decision.reason is (
+            Reason.ROLE_REQUIRES_APPROVAL if grant.via_approval else Reason.GRANTED
+        )
+        assert (decision.shops, decision.masked) == (frozenset({SHOP_A.id}), grant.masked)
+
+
+@pytest.mark.ac("AC-7.2.2")
+@pytest.mark.parametrize("role", ROLE_COLUMNS)
+@pytest.mark.parametrize("capability", list(Capability))
+def test_user__every_cell_without_a_shop_keeps_its_scope_and_masking(
+    role: Role, capability: Capability
+) -> None:
+    """Quill2 on #189: a request without a shop (a list) answers what it reaches: every shop
+    for an organization-wide cell (`✓`), the user's granted shops for an `S` cell, and the
+    `(masked)` qualifier, exactly as PERMISSION_MATRIX section 1 says."""
+    principal = a_principal(role)
+    decision = answer(ActorKind.USER, "u-1", capability.value, shop=None, principal=principal)
+
+    grant = DOCUMENTED[capability].get(role)
+    if grant is None:
+        assert decision.reason is Reason.NOT_GRANTED
+        return
+    reaches = None if grant.scope is Scope.ORGANIZATION else principal.granted_shops
+    assert decision.verdict is not Verdict.DENY
+    assert (decision.shops, decision.masked) == (reaches, grant.masked)
+
+
+def test_user__a_viewers_order_list_is_its_shops_and_masked() -> None:
+    viewer = a_principal(Role.VIEWER, shops=frozenset({SHOP_A.id}))
+
+    decision = answer(ActorKind.USER, "u-1", "view_orders", shop=None, principal=viewer)
+
+    assert decision.reason is Reason.GRANTED
+    assert (decision.shops, decision.masked) == (frozenset({SHOP_A.id}), True)
 
 
 def test_user__a_shop_role_is_denied_a_shop_it_was_not_granted() -> None:
@@ -355,8 +412,71 @@ def test_employee__without_an_originating_user_reaches_no_shop() -> None:
 
 
 @pytest.mark.ac("AC-7.2.4")
-def test_employee__without_a_shop_is_decided_on_its_own_grants() -> None:
-    assert ask(ActorKind.EMPLOYEE, "noa", "orders.read", shop=None) is Reason.GRANTED
+def test_employee__without_a_shop_or_an_originating_user_reaches_no_shop() -> None:
+    """Quill2 on #189: its own grants decide the verdict, but without an originating user it
+    reaches no shop (the docstring's rule), so a list it reads is empty."""
+    decision = answer(ActorKind.EMPLOYEE, "noa", "orders.read", shop=None)
+
+    assert decision.reason is Reason.GRANTED
+    assert decision.shops == frozenset()
+
+
+@pytest.mark.ac("AC-7.2.4")
+def test_employee__without_a_shop_is_narrowed_to_the_originating_users_shops() -> None:
+    """Quill2 on #189: noa acting for a Support member granted shop A reads shop A only."""
+    support = a_principal(Role.SUPPORT, shops=frozenset({SHOP_A.id}))
+
+    decision = answer(ActorKind.EMPLOYEE, "noa", "orders.read", shop=None, principal=support)
+
+    assert decision.reason is Reason.GRANTED
+    assert (decision.shops, decision.masked) == (frozenset({SHOP_A.id}), False)
+
+
+@pytest.mark.ac("AC-7.2.4")
+@pytest.mark.parametrize("role", [Role.OWNER, Role.ADMIN])
+def test_employee__without_a_shop_an_organization_wide_user_lends_every_shop(role: Role) -> None:
+    principal = a_principal(role, shops=frozenset())
+
+    decision = answer(ActorKind.EMPLOYEE, "noa", "orders.read", shop=None, principal=principal)
+
+    assert decision.shops is None
+
+
+@pytest.mark.ac("AC-7.2.4")
+def test_employee__on_a_shop_reaches_that_shop_only() -> None:
+    support = a_principal(Role.SUPPORT, shops=frozenset({SHOP_A.id, SHOP_B.id}))
+
+    decision = answer(ActorKind.EMPLOYEE, "noa", "orders.read", shop=SHOP_A, principal=support)
+
+    assert decision.shops == frozenset({SHOP_A.id})
+
+
+@pytest.mark.ac("AC-7.2.4")
+def test_employee__without_a_shop_an_originating_user_of_another_organization_is_refused() -> None:
+    foreign = Principal(
+        organization_id=OTHER_ORG,
+        role=Role.OWNER,
+        assurance=AssuranceLevel.AAL2,
+        reauthenticated_at=NOW,
+        granted_shops=frozenset({SHOP_A.id}),
+    )
+
+    assert ask(ActorKind.EMPLOYEE, "noa", "orders.read", shop=None, principal=foreign) is (
+        Reason.OTHER_ORGANIZATION
+    )
+
+
+@pytest.mark.ac("AC-7.2.4")
+@pytest.mark.parametrize(
+    ("kind", "actor_id"), [(ActorKind.AUTOMATION, "order-intake"), (ActorKind.SYSTEM, "outbox")]
+)
+def test_service_identities__without_a_shop_reach_every_shop_of_their_organization(
+    kind: ActorKind, actor_id: str
+) -> None:
+    decision = answer(kind, actor_id, "orders.read", shop=None)
+
+    assert decision.reason is Reason.GRANTED
+    assert (decision.shops, decision.masked) == (None, False)
 
 
 @pytest.mark.ac("AC-7.2.4")

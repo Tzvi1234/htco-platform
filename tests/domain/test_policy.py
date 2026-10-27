@@ -279,3 +279,18 @@ def test_version__needs_a_timezone() -> None:
             ActorRef(ActorKind.SYSTEM, "api"),
             datetime(2026, 10, 27, 9, 0),  # noqa: DTZ001 - the point of the test
         )
+
+
+@pytest.mark.parametrize(
+    "reach", [{"shops": None}, {"shops": frozenset({uuid.UUID(int=1)})}, {"masked": True}]
+)
+def test_a_denial_reaches_no_shop_and_masks_nothing(reach: dict[str, object]) -> None:
+    """Quill2 on #189: what a decision reaches is part of it, and a denial reaches nothing."""
+    with pytest.raises(ValueError, match="reaches nothing"):
+        PolicyDecision(
+            Reason.NOT_GRANTED,
+            "orders.read",
+            ActorRef(ActorKind.SYSTEM, "api"),
+            1,
+            **reach,  # type: ignore[arg-type]
+        )

@@ -244,12 +244,19 @@ class PolicyDecision:
     actor: ActorRef
     # The version decided under; None only when the organization has no policy yet.
     policy_version: int | None
+    # What it reaches (quill2 on #189): the shops of the organization the caller may act on or
+    # list, None for every shop of the organization, empty for none; and whether buyer details
+    # stay masked (the `(masked)` cells of PERMISSION_MATRIX section 1). A denial reaches nothing.
+    shops: frozenset[uuid.UUID] | None = frozenset()
+    masked: bool = False
 
     def __post_init__(self) -> None:
         if (self.policy_version is None) != (self.reason is Reason.NO_POLICY):
             raise ValueError("a decision names its policy version unless there is no policy")
         if self.policy_version is not None and self.policy_version < 1:
             raise ValueError("a policy version starts at 1")
+        if self.reason.verdict is Verdict.DENY and (self.shops != frozenset() or self.masked):
+            raise ValueError("a denial reaches nothing")
 
     @property
     def verdict(self) -> Verdict:
