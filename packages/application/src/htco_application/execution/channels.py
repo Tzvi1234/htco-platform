@@ -147,8 +147,8 @@ class EtsyWrites(Protocol):
     ) -> None: ...
 
 
-_READ_RECIPES = frozenset({"get_shop", "list_receipts", "list_reviews"})
 _WRITE_RECIPES = frozenset({"create_receipt_shipment", "update_shop_vacation"})
+type _Recipe = Callable[[int, ActionRequest], Awaitable[ChannelOutcome]]
 
 
 class EtsyApiChannel:
@@ -159,7 +159,21 @@ class EtsyApiChannel:
     ) -> None:
         self._etsy = etsy
         self._shops = shops
+        # The recipes this channel runs (AUD-06, #147): the gateway refuses at startup a binding
+        # whose recipe is not here, unless it is disabled.
+        self._recipes: Mapping[str, _Recipe] = {
+            "get_shop": self._get_shop,
+            "list_receipts": self._list_receipts,
+            "list_reviews": self._list_reviews,
+        }
+
         self._writes = writes
+
+    @property
+    def recipes(self) -> frozenset[str]:
+        # The writes are implemented whether or not this deployment wires them: an unwired write
+        # is refused at execute time, never routed to Etsy (ADR-0022).
+        return frozenset(self._recipes) | _WRITE_RECIPES
 
     def _etsy_shop(self, request: ActionRequest) -> int:
         etsy_shop = None if request.shop_id is None else self._shops.etsy_shop_id(request.shop_id)
@@ -168,20 +182,29 @@ class EtsyApiChannel:
         return etsy_shop
 
     async def execute(self, request: ActionRequest, binding: ChannelBinding) -> ChannelOutcome:
-        if binding.recipe in _WRITE_RECIPES and self._writes is not None:
+        if binding.recipe in _WRITE_RECIPES:
+            if self._writes is None:
+                raise MarketplaceWriteRefusedError(
+                    f"{request.action.name}: this Etsy write is not deployed"
+                )
             return await self._write(request, binding.recipe, self._writes)
-        if binding.recipe not in _READ_RECIPES:
+        recipe = None if binding.recipe is None else self._recipes.get(binding.recipe)
+        if recipe is None:
             raise MarketplaceWriteRefusedError(
-                f"{request.action.name}: this Etsy write is not deployed"
+                f"{request.action.name}: no recipe {binding.recipe} in the API channel"
             )
-        etsy_shop = self._etsy_shop(request)
-        if binding.recipe == "get_shop":
-            shop = await self._etsy.get_shop(etsy_shop)
-            return ChannelOutcome(
-                output={"shop_id": shop.shop_id, "name": shop.name, "currency": shop.currency_code}
-            )
-        if binding.recipe == "list_reviews":
-            return ChannelOutcome(output=await self._reviews(etsy_shop, request.input))
+        return await recipe(self._etsy_shop(request), request)
+
+    async def _get_shop(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:  # noqa: ARG002
+        shop = await self._etsy.get_shop(etsy_shop)
+        return ChannelOutcome(
+            output={"shop_id": shop.shop_id, "name": shop.name, "currency": shop.currency_code}
+        )
+
+    async def _list_reviews(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:
+        return ChannelOutcome(output=await self._reviews(etsy_shop, request.input))
+
+    async def _list_receipts(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:
         if request.input.get("order_history") is True:
             if request.actor.kind is not ActorKind.AUTOMATION:
                 raise MarketplacePermissionError(
@@ -319,6 +342,10 @@ UseCase = Callable[[ActionRequest], Awaitable[Mapping[str, JsonValue]]]
 
 class InternalChannel:
     channel = Channel.INTERNAL
+
+    @property
+    def recipes(self) -> frozenset[str]:
+        return frozenset(self._use_cases)
 
     def __init__(self, use_cases: Mapping[str, UseCase]) -> None:
         self._use_cases = use_cases

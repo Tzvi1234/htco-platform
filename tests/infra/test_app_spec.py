@@ -326,15 +326,23 @@ def test_worker__runs_only_the_named_schedules() -> None:
     }
 
 
-def test_order_automations_active__the_api_stops_syncing_and_webhooks_stay_off() -> None:
-    """Activation steps 3 and 5 (5.11): the worker owns the order sync; the webhook endpoint
-    stays off until the owner registers it in the Etsy developer portal and sets its secret."""
+def test_order_automations_active__the_api_stops_syncing_and_takes_webhooks() -> None:
+    """Activation steps 3 and 5 (5.11): the worker owns the order sync; the webhook endpoint is
+    on, since the owner registered it in the Etsy developer portal and set ETSY_WEBHOOK_SECRET
+    (2026-10-26), which the deploy maps from the GitHub secret, never a literal."""
     envs = _envs()
     assert envs["HTCO_ORDER_SYNC_IN_API"]["value"] == "false"
-    assert envs["HTCO_ETSY_WEBHOOKS_ENABLED"]["value"] == "false"
+    assert envs["HTCO_ETSY_WEBHOOKS_ENABLED"]["value"] == "true"
+    assert envs["HTCO_ETSY_WEBHOOK_SECRET"]["type"] == "SECRET"
+    assert envs["HTCO_ETSY_WEBHOOK_SECRET"]["value"] == "${HTCO_ETSY_WEBHOOK_SECRET}"
 
 
 def test_api__starts_automation_executions_for_the_worker() -> None:
     """Activation step 2b and the audited admin retry (5.10, 5.11): the API's engine creates
     executions and jobs, and never runs a handler."""
     assert _envs()["HTCO_AUTOMATIONS_ENABLED"]["value"] == "true"
+
+
+def test_spec__passkeys_stay_off_until_the_owner_enables_the_supabase_add_on() -> None:
+    """Issue #113: hosted Supabase needs the paid WebAuthn MFA add-on and the RP config first."""
+    assert _envs()["HTCO_PASSKEYS_ENABLED"]["value"] == "false"

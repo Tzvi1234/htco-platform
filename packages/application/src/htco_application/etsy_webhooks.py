@@ -31,7 +31,7 @@ import re
 import threading
 import uuid
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -39,14 +39,23 @@ from functools import partial
 from typing import Any, Protocol, override
 
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
-from htco_application.jobs import ClaimedJob, JobError, JobSpec, JsonValue
-from htco_application.maintenance import TenantShop
+from htco_application.jobs import ClaimedJob, JobSpec
+from htco_application.kernel import (
+    DomainEvent,
+    JobError,
+    JsonValue,
+    Offload,
+    OutboxMessage,
+    TenantShop,
+    publish,
+    run_inline,
+)
 from htco_application.marketplace import (
     InventorySnapshot,
     ListingSnapshot,
     MarketplaceNotFoundError,
 )
-from htco_application.messaging import InboxEvent, OutboxMessage, RecordedEvent
+from htco_application.messaging import InboxEvent, RecordedEvent
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import AutomationExecution, TriggerKind
 
@@ -54,7 +63,6 @@ WEBHOOK_SOURCE = "etsy"
 WEBHOOK_JOB = "etsy.webhook_event"
 ORDER_INTAKE = "etsy-order-intake"
 ORDER_SHIPPED = "order.shipped"
-EVENTS_DESTINATION = "events.publish"
 # Standard Webhooks' replay window.
 TOLERANCE = timedelta(minutes=5)
 # Etsy's payloads are a few hundred bytes; the inbox column holds 64 KiB.
@@ -293,13 +301,6 @@ class WebhookInbox(Protocol):
         ...
 
 
-type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
-
-
-async def _inline(work: Callable[[], Any]) -> Any:
-    return work()
-
-
 @dataclass(frozen=True)
 class Accepted:
     inbox_id: uuid.UUID
@@ -341,7 +342,7 @@ class EtsyWebhookIngress:
     inbox: WebhookInbox
     shops: WebhookShops
     clock: Callable[[], datetime]
-    offload: Offload = _inline
+    offload: Offload = run_inline
     # Events stored without a job, by reason (the 5.9 metrics read these).
     unrouted: Counter[str] = field(default_factory=Counter)
 
@@ -430,7 +431,7 @@ class CatalogReads(Protocol):
     async def get_listing_inventory(self, shop_id: int, listing_id: int) -> InventorySnapshot: ...
 
 
-class EtsyShopIds(Protocol):
+class TenantEtsyShops(Protocol):
     async def etsy_shop_of(self, shop: TenantShop) -> int | None:
         """The Etsy shop connected to the HTCO shop (inside its organization), or None."""
         ...
@@ -471,7 +472,7 @@ class EngineOrderIntake:
     order, so the webhook job never retries in a loop."""
 
     engine: TriggersAutomations
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def receipt_event(
         self,
@@ -507,11 +508,11 @@ class WebhookProcessor:
 
     orders: OrderIntakeTrigger
     catalog: CatalogReads
-    shops: EtsyShopIds
+    shops: TenantEtsyShops
     outbox: EventOutbox
     marks: ProcessedMarks
     clock: Callable[[], datetime]
-    offload: Offload = _inline
+    offload: Offload = run_inline
     # Tracking Synchronization (slice 6.1): also started by `order.shipped`, beside the intake.
     tracking: OrderIntakeTrigger | None = None
 
@@ -570,13 +571,18 @@ class WebhookProcessor:
         for name in route.publishes:
             if name == OUT_OF_STOCK and facts.get("in_stock") is not False:
                 continue  # the re-read does not confirm it: never trust the payload
-            message = OutboxMessage(
-                organization_id=shop.organization_id,
-                shop_id=shop.shop_id,
-                destination=EVENTS_DESTINATION,
-                idempotency_key=f"{name}:{job.id}",
-                payload={"event_type": name, "webhook_event_type": event_type, **facts},
-                correlation_id=correlation[:200],
+            message = publish(
+                DomainEvent(
+                    event_type=name,
+                    organization_id=shop.organization_id,
+                    shop_id=shop.shop_id,
+                    idempotency_key=f"{name}:{job.id}",
+                    occurred_at=now,
+                    actor=WEBHOOK_ACTOR,
+                    payload={"webhook_event_type": event_type, **facts},
+                    correlation_id=correlation,
+                    causation_id=f"job:{job.id}",
+                )
             )
             await self.offload(partial(self.outbox.add, message, now=now))
         return "published"

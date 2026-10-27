@@ -6,16 +6,26 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from htco_application.jobs import DEFAULT_RETRY, ClaimedJob, JobError
+from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
+from htco_application.kernel import (
+    EVENTS_DESTINATION,
+    DomainEvent,
+    JobError,
+    JsonValue,
+    OutboxMessage,
+    event_payload,
+    publish,
+)
 from htco_application.messaging import (
     OUTBOX_DELIVERY_JOB,
     InboxEvent,
-    OutboxMessage,
     PendingDelivery,
     deliver_outbox_message,
     delivery_job,
     payload_hash,
 )
+from htco_application.notifications import EventDeliverer
+from htco_domain.actors import ActorKind, ActorRef
 
 pytestmark = pytest.mark.anyio
 
@@ -50,6 +60,14 @@ class Store:
         now: datetime,  # noqa: ARG002 - the port
     ) -> None:
         self.failures.append((message_id, error, dead))
+
+
+@dataclass
+class Recording:
+    handled: list[OutboxMessage] = field(default_factory=list)
+
+    async def handle(self, message: OutboxMessage) -> None:
+        self.handled.append(message)
 
 
 @dataclass
@@ -162,6 +180,66 @@ async def test_deliver__failing_on_the_jobs_last_attempt__marks_the_message_dead
         )
 
     assert store.failures == [(message_id, "ConnectionError", True)]
+
+
+@pytest.mark.ac("AUD-01.4")
+async def test_deliver__an_event_version_no_consumer_accepts__is_dead_at_once_and_not_retried() -> (
+    None
+):
+    store = Store()
+    # A complete envelope (Codex on #174: a broken one is refused for that reason instead).
+    message_id = store.add(
+        publish(
+            DomainEvent(
+                event_type="orders.ingested.v1", organization_id=ORG, shop_id=SHOP,
+                idempotency_key="orders.ingested.v1:9", occurred_at=NOW,
+                actor=ActorRef(ActorKind.SYSTEM, "test"), payload_version=9,
+            )
+        )
+    )  # fmt: skip
+    subscriber = Recording()
+
+    delivered = await deliver_outbox_message(
+        store,
+        {EVENTS_DESTINATION: EventDeliverer({"orders.ingested.v1": subscriber})},
+        job_for(message_id),
+        now=NOW,
+    )
+
+    assert delivered is False
+    assert store.failures == [
+        (
+            message_id,
+            "UnknownEventVersionError: orders.ingested.v1 version 9 is not accepted",
+            True,
+        )
+    ]
+    assert subscriber.handled == []
+    assert not store.rows[message_id].delivered
+
+
+@pytest.mark.ac("AUD-01.5")
+async def test_deliver__a_flat_event_row_from_before_the_envelope__is_still_delivered() -> None:
+    store = Store()
+    flat: dict[str, JsonValue] = {
+        "event_type": "orders.ingested.v1",
+        "receipt_id": 7,
+        "source": "webhook",
+    }
+    message_id = store.add(OutboxMessage(ORG, EVENTS_DESTINATION, "orders.ingested.v1:7", flat))
+    subscriber = Recording()
+
+    delivered = await deliver_outbox_message(
+        store,
+        {EVENTS_DESTINATION: EventDeliverer({"orders.ingested.v1": subscriber})},
+        job_for(message_id),
+        now=NOW,
+    )
+
+    assert delivered is True
+    assert [event_payload(m) for m in subscriber.handled] == [
+        {"receipt_id": 7, "source": "webhook"}
+    ]
 
 
 async def test_deliver__no_deliverer_for_the_destination__fails_with_a_safe_error() -> None:

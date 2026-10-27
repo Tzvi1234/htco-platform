@@ -20,23 +20,28 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from itertools import pairwise
 
-from htco_application.jobs import JsonValue
+from htco_application.etsy_webhooks import ORDER_INTAKE
+from htco_application.kernel import DomainEvent, JsonValue, publish
 from htco_application.marketplace import OrderReceipt
 from htco_application.messaging import OutboxMessage
 from htco_application.order_receipts import receipt_to_json
+from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.orders import Money, OrderFacts, OrderState, ingest_path
 from htco_domain.state_machine import IllegalTransition
 
-EVENTS_DESTINATION = "events.publish"
 INGESTED = "orders.ingested.v1"
 UPDATED = "orders.updated.v1"
 CANCELLED = "orders.cancelled.v1"
 REFUNDED = "orders.refunded.v1"
 DRIFT_DETECTED = "orders.drift_detected.v1"
+INTAKE_ACTOR = ActorRef(ActorKind.AUTOMATION, ORDER_INTAKE)
+# A drift is unique per (shop, receipt, kind, Etsy update time) in app.sync_drifts; its ID is
+# derived from that key, so the event names the very row it recorded (slice 6.7).
+_DRIFT_IDS = uuid.UUID("6f2e1c3a-7d4b-5e8f-9a0b-1c2d3e4f5a6b")
 _BUYER_FIELDS = ("buyer_name", "shipping_address")
 
 
@@ -239,36 +244,58 @@ def plan_ingest(  # noqa: PLR0913 - the receipt, what is stored, where and when
     drifts = detect_drifts(stored, receipt, now=now, grace=context.drift_grace)
     if not drifts:
         return plan
-    events = tuple(_drift_event(receipt, d, organization_id, shop_id, context) for d in drifts)
+    events = tuple(
+        _drift_event(receipt, d, organization_id, shop_id, context, now=now) for d in drifts
+    )
     return replace(plan, drifts=drifts, events=plan.events + events)
 
 
-def _drift_event(
+def drift_id(
+    shop_id: uuid.UUID, receipt_id: int, kind: str, etsy_updated_at: datetime
+) -> uuid.UUID:
+    """The ID of the drift recorded for this receipt, kind and Etsy update time."""
+    if etsy_updated_at.tzinfo is None:
+        raise ValueError("a drift's Etsy update time needs a time zone")
+    at = etsy_updated_at.astimezone(UTC).isoformat()
+    return uuid.uuid5(_DRIFT_IDS, f"{shop_id}:{receipt_id}:{kind}:{at}")
+
+
+def _drift_event(  # noqa: PLR0913 - one event's facts
     receipt: OrderReceipt,
     drift: Drift,
     organization_id: uuid.UUID,
     shop_id: uuid.UUID,
     context: IngestContext,
+    *,
+    now: datetime,
 ) -> OutboxMessage:
-    """`orders.drift_detected.v1`: what differed and both values (no money, no buyer data)."""
-    return OutboxMessage(
-        organization_id=organization_id,
-        shop_id=shop_id,
-        destination=EVENTS_DESTINATION,
-        idempotency_key=(
-            f"{DRIFT_DETECTED}:{shop_id}:{receipt.receipt_id}:{drift.kind.value}:"
-            f"{int(receipt.updated_at.timestamp())}"
-        )[:200],
-        payload={
-            "event_type": DRIFT_DETECTED,
-            "shop_id": str(shop_id),
-            "receipt_id": receipt.receipt_id,
-            "kind": drift.kind.value,
-            "stored": drift.stored,
-            "observed": drift.observed,
-            "etsy_updated_at": receipt.updated_at.isoformat(),
-        },
-        correlation_id=None if context.correlation_id is None else context.correlation_id[:200],
+    """`orders.drift_detected.v1`: what differed and both values (no money, no buyer data), and
+    the drift it recorded (its ID and when it was seen) for Incident Detection (AC-6.3.4)."""
+    return publish(
+        DomainEvent(
+            event_type=DRIFT_DETECTED,
+            organization_id=organization_id,
+            shop_id=shop_id,
+            idempotency_key=(
+                f"{DRIFT_DETECTED}:{shop_id}:{receipt.receipt_id}:{drift.kind.value}:"
+                f"{int(receipt.updated_at.timestamp())}"
+            )[:200],
+            occurred_at=now,
+            actor=INTAKE_ACTOR,
+            payload={
+                "shop_id": str(shop_id),
+                "receipt_id": receipt.receipt_id,
+                "kind": drift.kind.value,
+                "stored": drift.stored,
+                "observed": drift.observed,
+                "etsy_updated_at": receipt.updated_at.isoformat(),
+                "drift_id": str(
+                    drift_id(shop_id, receipt.receipt_id, drift.kind.value, receipt.updated_at)
+                ),
+                "detected_at": now.isoformat(),
+            },
+            correlation_id=context.correlation_id,
+        )
     )
 
 
@@ -359,13 +386,18 @@ def _events(  # noqa: PLR0913 - the order and what changed
     if OrderState.REFUNDED in reached:
         names.append((REFUNDED, f"{REFUNDED}:{shop_id}:{receipt.receipt_id}"))
     return tuple(
-        OutboxMessage(
-            organization_id=organization_id,
-            shop_id=shop_id,
-            destination=EVENTS_DESTINATION,
-            idempotency_key=key,
-            payload={"event_type": name, **base},
-            correlation_id=None if context.correlation_id is None else context.correlation_id[:200],
+        publish(
+            DomainEvent(
+                event_type=name,
+                organization_id=organization_id,
+                shop_id=shop_id,
+                idempotency_key=key,
+                # When the order changed on Etsy: the fact the event states.
+                occurred_at=receipt.updated_at,
+                actor=INTAKE_ACTOR,
+                payload=base,
+                correlation_id=context.correlation_id,
+            )
         )
         for name, key in names
     )

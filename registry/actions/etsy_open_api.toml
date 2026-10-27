@@ -34,6 +34,42 @@ recipe = "list_receipts"
 requires_capability = "receipts_read"
 breaker_key = "etsy:api"
 
+# AUD-06 (#147 part B): the order history form, with the buyer data Order Intake stores. Granted
+# to etsy-order-intake only (tools/registry.py RESTRICTED_GRANTS); never to a user or employee.
+[[actions]]
+tool = "etsy.order_history.read"
+approval_policy = "R1"
+verify = "schema"
+timeout_seconds = 60
+input_schema = "etsy.order_history.read.input.json"
+output_schema = "etsy.order_history.read.output.json"
+rate_limit_key = "etsy:app"
+actor_kinds = ["automation"]
+[[actions.bindings]]
+channel = "api"
+recipe = "list_order_history"
+requires_capability = "receipts_read"
+breaker_key = "etsy:api"
+disabled = true  # no recipe yet (#147 part B)
+
+# AUD-06 (#147 part B): the shipments' tracking codes, no buyer data. Granted to tracking-sync
+# only (tools/registry.py RESTRICTED_GRANTS); never to a user or employee.
+[[actions]]
+tool = "etsy.shipments.read"
+approval_policy = "R1"
+verify = "schema"
+timeout_seconds = 60
+input_schema = "etsy.shipments.read.input.json"
+output_schema = "etsy.shipments.read.output.json"
+rate_limit_key = "etsy:app"
+actor_kinds = ["automation"]
+[[actions.bindings]]
+channel = "api"
+recipe = "list_shipments"
+requires_capability = "receipts_read"
+breaker_key = "etsy:api"
+disabled = true  # no recipe yet (#147 part B)
+
 [[actions]]
 tool = "etsy.reviews.read"
 approval_policy = "R0"
@@ -62,6 +98,7 @@ user_capability = "edit_product_facts"
 channel = "api"
 recipe = "update_listing_inventory"
 breaker_key = "etsy:api"
+disabled = true  # no recipe yet (#147): never routed until the API channel implements it
 
 # The tracking upload (slices 6.6 and 6.8), W3 (the owner's policy of 2026-10-26): the Owner's own
 # press runs after a step-up; an agent's or an automation's request waits for the Owner's approval,

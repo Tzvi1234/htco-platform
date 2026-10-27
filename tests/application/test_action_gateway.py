@@ -106,7 +106,7 @@ class World:
         )
         self.gateway = ActionGatewayService(
             GatewayParts(
-                catalog=real_catalog(self.registry),
+                catalog=real_catalog(self.registry, built=True),
                 registry=lambda: self.registry,
                 store=self.store,
                 principals=self.principals,

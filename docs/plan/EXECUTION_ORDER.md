@@ -38,13 +38,15 @@
 | Rank | Task | Depends on | Key acceptance | Can run in parallel with |
 |---|---|---|---|---|
 | 23 | Phase 6 (tracking, incidents, ship-by and low-review alerts, owner-triggered shipment writes 6.8) | 22 | AC-6.x, AC-6.8.x, AC-6.9.x | — |
+| 23a | **Passkeys as a second factor (#113, owner 2026-10-25):** WebAuthn MFA through Supabase Auth next to TOTP, behind `HTCO_PASSKEYS_ENABLED`; the platform part, then Settings › Security and the sign-in step on the web | 6.10; the owner's WebAuthn MFA add-on decision (production only) | #113's ACs | 24 |
 | 24 | Phase 7 (tasks, approvals on Postgres 7.11, activity, the owner's first writes 7.12) | 23 | AC-7.x, M2 gate | — |
 | 24a | **AutoVA quotes (Phase 7, slices 7.13–7.17):** supplier and quote model, quote mailbox intake, deterministic parser, "New product quotes" screen, the owner's choice, and the hand-off to AutoVA as a Human task until A-02 exists | 7.11 (approvals), D-23 (mailbox), A-09 (sender and sample mails) | AC-7.13.x to AC-7.17.x | 24 |
 | 25 | Phase 8 (registry tables, LangGraph checkpointer, tool bridge on the gateway 8.10) | 24 | AC-8.x | 26, 27 |
-| 26 | **Pulled forward (owner, 2026-10-23): starts right after Phase 6, in parallel with Phase 7.** Phase 8A slices 8A.1–8A.5, 8A.7–8A.10: browser worker, controller, preflight, challenges, then **AutoVA recipes first** (A-01 with Export first; then A-02 approving the chosen quote), then B-02 and B-03, guards, monitoring | 24, 24a (for A-02), A-08 (AutoVA's terms), owner fills B-01–B-03 (D-16) | AC-8A.x except 8A.6; AC-8A.10.x | 25, 27 |
-| 27 | Phase 8B (authenticator) | 24 | AC-8B.x | 25, 26 |
+| 26 | **Pulled forward (owner, 2026-10-23): starts right after Phase 6, in parallel with Phase 7.** Phase 8A slices 8A.1–8A.5, 8A.7–8A.10: browser worker, controller (ADR-0025: the layered `BrowserProvider` contract and `ManagedChromiumProvider` in 8A.2a, Browser Configuration Profiles in 8A.2b, and browser dispatch with resume through `submit` in 8A.2c, before any recipe runs through the gateway; Live View and Human Takeover in 8A.11, ADR-0026, starting with its headless spike), preflight with the `NetworkProvider` egress checks, challenges, then **AutoVA recipes first** (A-01 with Export first; then A-02 approving the chosen quote), then B-02 and B-03, guards, monitoring | 24, 24a (for A-02), A-08 (AutoVA's terms), owner fills B-01–B-03 (D-16) | AC-8A.x except 8A.6; AC-8A.10.x | 25, 27 |
+| 26a | **Pulled forward (owner, 2026-10-26, ADR-0025 §5):** the minimal Model Gateway from slices 9.1 and 9.2 (the `ModelGateway` port, one provider adapter, the `browser-agent-default` catalog alias, hard caps on the interim budget ledger, PII masking, recording, kill switches, per-run gateway tokens), then **Phase 8A slice 8A.6 (Browser Use for employees)** on top of it | 26 (8A.2, 8A.5, 8A.7) | AC-8A.6.x; the AC-9.1.x and AC-9.2.x it covers | 27 |
+| 27 | Phase 8B (authenticator) | 24 | AC-8B.x | 25, 26, 26a |
 | 28 | Phase 9 (router with routed and pinned modes and automatic difficulty, ADR-0023; budgets, Jev, simple vs complex routing 9.9; the knowledge base and retrieval 9.10, ADR-0024, ready before Dana in Phase 14; Eitan) | 25 | AC-9.x | — |
-| 29 | Phase 8A slice 8A.6 (Browser Use for employees) | 26, 28 | AC-8A.6.x | 30 |
+| 29 | Phase 8A slice 8A.6 moves onto the full Phase 9 router and ledger: the employee's own routing policy replaces the interim pinned alias, and `model_call_budgets` folds into 9.4's ledger (8A.6 itself shipped at row 26a) | 26a, 28 | AC-8A.6.1, AC-9.4.x | 30 |
 | 30 | Phase 10 (supervision with the execution-chain monitors) | 28 | AC-10.x | 29 |
 | 31 | Phases 11 → 12 → 13; Phase 14 in parallel with 11–13 (needs 8A and 8B for delivery A) | 30 | Phase gates | — |
 

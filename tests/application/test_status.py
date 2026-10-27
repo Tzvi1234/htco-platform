@@ -5,13 +5,16 @@ environment (AC-5.18.2), and the chain view of one order's execution in causal o
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
 from htco_application.access.authentication import AuthContext, Membership
 from htco_application.approvals import ApprovalResumer
+from htco_application.automation.durable import StateChange
 from htco_application.browser_environments import EnvironmentRegistry, MemoryEnvironmentStore
 from htco_application.execution.gateway import ActionOutcome
+from htco_application.kernel import event_payload
 from htco_application.marketplace import MarketplaceRateLimitedError
 from htco_application.status import (
     EXECUTION_STATE_CHANGED,
@@ -25,6 +28,7 @@ from htco_application.status import (
     TriggerRecord,
     build_chain,
     execution_chain,
+    execution_state_event,
 )
 from htco_domain.actions import ActionState
 from htco_domain.actors import ActorKind, ActorRef
@@ -70,12 +74,37 @@ async def test_execution__every_state_change_emits_exactly_one_event() -> None:
 
     store = automations.store
     assert len(store.events) == len(store.changes) >= 5
-    assert [e.payload["to_state"] for e in store.events] == [
+    assert [event_payload(e)["to_state"] for e in store.events] == [
         c.to_state.value for c in store.changes
     ]
     assert {e.payload["event_type"] for e in store.events} == {EXECUTION_STATE_CHANGED}
     assert len({e.idempotency_key for e in store.events}) == len(store.events)
-    assert store.events[-1].payload["status"] == StatusKind.SUCCEEDED.value
+    assert event_payload(store.events[-1])["status"] == StatusKind.SUCCEEDED.value
+
+
+@pytest.mark.ac("AC-5.18.2")
+def test_execution_state_event__a_replayed_change__keeps_its_key_and_event_id() -> None:
+    """Codex (local) on #174, P1: the event is keyed by the recorded change's own ID, so a
+    change written again (a replayed transaction or job) gives the same outbox key and
+    event_id, and the outbox keeps one row; two changes with the same states at the same
+    instant (a retry) stay two events."""
+    change = StateChange(
+        execution_id=uuid.uuid7(), organization_id=ORG, from_state=ExecutionState.FAILED,
+        to_state=ExecutionState.RETRY_SCHEDULED, actor=ActorRef(ActorKind.SYSTEM, "w"),
+        correlation_id="c-1", at=NOW,
+    )  # fmt: skip
+
+    first, replayed = execution_state_event(change), execution_state_event(change)
+    twin = execution_state_event(replace(change, id=uuid.uuid7()))
+
+    assert (
+        first.idempotency_key
+        == replayed.idempotency_key
+        == (f"{EXECUTION_STATE_CHANGED}:{change.id}")
+    )
+    assert first.payload["event_id"] == replayed.payload["event_id"]
+    assert twin.idempotency_key != first.idempotency_key
+    assert twin.payload["event_id"] != first.payload["event_id"]
 
 
 @pytest.mark.ac("AC-5.18.2")
@@ -90,7 +119,7 @@ async def test_execution__rejected__the_cancellation_has_its_event() -> None:
         shown_hash=approval.request.request_hash,
     )  # fmt: skip
 
-    assert [e.payload["to_state"] for e in automations.store.events][-1] == "cancelled"
+    assert [event_payload(e)["to_state"] for e in automations.store.events][-1] == "cancelled"
     assert len(automations.store.events) == len(automations.store.changes)
     assert isinstance(ApprovalResumer, type)
 
@@ -168,14 +197,16 @@ def at(seconds: int) -> datetime:
     return T0 + timedelta(seconds=seconds)
 
 
-def order_records(*, shop: uuid.UUID | None = SHOP) -> ChainRecords:
+def order_records(
+    *, shop: uuid.UUID | None = SHOP, output: dict[str, Any] | None = None
+) -> ChainRecords:
     """One paid order: the webhook, the intake execution, two actions, their events."""
     execution_id, read_id, write_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     approval_id = uuid.uuid4()
     x = ExecutionState
     return ChainRecords(
         execution=ExecutionRecord(execution_id, ORG, shop, "etsy-order-intake", x.SUCCEEDED,
-                                  "corr-order", at(1)),
+                                  "corr-order", at(1), output=output),
         trigger=TriggerRecord("inbox-1", "event", at(0), "etsy:receipt.paid"),
         changes=[
             ChangeRecord(None, x.PENDING, "system:etsy-webhook", None, at(1)),
@@ -275,3 +306,18 @@ def test_execution_chain__refusals(
 ) -> None:
     with pytest.raises(error):
         execution_chain(auth, Reader(records), uuid.uuid4(), organization_id=None, now=NOW)
+
+
+@pytest.mark.parametrize(
+    ("role", "shown"), [(Role.OWNER, True), (Role.ADMIN, True), (Role.OPERATIONS, False)]
+)
+def test_execution_chain__the_run_output_is_for_the_owner_and_admins(
+    role: Role, *, shown: bool
+) -> None:
+    """Per-run counts (#127): the Owner and Admins see them; a shop-scoped role does not."""
+    records = order_records(output={"receipts": 2, "recorded": 1})
+
+    chain = execution_chain(caller(role), Reader(records), uuid.uuid4(),
+                            organization_id=None, now=NOW)  # fmt: skip
+
+    assert chain.execution.output == ({"receipts": 2, "recorded": 1} if shown else None)

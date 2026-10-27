@@ -130,7 +130,9 @@ def gateway(  # noqa: PLR0913 - a test world with optional parts
     registry = office()
     # A generous budget unless the test is about the budget.
     budget = budget or RateBudget("etsy:app", per_second=1000, per_day=100_000)
-    catalog = replace(real_catalog(registry), rate_budgets={budget.key: budget})
+    # A scripted channel runs any recipe; the real API channel gets the catalog as declared.
+    built = getattr(channel, "recipes", None) is None
+    catalog = replace(real_catalog(registry, built=built), rate_budgets={budget.key: budget})
     if timeout is not None:
         actions = {n: replace(d, timeout=timeout) for n, d in catalog.actions.items()}
         catalog = replace(catalog, actions=actions)
@@ -171,7 +173,7 @@ def per_second(calls: Sequence[datetime]) -> Counter[datetime]:
 
 
 def test_catalog__the_real_etsy_budget_is_declared() -> None:
-    catalog = real_catalog()
+    catalog = real_catalog(built=True)
 
     budget = catalog.rate_budgets["etsy:app"]
     assert budget.per_second >= 1
@@ -627,7 +629,7 @@ async def test_transport_failures_and_5xx__retried_for_reads(error: Exception) -
 def test_gateway__refuses_guards_without_a_budget_for_an_action() -> None:
     clock = Clock()
     registry = office()
-    catalog = replace(real_catalog(registry), rate_budgets={})
+    catalog = replace(real_catalog(registry, built=True), rate_budgets={})
     world = World()
 
     with pytest.raises(ValueError, match="etsy:app"):

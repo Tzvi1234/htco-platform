@@ -1,0 +1,25 @@
+[project]
+name = "htco-browser-worker"
+version = "0.0.0"
+description = "HTCO browser-worker: the Browser channel's own component, Chromium through Playwright (Phase 8A)."
+requires-python = "==3.14.*"
+dependencies = [
+  "anyio>=4.12,<5",
+  "htco-application",
+  "htco-domain",
+  "htco-persistence",
+  "htco-platform",
+  # ADR-0020 (main confirmed 2026-10-25): pinned exactly; the wheel bundles its driver and runs
+  # no install script. Chromium is fetched only by `playwright install chromium` in the image.
+  "playwright==1.64.0",
+]
+
+[tool.uv.sources]
+htco-application = { workspace = true }
+htco-domain = { workspace = true }
+htco-persistence = { workspace = true }
+htco-platform = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"

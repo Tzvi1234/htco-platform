@@ -14,8 +14,8 @@ from typing import Any
 
 import psycopg
 
+from htco_application.kernel import EVENTS_DESTINATION
 from htco_application.status import (
-    EVENT_DESTINATION,
     ActionRecord,
     ChainRecords,
     ChangeRecord,
@@ -48,7 +48,7 @@ class PostgresChainReader:
             row = connection.execute(
                 """
                 select id, organization_id, shop_id, automation_id, state, correlation_id,
-                       created_at, causation_id, trigger
+                       created_at, causation_id, trigger, output
                 from app.automation_executions where id = %s and organization_id = %s
                 """,
                 [execution_id, organization_id],
@@ -58,6 +58,7 @@ class PostgresChainReader:
             execution = ExecutionRecord(
                 id=row[0], organization_id=row[1], shop_id=row[2], automation_id=row[3],
                 state=ExecutionState(row[4]), correlation_id=row[5], created_at=row[6],
+                output=row[9],
             )  # fmt: skip
             trigger = self._trigger(connection, organization_id, row[7], row[8], row[6])
             actions = self._actions(connection, organization_id, execution)
@@ -154,12 +155,14 @@ class PostgresChainReader:
             """
             select id, payload ->> 'event_type', action_execution_id, created_at from jobs.outbox
             where organization_id = %s and destination = %s
-              and (action_execution_id = any(%s) or payload ->> 'execution_id' = %s)
+              and (action_execution_id = any(%s)
+                   or coalesce(payload -> 'payload' ->> 'execution_id', payload ->> 'execution_id')
+                      = %s)
             order by created_at limit %s
             """,
             [
                 organization_id,
-                EVENT_DESTINATION,
+                EVENTS_DESTINATION,
                 [a.id for a in actions],
                 str(execution.id),
                 _MAX_ROWS,

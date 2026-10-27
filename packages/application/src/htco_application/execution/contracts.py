@@ -42,6 +42,8 @@ class ChannelBinding:
     browser_scope_id: str | None = None
     deterministic: bool = True  # False only for Browser Use recipes (employees only)
     breaker_key: str | None = None  # the circuit breaker it shares: "etsy:api", "etsy:web"
+    # Declared but not built yet: never routed, and exempt from the startup recipe check (#147).
+    disabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,7 @@ def _binding(raw: Mapping[str, Any]) -> ChannelBinding:
         browser_scope_id=raw.get("browser_scope_id"),
         deterministic=bool(raw.get("deterministic", True)),
         breaker_key=raw.get("breaker_key"),
+        disabled=bool(raw.get("disabled", False)),
     )
 
 

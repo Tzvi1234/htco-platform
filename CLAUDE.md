@@ -82,6 +82,7 @@ The only prerequisite is [uv](https://docs.astral.sh/uv/); it installs Python, `
 | `wsl -d Ubuntu -u root -- bash <clone>/scripts/local-db-ci.sh [REPO]` | CI's whole `database` job locally (steps read from `ci.yml`), with a pass/fail summary; one-time setup `scripts/local-db-setup.sh` ([LOCAL_DB_TESTS.md](docs/engineering/LOCAL_DB_TESTS.md)) | Dev environment (forge) |
 | `just seed` | Two organizations, their shops, one user per role | Slice 2.2 |
 | `uv run htco admin bootstrap --email … --organization … --display-name …` | Create the owner's organization and owner membership after the owner signs up (idempotent; needs `HTCO_DATABASE_URL`) | Slice 2.5 |
+| `HTCO_TEST_BROWSER=1 uv run pytest -m browser tests/browser_worker` | Real-Chromium tests against pages served on 127.0.0.1 only (after `uv run playwright install chromium`; CI's `browser` job) | Slice 8A.2 |
 | `uv run python -m htco_worker` | The `agent-worker`: job queue consumer, schedules and maintenance jobs (needs `HTCO_DATABASE_URL`; schedules only when named in `HTCO_WORKER_SCHEDULES`) | Slice 5.1 |
 | `uv run htco admin dead-letters [--organization ID] [--limit N]` | Jobs whose retries are exhausted, one JSON line each (needs `HTCO_DATABASE_URL`) | Slice 5.1 |
 | `uv run htco registry sync --automations [--apply \| --check]` | Load `registry/automations/` into `app.automation_definitions` (dry run by default; `--apply` idempotent with the commit; `--check` exits 1 on any difference; needs `HTCO_DATABASE_URL`) | Slice 5.10 |

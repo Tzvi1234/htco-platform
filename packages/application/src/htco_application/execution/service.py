@@ -271,6 +271,19 @@ class ActionGatewayService:
                 raise ValueError(f"no rate budget for {', '.join(missing)}")
         if parts.human is None and {Channel.BROWSER, Channel.HUMAN} & set(parts.adapters):
             raise ValueError("a browser or human channel needs a task store for its hand-offs")
+        unbuilt = sorted(
+            f"{definition.name} -> {binding.channel.value}:{binding.recipe}"
+            for definition in parts.catalog.actions.values()
+            for binding in definition.bindings
+            if not binding.disabled
+            and binding.channel in parts.adapters
+            and (recipes := getattr(parts.adapters[binding.channel], "recipes", None)) is not None
+            and binding.recipe not in recipes
+        )
+        if unbuilt:
+            # A recipe the channel cannot run would fail every call (AUD-06, #147): refuse to
+            # start, unless the binding is marked disabled until it is built.
+            raise ValueError(f"no implementation for {', '.join(unbuilt)}")
         self._p = parts
         self._router = ExecutionRouter(
             parts.adapters,

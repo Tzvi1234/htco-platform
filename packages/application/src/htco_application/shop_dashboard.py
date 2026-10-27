@@ -29,6 +29,7 @@ from typing import Protocol
 from htco_application.access.authentication import AuthContext, NoMembershipError
 from htco_application.access.policy import Capability, Outcome, ShopRef, decide
 from htco_application.etsy_webhooks import WindowLimiter
+from htco_application.kernel import Page
 from htco_application.marketplace import (
     AccessTokenProvider,
     ListingDetails,
@@ -40,7 +41,6 @@ from htco_application.marketplace import (
     MarketplaceUnavailableError,
     OrderLine,
     OrderReceipt,
-    Page,
     ProductionPartner,
     ReturnPolicy,
     ShippingProfile,

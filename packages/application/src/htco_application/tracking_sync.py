@@ -22,22 +22,29 @@ Two kinds of run:
 
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from functools import partial
-from typing import Any, Protocol
+from typing import Protocol
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
 from htco_application.etsy_webhooks import WEBHOOK_ACTOR, TriggersAutomations
 from htco_application.fulfillment_schedule import TRACKING_SYNC
-from htco_application.incidents import EVENTS, IncidentService, order_resource
-from htco_application.jobs import JobError, JsonValue
-from htco_application.maintenance import TenantShop
+from htco_application.incidents import IncidentService, order_resource
+from htco_application.kernel import (
+    DomainEvent,
+    JobError,
+    JsonValue,
+    Offload,
+    OutboxMessage,
+    TenantShop,
+    publish,
+    run_inline,
+)
 from htco_application.marketplace import OrderReceipt
-from htco_application.messaging import OutboxMessage
 from htco_application.order_intake import GatewayReceipts, IntakeShops
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import TriggerKind
@@ -115,16 +122,8 @@ class TrackingStore(Protocol):
         ...
 
 
-type Offload = Callable[[Callable[[], Any]], Awaitable[Any]]
-
-
-async def _inline(work: Callable[[], Any]) -> Any:
-    return work()
-
-
 def tracking_event(observation: TrackingObservation) -> OutboxMessage:
     payload: dict[str, JsonValue] = {
-        "event_type": TRACKING_DETECTED,
         "tracking_event_id": str(observation.id),
         "receipt_id": observation.receipt_id,
         "carrier": observation.carrier,
@@ -132,18 +131,20 @@ def tracking_event(observation: TrackingObservation) -> OutboxMessage:
         "observed_via": observation.observed_via.value,
         "observed_at": observation.observed_at.isoformat(),
     }
-    return OutboxMessage(
-        organization_id=observation.organization_id,
-        shop_id=observation.shop_id,
-        destination=EVENTS,
-        idempotency_key=(
-            f"{TRACKING_DETECTED}:{observation.shop_id}:{observation.receipt_id}:"
-            f"{observation.fingerprint.hex()[:32]}"
-        ),
-        payload=payload,
-        correlation_id=None
-        if observation.correlation_id is None
-        else observation.correlation_id[:200],
+    return publish(
+        DomainEvent(
+            event_type=TRACKING_DETECTED,
+            organization_id=observation.organization_id,
+            shop_id=observation.shop_id,
+            idempotency_key=(
+                f"{TRACKING_DETECTED}:{observation.shop_id}:{observation.receipt_id}:"
+                f"{observation.fingerprint.hex()[:32]}"
+            ),
+            occurred_at=observation.observed_at,
+            actor=ActorRef(ActorKind.AUTOMATION, TRACKING_SYNC),
+            payload=payload,
+            correlation_id=observation.correlation_id,
+        )
     )
 
 
@@ -156,7 +157,7 @@ class TrackingRecorder:
     incidents: IncidentService
     clock: Callable[[], datetime]
     new_id: Callable[[], uuid.UUID] = uuid.uuid7
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def record(  # noqa: PLR0913 - one shipment's facts
         self,
@@ -223,7 +224,7 @@ class TrackingSync:
     store: TrackingStore
     shops: IntakeShops
     clock: Callable[[], datetime]
-    offload: Offload = _inline
+    offload: Offload = run_inline
     batch: int = SCHEDULE_BATCH
 
     async def __call__(self, ctx: HandlerContext) -> HandlerOutcome:
@@ -286,7 +287,7 @@ class EngineTrackingSync:
     Synchronization per receipt and event. Refused (and logged) until the owner activates it."""
 
     engine: TriggersAutomations
-    offload: Offload = _inline
+    offload: Offload = run_inline
 
     async def receipt_event(
         self,

@@ -128,7 +128,7 @@ class ExecutionRouter:
         refusals: list[NoRoute] = []
         for binding in bindings:
             adapter = self._adapters.get(binding.channel)
-            if adapter is None:
+            if adapter is None or binding.disabled:
                 continue
             refusal = self._refusal(definition, request, binding)
             if refusal is None:

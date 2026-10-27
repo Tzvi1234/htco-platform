@@ -7,8 +7,15 @@ from typing import override
 
 import pytest
 
-from htco_application.incidents import EVENTS, INCIDENT_OPENED
-from htco_application.messaging import OutboxMessage, PendingDelivery
+from htco_application.incidents import (
+    INCIDENT_ESCALATED,
+    INCIDENT_OPENED,
+    Detection,
+    IncidentService,
+    order_resource,
+)
+from htco_application.kernel import EVENTS_DESTINATION, OutboxMessage, event_payload
+from htco_application.messaging import PendingDelivery
 from htco_application.notifications import (
     EMAIL_DESTINATION,
     NOTIFICATION_REQUESTED,
@@ -26,6 +33,8 @@ from htco_application.notifications import (
     notification_requested,
     render_email,
 )
+from htco_domain.actors import ActorKind, ActorRef
+from htco_domain.incidents import Cause, IncidentState, ResourceKind
 from htco_domain.notifications import (
     Locale,
     NotificationKind,
@@ -34,6 +43,8 @@ from htco_domain.notifications import (
     check_params,
     wants_email,
 )
+from tests.event_contracts import check_if_event
+from tests.fulfillment_fakes import MemoryIncidentStore
 from tests.notification_fakes import (
     FakeEmail,
     Member,
@@ -68,7 +79,7 @@ def opened_event(receipt_id: int = 4000000001) -> OutboxMessage:
     return OutboxMessage(
         organization_id=ORG,
         shop_id=SHOP,
-        destination=EVENTS,
+        destination=EVENTS_DESTINATION,
         idempotency_key=f"{INCIDENT_OPENED}:{INCIDENT}",
         payload={
             "event_type": INCIDENT_OPENED, "incident_id": str(INCIDENT),
@@ -163,7 +174,9 @@ async def test_preferences_and_unrelated_events() -> None:
 
     await deliverer.deliver(delivery(opened_event()))
     await deliverer.deliver(
-        delivery(OutboxMessage(ORG, EVENTS, "other:1", {"event_type": "orders.ingested.v1"}))
+        delivery(
+            OutboxMessage(ORG, EVENTS_DESTINATION, "other:1", {"event_type": "orders.ingested.v1"})
+        )
     )
 
     assert len(store.rows) == 2
@@ -274,7 +287,8 @@ async def test_a_sent_email_links_to_the_incident(kind: str) -> None:
     await _deliverer(email, directory).deliver(pending)
 
     [sent] = email.sent.values()
-    assert f"https://office.example.test/incidents/{INCIDENT}" in sent.text
+    # Quill on #119: the link names its workspace, so a member of several lands on it.
+    assert f"https://office.example.test/incidents/{INCIDENT}?workspace={ORG}" in sent.text
     assert directory.records[pending.id][0] == "sent"
     assert "owner@example.test" not in repr(sent)
 
@@ -295,7 +309,7 @@ class NoticeStore:
         return self.agents
 
     def add(self, message: OutboxMessage, *, now: datetime) -> uuid.UUID:  # noqa: ARG002
-        self.added.append(message)
+        self.added.append(check_if_event(message))
         return uuid.uuid4()
 
 
@@ -309,9 +323,9 @@ async def test_ac_6_4_4_a_sign_in_from_a_new_device_sends_one_email_to_that_user
 
     assert sent == 1
     [event] = notice_store.added
-    assert event.payload["kind"] == "sign_in_new_device"
-    assert event.payload["user_id"] == str(OWNER)
-    assert event.payload["params"] == {"device": "Chrome on Windows"}
+    assert event_payload(event)["kind"] == "sign_in_new_device"
+    assert event_payload(event)["user_id"] == str(OWNER)
+    assert event_payload(event)["params"] == {"device": "Chrome on Windows"}
     # The worker turns the request into one notification and one email for that user only.
     store = members()
     await RequestedNotifications(NotificationService(store, clock=lambda: NOW)).handle(event)
@@ -379,7 +393,8 @@ def test_device_families_and_requests() -> None:
         NotificationRequest(ORG, NotificationKind.SIGN_IN_NEW_DEVICE, "k")
     with pytest.raises(UnsafeParameter):
         notification_requested(
-            NotificationRequest(ORG, NotificationKind.SHOP_CONNECTED, "k", {"name": FAKE_BUYER})
+            NotificationRequest(ORG, NotificationKind.SHOP_CONNECTED, "k", {"name": FAKE_BUYER}),
+            now=NOW,
         )
 
 
@@ -401,7 +416,7 @@ async def test_an_escalated_incident_notifies_once_with_an_email() -> None:
     store = members()
     service = NotificationService(store, clock=lambda: NOW)
     escalated = OutboxMessage(
-        organization_id=ORG, shop_id=SHOP, destination=EVENTS,
+        organization_id=ORG, shop_id=SHOP, destination=EVENTS_DESTINATION,
         idempotency_key=f"incidents.escalated.v1:{INCIDENT}",
         payload={"event_type": "incidents.escalated.v1", "incident_id": str(INCIDENT),
                  "cause": "tracking_missing", "severity": "medium", "receipt_id": 4000000001,
@@ -420,12 +435,119 @@ async def test_an_escalated_incident_notifies_once_with_an_email() -> None:
     assert len(store.outbox) == 2  # one email each: an escalation is urgent
 
 
+async def test_each_escalation_notifies_once() -> None:
+    """Quill on #119: two escalations of one incident are two notifications; a redelivery of
+    either is none."""
+    store = members()
+    service = NotificationService(store, clock=lambda: NOW)
+    deliverer = EventDeliverer({"incidents.escalated.v1": IncidentNotifications(service)})
+
+    def escalated(at: str) -> OutboxMessage:
+        return OutboxMessage(
+            organization_id=ORG, shop_id=SHOP, destination=EVENTS_DESTINATION,
+            idempotency_key=f"incidents.escalated.v1:{INCIDENT}:{at}",
+            payload={"event_type": "incidents.escalated.v1", "incident_id": str(INCIDENT),
+                     "cause": "tracking_missing", "severity": "medium", "receipt_id": 4000000001,
+                     "escalated_from": "detected", "escalated_at": at},
+        )  # fmt: skip
+
+    for at in (
+        "2026-10-25T09:00:00+00:00",
+        "2026-10-25T09:00:00+00:00",
+        "2026-10-29T10:00:00+00:00",
+    ):
+        await deliverer.deliver(delivery(escalated(at)))
+
+    owners = [n for n in store.rows.values() if n.user_id == OWNER]
+    assert len(owners) == 2
+
+
+async def test_two_escalations_in_one_second_notify_twice_and_a_redelivery_never() -> None:
+    """Codex on #163: two escalations of one incident in the same second share escalated_at
+    but each has its own escalation_id: two notifications, and a redelivery of either is none."""
+    store = members()
+    service = NotificationService(store, clock=lambda: NOW)
+    deliverer = EventDeliverer({"incidents.escalated.v1": IncidentNotifications(service)})
+    at = "2026-10-25T09:00:00+00:00"
+
+    def escalated(escalation: uuid.UUID) -> OutboxMessage:
+        return OutboxMessage(
+            organization_id=ORG, shop_id=SHOP, destination=EVENTS_DESTINATION,
+            idempotency_key=f"incidents.escalated.v1:{INCIDENT}:{escalation}",
+            payload={"event_type": "incidents.escalated.v1", "incident_id": str(INCIDENT),
+                     "cause": "tracking_missing", "severity": "medium", "receipt_id": 4000000001,
+                     "escalated_from": "detected", "escalated_at": at,
+                     "escalation_id": str(escalation)},
+        )  # fmt: skip
+
+    first, second = uuid.uuid7(), uuid.uuid7()
+    for escalation in (first, first, second, second):
+        await deliverer.deliver(delivery(escalated(escalation)))
+
+    owners = [n for n in store.rows.values() if n.user_id == OWNER]
+    assert len(owners) == 2
+
+
+async def test_enveloped_escalations_from_the_incident_service_notify_once_each() -> None:
+    """Main on #174 (#163 merged in): the notifier reads the real escalation events, in the
+    AUD-01 envelope, through `read_event`. Two escalations in one second are two notifications,
+    keyed by each escalation's ID; a redelivery of either is none."""
+    incidents = MemoryIncidentStore()
+    incident_service = IncidentService(incidents, clock=lambda: NOW)
+    robot = ActorRef(ActorKind.AUTOMATION, "incident-detection-escalation")
+    incident, _ = await incident_service.open(
+        Detection(
+            organization_id=ORG, cause=Cause.TRACKING_MISSING, resource_kind=ResourceKind.ORDER,
+            resource_id=order_resource(SHOP, 4000000001), detected_at=NOW,
+            source="sla_inspector", shop_id=SHOP, receipt_id=4000000001,
+        ),
+        actor=robot,
+    )  # fmt: skip
+    await incident_service.move(ORG, incident.id, IncidentState.ESCALATED, actor=robot)
+    await incident_service.move(ORG, incident.id, IncidentState.TRIAGED, actor=robot)
+    await incident_service.move(ORG, incident.id, IncidentState.ESCALATED, actor=robot)
+    first, second = incidents.events.of(INCIDENT_ESCALATED)
+    assert "payload_version" in first.payload  # the envelope, not the flat shape
+
+    store = members()
+    service = NotificationService(store, clock=lambda: NOW)
+    deliverer = EventDeliverer({INCIDENT_ESCALATED: IncidentNotifications(service)})
+    for message in (first, first, second, second):
+        await deliverer.deliver(delivery(message))
+
+    owners = sorted(n.dedup_key for n in store.rows.values() if n.user_id == OWNER)
+    assert owners == sorted(
+        f"incident_escalated:{incident.id}:{event_payload(m)['escalation_id']}"
+        for m in (first, second)
+    )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [NotificationKind.INCIDENT_OPENED, NotificationKind.INCIDENT_ESCALATED,
+     NotificationKind.INCIDENT_RESOLVED],
+)  # fmt: skip
+@pytest.mark.parametrize("locale", list(Locale))
+def test_an_incident_without_an_order_never_reads_order_dash(
+    kind: NotificationKind, locale: Locale
+) -> None:
+    """Quill on #119: an automation that stopped has no order; its email names no "order -"."""
+    params = {"incident_id": str(INCIDENT), "cause": "automation_dead_lettered",
+              "severity": "critical"}  # fmt: skip
+
+    rendered = render_email(kind, locale, params, link="https://office.example.test/x")
+
+    for text in (rendered.subject, rendered.text):
+        assert " -" not in text.replace(" - ", "")  # no empty order number
+        assert "{receipt_id}" not in text
+
+
 async def test_a_resolved_incident_notifies_once() -> None:
     """Codex review of #87: `incidents.resolved.v1` has a subscriber."""
     store = members()
     service = NotificationService(store, clock=lambda: NOW)
     resolved = OutboxMessage(
-        organization_id=ORG, shop_id=SHOP, destination=EVENTS,
+        organization_id=ORG, shop_id=SHOP, destination=EVENTS_DESTINATION,
         idempotency_key=f"incidents.resolved.v1:{INCIDENT}",
         payload={"event_type": "incidents.resolved.v1", "incident_id": str(INCIDENT),
                  "cause": "tracking_missing", "severity": "medium", "receipt_id": 4000000001},

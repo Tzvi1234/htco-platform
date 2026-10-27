@@ -4,7 +4,7 @@ approvals, a channel adapter, principals and capabilities. Shared by the gateway
 import threading
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -20,14 +20,25 @@ from htco_application.execution.service import Claim, Finish
 from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_application.workforce.registry import Registry
 from htco_domain.actions import ACTION_FINAL_STATES, ActionState
+from tests.event_contracts import check_if_event
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = ROOT / "registry"
 SCHEMAS = ROOT / "packages" / "contracts" / "actions"
 
 
-def real_catalog(registry: Registry | None = None) -> ActionCatalog:
-    return read_action_catalog(REGISTRY, SCHEMAS, registry or read_registry(REGISTRY).registry())
+def real_catalog(registry: Registry | None = None, *, built: bool = False) -> ActionCatalog:
+    """The registry's catalog. `built` enables every disabled binding, as if its recipe were
+    built: for tests of the gateway's flow (approvals, guards) through a fake channel, which
+    use a declared write such as the inventory update as their example (#147)."""
+    catalog = read_action_catalog(REGISTRY, SCHEMAS, registry or read_registry(REGISTRY).registry())
+    if not built:
+        return catalog
+    actions = {
+        name: replace(action, bindings=tuple(replace(b, disabled=False) for b in action.bindings))
+        for name, action in catalog.actions.items()
+    }
+    return replace(catalog, actions=actions)
 
 
 @dataclass
@@ -70,6 +81,8 @@ class MemoryActionStore:
             )
 
     def record(self, execution_id: uuid.UUID, step: Finish, *, now: datetime) -> None:  # noqa: ARG002
+        if step.event is not None:
+            check_if_event(step.event)  # the gateway's real events, against their schemas
         with self._guard:
             row = self.rows[self.ids[execution_id]]
             row.state, row.result = step.state, step.result

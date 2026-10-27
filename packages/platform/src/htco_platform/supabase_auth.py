@@ -54,6 +54,15 @@ class MfaRequiredError(AuthServiceError):
     An AuthServiceError for every caller that does not expect it."""
 
 
+class WebAuthnDisabledError(AuthServiceError):
+    """WebAuthn MFA is switched off in Supabase Auth (`mfa_webauthn_*_not_enabled`)."""
+
+
+_WEBAUTHN_DISABLED = frozenset(
+    {"mfa_webauthn_enroll_not_enabled", "mfa_webauthn_verify_not_enabled"}
+)
+
+
 @dataclass(frozen=True)
 class TotpEnrollment:
     factor_id: str
@@ -69,6 +78,16 @@ class Factor:
     factor_type: str
     verified: bool
     friendly_name: str | None
+
+
+@dataclass(frozen=True)
+class WebAuthnChallenge:
+    """A WebAuthn MFA challenge: `create` for a new passkey, `request` to use one (issue #113)."""
+
+    challenge_id: str
+    ceremony: str
+    # `credential_options` exactly as Supabase Auth sent them: for the browser, never logged.
+    options: dict[str, Any] = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -163,6 +182,63 @@ class SupabaseAuth:
         except (ValueError, KeyError, TypeError) as error:
             raise AuthServiceError("Supabase Auth answered without tokens") from error
 
+    # Passkeys (issue #113): WebAuthn MFA factors. The RP ID and origins are Auth's own config
+    # (`[auth.webauthn]`); the credential passes through as the browser made it.
+
+    async def enroll_webauthn(self, access_token: str, *, friendly_name: str) -> str:
+        body = await self._as_user(
+            "POST",
+            "/factors",
+            access_token,
+            {"factor_type": "webauthn", "friendly_name": friendly_name},
+        )
+        factor_id = body.get("id")
+        if not isinstance(factor_id, str) or not factor_id:
+            raise AuthServiceError("Supabase Auth answered without the factor")
+        return factor_id
+
+    async def challenge_webauthn(self, access_token: str, factor_id: str) -> WebAuthnChallenge:
+        body = await self._as_user("POST", f"/factors/{factor_id}/challenge", access_token, {})
+        webauthn = body.get("webauthn")
+        challenge_id = body.get("id")
+        if (
+            not isinstance(webauthn, dict)
+            or not isinstance(challenge_id, str)
+            or webauthn.get("type") not in {"create", "request"}
+            or not isinstance(webauthn.get("credential_options"), dict)
+        ):
+            raise AuthServiceError("Supabase Auth answered without the WebAuthn challenge")
+        return WebAuthnChallenge(
+            challenge_id=challenge_id,
+            ceremony=str(webauthn["type"]),
+            options=dict(webauthn["credential_options"]),
+        )
+
+    async def verify_webauthn(
+        self,
+        access_token: str,
+        factor_id: str,
+        challenge_id: str,
+        ceremony: str,
+        credential: dict[str, Any],
+    ) -> AuthTokens:
+        body = await self._as_user(
+            "POST",
+            f"/factors/{factor_id}/verify",
+            access_token,
+            {
+                "challenge_id": challenge_id,
+                "webauthn": {"type": ceremony, "credential_response": credential},
+            },
+            refused=_REJECTED | {"validation_failed", "mfa_ip_address_mismatch"},
+            # Auth v2.197.0 answers 500 for an assertion that fails validation.
+            server_error_refused=True,
+        )
+        try:
+            return _tokens(body)
+        except (ValueError, KeyError, TypeError) as error:
+            raise AuthServiceError("Supabase Auth answered without tokens") from error
+
     async def factors(self, access_token: str) -> list[Factor]:
         body = await self._as_user("GET", "/user", access_token, None)
         entries = body.get("factors") or []
@@ -180,14 +256,15 @@ class SupabaseAuth:
     async def unenroll(self, access_token: str, factor_id: str) -> None:
         await self._as_user("DELETE", f"/factors/{factor_id}", access_token, None)
 
-    async def _as_user(
+    async def _as_user(  # noqa: PLR0913 - the request and how to read its refusals
         self,
         method: str,
         path: str,
         access_token: str,
-        body: dict[str, str] | None,
+        body: dict[str, Any] | None,
         *,
         refused: frozenset[str] = _REJECTED,
+        server_error_refused: bool = False,
     ) -> dict[str, Any]:
         try:
             response = await self._client.request(
@@ -203,6 +280,15 @@ class SupabaseAuth:
         code = _error_code(response)
         if response.is_client_error and code == "insufficient_aal":
             raise MfaRequiredError("an aal2 session is required")
+        if response.is_client_error and code in _WEBAUTHN_DISABLED:
+            raise WebAuthnDisabledError("WebAuthn MFA is switched off in Supabase Auth")
+        if (
+            server_error_refused
+            and response.status_code == httpx.codes.INTERNAL_SERVER_ERROR
+            and _message(response) == _WEBAUTHN_VALIDATION_FAILED
+        ):
+            # Only Auth's own validation failure; any other 500 is an outage (local Codex on #171).
+            raise InvalidCredentialsError("refused")
         if response.status_code == httpx.codes.UNPROCESSABLE_ENTITY and code == "weak_password":
             raise WeakPasswordError("the password is too weak")
         if response.status_code == httpx.codes.UNPROCESSABLE_ENTITY and code == "same_password":
@@ -249,6 +335,19 @@ def _tokens(body: dict[str, Any]) -> AuthTokens:
     if not isinstance(access, str) or not isinstance(refresh, str):
         raise TypeError("tokens must be strings")
     return AuthTokens(access_token=access, refresh_token=refresh, expires_at=expires_at)
+
+
+# Auth v2.197.0 answers a WebAuthn assertion that fails validation with a 500 and this message.
+_WEBAUTHN_VALIDATION_FAILED = "Failed to validate WebAuthn MFA response"
+
+
+def _message(response: httpx.Response) -> str | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    message = body.get("msg") or body.get("message") if isinstance(body, dict) else None
+    return message if isinstance(message, str) else None
 
 
 def _error_code(response: httpx.Response) -> str | None:

@@ -101,6 +101,21 @@ class Database:
         return psycopg.connect(self._conninfo, autocommit=True, connect_timeout=5)
 
     @contextmanager
+    def transaction_on(self, connection: psycopg.Connection[Any]) -> Iterator[None]:
+        """One transaction on a dedicated connection (a lock's own), as this database's role
+        and in the current `tenant_scope`, both `set local`, so the connection keeps its login
+        role and no tenant once the transaction ends (#169: the fenced profile write)."""
+        with connection.transaction():
+            if self._role is not None:
+                connection.execute(sql.SQL("set local role {}").format(sql.Identifier(self._role)))
+                tenant = _TENANT.get()
+                connection.execute(
+                    "select set_config('htco.organization_id', %s, true)",
+                    ["" if tenant is None else str(tenant)],
+                )
+            yield
+
+    @contextmanager
     def user_transaction(self, claims: Mapping[str, Any]) -> Iterator[psycopg.Connection[Any]]:
         """One transaction as the signed-in user: committed on success, rolled back on error."""
         with self._pool.connection() as connection, connection.transaction():

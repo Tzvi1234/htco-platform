@@ -128,6 +128,12 @@ services:
       - key: HTCO_WEB_ORIGINS
         scope: RUN_TIME
         value: ${HTCO_WEB_ORIGINS}
+      # Passkeys as a second factor (issue #113): OFF until the owner enables Supabase's WebAuthn
+      # MFA add-on and sets its RP config (RP ID ht-co.app, origin https://dash.ht-co.app). See
+      # docs/features/identity-access/passkeys.md. Turning it on is the owner's change only.
+      - key: HTCO_PASSKEYS_ENABLED
+        scope: RUN_TIME
+        value: "false"
       # Etsy token vault (slice 4.2): off until the key secret exists (blank means unset). The
       # previous keys stay blank except while rotating to a new key.
       - key: HTCO_TOKEN_VAULT_KEY
@@ -153,12 +159,13 @@ services:
       - key: HTCO_ETSY_REDIRECT_URI
         scope: RUN_TIME
         value: https://dash.ht-co.app/integrations/etsy/callback
-      # Etsy webhooks (slice 5.3): `POST /webhooks/etsy`, off until the owner registers the endpoint
-      # in the Etsy developer portal. The signing secret comes from the GitHub secret
-      # ETSY_WEBHOOK_SECRET (docs/features/orders-ingest/operations.md); blank means unset.
+      # Etsy webhooks (slice 5.3): `POST /webhooks/etsy`, on since the owner registered the endpoint
+      # in the Etsy developer portal (activation step 5 of 5.11). The signing secret comes from the
+      # GitHub secret ETSY_WEBHOOK_SECRET (docs/features/orders-ingest/operations.md); blank means
+      # unset. Rollback: "false" (reconciliation keeps the store complete meanwhile).
       - key: HTCO_ETSY_WEBHOOKS_ENABLED
         scope: RUN_TIME
-        value: "false"
+        value: "true"
       - key: HTCO_ETSY_WEBHOOK_SECRET
         scope: RUN_TIME
         type: SECRET

@@ -5,7 +5,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from htco_application.jobs import JobError, JobSpec, describe_error, due_schedule_jobs
+from htco_application.jobs import JobSpec, due_schedule_jobs
+from htco_application.kernel import JobError, describe_error
 from htco_domain.jobs import Schedule
 from tests.job_fakes import MemoryJobQueue
 
