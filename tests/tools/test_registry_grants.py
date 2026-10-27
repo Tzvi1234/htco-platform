@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from htco_application.execution.channels import EtsyApiChannel
 from htco_application.execution.contracts import ActionCatalogError
 from htco_application.execution.schema import validate
 from htco_application.workforce.files import (
@@ -18,6 +19,7 @@ from htco_application.workforce.files import (
 from htco_application.workforce.registry import RESTRICTED_GRANTS as REGISTRY_RESTRICTED_GRANTS
 from htco_application.workforce.registry import Registry, RegistryError
 from htco_domain.actors import ActorKind
+from tests.application.test_execution_router import EtsyShops, FakeMarketplace
 from tools.registry import ACTION_SCHEMAS, RESTRICTED_GRANTS, main, unauthorized_grants
 
 ROOT = Path(__file__).resolve().parents[2] / "registry"
@@ -153,7 +155,7 @@ def _actions() -> dict[str, dict[str, Any]]:
     ("action", "recipe"),
     [(ORDER_HISTORY, "list_order_history"), (SHIPMENTS, "list_shipments")],
 )
-def test_a_new_read__is_r1_automation_only_and_disabled_until_its_recipe(
+def test_a_new_read__is_r1_automation_only_and_its_recipe_is_built(
     action: str, recipe: str
 ) -> None:
     raw = _actions()[action]
@@ -169,8 +171,9 @@ def test_a_new_read__is_r1_automation_only_and_disabled_until_its_recipe(
         "recipe": recipe,
         "requires_capability": "receipts_read",
         "breaker_key": "etsy:api",
-        "disabled": True,
     }
+    # Enabled (#147 part B): the API channel runs its recipe.
+    assert recipe in EtsyApiChannel(FakeMarketplace(), EtsyShops()).recipes
 
 
 def test_receipts_read__keeps_its_contract() -> None:

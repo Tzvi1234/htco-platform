@@ -45,7 +45,7 @@ from htco_application.jobs import JobError
 from htco_application.marketplace import MarketplacePort
 from htco_application.mfa import Enrollment, Factor
 from htco_application.notifications import SecurityNotices
-from htco_application.order_history import OrderSync
+from htco_application.order_history import OrderSync, adapter_pages
 from htco_application.order_intake import QueuedSyncRequests
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
@@ -556,8 +556,7 @@ def _etsy_wiring(
     # HTCO_ORDER_SYNC_IN_API is off; until then this process runs it as the fallback.
     history = OrderSync(
         store=PostgresOrderStore(database),
-        source=adapter,
-        tokens=tokens,
+        pages=adapter_pages(adapter, tokens),
         clock=lambda: datetime.now(UTC),
         audit=PostgresAuditLog(database),
         requests=None

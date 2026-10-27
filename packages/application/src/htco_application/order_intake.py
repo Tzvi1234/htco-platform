@@ -1,7 +1,7 @@
 """Etsy Order Intake on the durable engine (slice 5.4): the `etsy-order-intake` handler.
 
-Every Etsy read goes through the Action Gateway (`etsy.receipts.read`, API channel, the guarded
-GET-only adapter, the app-wide rate budget and the `etsy:api` breaker), in its order history form:
+Every Etsy read goes through the Action Gateway (`etsy.order_history.read` by `OrderHistoryRead`,
+API channel, the guarded GET-only adapter, the app-wide rate budget and the `etsy:api` breaker):
 the whole receipt as the store keeps it, an R1 output the gateway never stores. Every write goes
 to the #57 order history store through its one ingest path (`order_ingest`), in one transaction
 with the state transitions, the estimated money and the events.
@@ -21,15 +21,17 @@ The API process no longer runs the sync when `HTCO_ORDER_SYNC_IN_API` is off: it
 import asyncio
 import logging
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta, tzinfo
 from typing import Protocol
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
+from htco_application.etsy_reads import (
+    OrderHistoryRead,
+)
 from htco_application.etsy_webhooks import ORDER_INTAKE, TriggersAutomations
-from htco_application.execution.gateway import ActionOutcome, ActionRef, ActionRequest
 from htco_application.jobs import ClaimedJob, JobQueue, JobSpec, fan_out_per_shop
 from htco_application.kernel import (
     ConnectedShops,
@@ -41,14 +43,12 @@ from htco_application.kernel import (
     run_inline,
 )
 from htco_application.marketplace import (
-    AccessTokenProvider,
     MarketplaceRateLimitedError,
     OrderReceipt,
 )
 from htco_application.order_history import (
     INCREMENTAL_DAYS,
     MAX_RATE_LIMIT_WAIT,
-    PAGE,
     RATE_LIMIT_RETRIES,
     OrderStore,
     OrderSync,
@@ -59,14 +59,12 @@ from htco_application.order_ingest import (
     IngestPlan,
     IngestSource,
 )
-from htco_application.order_receipts import receipt_from_json
 from htco_application.shop_integrations import ShopIntegration
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import TriggerKind
 from htco_domain.integrations import IntegrationStatus
 from htco_domain.jobs import Schedule
 
-RECEIPTS_READ = ActionRef("etsy.receipts.read", 1)
 ORDER_SYNC_JOB = "etsy.order_sync"
 DELIVERED = "order.delivered"
 # One requested history run per shop and period (the dashboard's stale reads), and the Owner's
@@ -122,114 +120,6 @@ class ShopBusyError(JobError):
     """Another run holds the shop's order lock: retried by the execution's policy."""
 
 
-class IntakeActionError(JobError):
-    """The gateway refused or failed the read: the execution retries by its policy."""
-
-
-class _NoPinning:
-    """The gateway's API channel reads with the vault's own token source; nothing to pin."""
-
-    def pinned(self, shop_id: uuid.UUID, *, generation: int) -> AccessTokenProvider:  # noqa: ARG002 - the port
-        return _UNUSED
-
-
-class _UnusedTokens:
-    async def access_token(self, shop_id: int) -> str:  # pragma: no cover - never called
-        del shop_id
-        raise AssertionError("the gateway reads with its own tokens")
-
-
-_UNUSED = _UnusedTokens()
-
-
-@dataclass
-class GatewayReceipts:
-    """The order history's `ReceiptSource` through the Action Gateway, for one execution."""
-
-    context: HandlerContext
-    clock: Callable[[], datetime]
-
-    async def list_order_receipts(  # noqa: PLR0913 - the ReceiptSource port
-        self,
-        shop_id: int,  # noqa: ARG002 - the gateway resolves the shop's Etsy ID itself
-        *,
-        min_created: datetime | None,  # noqa: ARG002 - the order history reads all, or changes
-        min_last_modified: datetime | None = None,
-        limit: int = PAGE,
-        offset: int = 0,
-        urgent: bool = False,  # noqa: ARG002 - intake reads are routine
-        tokens: AccessTokenProvider | None = None,  # noqa: ARG002 - see _NoPinning
-        open_orders: bool = False,
-    ) -> Page[OrderReceipt]:
-        values: dict[str, JsonValue] = {"order_history": True, "limit": limit, "offset": offset}
-        window = "all"
-        if open_orders:  # every paid, unshipped receipt, whenever it was ordered (5.5)
-            values |= {"was_paid": True, "was_shipped": False}
-            window = "open"
-        if min_last_modified is not None:
-            since = int(min_last_modified.timestamp())
-            values["min_last_modified"] = since
-            window = f"since{since}"
-        output = await self._read(values, f"{window}:{offset}")
-        receipts = tuple(_receipts(output))
-        count = output.get("count")
-        return Page(
-            items=receipts,
-            total_count=count if isinstance(count, int) else len(receipts),
-            offset=offset,
-        )
-
-    async def get_order_receipt(self, receipt_id: int) -> OrderReceipt:
-        output = await self._read(
-            {"order_history": True, "receipt_id": receipt_id}, f"receipt:{receipt_id}"
-        )
-        found = [r for r in _receipts(output) if r.receipt_id == receipt_id]
-        if not found:
-            raise IntakeActionError(f"etsy.receipts.read returned no receipt {receipt_id}")
-        return found[0]
-
-    async def _read(self, values: dict[str, JsonValue], part: str) -> Mapping[str, JsonValue]:
-        ctx = self.context
-        # Unique per execution attempt and page: an R1 read's output is never stored, so a
-        # finished key could not answer again; a deferred key continues after its retry_at.
-        key = f"{ctx.execution_id}:{ctx.attempt}:{part}"
-        result = await ctx.gateway.submit(
-            ActionRequest(
-                action=RECEIPTS_READ,
-                actor=ActorRef(ActorKind.AUTOMATION, ctx.automation_id),
-                organization_id=ctx.organization_id,
-                shop_id=ctx.shop_id,
-                idempotency_key=key[:200],
-                correlation_id=ctx.correlation_id,
-                causation_id=f"execution:{ctx.execution_id}",
-                input=values,
-            )
-        )
-        if result.outcome is ActionOutcome.SUCCEEDED and result.output is not None:
-            return result.output
-        if result.outcome is ActionOutcome.DEFERRED:
-            wait = None
-            if result.retry_at is not None:
-                wait = max(1.0, (result.retry_at - self.clock()).total_seconds())
-            # The order history waits out a 429 a few times, then the run fails into a retry.
-            raise MarketplaceRateLimitedError(
-                f"etsy.receipts.read deferred ({result.error_code})", retry_after_seconds=wait
-            )
-        raise IntakeActionError(
-            f"etsy.receipts.read {result.outcome.value}: {result.error_code or 'no output'}"
-        )
-
-
-def _receipts(output: Mapping[str, JsonValue]) -> list[OrderReceipt]:
-    raw = output.get("receipts")
-    if not isinstance(raw, list):
-        raise IntakeActionError("etsy.receipts.read returned no receipts list")
-    try:
-        return [receipt_from_json(item) for item in raw if isinstance(item, dict)]
-    except KeyError, TypeError, ValueError:
-        raise IntakeActionError("etsy.receipts.read returned an unreadable receipt") from None
-
-
 @dataclass
 class OrderIntake:
     """The `etsy-order-intake` handler."""
@@ -249,7 +139,7 @@ class OrderIntake:
             or integration.status is not IntegrationStatus.CONNECTED
         ):
             return Completed({"skipped": "not_connected"})
-        receipts = GatewayReceipts(ctx, self.clock)
+        receipts = OrderHistoryRead(ctx, self.clock)
         receipt_id = ctx.payload.get("receipt_id")
         if isinstance(receipt_id, int) and not isinstance(receipt_id, bool):
             return await self._receipt(ctx, integration, receipts, receipt_id)
@@ -264,7 +154,7 @@ class OrderIntake:
         self,
         ctx: HandlerContext,
         integration: ShopIntegration,
-        receipts: GatewayReceipts,
+        receipts: OrderHistoryRead,
         *,
         sweep: bool,
     ) -> HandlerOutcome:
@@ -312,7 +202,7 @@ class OrderIntake:
     async def _pages(
         self,
         integration: ShopIntegration,
-        receipts: GatewayReceipts,
+        receipts: OrderHistoryRead,
         context: IngestContext,
         *,
         since: datetime | None = None,
@@ -331,15 +221,14 @@ class OrderIntake:
         return seen, drifts
 
     async def _page(
-        self, receipts: GatewayReceipts, *, since: datetime | None, offset: int, open_orders: bool
+        self, receipts: OrderHistoryRead, *, since: datetime | None, offset: int, open_orders: bool
     ) -> Page[OrderReceipt]:
         """One page; a deferral (429, the daily budget) is waited out a few times."""
         for attempt in range(RATE_LIMIT_RETRIES + 1):
             try:
-                return await receipts.list_order_receipts(
-                    0, min_created=None, min_last_modified=since, offset=offset,
-                    open_orders=open_orders,
-                )  # fmt: skip
+                return await receipts.page(
+                    changed_since=since, offset=offset, open_orders=open_orders
+                )
             except MarketplaceRateLimitedError as error:
                 if attempt == RATE_LIMIT_RETRIES:
                     raise
@@ -348,10 +237,10 @@ class OrderIntake:
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def _count(
-        self, integration: ShopIntegration, receipts: GatewayReceipts
+        self, integration: ShopIntegration, receipts: OrderHistoryRead
     ) -> dict[str, JsonValue]:
         """Etsy's receipt count against the store's (the nightly sweep): a gap is reported."""
-        page = await receipts.list_order_receipts(0, min_created=None, limit=1, offset=0)
+        page = await receipts.page(limit=1)
         stored = await self.store.order_count(integration.shop_id, integration.etsy_shop_id)
         return {"etsy_receipts": page.total_count, "orders_stored": stored}
 
@@ -359,10 +248,10 @@ class OrderIntake:
         self,
         ctx: HandlerContext,
         integration: ShopIntegration,
-        receipts: GatewayReceipts,
+        receipts: OrderHistoryRead,
         receipt_id: int,
     ) -> HandlerOutcome:
-        receipt = await receipts.get_order_receipt(receipt_id)
+        receipt = await receipts.receipt(receipt_id)
         delivered = frozenset({receipt_id}) if ctx.payload.get("event_type") == DELIVERED else None
         context = IngestContext(
             IngestSource.WEBHOOK,
@@ -382,12 +271,11 @@ class OrderIntake:
         )
 
     async def _history(
-        self, ctx: HandlerContext, integration: ShopIntegration, receipts: GatewayReceipts
+        self, ctx: HandlerContext, integration: ShopIntegration, receipts: OrderHistoryRead
     ) -> HandlerOutcome:
         sync = OrderSync(
             store=self.store,
-            source=receipts,
-            tokens=_NoPinning(),
+            pages=lambda _integration: receipts,
             clock=self.clock,
             sleep=self.sleep,
             backfill_context=BACKFILL,

@@ -49,7 +49,6 @@ channel = "api"
 recipe = "list_order_history"
 requires_capability = "receipts_read"
 breaker_key = "etsy:api"
-disabled = true  # no recipe yet (#147 part B)
 
 # AUD-06 (#147 part B): the shipments' tracking codes, no buyer data. Granted to tracking-sync
 # only (tools/registry.py RESTRICTED_GRANTS); never to a user or employee.
@@ -67,7 +66,6 @@ channel = "api"
 recipe = "list_shipments"
 requires_capability = "receipts_read"
 breaker_key = "etsy:api"
-disabled = true  # no recipe yet (#147 part B)
 
 [[actions]]
 tool = "etsy.reviews.read"

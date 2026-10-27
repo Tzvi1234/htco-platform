@@ -2,6 +2,8 @@
 and a write never reaches a channel (the shared approval contract waits for a decision no one
 can give in the worker)."""
 
+import re
+import shutil
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -25,7 +27,7 @@ from htco_application.execution.service import (
     ShopOwners,
 )
 from htco_application.order_intake import ORDER_SYNC_JOB
-from htco_application.workforce.registry import parse_automation
+from htco_application.workforce.registry import RegistryError, parse_automation
 from htco_domain.actors import ActorKind, ActorRef
 from htco_persistence.database import Database
 from htco_worker.main import NoUsers, order_sync_handlers, worker_engine, worker_gateway
@@ -65,6 +67,31 @@ def test_gateway__off__refuses_every_action() -> None:
 
 def test_gateway__without_the_etsy_app__refuses_every_action() -> None:
     assert isinstance(worker_gateway(_settings(), Database(DATABASE), None), UnavailableGateway)
+
+
+@pytest.mark.parametrize(
+    ("automation", "action"),
+    [("tracking-sync", "etsy.order_history.read"), ("etsy-order-intake", "etsy.shipments.read")],
+)
+def test_gateway__a_registry_granting_a_restricted_read_elsewhere__refused_at_startup(
+    tmp_path: Path, automation: str, action: str
+) -> None:
+    """AUD-06 (#147): the worker refuses to start on such a grant, before it reads Postgres."""
+    registry = tmp_path / "registry"
+    shutil.copytree(ROOT / "registry", registry)
+    path = registry / "automations" / f"{automation}.toml"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        text.replace("allowed_actions = [", f'allowed_actions = ["{action}", ', 1),
+        encoding="utf-8",
+    )
+    assert action in path.read_text(encoding="utf-8")
+    settings = _settings(
+        registry_path=registry, action_schemas_path=ROOT / "packages" / "contracts" / "actions"
+    )
+
+    with pytest.raises(RegistryError, match=rf"{automation}.*{re.escape(action)}"):
+        worker_gateway(settings, Database(DATABASE), FakeMarketplace())  # type: ignore[arg-type]
 
 
 def test_gateway__on__the_real_gateway_with_the_registry_and_contracts() -> None:

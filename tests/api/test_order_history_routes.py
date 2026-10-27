@@ -13,7 +13,7 @@ from datetime import timedelta
 import pytest
 
 from htco_application.marketplace import OrderRefund
-from htco_application.order_history import OrderSync
+from htco_application.order_history import OrderSync, adapter_pages
 from htco_domain.identity import Role
 from tests.api.test_etsy_connect_routes import CSRF, PROBLEMS
 from tests.api.test_shop_data_routes import World, _world
@@ -34,8 +34,7 @@ class Wired:
         self.audit = AuditLog()
         self.sync = OrderSync(
             store=self.store,
-            source=world.source,
-            tokens=Pinning(),
+            pages=adapter_pages(world.source, Pinning()),
             clock=world.clock,
             audit=self.audit,
         )

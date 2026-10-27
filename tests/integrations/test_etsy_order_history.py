@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from htco_application.marketplace import MarketplaceMoney, ShippingAddress
-from htco_application.order_history import OrderSync
+from htco_application.order_history import OrderSync, adapter_pages
 from htco_integrations.etsy import EtsyConfig
 from tests.application.test_shop_dashboard import SHOP, World
 from tests.etsy_fakes import Pinning
@@ -128,7 +128,9 @@ async def test_backfill_through_the_adapter__gets_only_and_every_page() -> None:
     )
     harness = Harness(etsy, EtsyConfig())
     store = MemoryOrderStore()
-    sync = OrderSync(store=store, source=harness.adapter, tokens=Pinning(), clock=world.clock)
+    sync = OrderSync(
+        store=store, pages=adapter_pages(harness.adapter, Pinning()), clock=world.clock
+    )
 
     with capture_logs() as logs:
         async with harness.client:

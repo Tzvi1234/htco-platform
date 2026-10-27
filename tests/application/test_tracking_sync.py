@@ -38,6 +38,7 @@ from htco_domain.automation import AutomationExecution, TriggerKind
 from htco_domain.fulfillment import tracking_fingerprint
 from htco_domain.incidents import Cause, IncidentState, ResourceKind
 from htco_domain.integrations import IntegrationStatus
+from htco_domain.workforce import Readiness
 from tests.application.test_action_gateway import ORG, SHOP, office
 from tests.application.test_execution_router import EtsyShops, FakeMarketplace
 from tests.application.test_order_intake import _vault
@@ -58,10 +59,14 @@ SECOND_CODE = "FAKE-INTAKE-TRACK-02"
 def tracking_office() -> Registry:
     base = office()
     automation = parse_automation(
-        engine_document(TRACKING_SYNC, allowed_actions=["etsy.receipts.read"])
+        engine_document(TRACKING_SYNC, allowed_actions=["etsy.shipments.read"])
     )
+    tools = dict(base.tools)
+    tools["etsy.shipments.read"] = replace(tools["etsy.shipments.read"], readiness=Readiness.ACTIVE)
     return replace(
-        base, automations=MappingProxyType({**base.automations, TRACKING_SYNC: automation})
+        base,
+        tools=MappingProxyType(tools),
+        automations=MappingProxyType({**base.automations, TRACKING_SYNC: automation}),
     )
 
 

@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from htco_application.etsy_reads import ORDER_HISTORY_READ
 from htco_application.execution.channels import EtsyApiChannel
 from htco_application.execution.gateway import ActionOutcome, ActionRequest, Channel
 from htco_application.execution.guards import Guards, MemoryBreakers, MemoryRateLimiter, MemorySlots
@@ -34,7 +35,6 @@ from htco_application.order_intake import (
     DEFAULT_RECONCILIATION_TIMES,
     DEFAULT_RECONCILIATION_TZ,
     ORDER_SYNC_JOB,
-    RECEIPTS_READ,
     RECONCILE,
     SWEEP,
     ShopBusyError,
@@ -452,11 +452,11 @@ async def test_budget__the_gateways_limiter_enforces_it() -> None:
 
 def _read_request(execution_id: uuid.UUID) -> ActionRequest:
     return ActionRequest(
-        action=RECEIPTS_READ,
+        action=ORDER_HISTORY_READ,
         actor=ActorRef(ActorKind.AUTOMATION, "etsy-order-intake"),
         organization_id=ORG,
         shop_id=SHOP,
         idempotency_key=f"{execution_id}:read",
         correlation_id="c",
-        input={"order_history": True, "limit": 100, "offset": 0},
+        input={"limit": 100, "offset": 0},
     )
