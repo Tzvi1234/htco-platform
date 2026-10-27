@@ -31,9 +31,9 @@ def assert_event_contract(event: OutboxMessage | Mapping[str, JsonValue]) -> Non
 
 
 def check_if_event(message: OutboxMessage) -> OutboxMessage:
-    """For the test outboxes: an enveloped `events.publish` message must match its schema.
-    Flat messages (the gateway's `actions.*` until its follow-up) pass through unchecked."""
-    if message.destination == EVENTS_DESTINATION and "payload_version" in message.payload:
+    """For the test outboxes: every `events.publish` message must match its schema, flat ones
+    too (the gateway's `actions.*` have temporary flat schemas until #205; Codex on #174)."""
+    if message.destination == EVENTS_DESTINATION:
         assert_event_contract(message)
     return message
 

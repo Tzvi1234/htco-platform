@@ -28,7 +28,8 @@ Events are published through the outbox (`jobs.outbox`, slice 5.2); the first pr
   - a schema has no linked row here;
   - a link points to a missing schema;
   - a producer's test builds an event that does not validate (`tests/event_contracts.py`).
-- The Action Gateway's `actions.*` events still use the flat shape until the `execution/` follow-up of #140 moves them to `publish`. Their schemas already describe the envelope.
+- The Action Gateway's `actions.*` events still use the flat shape until the `execution/` follow-up (#205) moves them to `publish`. Until then their schemas are **temporary** and describe that flat shape ("remove after migration"), so the test outboxes check the events the gateway really writes.
+- A nullable field has a machine type, such as `"type": ["integer", "null"]`. Only a field that may hold any JSON value is untyped, and its description says so.
 
 | Event | Producer | Consumers | Phase |
 |---|---|---|---|

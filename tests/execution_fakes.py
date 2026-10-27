@@ -20,6 +20,7 @@ from htco_application.execution.service import Claim, Finish
 from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_application.workforce.registry import Registry
 from htco_domain.actions import ACTION_FINAL_STATES, ActionState
+from tests.event_contracts import check_if_event
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = ROOT / "registry"
@@ -70,6 +71,8 @@ class MemoryActionStore:
             )
 
     def record(self, execution_id: uuid.UUID, step: Finish, *, now: datetime) -> None:  # noqa: ARG002
+        if step.event is not None:
+            check_if_event(step.event)  # the gateway's real events, against their schemas
         with self._guard:
             row = self.rows[self.ids[execution_id]]
             row.state, row.result = step.state, step.result

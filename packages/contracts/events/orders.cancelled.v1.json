@@ -31,9 +31,17 @@
       "minLength": 1
     },
     "correlation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "string or null"
     },
     "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "string or null"
     },
     "idempotency_key": {
@@ -81,6 +89,10 @@
           "type": "integer"
         },
         "state": {
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "string or null"
         },
         "etsy_updated_at": {
