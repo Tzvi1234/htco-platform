@@ -23,3 +23,11 @@ def shard_of(nodeid: str, count: int) -> int:
 def select_shard(nodeids: Sequence[str], index: int, count: int) -> list[str]:
     """The node ids that belong to shard `index` of `count`, in their original order."""
     return [nodeid for nodeid in nodeids if shard_of(nodeid, count) == index]
+
+
+FUZZ_FILE = "tests/contract/test_api_fuzzing.py"
+
+
+def is_kept(nodeid: str, index: int, count: int) -> bool:
+    """Only the fuzzing file is sharded; every other test always stays selected."""
+    return not nodeid.startswith(f"{FUZZ_FILE}::") or shard_of(nodeid, count) == index

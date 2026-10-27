@@ -77,7 +77,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `total` is the shard count passed to `just fuzz`; tests/tools/test_fuzz_sharding.py fails
+        # if it differs from the number of shards listed here.
         shard: [0, 1, 2, 3]
+        total: [4]
     permissions:
       contents: read
     steps:
@@ -91,7 +94,7 @@ jobs:
           enable-cache: true
           cache-python: true
       - name: API fuzzing
-        run: uv run just fuzz "${{ matrix.shard }}/4"
+        run: uv run just fuzz "${{ matrix.shard }}/${{ matrix.total }}"
   # A real Chromium against pages served on 127.0.0.1 only, never a live site (Phase 8A).
   browser:
     name: browser
