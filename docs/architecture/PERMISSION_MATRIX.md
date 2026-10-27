@@ -62,6 +62,8 @@ Automations run under their own service identities with least-privilege database
 | Etsy Order Intake, Order Deduplication & Verification | Read Etsy receipts; upsert orders, items, shipments; write inbox, events and activity records | Any Etsy write; reading tokens of other shops |
 | Product Sales Counters, Finance Ledger Ingestion | Write counters and ledger entries from verified events | Changing orders; any external call |
 | Tracking Synchronization, Incident Detection & Escalation | Read orders and shipments; create and close incidents; request notifications | Etsy writes |
+| Etsy Order Intake only: `etsy.order_history.read` (R1, AUD-06) | Read receipts in their order history form, with the buyer data it stores | Granting it to another automation, an employee or a user: `python -m tools.registry --check` refuses the grant (`RESTRICTED_GRANTS`) |
+| Tracking Synchronization only: `etsy.shipments.read` (R1, AUD-06) | Read the shipments' tracking codes and carriers; no buyer data | Granting it to another automation, an employee or a user: `python -m tools.registry --check` refuses the grant (`RESTRICTED_GRANTS`) |
 | Catalog Draft Creation & Publishing | Create drafts; publish only an approved specification | Pricing changes; publishing without an approval |
 | Supplier Quote Request & Follow-up | Record requests and quotes; update the workflow status | Activating a mapping without approval; payments |
 | Order & Financial Reconciliation | Read internal and external records; write reconciliation evidence and findings | Correcting records directly |

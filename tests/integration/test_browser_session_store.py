@@ -14,7 +14,12 @@ import psycopg
 import pytest
 
 from htco_application.browser_controller import BrowserController, SessionTimeoutError
-from htco_application.browser_profiles import ProfileVault, ProfileWorkspaces
+from htco_application.browser_profiles import (
+    ProfileFenceLostError,
+    ProfileRecordError,
+    ProfileVault,
+    ProfileWorkspaces,
+)
 from htco_persistence.browser_profiles import PostgresBrowserProfiles
 from htco_persistence.browser_sessions import PostgresProfileLocks, PostgresSessionLog, lock_key
 from htco_persistence.database import Database, tenant_scope
@@ -184,3 +189,86 @@ async def test_lock__a_dropped_lease_stays_lost_after_another_session_takes_the_
             assert second.held
             assert not await locks.still_held(first)
             assert await locks.still_held(second)
+
+
+def _vault(profiles: PostgresBrowserProfiles) -> ProfileVault:
+    return ProfileVault(
+        EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), profiles, lambda: datetime.now(UTC)
+    )
+
+
+@pytest.mark.ac("AC-8A.2.2")
+async def test_profile__a_lost_lease_never_overwrites_a_newer_archive(
+    admin: Database, browser: Database
+) -> None:
+    """Codex on #122 (#169), on real Postgres: S1 passes its fence check, then its lock's
+    connection drops while it packs. S2 takes the lock and commits newer cookies. S1's write
+    is then refused inside the write itself, so the stale cookies never win."""
+    tenant = Tenant(admin)
+    _, environment_id = an_environment(admin, tenant)
+    profiles = PostgresBrowserProfiles(browser)
+    vault = _vault(profiles)
+    locks = PostgresProfileLocks(admin, poll_seconds=0.05)
+    with tenant_scope(tenant.organization_id):
+        environment = profiles.by_id(environment_id)
+        assert environment is not None
+        async with locks.hold(environment_id, until=soon(3)) as first:
+            assert await locks.still_held(first)  # S1's check passes
+            scalar(
+                admin, "select pg_terminate_backend(%s)", [first.connection.info.backend_pid]
+            )  # S1's lock connection drops while it packs
+            async with locks.hold(environment_id, until=soon(3)) as second:
+                assert second.held
+                vault.seal(environment, b"fresh", fence=second)
+            with pytest.raises(ProfileFenceLostError):
+                vault.seal(environment, b"stale", fence=first)
+        assert vault.open(environment) == b"fresh"
+
+
+@pytest.mark.ac("AC-8A.2.2")
+async def test_profile__a_fenced_write_needs_this_backend_to_hold_the_lock(
+    admin: Database, browser: Database
+) -> None:
+    """A lease that never took the lock, or another environment's lease, writes nothing; a lease
+    that holds it writes, on its own connection, as the browser role in the tenant's scope."""
+    tenant, other = Tenant(admin), Tenant(admin)
+    _, environment_id = an_environment(admin, tenant)
+    _, elsewhere_id = an_environment(admin, tenant)
+    profiles = PostgresBrowserProfiles(browser)
+    vault = _vault(profiles)
+    locks = PostgresProfileLocks(admin, poll_seconds=0.05)
+    with tenant_scope(tenant.organization_id):
+        environment = profiles.by_id(environment_id)
+        assert environment is not None
+        async with locks.hold(elsewhere_id, until=soon(2)) as foreign:
+            with pytest.raises(ProfileFenceLostError):
+                vault.seal(environment, b"foreign", fence=foreign)
+        async with locks.hold(environment_id, until=soon(2)) as lease:
+            async with locks.hold(environment_id, until=soon(0.2)) as waiting:
+                assert not waiting.held
+                with pytest.raises(ProfileFenceLostError):
+                    vault.seal(environment, b"waiting", fence=waiting)
+            vault.seal(environment, b"held", fence=lease)
+            # The transaction's role and tenant were `set local`: the lock's connection is back
+            # to its login role with no tenant.
+            row = lease.connection.execute(
+                "select current_user, current_setting('htco.organization_id', true)"
+            ).fetchone()
+            assert row is not None
+            assert row[0] != "htco_browser"
+            assert row[1] in (None, "")
+            # The backend is alive but no longer holds the lock: the check inside the write
+            # refuses it.
+            lease.connection.execute(
+                "select pg_advisory_unlock(hashtextextended(%s, 0))", [lock_key(environment_id)]
+            )
+            with pytest.raises(ProfileFenceLostError):
+                vault.seal(environment, b"unlocked", fence=lease)
+        assert vault.open(environment) == b"held"
+    # Another organization's scope: RLS hides the row, so even a held lease writes nothing.
+    with tenant_scope(other.organization_id):
+        async with locks.hold(environment_id, until=soon(2)) as lease:
+            with pytest.raises(ProfileRecordError):
+                vault.seal(environment, b"other", fence=lease)
+    with tenant_scope(tenant.organization_id):
+        assert vault.open(environment) == b"held"

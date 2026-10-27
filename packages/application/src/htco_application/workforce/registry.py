@@ -42,6 +42,36 @@ type Document = Mapping[str, Any]
 OWNER = "owner"
 
 
+# AUD-06 (#147 part B): the Etsy reads that hand over buyer data or tracking codes, and the only
+# automations that may be granted each one; no employee may hold them. Enforced when the registry
+# loads (`Registry.from_documents`), so the worker and the API refuse an unauthorized grant at
+# startup, not only the CLI check (sage2 on #207).
+RESTRICTED_GRANTS: Mapping[str, frozenset[str]] = MappingProxyType(
+    {
+        "etsy.order_history.read": frozenset({"etsy-order-intake"}),
+        "etsy.shipments.read": frozenset({"tracking-sync"}),
+    }
+)
+
+
+def restricted_grant_problems(
+    automations: Mapping[str, AutomationDefinition], employees: Mapping[str, EmployeeProfile]
+) -> list[str]:
+    """Every grant of a restricted read to an automation or an employee outside its allowlist."""
+    problems = [
+        f"automation {automation.id!r} may not be granted {action!r}"
+        for automation in sorted(automations.values(), key=lambda a: a.id)
+        for action in sorted(automation.allowed_actions & RESTRICTED_GRANTS.keys())
+        if automation.id not in RESTRICTED_GRANTS[action]
+    ]
+    problems += [
+        f"employee {employee_id!r} may not be granted {tool!r}"
+        for employee_id, profile in sorted(employees.items())
+        for tool in sorted(profile.allowed_tools & RESTRICTED_GRANTS.keys())
+    ]
+    return problems
+
+
 class RegistryError(ValueError):
     def __init__(self, problems: Sequence[str]) -> None:
         self.problems = tuple(problems)
@@ -313,6 +343,7 @@ class Registry:
             for advisor in advisor_map
             if advisor in employee_map
         ]
+        problems += restricted_grant_problems(automation_map, employee_map)
         if problems:
             raise RegistryError(problems)
         return cls(

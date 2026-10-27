@@ -12,14 +12,27 @@ from pathlib import Path
 
 from htco_application.execution.contracts import ActionCatalogError
 from htco_application.workforce.files import read_action_catalog, read_registry
-from htco_application.workforce.registry import Registry, RegistryError
+from htco_application.workforce.registry import (
+    RESTRICTED_GRANTS,
+    Registry,
+    RegistryError,
+    restricted_grant_problems,
+)
 
 REGISTRY_ROOT = Path(__file__).resolve().parents[1] / "registry"
 ACTION_SCHEMAS = Path(__file__).resolve().parents[1] / "packages" / "contracts" / "actions"
 
+# AUD-06's allowlist lives with the registry the runtime loads; re-exported for the check.
+__all__ = ["ACTION_SCHEMAS", "REGISTRY_ROOT", "RESTRICTED_GRANTS", "load_registry", "main"]
+
 
 def load_registry(root: Path = REGISTRY_ROOT) -> Registry:
     return read_registry(root).registry()
+
+
+def unauthorized_grants(registry: Registry) -> list[str]:
+    """A loaded registry has none (the load refuses them); kept for the check's summary."""
+    return restricted_grant_problems(registry.automations, registry.employees)
 
 
 def main(argv: list[str]) -> int:
@@ -32,6 +45,10 @@ def main(argv: list[str]) -> int:
         catalog = read_action_catalog(args.root, ACTION_SCHEMAS, registry)
     except (RegistryError, ActionCatalogError) as error:
         sys.stderr.write(f"{error}\n")
+        return 1
+    problems = unauthorized_grants(registry)
+    if problems:
+        sys.stderr.write("".join(f"- {problem}\n" for problem in problems))
         return 1
     ready = sum(p.is_production_ready() for p in registry.employees.values())
     sys.stdout.write(

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.shipments.read.output.json",
+  "title": "etsy.shipments.read output",
+  "type": "object",
+  "required": [
+    "shipments"
+  ],
+  "properties": {
+    "shipments": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": [
+          "receipt_id",
+          "shipments"
+        ],
+        "properties": {
+          "receipt_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "shipments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "tracking_code"
+              ],
+              "properties": {
+                "tracking_code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "carrier_name": {
+                  "description": "Absent when Etsy has none (the schema subset has no null union).",
+                  "type": "string"
+                },
+                "shipment_notification_timestamp": {
+                  "description": "Epoch seconds; absent when Etsy has none.",
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}
