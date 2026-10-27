@@ -29,6 +29,7 @@ from htco_application.notifications import NotificationRequest, NotificationServ
 from htco_application.shops import OrganizationRequiredError
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.fulfillment import BusinessCalendar, TrackingNumber
+from htco_domain.identity import AssuranceLevel, Role
 from htco_domain.notifications import NotificationKind
 from htco_domain.relay import ClosedReason, RelayState, relay_window
 
@@ -297,6 +298,25 @@ def _allowed(
     return decide(principal, capability, shop=shop, now=now).outcome is Outcome.ALLOW
 
 
+class SecondFactorRequiredError(PermissionError):
+    """The paste needs a session signed in with a second factor (aal2)."""
+
+
+# Who pastes and copies a tracking number (6.10 PR B, main's decision of 2026-10-27): an Owner or
+# an Admin of the organization, signed in with a second factor. The code is buyer data, and the
+# copy goes into Etsy's order, so no shop role does it.
+_RELAY_OPERATORS = frozenset({Role.OWNER, Role.ADMIN})
+
+
+def _operator_refusal(auth: AuthContext, organization_id: uuid.UUID) -> PermissionError | None:
+    principal = auth.principal_for(organization_id)
+    if principal.role not in _RELAY_OPERATORS:
+        return PermissionError("only an Owner or an Admin pastes and copies tracking")
+    if principal.assurance is not AssuranceLevel.AAL2:
+        return SecondFactorRequiredError("confirm with your second factor first")
+    return None
+
+
 class RelayCursorError(ValueError):
     """The cursor names no relay item of the organization."""
 
@@ -352,8 +372,8 @@ def submit_tracking(  # noqa: PLR0913 - the caller, the item and the pasted trac
     correlation_id: str | None,
 ) -> RelayItem:
     """The owner pastes the number from AutoVA. Raises `RelayItemNotVisibleError` (404),
-    `PermissionError` (403), `TrackingFormatError` (422), `RelayItemMovedError` and
-    `DuplicateTrackingError` (409)."""
+    `PermissionError` (403), `SecondFactorRequiredError` (403 mfa-required),
+    `TrackingFormatError` (422), `RelayItemMovedError` and `DuplicateTrackingError` (409)."""
     organization_id = _organization(auth, organization_id)
     item = store.item(organization_id, item_id)
     if item is None or not _allowed(
@@ -363,6 +383,9 @@ def submit_tracking(  # noqa: PLR0913 - the caller, the item and the pasted trac
     for capability in (Capability.UPDATE_INCIDENTS, Capability.VIEW_BUYER_CONTACT):
         if not _allowed(auth, organization_id, item.shop_id, capability, now=now):
             raise PermissionError("the role may not paste tracking")
+    refusal = _operator_refusal(auth, organization_id)
+    if refusal is not None:
+        raise refusal
     tracking = TrackingNumber.parse(carrier, code)  # before anything else (AC-6.10.4)
     if item.state is not RelayState.AWAITING_TRACKING:
         raise RelayItemMovedError(item.state)
@@ -392,15 +415,19 @@ def relay_code(  # noqa: PLR0913 - the caller, the item and the request
     now: datetime,
     correlation_id: str | None,
 ) -> str:
-    """The pasted code for the person who copies it into Etsy: buyer-data roles of the shop
-    only, while the item is open, and every reveal audited (`relay.code_revealed`, without the
-    code). Anyone else, or a closed item, gets `RelayItemNotVisibleError` (404), so the answer
+    """The pasted code for the person who copies it into Etsy: an Owner or Admin with a second
+    factor only, while the item is open, and every reveal audited (`relay.code_revealed`, without
+    the code). Anyone else, or a closed item, gets `RelayItemNotVisibleError` (404), so the answer
     never says whether a code exists."""
     organization_id = _organization(auth, organization_id)
     item = store.item(organization_id, item_id)
-    if item is None or not all(
-        _allowed(auth, organization_id, item.shop_id, capability, now=now)
-        for capability in (Capability.UPDATE_INCIDENTS, Capability.VIEW_BUYER_CONTACT)
+    if (
+        item is None
+        or not all(
+            _allowed(auth, organization_id, item.shop_id, capability, now=now)
+            for capability in (Capability.UPDATE_INCIDENTS, Capability.VIEW_BUYER_CONTACT)
+        )
+        or _operator_refusal(auth, organization_id) is not None
     ):
         raise RelayItemNotVisibleError("no such relay item")
     if not item.state.is_open:

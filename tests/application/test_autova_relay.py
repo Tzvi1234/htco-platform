@@ -26,6 +26,7 @@ from htco_application.relay import (
     RelayItem,
     RelayItemMovedError,
     RelayItemNotVisibleError,
+    SecondFactorRequiredError,
     expire_relay_codes,
     list_relay_items,
     open_due_relay_items,
@@ -742,3 +743,77 @@ async def test_every_reveal_of_a_code_is_audited_without_the_code() -> None:
         "req-2",
     )
     assert CODE not in str(reveal.after)
+
+
+# --- 6.10 PR B: who may paste and copy (main's decision of 2026-10-27) ----------------------
+
+
+def mfa_less(role: Role = Role.OWNER) -> AuthContext:
+    return AuthContext(
+        user_id=OWNER,
+        assurance=AssuranceLevel.AAL1,
+        session_id=None,
+        memberships=(Membership(ORG, role, frozenset({SHOP})),),
+    )
+
+
+@pytest.mark.parametrize("role", [Role.OPERATIONS, Role.SUPPORT])
+async def test_pr_b_a_shop_role_with_buyer_data_may_not_paste_or_copy(role: Role) -> None:
+    """Only an Owner or an Admin pastes and copies tracking: a shop role refuses even with the
+    shop and its buyer data."""
+    store = MemoryRelayStore()
+    item = await an_item(store)
+
+    with pytest.raises(PermissionError):
+        submit_tracking(
+            auth(role), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE,
+            now=PAID, correlation_id="req-1",
+        )  # fmt: skip
+    submit_tracking(
+        auth(), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE, now=PAID,
+        correlation_id="req-2",
+    )  # fmt: skip
+    with pytest.raises(RelayItemNotVisibleError):
+        relay_code(
+            auth(role), store, organization_id=ORG, item_id=item, now=PAID, correlation_id="r"
+        )
+
+    assert [a.action for a in store.audits] == ["relay.tracking_pasted"]
+
+
+@pytest.mark.parametrize("role", [Role.OWNER, Role.ADMIN])
+async def test_pr_b_without_a_second_factor_neither_paste_nor_copy(role: Role) -> None:
+    store = MemoryRelayStore()
+    item = await an_item(store)
+
+    with pytest.raises(SecondFactorRequiredError):
+        submit_tracking(
+            mfa_less(role), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE,
+            now=PAID, correlation_id="req-1",
+        )  # fmt: skip
+    submit_tracking(
+        auth(), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE, now=PAID,
+        correlation_id="req-2",
+    )  # fmt: skip
+    with pytest.raises(RelayItemNotVisibleError):
+        relay_code(
+            mfa_less(role), store, organization_id=ORG, item_id=item, now=PAID, correlation_id="r"
+        )
+
+    assert [a.action for a in store.audits] == ["relay.tracking_pasted"]  # no reveal audited
+
+
+async def test_pr_b_an_admin_with_a_second_factor_pastes_and_copies() -> None:
+    store = MemoryRelayStore()
+    item = await an_item(store)
+
+    submit_tracking(
+        auth(Role.ADMIN), store, organization_id=ORG, item_id=item, carrier="usps", code=CODE,
+        now=PAID, correlation_id="req-1",
+    )  # fmt: skip
+    code = relay_code(
+        auth(Role.ADMIN), store, organization_id=ORG, item_id=item, now=PAID, correlation_id="r"
+    )
+
+    assert code == CODE
+    assert [a.action for a in store.audits] == ["relay.tracking_pasted", "relay.code_revealed"]
