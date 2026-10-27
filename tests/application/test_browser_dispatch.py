@@ -30,16 +30,16 @@ def lease() -> BrowserJobLease:
 
 
 class Queue:
-    def __init__(self, *, lose_after: int | None = None, fail: bool = False) -> None:
+    def __init__(self, *, lose_after: int | None = None, broken: bool = False) -> None:
         self.renewals = 0
         self.lose_after = lose_after
-        self.fail = fail
+        self.broken = broken
 
     async def claim(self, *, worker_id: str, lease: timedelta) -> BrowserJobLease | None:  # noqa: ARG002  # pragma: no cover
         return None
 
     async def renew(self, job: BrowserJobLease, *, lease: timedelta) -> datetime:  # noqa: ARG002
-        if self.fail:
+        if self.broken:
             raise RuntimeError("database gone")
         if self.lose_after is not None and self.renewals >= self.lose_after:
             raise LeaseLostError("gone")
@@ -70,7 +70,7 @@ async def test_heartbeat__renews_while_the_run_goes_on_and_stops_after() -> None
 
 
 @pytest.mark.ac("AC-8A.2.21")
-@pytest.mark.parametrize("queue", [Queue(lose_after=1), Queue(fail=True)])
+@pytest.mark.parametrize("queue", [Queue(lose_after=1), Queue(broken=True)])
 async def test_heartbeat__a_lost_or_failed_renewal_stops_the_beat(
     queue: Queue, caplog: pytest.LogCaptureFixture
 ) -> None:
