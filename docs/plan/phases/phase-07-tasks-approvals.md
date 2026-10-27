@@ -166,6 +166,7 @@ Scheduled scan of tasks and automation executions: expired leases, stalled tasks
 | AC-7.10.2 | A task whose business effect is already recorded (for example the order exists) is closed with that evidence and not run again. |
 | AC-7.10.3 | Two scheduler instances never recover the same task twice (lock test). |
 | AC-7.10.4 | The specification has all 18 sections defined; replay, failure and recovery tests pass. |
+| AC-7.10.5 | **Escalated and recovered work on the web** (ER-UX-07). The task board and list of 7.5 show each task this automation escalated to a person, marked as escalated, with why (lease expired and not restartable, stalled past its SLA, or its resource arrived), its assignee and its SLA; an escalation also notifies the assignee through 7.6. A task's detail (AC-7.5.4) shows its recovery history: each resume, reassignment, escalation or close on evidence, with when and the activity record it wrote (AC-7.10.1, AC-7.10.2), linked to the task's trail in 7.8. Users see it under PERMISSION_MATRIX section 1's "View tasks and approvals" row (`VIEW_TASKS`) for the task's shop; an escalation the scan could not attribute to a shop is shown to the Owners and Admins. |
 
 ### 7.11 — Approvals and the Human channel on Postgres
 
