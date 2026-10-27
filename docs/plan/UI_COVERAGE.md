@@ -46,6 +46,7 @@
 | 7.6 Notification preferences | Each user's settings | **AC-7.6.2 (new)** | 7 |
 | 7.7, 7.8 Activity | The activity record | 7.8, AC-7.8.4 | 7 |
 | 7.9 Scheduled reporting | Daily and weekly reports | **AC-7.9.4 (new):** reports on the web | 7 |
+| 7.10 Task scheduling and recovery | Escalated work, each task's recovery history | 7.5, AC-7.5.4; **AC-7.10.5 (new)** | 7 |
 | 7.12 The owner's first Etsy writes | Announcement, sale message, vacation, sections, holidays | AC-7.12.1, 7.12.2; **AC-7.12.3 (new)** | 7 |
 | 7.13, 7.17 Suppliers and quotes | Request states, mappings | 7.16, AC-7.16.2; **AC-7.16.3 (new)** | 7 |
 | 7.14 Quote mailbox | The mailbox's state, Gmail consent (b) | **AC-7.14.4 (new)** | 7 |
