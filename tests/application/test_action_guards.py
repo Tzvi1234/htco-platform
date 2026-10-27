@@ -130,7 +130,9 @@ def gateway(  # noqa: PLR0913 - a test world with optional parts
     registry = office()
     # A generous budget unless the test is about the budget.
     budget = budget or RateBudget("etsy:app", per_second=1000, per_day=100_000)
-    catalog = replace(real_catalog(registry, built=True), rate_budgets={budget.key: budget})
+    # A scripted channel runs any recipe; the real API channel gets the catalog as declared.
+    built = getattr(channel, "recipes", None) is None
+    catalog = replace(real_catalog(registry, built=built), rate_budgets={budget.key: budget})
     if timeout is not None:
         actions = {n: replace(d, timeout=timeout) for n, d in catalog.actions.items()}
         catalog = replace(catalog, actions=actions)
