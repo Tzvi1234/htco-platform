@@ -27,8 +27,13 @@ from typing import Any, Protocol
 
 from htco_application.access.authentication import AuthContext, NoMembershipError
 from htco_application.access.policy import Capability, Outcome, ShopRef, decide
-from htco_application.kernel import EVENTS_DESTINATION, JsonValue, ShopOwners
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import (
+    DomainEvent,
+    JsonValue,
+    OutboxMessage,
+    ShopOwners,
+    publish,
+)
 from htco_application.shops import ShopAccessDeniedError, ShopNotFoundError
 from htco_domain.actors import ActorRef
 from htco_domain.browser import (
@@ -153,7 +158,6 @@ class EnvironmentProvisioner(Protocol):  # contract in Phase 5, real in 8A
 def status_event(change: EnvironmentChange) -> OutboxMessage:
     """IDs and statuses only (EVENT_CATALOG rule 3): never the reason text or the consent."""
     payload: dict[str, JsonValue] = {
-        "event_type": STATUS_CHANGED_EVENT,
         "environment_id": str(change.environment_id),
         "shop_id": str(change.shop_id),
         "from_status": change.from_status.value,
@@ -161,17 +165,21 @@ def status_event(change: EnvironmentChange) -> OutboxMessage:
         "actor": str(change.actor),
         "occurred_at": change.occurred_at.isoformat(),
     }
-    return OutboxMessage(
-        organization_id=change.organization_id,
-        shop_id=change.shop_id,
-        destination=EVENTS_DESTINATION,
-        # One event per recorded change: a change is one (environment, target, time).
-        idempotency_key=(
-            f"{STATUS_CHANGED_EVENT}:{change.environment_id}:{change.to_status.value}:"
-            f"{change.occurred_at.isoformat()}"
-        ),
-        payload=payload,
-        correlation_id=change.correlation_id,
+    return publish(
+        DomainEvent(
+            event_type=STATUS_CHANGED_EVENT,
+            organization_id=change.organization_id,
+            shop_id=change.shop_id,
+            # One event per recorded change: a change is one (environment, target, time).
+            idempotency_key=(
+                f"{STATUS_CHANGED_EVENT}:{change.environment_id}:{change.to_status.value}:"
+                f"{change.occurred_at.isoformat()}"
+            ),
+            occurred_at=change.occurred_at,
+            actor=change.actor,
+            payload=payload,
+            correlation_id=change.correlation_id,
+        )
     )
 
 

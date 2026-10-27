@@ -25,7 +25,7 @@ from htco_application.incidents import (
     IncidentService,
 )
 from htco_application.jobs import ClaimedJob
-from htco_application.kernel import JobError, TenantShop
+from htco_application.kernel import JobError, TenantShop, event_payload
 from htco_application.sla_inspector import AwaitingOrder, IncidentDetection
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import TriggerKind
@@ -87,7 +87,7 @@ async def test_ac_6_2_1_at_exactly_the_deadline_no_breach_one_microsecond_later_
     outcome = await after.handler(after.context({"mode": "inspect"}))
     assert outcome == Completed({"checked": 1, "opened": 1, "resolved": 0, "escalated": 0})
     [breach] = after.incident_store.events.of(SLA_BREACHED)
-    assert breach.payload["deadline"] == deadline.isoformat()
+    assert event_payload(breach)["deadline"] == deadline.isoformat()
 
 
 @pytest.mark.ac("AC-6.2.2")
@@ -131,7 +131,7 @@ async def test_a_cancelled_order_resolves_its_incident_on_that_evidence() -> Non
     [incident] = inspector.incident_store.incidents.values()
     assert incident.state is IncidentState.RESOLVED
     [event] = inspector.incident_store.events.of(INCIDENT_RESOLVED)
-    assert event.payload["evidence_kind"] == "order_closed"
+    assert event_payload(event)["evidence_kind"] == "order_closed"
 
 
 async def test_an_old_incident_escalates_once() -> None:

@@ -33,8 +33,16 @@ from htco_application.incidents import (
     drift_detection,
     order_resource,
 )
-from htco_application.kernel import EVENTS_DESTINATION, JobError, JsonValue, Offload, run_inline
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import (
+    DomainEvent,
+    JobError,
+    JsonValue,
+    Offload,
+    OutboxMessage,
+    event_payload,
+    publish,
+    run_inline,
+)
 from htco_application.notifications import NotificationRequest, NotificationService
 from htco_application.relay import (
     RelayStore,
@@ -110,10 +118,10 @@ def breach_event(  # noqa: PLR0913 - one breach's facts
     order: AwaitingOrder,
     policy: SlaPolicy,
     deadline: datetime,
+    detected_at: datetime,
     correlation_id: str | None,
 ) -> OutboxMessage:
     payload: dict[str, JsonValue] = {
-        "event_type": SLA_BREACHED,
         "receipt_id": order.receipt_id,
         "policy_id": str(policy.id),
         "policy_version": policy.version,
@@ -122,13 +130,19 @@ def breach_event(  # noqa: PLR0913 - one breach's facts
         "paid_at": order.paid_at.isoformat(),
         "deadline": deadline.isoformat(),
     }
-    return OutboxMessage(
-        organization_id=organization_id,
-        shop_id=shop_id,
-        destination=EVENTS_DESTINATION,
-        idempotency_key=f"{SLA_BREACHED}:{shop_id}:{order.receipt_id}:{policy.id}:{policy.version}",
-        payload=payload,
-        correlation_id=None if correlation_id is None else correlation_id[:200],
+    return publish(
+        DomainEvent(
+            event_type=SLA_BREACHED,
+            organization_id=organization_id,
+            shop_id=shop_id,
+            idempotency_key=(
+                f"{SLA_BREACHED}:{shop_id}:{order.receipt_id}:{policy.id}:{policy.version}"
+            ),
+            occurred_at=detected_at,
+            actor=DETECTOR,
+            payload=payload,
+            correlation_id=correlation_id,
+        )
     )
 
 
@@ -225,6 +239,7 @@ class IncidentDetection:
                         order=order,
                         policy=policy,
                         deadline=deadline,
+                        detected_at=now,
                         correlation_id=ctx.correlation_id,
                     ),
                 ),
@@ -382,7 +397,7 @@ class DriftIncidents:
 
     @staticmethod
     def request_for(message: OutboxMessage) -> TriggerRequest | None:
-        payload = message.payload
+        payload = event_payload(message)
         drift = {name: payload.get(name) for name in _DRIFT_FIELDS}
         if (
             message.shop_id is None

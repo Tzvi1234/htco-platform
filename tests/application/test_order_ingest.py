@@ -11,6 +11,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from htco_application.kernel import event_payload
 from htco_application.marketplace import MarketplaceMoney, OrderReceipt
 from htco_application.order_ingest import (
     BACKFILL,
@@ -29,6 +30,7 @@ from htco_application.order_ingest import (
 )
 from htco_application.order_receipts import receipt_from_json, receipt_to_json
 from htco_domain.orders import OrderState
+from tests.event_contracts import assert_event_contract
 from tests.order_intake_fakes import (
     FAKE_LINE,
     FAKE_NAME,
@@ -70,6 +72,7 @@ def test_a_new_paid_order__passes_paid_ingested_awaiting_with_one_ingested_event
         Transition(_O.INGESTED, _O.AWAITING_SHIPMENT),
     )
     [event] = p.events
+    assert_event_contract(event)
     assert event.payload["event_type"] == INGESTED
     assert event.idempotency_key == f"{INGESTED}:{SHOP}:{receipt.receipt_id}"
     assert event.destination == "events.publish"
@@ -110,8 +113,9 @@ def test_a_newer_copy__moves_the_state_and_publishes_an_update() -> None:
 
     assert p.transitions == (Transition(_O.AWAITING_SHIPMENT, _O.SHIPPED),)
     [event] = p.events
+    assert_event_contract(event)
     assert event.payload["event_type"] == UPDATED
-    assert event.payload["state"] == "shipped"
+    assert event_payload(event)["state"] == "shipped"
 
 
 @pytest.mark.ac("AC-5.4.5")

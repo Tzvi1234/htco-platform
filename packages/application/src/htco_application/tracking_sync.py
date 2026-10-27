@@ -35,15 +35,16 @@ from htco_application.etsy_webhooks import WEBHOOK_ACTOR, TriggersAutomations
 from htco_application.fulfillment_schedule import TRACKING_SYNC
 from htco_application.incidents import IncidentService, order_resource
 from htco_application.kernel import (
-    EVENTS_DESTINATION,
+    DomainEvent,
     JobError,
     JsonValue,
     Offload,
+    OutboxMessage,
     TenantShop,
+    publish,
     run_inline,
 )
 from htco_application.marketplace import OrderReceipt
-from htco_application.messaging import OutboxMessage
 from htco_application.order_intake import GatewayReceipts, IntakeShops
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import TriggerKind
@@ -132,7 +133,6 @@ class TrackingStore(Protocol):
 
 def tracking_event(observation: TrackingObservation) -> OutboxMessage:
     payload: dict[str, JsonValue] = {
-        "event_type": TRACKING_DETECTED,
         "tracking_event_id": str(observation.id),
         "receipt_id": observation.receipt_id,
         "carrier": observation.carrier,
@@ -140,18 +140,20 @@ def tracking_event(observation: TrackingObservation) -> OutboxMessage:
         "observed_via": observation.observed_via.value,
         "observed_at": observation.observed_at.isoformat(),
     }
-    return OutboxMessage(
-        organization_id=observation.organization_id,
-        shop_id=observation.shop_id,
-        destination=EVENTS_DESTINATION,
-        idempotency_key=(
-            f"{TRACKING_DETECTED}:{observation.shop_id}:{observation.receipt_id}:"
-            f"{observation.fingerprint.hex()[:32]}"
-        ),
-        payload=payload,
-        correlation_id=None
-        if observation.correlation_id is None
-        else observation.correlation_id[:200],
+    return publish(
+        DomainEvent(
+            event_type=TRACKING_DETECTED,
+            organization_id=observation.organization_id,
+            shop_id=observation.shop_id,
+            idempotency_key=(
+                f"{TRACKING_DETECTED}:{observation.shop_id}:{observation.receipt_id}:"
+                f"{observation.fingerprint.hex()[:32]}"
+            ),
+            occurred_at=observation.observed_at,
+            actor=ActorRef(ActorKind.AUTOMATION, TRACKING_SYNC),
+            payload=payload,
+            correlation_id=observation.correlation_id,
+        )
     )
 
 

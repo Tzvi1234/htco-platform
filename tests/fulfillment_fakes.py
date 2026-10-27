@@ -7,11 +7,12 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from htco_application.incidents import IncidentRecord, IncidentStep, StaleIncident
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import OutboxMessage
 from htco_application.sla_inspector import AwaitingOrder
 from htco_application.tracking_sync import RecordedTracking, TrackingObservation, TrackingSource
 from htco_domain.fulfillment import SlaPolicy
 from htco_domain.incidents import IncidentState, check_incident_transition
+from tests.event_contracts import check_if_event
 
 
 @dataclass
@@ -21,6 +22,7 @@ class Events:
     messages: dict[str, OutboxMessage] = field(default_factory=dict)
 
     def add(self, message: OutboxMessage) -> None:
+        check_if_event(message)
         self.messages.setdefault(message.idempotency_key, message)
 
     def of(self, event_type: str) -> list[OutboxMessage]:

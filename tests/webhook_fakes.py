@@ -14,8 +14,9 @@ from typing import Any
 
 from htco_application.etsy_webhooks import WebhookSecret
 from htco_application.jobs import JobSpec
-from htco_application.kernel import TenantShop
-from htco_application.messaging import InboxEvent, OutboxMessage, RecordedEvent
+from htco_application.kernel import OutboxMessage, TenantShop
+from htco_application.messaging import InboxEvent, RecordedEvent
+from tests.event_contracts import check_if_event
 from tests.job_fakes import MemoryJobQueue
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "etsy" / "webhooks" / "events.json"
@@ -113,5 +114,6 @@ class MemoryOutbox:
     messages: dict[str, OutboxMessage] = field(default_factory=dict)
 
     def add(self, message: OutboxMessage, *, now: datetime) -> uuid.UUID:
+        check_if_event(message)
         self.messages.setdefault(message.idempotency_key, message)
         return uuid.uuid5(uuid.NAMESPACE_URL, message.idempotency_key)

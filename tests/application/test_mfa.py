@@ -124,6 +124,22 @@ async def test_enroll_again__the_unfinished_factor_is_removed_first() -> None:
     assert [(f.id, f.verified) for f in mfa.factors] == [(again.factor_id, False)]
 
 
+async def test_enroll_again__removes_only_an_unfinished_authenticator_app() -> None:
+    """Codex on #171: the cleanup removes the user's unfinished authenticator apps only, never a
+    passkey being created at the same time (unverified webauthn); its name stays taken."""
+    store, auth, mfa = Store(), Auth(), Mfa()
+    mfa.factors = [
+        Factor(id="app-old", verified=False, name="Old phone", kind="totp"),
+        Factor(id="pk-new", verified=False, name="Phone", kind="webauthn"),
+    ]
+    session = await active(store, auth)
+
+    await start_enrollment(session, mfa, friendly_name="Phone")
+
+    assert mfa.calls == ["remove access-1 app-old", "enroll access-1 Phone (2)"]
+    assert "pk-new" in [f.id for f in mfa.factors]
+
+
 async def test_enroll_another__a_verified_factor_is_kept_and_the_name_made_unique() -> None:
     store, auth, mfa = Store(), Auth(), Mfa()
     mfa.factors = [Factor(id="kept", verified=True, name="Phone")]

@@ -30,7 +30,7 @@ from htco_application.etsy_webhooks import (
     verify_signature,
 )
 from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
-from htco_application.kernel import JobError
+from htco_application.kernel import JobError, event_payload
 from htco_application.marketplace import (
     InventorySnapshot,
     ListingSnapshot,
@@ -434,7 +434,11 @@ class Processing:
         return await self.processor.process(job), job
 
     def published(self) -> dict[str, dict[str, Any]]:
-        return {m.payload["event_type"]: dict(m.payload) for m in self.outbox.messages.values()}  # type: ignore[misc]
+        """Each published event type with its facts (the envelope's payload)."""
+        return {
+            str(m.payload["event_type"]): dict(event_payload(m))
+            for m in self.outbox.messages.values()
+        }
 
 
 @pytest.mark.ac("AC-5.3.4")
@@ -481,7 +485,7 @@ async def test_process__listing_events_reread_the_listing_and_publish_it(event_t
     assert outcome == "published"
     assert run.catalog.reads == [f"listing:{ETSY_SHOP}:{LISTING}"]
     assert run.published()[LISTING_CHANGED] == {
-        "event_type": LISTING_CHANGED, "webhook_event_type": event_type, "listing_id": LISTING,
+        "webhook_event_type": event_type, "listing_id": LISTING,
         "state": "active", "listing_quantity": 3, "etsy_updated_at": "2026-10-24T08:00:00+00:00",
     }  # fmt: skip
     assert run.engine.requests == []

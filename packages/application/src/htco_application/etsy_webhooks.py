@@ -41,11 +41,13 @@ from typing import Any, Protocol, override
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
 from htco_application.jobs import ClaimedJob, JobSpec
 from htco_application.kernel import (
-    EVENTS_DESTINATION,
+    DomainEvent,
     JobError,
     JsonValue,
     Offload,
+    OutboxMessage,
     TenantShop,
+    publish,
     run_inline,
 )
 from htco_application.marketplace import (
@@ -53,7 +55,7 @@ from htco_application.marketplace import (
     ListingSnapshot,
     MarketplaceNotFoundError,
 )
-from htco_application.messaging import InboxEvent, OutboxMessage, RecordedEvent
+from htco_application.messaging import InboxEvent, RecordedEvent
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import AutomationExecution, TriggerKind
 
@@ -569,13 +571,18 @@ class WebhookProcessor:
         for name in route.publishes:
             if name == OUT_OF_STOCK and facts.get("in_stock") is not False:
                 continue  # the re-read does not confirm it: never trust the payload
-            message = OutboxMessage(
-                organization_id=shop.organization_id,
-                shop_id=shop.shop_id,
-                destination=EVENTS_DESTINATION,
-                idempotency_key=f"{name}:{job.id}",
-                payload={"event_type": name, "webhook_event_type": event_type, **facts},
-                correlation_id=correlation[:200],
+            message = publish(
+                DomainEvent(
+                    event_type=name,
+                    organization_id=shop.organization_id,
+                    shop_id=shop.shop_id,
+                    idempotency_key=f"{name}:{job.id}",
+                    occurred_at=now,
+                    actor=WEBHOOK_ACTOR,
+                    payload={"webhook_event_type": event_type, **facts},
+                    correlation_id=correlation,
+                    causation_id=f"job:{job.id}",
+                )
             )
             await self.offload(partial(self.outbox.add, message, now=now))
         return "published"

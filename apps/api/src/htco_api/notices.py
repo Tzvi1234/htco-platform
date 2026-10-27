@@ -31,6 +31,12 @@ async def mfa_enrolled(request: Request, user_id: uuid.UUID, factor_id: str) -> 
         await notices.mfa_changed(user_id, factor_id=factor_id, change="enrolled")
 
 
+async def mfa_removed(request: Request, user_id: uuid.UUID, factor_id: str) -> None:
+    notices = _notices(request)
+    if notices is not None:
+        await notices.mfa_changed(user_id, factor_id=factor_id, change="removed")
+
+
 async def shop_changed(
     request: Request,
     kind: NotificationKind,

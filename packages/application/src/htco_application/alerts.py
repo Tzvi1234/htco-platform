@@ -9,7 +9,7 @@ it (slice 5.3).
 import uuid
 from dataclasses import dataclass
 
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import OutboxMessage, event_payload
 from htco_application.notifications import NotificationRequest, NotificationService
 from htco_domain.notifications import NotificationKind
 
@@ -23,7 +23,7 @@ class StockAlerts:
     service: NotificationService
 
     async def handle(self, message: OutboxMessage) -> None:
-        payload = message.payload
+        payload = event_payload(message)
         listing = payload.get("listing_id")
         if not isinstance(listing, int) or isinstance(listing, bool) or message.shop_id is None:
             return

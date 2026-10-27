@@ -22,8 +22,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
-from htco_application.kernel import EVENTS_DESTINATION, JsonValue, Offload, run_inline
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import (
+    DomainEvent,
+    JsonValue,
+    Offload,
+    OutboxMessage,
+    publish,
+    run_inline,
+)
 from htco_domain.actors import ActorRef
 from htco_domain.incidents import (
     DEFAULT_SEVERITY,
@@ -147,11 +153,17 @@ class IncidentStore(Protocol):
     ) -> tuple[IncidentRecord, ...]: ...
 
 
-def _event(
-    name: str, incident: IncidentRecord, *, extra: Mapping[str, JsonValue], correlation: str | None
+def _event(  # noqa: PLR0913 - the event, the incident, who changed it when, and which occurrence
+    name: str,
+    incident: IncidentRecord,
+    *,
+    extra: Mapping[str, JsonValue],
+    correlation: str | None,
+    actor: ActorRef,
+    at: datetime,
+    occurrence: str | None = None,
 ) -> OutboxMessage:
     payload: dict[str, JsonValue] = {
-        "event_type": name,
         "incident_id": str(incident.id),
         "dedup_key": incident.dedup_key,
         "cause": incident.cause.value,
@@ -161,13 +173,19 @@ def _event(
         "receipt_id": incident.receipt_id,
         **extra,
     }
-    return OutboxMessage(
-        organization_id=incident.organization_id,
-        shop_id=incident.shop_id,
-        destination=EVENTS_DESTINATION,
-        idempotency_key=f"{name}:{incident.id}",
-        payload=payload,
-        correlation_id=None if correlation is None else correlation[:200],
+    return publish(
+        DomainEvent(
+            event_type=name,
+            organization_id=incident.organization_id,
+            shop_id=incident.shop_id,
+            # An event that may happen again for the incident (an escalation) is keyed by its ID.
+            idempotency_key=f"{name}:{incident.id}"
+            + ("" if occurrence is None else f":{occurrence}"),
+            occurred_at=at,
+            actor=actor,
+            payload=payload,
+            correlation_id=correlation,
+        )
     )
 
 
@@ -213,6 +231,8 @@ class IncidentService:
             incident,
             extra={"detected_at": detection.detected_at.isoformat(), "source": detection.source},
             correlation=detection.correlation_id,
+            actor=actor,
+            at=now,
         )
         events = (opened, *detection.events)
         opened_incident: tuple[IncidentRecord, bool] = await self.offload(
@@ -297,12 +317,22 @@ class IncidentService:
             current = target
         events: tuple[OutboxMessage, ...] = ()
         if current is IncidentState.ESCALATED and incident.state is not IncidentState.ESCALATED:
+            # Each escalation has its own ID (Codex, #163): two in one second are still two, and
+            # the event's key and the notification's dedup key both name it.
+            escalation_id = str(self.new_id())
             events = (
                 _event(
                     INCIDENT_ESCALATED,
                     incident,
-                    extra={"escalated_from": incident.state.value, "escalated_at": now.isoformat()},
+                    extra={
+                        "escalated_from": incident.state.value,
+                        "escalated_at": now.isoformat(),
+                        "escalation_id": escalation_id,
+                    },
                     correlation=correlation_id,
+                    actor=actor,
+                    at=now,
+                    occurrence=escalation_id,
                 ),
             )
         if current is IncidentState.RESOLVED and evidence is not None:
@@ -317,6 +347,8 @@ class IncidentService:
                         "resolved_at": now.isoformat(),
                     },
                     correlation=correlation_id,
+                    actor=actor,
+                    at=now,
                 ),
             )
         frozen = tuple(steps)

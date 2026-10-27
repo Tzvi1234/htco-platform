@@ -114,8 +114,24 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check --strict -
           tar --extract --gzip --file "$RUNNER_TEMP/gitleaks.tar.gz" --directory "$RUNNER_TEMP" gitleaks
-      - name: Secrets in the full history
-        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --no-banner .'
+      # A pull request scans the commits it brings (base..the merge commit); a push to main scans
+      # main's whole history. `fetch-depth: 0` also fetches every other branch, and a finding on
+      # another open PR's branch must not turn every PR red: that branch is scanned by its own PR,
+      # and every ref by the daily full-history scan (secrets-history.yml). This job stays
+      # required through ci-gate (tests/tools/test_secret_scan.py).
+      - name: Secrets in this run's history
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # Fail closed: an empty base would make the range `..HEAD`, which scans nothing.
+            [ -n "$BASE_SHA" ] || { echo "::error::no base SHA for the pull request's range"; exit 1; }
+            range="$BASE_SHA..HEAD"
+          else
+            range="HEAD"
+          fi
+          "$RUNNER_TEMP/gitleaks" git --redact --verbose --no-banner --log-opts="$range" .
       - name: Install osv-scanner
         run: |
           curl --fail --silent --show-error --location --output "$RUNNER_TEMP/osv-scanner" \
