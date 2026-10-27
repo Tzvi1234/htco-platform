@@ -1,9 +1,18 @@
-"""Least privilege for buyer data (ADR-0018, ER-SEC-02; audit AUD-06 in #134).
+"""Least privilege for buyer data (ADR-0018, ER-SEC-02; audit AUD-06 in #134 and #147).
 
-`etsy.receipts.read` has an order-history form: whole receipts, with shipments and items. Only
-Etsy Order Intake receives the buyer's name and shipping address in it. Every other automation
-that may call the action (today Order Deduplication & Verification and Tracking Sync), and any
-automation added later, receives the same receipts without them. Invented values only."""
+Receipts reach automations through three actions, each with its own grant:
+
+- `etsy.order_history.read`: whole receipts as the order history stores them. Granted to Etsy
+  Order Intake alone (`RESTRICTED_GRANTS`), the only automation that receives the buyer's name,
+  shipping address and the seller's refund note; still shaped by `for_automation`, so any other
+  automation would get them stripped.
+- `etsy.shipments.read`: each receipt's shipments with their tracking codes, and nothing of the
+  buyer. Granted to Tracking Sync alone.
+- `etsy.receipts.read`, its order history form: the same receipts without the buyer's data and
+  without tracking codes, for every automation (Order Deduplication & Verification), Intake's
+  name included.
+
+Invented values only."""
 
 import json
 import tomllib
@@ -13,17 +22,19 @@ from pathlib import Path
 
 import pytest
 
+from htco_application.etsy_reads import ORDER_HISTORY_READ, RECEIPTS_READ, SHIPMENTS_READ
 from htco_application.execution.channels import EtsyApiChannel
 from htco_application.execution.contracts import ChannelBinding
-from htco_application.execution.gateway import ActionRequest, Channel
+from htco_application.execution.gateway import ActionRef, ActionRequest, Channel
 from htco_application.kernel import JsonValue
-from htco_application.marketplace import MarketplacePermissionError
-from htco_application.order_intake import RECEIPTS_READ
+from htco_application.marketplace import MarketplacePermissionError, OrderReceipt
 from htco_application.order_receipts import (
     BUYER_DATA_AUTOMATIONS,
     TRACKING_CODE_AUTOMATIONS,
     receipt_from_json,
+    shipments_from_json,
 )
+from htco_application.workforce.registry import RESTRICTED_GRANTS
 from htco_domain.actors import ActorKind, ActorRef
 from tests.application.test_action_gateway import ORG, SHOP
 from tests.application.test_execution_router import EtsyShops, FakeMarketplace
@@ -41,100 +52,137 @@ pytestmark = pytest.mark.anyio
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECEIPT = 4000000001
+RECEIPT_ACTIONS = (RECEIPTS_READ.name, ORDER_HISTORY_READ.name, SHIPMENTS_READ.name)
 
 
-def _callers_of_the_receipts_action() -> list[str]:
-    callers = []
+def _grants() -> dict[str, set[str]]:
+    granted: dict[str, set[str]] = {}
     for path in sorted((REPO_ROOT / "registry/automations").glob("*.toml")):
         document = tomllib.loads(path.read_text(encoding="utf-8"))
-        if RECEIPTS_READ.name in document.get("allowed_actions", []):
-            callers.append(str(document["id"]))
-    return callers
+        for action in set(document.get("allowed_actions", [])) & set(RECEIPT_ACTIONS):
+            granted.setdefault(action, set()).add(str(document["id"]))
+    return granted
 
 
-CALLERS = _callers_of_the_receipts_action()
-# Any automation granted the action later must not get buyer data by default either.
+GRANTS = _grants()
+CALLERS = sorted(set().union(*GRANTS.values()))
+# Any automation granted an action later must not get buyer data by default either.
 CANDIDATES = [*CALLERS, "a-future-automation"]
 
 
-def test_only_etsy_order_intake__is_entitled_to_buyer_data() -> None:
+def test_each_receipt_action__granted_to_its_automations_only() -> None:
     assert frozenset({"etsy-order-intake"}) == BUYER_DATA_AUTOMATIONS
     # Tracking codes can locate the parcel and so the buyer (ADR-0018): Intake stores them and
     # Tracking Sync records them; nothing else needs them.
     assert frozenset({"etsy-order-intake", "tracking-sync"}) == TRACKING_CODE_AUTOMATIONS
-    assert "etsy-order-intake" in CALLERS
-    assert {"order-dedup-verification", "tracking-sync"} <= set(CALLERS)
+    assert GRANTS[ORDER_HISTORY_READ.name] == {"etsy-order-intake"}
+    assert GRANTS[SHIPMENTS_READ.name] == {"tracking-sync"}
+    assert GRANTS[RECEIPTS_READ.name] == {"order-dedup-verification"}
+    for action, allowed in RESTRICTED_GRANTS.items():
+        assert GRANTS[action] <= allowed
 
 
-async def _order_history(automation_id: str, values: dict[str, JsonValue]) -> dict[str, JsonValue]:
+def _receipt() -> OrderReceipt:
     receipt = refunded(shipped(paid_receipt(RECEIPT), minutes=30), minutes=60)
-    receipt = replace(receipt, shipments=shipped(receipt, minutes=30).shipments)
-    channel = EtsyApiChannel(FakeMarketplace(order_receipts=(receipt,)), EtsyShops())
+    return replace(receipt, shipments=shipped(receipt, minutes=30).shipments)
+
+
+async def _read(
+    action: ActionRef, recipe: str, automation_id: str, values: dict[str, JsonValue]
+) -> dict[str, JsonValue]:
+    channel = EtsyApiChannel(FakeMarketplace(order_receipts=(_receipt(),)), EtsyShops())
     outcome = await channel.execute(
         ActionRequest(
-            action=RECEIPTS_READ,
+            action=action,
             actor=ActorRef(ActorKind.AUTOMATION, automation_id),
             organization_id=ORG,
             shop_id=SHOP,
             idempotency_key=f"{automation_id}:{uuid.uuid4()}",
             correlation_id="c",
-            input={"order_history": True, **values},
+            input=values,
         ),
-        ChannelBinding(Channel.API, recipe="list_receipts"),
+        ChannelBinding(Channel.API, recipe=recipe),
     )
     assert outcome.output is not None
     return dict(outcome.output)
 
 
+def _one(output: dict[str, JsonValue], key: str = "receipts") -> dict[str, JsonValue]:
+    items = output[key]
+    assert isinstance(items, list)
+    [raw] = items
+    assert isinstance(raw, dict)
+    return raw
+
+
+VALUES: list[dict[str, JsonValue]] = [{"receipt_id": RECEIPT}, {"limit": 100, "offset": 0}]
+
+
 @pytest.mark.parametrize("automation_id", CANDIDATES)
-@pytest.mark.parametrize("values", [{"receipt_id": RECEIPT}, {"limit": 100, "offset": 0}])
-async def test_order_history_form__buyer_name_and_address_reach_etsy_order_intake_only(
+@pytest.mark.parametrize("values", VALUES)
+async def test_order_history_read__buyer_data_and_the_refund_note_reach_intake_only(
     automation_id: str, values: dict[str, JsonValue]
 ) -> None:
-    output = await _order_history(automation_id, values)
-    receipts = output["receipts"]
-    assert isinstance(receipts, list)
-    [raw] = receipts
-    assert isinstance(raw, dict)
+    output = await _read(ORDER_HISTORY_READ, "list_order_history", automation_id, values)
+    raw = _one(output)
     text = json.dumps(output)
     receipt = receipt_from_json(raw)
 
     if automation_id in BUYER_DATA_AUTOMATIONS:
         assert receipt.buyer_name == FAKE_NAME
         assert receipt.shipping_address is not None
+        assert {refund.note_from_issuer for refund in receipt.refunds} == {FAKE_NOTE}
     else:
         assert raw["buyer_name"] is None
         assert raw["shipping_address"] is None
-        assert FAKE_NAME not in text
-        assert FAKE_LINE not in text
-        assert receipt.buyer_display_name is None
-    # The order facts every caller needs stay: items, totals and shipments with tracking codes.
+        for value in (FAKE_NAME, FAKE_LINE, FAKE_NOTE):
+            assert value not in text
+    codes = {shipment.tracking_code for shipment in receipt.shipments}
+    assert codes == ({FAKE_TRACKING} if automation_id in TRACKING_CODE_AUTOMATIONS else {""})
+    # The order facts stay: items, totals, shipments and refunds.
     assert receipt.receipt_id == RECEIPT
     assert receipt.lines
     assert receipt.shipments
+    assert receipt.refunds
 
 
 @pytest.mark.parametrize("automation_id", CANDIDATES)
-@pytest.mark.parametrize("values", [{"receipt_id": RECEIPT}, {"limit": 100, "offset": 0}])
-async def test_order_history_form__tracking_codes_reach_intake_and_tracking_sync_only(
+@pytest.mark.parametrize("values", VALUES)
+async def test_receipts_read__the_order_history_form_never_has_buyer_data_or_codes(
     automation_id: str, values: dict[str, JsonValue]
 ) -> None:
     """Order Deduplication & Verification compares totals and items, never shipments (quill on
-    #135): it, and any automation added later, gets the shipments without their codes."""
-    output = await _order_history(automation_id, values)
-    receipts = output["receipts"]
-    assert isinstance(receipts, list)
-    [raw] = receipts
-    assert isinstance(raw, dict)
+    #135): it gets the shipments without their codes, and no buyer data, under any name."""
+    output = await _read(
+        RECEIPTS_READ, "list_receipts", automation_id, {"order_history": True, **values}
+    )
+    raw = _one(output)
+    text = json.dumps(output)
     receipt = receipt_from_json(raw)
 
-    assert receipt.shipments  # carrier and time stay for every caller
-    codes = {shipment.tracking_code for shipment in receipt.shipments}
-    if automation_id in TRACKING_CODE_AUTOMATIONS:
-        assert codes == {FAKE_TRACKING}
-    else:
-        assert codes == {""}
-        assert FAKE_TRACKING not in json.dumps(output)
+    assert raw["buyer_name"] is None
+    assert raw["shipping_address"] is None
+    for value in (FAKE_NAME, FAKE_LINE, FAKE_NOTE, FAKE_TRACKING):
+        assert value not in text
+    assert receipt.lines
+    assert {shipment.tracking_code for shipment in receipt.shipments} == {""}
+    assert {refund.note_from_issuer for refund in receipt.refunds} == {None}
+
+
+@pytest.mark.parametrize("values", VALUES)
+async def test_shipments_read__tracking_codes_and_nothing_of_the_buyer(
+    values: dict[str, JsonValue],
+) -> None:
+    output = await _read(SHIPMENTS_READ, "list_shipments", "tracking-sync", values)
+    raw = _one(output, "shipments")
+    text = json.dumps(output)
+
+    assert set(raw) == {"receipt_id", "shipments"}
+    receipt_id, shipments = shipments_from_json(raw)
+    assert receipt_id == RECEIPT
+    assert {shipment.tracking_code for shipment in shipments} == {FAKE_TRACKING}
+    for value in (FAKE_NAME, FAKE_LINE, FAKE_NOTE):
+        assert value not in text
 
 
 @pytest.mark.parametrize("kind", [ActorKind.USER, ActorKind.EMPLOYEE])
@@ -158,25 +206,3 @@ async def test_order_history_form__refused_to_a_person_or_an_employee(kind: Acto
 
     assert refused.value.status == 403
     assert marketplace.calls == []
-
-
-@pytest.mark.parametrize("automation_id", CANDIDATES)
-async def test_order_history_form__the_sellers_refund_note_reaches_intake_only(
-    automation_id: str,
-) -> None:
-    """The seller's note on a refund is shown only to buyer-data roles (sage on #135): every
-    automation but Intake gets the refund's amount, reason and status without it."""
-    output = await _order_history(automation_id, {"receipt_id": RECEIPT})
-    receipts = output["receipts"]
-    assert isinstance(receipts, list)
-    [raw] = receipts
-    assert isinstance(raw, dict)
-    receipt = receipt_from_json(raw)
-
-    assert receipt.refunds
-    notes = {refund.note_from_issuer for refund in receipt.refunds}
-    if automation_id in BUYER_DATA_AUTOMATIONS:
-        assert notes == {FAKE_NOTE}
-    else:
-        assert notes == {None}
-        assert FAKE_NOTE not in json.dumps(output)

@@ -56,12 +56,6 @@ class Route(StrEnum):
 # Module → (path, why). Read bypasses name their way out; none of them may write.
 MODULES: dict[str, tuple[Route, str]] = {
     API_CHANNEL: (Route.GATEWAY, "the gateway's API channel itself"),
-    APPLICATION + "order_intake.py": (
-        Route.GATEWAY,
-        "GatewayReceipts: the order history's receipt source through `etsy.receipts.read`",
-    ),
-    APPLICATION + "order_automations.py": (Route.GATEWAY, "GatewayReceipts, per execution"),
-    APPLICATION + "tracking_sync.py": (Route.GATEWAY, "GatewayReceipts, per execution"),
     APPLICATION + "order_history.py": (
         Route.READ_BYPASS,
         "the API-process sync, the fallback behind HTCO_ORDER_SYNC_IN_API (phase-05 5.4)",
@@ -98,11 +92,7 @@ CALL_SITES: frozenset[tuple[str, str, str]] = frozenset(
         # Low-review alerts (6.9): the API channel's own read, behind `etsy.reviews.read`.
         ("execution/channels.py", "EtsyApiChannel._reviews", "list_reviews"),
         ("execution/channels.py", "EtsyApiChannel._get_shop", "get_shop"),
-        ("order_automations.py", "OrderVerification.__call__", "get_order_receipt"),
-        ("order_history.py", "OrderSync._read", "list_order_receipts"),
-        ("order_intake.py", "OrderIntake._count", "list_order_receipts"),
-        ("order_intake.py", "OrderIntake._page", "list_order_receipts"),
-        ("order_intake.py", "OrderIntake._receipt", "get_order_receipt"),
+        ("order_history.py", "AdapterReceiptPages.page", "list_order_receipts"),
         ("shop_capabilities.py", "_probe", "check_receipt_addresses"),
         ("shop_capabilities.py", "_probe", "get_shop"),
         ("shop_capabilities.py", "_probe", "list_listings"),
@@ -115,7 +105,6 @@ CALL_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ("shop_dashboard.py", "_Opened.shipping", "list_production_partners"),
         ("shop_dashboard.py", "_Opened.shipping", "list_return_policies"),
         ("shop_dashboard.py", "_Opened.shipping", "list_shipping_profiles"),
-        ("tracking_sync.py", "TrackingSync.__call__", "get_order_receipt"),
     ]
 )
 # Only these import the adapter: they build it and hand it to the parts above.

@@ -11,7 +11,7 @@ side_effect = "internal"
 approval_required = false
 ai_steps = []
 # The Action Gateway lets it read receipts (slice 6.1); it writes only its own tables.
-allowed_actions = ["etsy.receipts.read", "etsy.shipments.read"]
+allowed_actions = ["etsy.shipments.read"]
 readiness = "draft"
 activation_phase = 6
 
@@ -42,7 +42,7 @@ text = "The shop exists in the execution's organization and is connected; otherw
 
 [specification.steps]
 status = "defined"
-text = "Choose the receipts: the webhook's receipt, or up to 25 paid, shipped receipts without recorded tracking (the schedule). Re-read each through the Action Gateway (etsy.receipts.read, GET-only). For each shipment with a code, record one tracking_events row (source etsy, how it was observed, first observed time, carrier and the code's last four characters only) and, only for a new row, fulfillment.tracking_detected.v1 through the outbox; then resolve the receipt's open tracking_missing incident with the TRACKING_PRESENT evidence, and mark the receipt checked (tracking_checks). It never changes the order's state (Order Intake's state machine records SHIPPED) and never writes a shipment to Etsy: tracking reaches Etsy through the relay of slice 6.10. Tracking recorded from Etsy closes the order's open relay item (tracking_on_etsy) and deletes its pasted code."
+text = "Choose the receipts: the webhook's receipt, or up to 25 paid, shipped receipts without recorded tracking (the schedule). Read each one's shipments through the Action Gateway (etsy.shipments.read, GET-only, tracking codes and nothing of the buyer). For each shipment with a code, record one tracking_events row (source etsy, how it was observed, first observed time, carrier and the code's last four characters only) and, only for a new row, fulfillment.tracking_detected.v1 through the outbox; then resolve the receipt's open tracking_missing incident with the TRACKING_PRESENT evidence, and mark the receipt checked (tracking_checks). It never changes the order's state (Order Intake's state machine records SHIPPED) and never writes a shipment to Etsy: tracking reaches Etsy through the relay of slice 6.10. Tracking recorded from Etsy closes the order's open relay item (tracking_on_etsy) and deletes its pasted code."
 
 [specification.output_schema]
 status = "defined"
@@ -70,7 +70,7 @@ text = "120 s per attempt; every 15 minutes per shop once the schedule is on, or
 
 [specification.permissions]
 status = "defined"
-text = "Runs as the htco_worker role inside its job's organization: select and insert on tracking_events, select, insert and update on tracking_checks, the incident updates of slice 6.3, the outbox, the etsy_orders columns it needs, and the closing of relay items (update of state, closed_reason and its times; delete of the item's code, which it never reads). Its only action is etsy.receipts.read; it has no Etsy write. It receives the shipments' tracking codes in that action's order history form (TRACKING_CODE_AUTOMATIONS) because recording them is its job; never the buyer's name or address (AUD-06)."
+text = "Runs as the htco_worker role inside its job's organization: select and insert on tracking_events, select, insert and update on tracking_checks, the incident updates of slice 6.3, the outbox, the etsy_orders columns it needs, and the closing of relay items (update of state, closed_reason and its times; delete of the item's code, which it never reads). Its only action is etsy.shipments.read, granted to it alone (#147); it has no Etsy write. It receives the shipments' tracking codes because recording them is its job, and nothing of the buyer (AUD-06)."
 
 [specification.audit]
 status = "defined"

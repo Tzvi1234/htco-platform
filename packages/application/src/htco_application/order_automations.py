@@ -40,6 +40,7 @@ from typing import Any, Protocol
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
+from htco_application.etsy_reads import ReceiptsRead
 from htco_application.etsy_webhooks import ORDER_INTAKE, TriggersAutomations
 from htco_application.kernel import (
     DomainEvent,
@@ -61,7 +62,7 @@ from htco_application.order_ingest import (
     IngestSource,
     drift_id,
 )
-from htco_application.order_intake import GatewayReceipts, IntakeShops
+from htco_application.order_intake import IntakeShops
 from htco_application.shop_integrations import ShopIntegration
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import TriggerKind
@@ -206,7 +207,7 @@ class OrderVerification:
             or integration.status is not IntegrationStatus.CONNECTED
         ):
             return Completed({"skipped": "not_connected"})
-        receipt = await GatewayReceipts(ctx, self.clock).get_order_receipt(receipt_id)
+        receipt = await ReceiptsRead(ctx, self.clock).receipt(receipt_id)
         stored = await self.store.snapshot(ctx.shop_id, receipt)
         differences = verify(stored, receipt)
         recorded = await self.store.record_differences(

@@ -31,6 +31,7 @@ from typing import Protocol
 
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
+from htco_application.etsy_reads import ShipmentsRead
 from htco_application.etsy_webhooks import WEBHOOK_ACTOR, TriggersAutomations
 from htco_application.fulfillment_schedule import TRACKING_SYNC
 from htco_application.incidents import IncidentService, order_resource
@@ -44,8 +45,8 @@ from htco_application.kernel import (
     publish,
     run_inline,
 )
-from htco_application.marketplace import OrderReceipt
-from htco_application.order_intake import GatewayReceipts, IntakeShops
+from htco_application.marketplace import OrderShipment
+from htco_application.order_intake import IntakeShops
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import TriggerKind
 from htco_domain.fulfillment import carrier_of, normalize_tracking_code, tracking_fingerprint
@@ -267,25 +268,30 @@ class TrackingSync:
             via = ObservedVia.SCHEDULE
         else:
             raise JobError("a tracking sync names a receipt or the schedule mode")
-        reader = GatewayReceipts(ctx, self.clock)
+        reader = ShipmentsRead(ctx, self.clock)
         recorded = 0
         for receipt in receipts:
-            observed = await reader.get_order_receipt(receipt)
-            recorded += await self._shipments(ctx, shop_id, observed, via)
+            shipments = await reader.shipments(receipt)
+            recorded += await self._shipments(ctx, shop_id, receipt, shipments, via)
             await self.offload(partial(self.store.mark_checked, shop_id, receipt, now=self.clock()))
         return Completed({"receipts": len(receipts), "recorded": recorded, "via": via.value})
 
     async def _shipments(
-        self, ctx: HandlerContext, shop_id: uuid.UUID, receipt: OrderReceipt, via: ObservedVia
+        self,
+        ctx: HandlerContext,
+        shop_id: uuid.UUID,
+        receipt_id: int,
+        shipments: tuple[OrderShipment, ...],
+        via: ObservedVia,
     ) -> int:
         created = 0
-        for shipment in receipt.shipments:
+        for shipment in shipments:
             if not normalize_tracking_code(shipment.tracking_code):
                 continue  # a shipment without a code: nothing to record yet
             result = await self.recorder.record(
                 organization_id=ctx.organization_id,
                 shop_id=shop_id,
-                receipt_id=receipt.receipt_id,
+                receipt_id=receipt_id,
                 carrier_name=shipment.carrier,
                 code=shipment.tracking_code,
                 source=TrackingSource.ETSY,

@@ -11,6 +11,7 @@ import pytest
 
 from htco_application.automation.durable import Completed, HandlerContext
 from htco_application.automation.engine import AutomationRefused, TriggerRequest
+from htco_application.etsy_reads import ORDER_HISTORY_READ, RECEIPTS_READ, IntakeActionError
 from htco_application.etsy_webhooks import ORDER_INTAKE
 from htco_application.execution.channels import EtsyApiChannel
 from htco_application.execution.gateway import (
@@ -27,9 +28,7 @@ from htco_application.marketplace import MarketplaceRateLimitedError
 from htco_application.order_ingest import INGESTED, IngestSource
 from htco_application.order_intake import (
     ORDER_SYNC_JOB,
-    RECEIPTS_READ,
     EngineSyncTrigger,
-    IntakeActionError,
     OrderIntake,
     QueuedSyncRequests,
 )
@@ -137,9 +136,9 @@ async def test_receipt__reread_through_the_gateway_and_ingested_with_its_buyer_r
     stored = intake.store.orders[(SHOP, RECEIPT)]
     assert stored.buyer_name == FAKE_NAME  # the buyer row is kept (ADR-0018)
     [row] = intake.action_store.rows.values()
-    assert row.request.action == RECEIPTS_READ
+    assert row.request.action == ORDER_HISTORY_READ
     assert row.request.actor == ActorRef(ActorKind.AUTOMATION, ORDER_INTAKE)
-    assert row.request.input == {"order_history": True, "receipt_id": RECEIPT}
+    assert row.request.input == {"receipt_id": RECEIPT}
     # An R1 output: returned to the handler, never stored with the action.
     assert all(not step.store_output for step in row.steps if step.result.output)
     assert {t[2] for t in intake.store.transitions} == {IngestSource.WEBHOOK.value}
@@ -233,7 +232,8 @@ async def test_history__backfill_then_30_days_through_the_gateway() -> None:
     sources = [ctx.source for ctx in intake.store.contexts]
     assert sources == [IngestSource.BACKFILL, IngestSource.SYNC]
     requests = [row.request for row in intake.action_store.rows.values()]
-    assert all(r.input["order_history"] is True for r in requests)
+    assert {r.action for r in requests} == {ORDER_HISTORY_READ}
+    assert all("order_history" not in r.input for r in requests)
 
 
 async def test_history__a_lock_held_elsewhere__skipped() -> None:

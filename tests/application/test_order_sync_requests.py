@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 
 from htco_application.audit import AuditRecord
-from htco_application.order_history import OrderSync, request_order_sync
+from htco_application.order_history import OrderSync, adapter_pages, request_order_sync
 from htco_application.shop_dashboard import shop_orders
 from htco_application.shop_integrations import ShopIntegration
 from tests.application.test_shop_dashboard import SHOP, World, auth
@@ -30,8 +30,7 @@ def _world(requests: Requests) -> tuple[World, OrderSync]:
     world = World()
     sync = OrderSync(
         store=MemoryOrderStore(),
-        source=world.source,
-        tokens=Pinning(),
+        pages=adapter_pages(world.source, Pinning()),
         clock=world.clock,
         audit=AuditLog(),
         requests=requests,
