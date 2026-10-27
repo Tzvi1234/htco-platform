@@ -131,7 +131,7 @@ def _review(review: ShopReview) -> dict[str, JsonValue]:
     return mapped
 
 
-_READS = frozenset({"get_shop", "list_receipts", "list_reviews"})
+type _Recipe = Callable[[int, ActionRequest], Awaitable[ChannelOutcome]]
 
 
 class EtsyApiChannel:
@@ -140,22 +140,39 @@ class EtsyApiChannel:
     def __init__(self, etsy: EtsyReads, shops: EtsyShopIds) -> None:
         self._etsy = etsy
         self._shops = shops
+        # The recipes this channel runs (AUD-06, #147): the gateway refuses at startup a binding
+        # whose recipe is not here, unless it is disabled.
+        self._recipes: Mapping[str, _Recipe] = {
+            "get_shop": self._get_shop,
+            "list_receipts": self._list_receipts,
+            "list_reviews": self._list_reviews,
+        }
+
+    @property
+    def recipes(self) -> frozenset[str]:
+        return frozenset(self._recipes)
 
     async def execute(self, request: ActionRequest, binding: ChannelBinding) -> ChannelOutcome:
-        if binding.recipe not in _READS:
+        recipe = None if binding.recipe is None else self._recipes.get(binding.recipe)
+        if recipe is None:
             raise MarketplaceWriteRefusedError(
-                f"{request.action.name}: Etsy writes stay disabled until Phases 6 and 7"
+                f"{request.action.name}: no recipe {binding.recipe} in the API channel"
             )
         etsy_shop = None if request.shop_id is None else self._shops.etsy_shop_id(request.shop_id)
         if etsy_shop is None:
             raise MarketplaceNotFoundError("the shop has no Etsy connection", status=404)
-        if binding.recipe == "get_shop":
-            shop = await self._etsy.get_shop(etsy_shop)
-            return ChannelOutcome(
-                output={"shop_id": shop.shop_id, "name": shop.name, "currency": shop.currency_code}
-            )
-        if binding.recipe == "list_reviews":
-            return ChannelOutcome(output=await self._reviews(etsy_shop, request.input))
+        return await recipe(etsy_shop, request)
+
+    async def _get_shop(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:  # noqa: ARG002
+        shop = await self._etsy.get_shop(etsy_shop)
+        return ChannelOutcome(
+            output={"shop_id": shop.shop_id, "name": shop.name, "currency": shop.currency_code}
+        )
+
+    async def _list_reviews(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:
+        return ChannelOutcome(output=await self._reviews(etsy_shop, request.input))
+
+    async def _list_receipts(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:
         if request.input.get("order_history") is True:
             if request.actor.kind is not ActorKind.AUTOMATION:
                 raise MarketplacePermissionError(
@@ -242,6 +259,10 @@ UseCase = Callable[[ActionRequest], Awaitable[Mapping[str, JsonValue]]]
 
 class InternalChannel:
     channel = Channel.INTERNAL
+
+    @property
+    def recipes(self) -> frozenset[str]:
+        return frozenset(self._use_cases)
 
     def __init__(self, use_cases: Mapping[str, UseCase]) -> None:
         self._use_cases = use_cases

@@ -61,6 +61,7 @@ user_capability = "edit_product_facts"
 channel = "api"
 recipe = "update_listing_inventory"
 breaker_key = "etsy:api"
+disabled = true  # no recipe yet (#147): never routed until the API channel implements it
 
 # The app-wide Etsy budget (slice 5.15): one key's calls per second and per UTC day, shared by
 # every shop and worker. Conservative placeholders below Etsy's documented defaults until the
