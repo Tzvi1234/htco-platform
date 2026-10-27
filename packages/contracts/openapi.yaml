@@ -9421,9 +9421,7 @@ components:
       - opened_at
       - updated_at
       title: RelayItemView
-      description: 'No code and nothing of it (the code is buyer data, revealed by the parcels'' audited
-
-        route).'
+      description: No code and nothing of it (the code is buyer data, revealed by the audited code route).
     RelayPasteView:
       properties:
         id:

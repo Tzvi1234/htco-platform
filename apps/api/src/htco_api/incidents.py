@@ -8,7 +8,7 @@
 - `GET /v1/notifications`, `POST /v1/notifications/read`: the caller's own inbox.
 - `GET /v1/relay-items`, `POST /v1/relay-items/{id}/tracking`, `GET /v1/relay-items/{id}/code`:
   the AutoVA relay (slice 6.10): the open items, the owner's paste, and the code for the person
-  who copies it into Etsy (buyer-data roles only; never in a list, a log or an audit).
+  who copies it into Etsy (an Owner or Admin with a second factor only; never in a list, a log or an audit).
 
 Identifiers, states and codes only; never buyer data (an order is its receipt number).
 """
@@ -109,8 +109,7 @@ class IncidentCenter:
 
 
 class RelayItemView(BaseModel):
-    """No code and nothing of it (the code is buyer data, revealed by the parcels' audited
-    route)."""
+    """No code and nothing of it (the code is buyer data, revealed by the audited code route)."""
 
     id: uuid.UUID
     shop_id: uuid.UUID

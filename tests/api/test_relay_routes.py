@@ -236,16 +236,21 @@ async def test_pr_b_only_an_owner_or_admin_pastes_and_copies(role: Role) -> None
         await http.post(
             f"/v1/relay-items/{item.id}/tracking", json={"carrier": "usps", "code": CODE}
         )
+    handed_off = store.item(ORG, item.id)
     async with client(store, role) as http:
         pasted = await http.post(
             f"/v1/relay-items/{item.id}/tracking", json={"carrier": "usps", "code": CODE}
         )
         copy = await http.get(f"/v1/relay-items/{item.id}/code")
 
-    assert pasted.status_code in {403, 404}
+    if role in {Role.OPERATIONS, Role.SUPPORT}:
+        assert (pasted.status_code, pasted.json()["type"].rsplit("/", 1)[-1]) == (403, "forbidden")
+    else:
+        assert pasted.status_code in {403, 404}
     assert copy.status_code == 404
     assert CODE not in copy.text
     assert [a.action for a in store.audits] == ["relay.tracking_pasted"]
+    assert store.item(ORG, item.id) == handed_off
 
 
 async def test_pr_b_without_a_second_factor_403_mfa_required_and_no_code() -> None:
