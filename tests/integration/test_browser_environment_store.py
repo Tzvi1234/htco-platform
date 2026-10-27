@@ -92,8 +92,9 @@ async def test_transitions__store_history_and_one_event_each(admin: Database) ->
             [environment_id],
         ).fetchall()
         events = connection.execute(
-            "select payload ->> 'to_status' from jobs.outbox "
-            "where payload ->> 'event_type' = %s and payload ->> 'environment_id' = %s "
+            "select payload -> 'payload' ->> 'to_status' from jobs.outbox "
+            "where payload ->> 'event_type' = %s"
+            " and payload -> 'payload' ->> 'environment_id' = %s "
             "order by created_at",
             [STATUS_CHANGED_EVENT, str(environment_id)],
         ).fetchall()

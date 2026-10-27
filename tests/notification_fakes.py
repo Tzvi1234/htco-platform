@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import OutboxMessage
 from htco_application.notifications import (
     EmailMessage,
     EmailPermanentError,

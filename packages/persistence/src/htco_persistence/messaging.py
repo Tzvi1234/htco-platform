@@ -14,9 +14,9 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from htco_application.jobs import JobSpec
+from htco_application.kernel import OutboxMessage
 from htco_application.messaging import (
     InboxEvent,
-    OutboxMessage,
     PendingDelivery,
     RecordedEvent,
     delivery_job,

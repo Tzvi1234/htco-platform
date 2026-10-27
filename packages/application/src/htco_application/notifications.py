@@ -20,14 +20,25 @@ destination; `EventDeliverer` hands it to `IncidentNotifications`.
 
 import logging
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape
 from typing import Protocol
 
-from htco_application.kernel import EVENTS_DESTINATION, JsonValue, Offload, run_inline
-from htco_application.messaging import OutboxMessage, PendingDelivery
+from htco_application.kernel import (
+    ACCEPTED_VERSIONS,
+    DomainEvent,
+    JsonValue,
+    Offload,
+    OutboxMessage,
+    event_payload,
+    publish,
+    read_event,
+    run_inline,
+)
+from htco_application.messaging import PendingDelivery
+from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.notifications import (
     AUDIENCE,
     Audience,
@@ -194,11 +205,12 @@ class IncidentNotifications:
     service: NotificationService
 
     async def handle(self, message: OutboxMessage) -> None:
-        payload = message.payload
+        event = read_event(message.payload)
+        payload = event.payload
         kind = {
             INCIDENT_RESOLVED_EVENT: NotificationKind.INCIDENT_RESOLVED,
             INCIDENT_ESCALATED_EVENT: NotificationKind.INCIDENT_ESCALATED,
-        }.get(str(payload.get("event_type")), NotificationKind.INCIDENT_OPENED)
+        }.get(event.event_type, NotificationKind.INCIDENT_OPENED)
         incident_id = uuid.UUID(str(payload["incident_id"]))
         params: dict[str, object] = {
             "incident_id": str(incident_id),
@@ -231,16 +243,28 @@ class IncidentNotifications:
 @dataclass
 class EventDeliverer:
     """The `events.publish` destination: events with a subscriber are handed to it (which must
-    be idempotent: a replayed delivery calls it again); all others are accepted as records."""
+    be idempotent: a replayed delivery calls it again); all others are accepted as records.
+    It reads the envelope first: a version the subscriber does not read (its
+    `accepted_versions`, by default version 1), a broken envelope or a message that is not an
+    event is dead-lettered with its type and never handed on. An event nobody reads is
+    accepted as a record in any version."""
 
     subscribers: Mapping[str, EventSubscriber]
 
     async def deliver(self, delivery: PendingDelivery) -> None:
-        event_type = delivery.message.payload.get("event_type")
+        payload = delivery.message.payload
+        event_type = payload.get("event_type")
         subscriber = self.subscribers.get(event_type) if isinstance(event_type, str) else None
+        # Codex (local) on #174: the subscriber names the versions it reads.
+        accepted: Collection[int] | None = (
+            None
+            if subscriber is None
+            else getattr(subscriber, "accepted_versions", ACCEPTED_VERSIONS)
+        )
+        event = read_event(payload, accepted=accepted)
         if subscriber is not None:
             await subscriber.handle(delivery.message)
-        _log.info("event.accepted: %s outbox=%s", event_type, delivery.id)
+        _log.info("event.accepted: %s outbox=%s", event.event_type, delivery.id)
 
 
 # --- Email ---------------------------------------------------------------------------------------
@@ -613,14 +637,14 @@ class EmailDeliverer:
 # --- Requests from other processes (`notifications.requested.v1`) --------------------------------
 
 NOTIFICATION_REQUESTED = "notifications.requested.v1"
+NOTIFICATIONS_ACTOR = ActorRef(ActorKind.SYSTEM, "notifications")
 
 
-def notification_requested(request: NotificationRequest) -> OutboxMessage:
+def notification_requested(request: NotificationRequest, *, now: datetime) -> OutboxMessage:
     """The request as an event, for a process that does not write notifications itself (the
     API): the worker's `RequestedNotifications` turns it into notifications and emails."""
     params: dict[str, JsonValue] = dict(check_params(request.params))
     payload: dict[str, JsonValue] = {
-        "event_type": NOTIFICATION_REQUESTED,
         "kind": request.kind.value,
         "dedup_key": request.dedup_key,
         "params": params,
@@ -628,13 +652,17 @@ def notification_requested(request: NotificationRequest) -> OutboxMessage:
         "incident_id": None if request.incident_id is None else str(request.incident_id),
     }
     key = f"{NOTIFICATION_REQUESTED}:{request.organization_id}:{request.dedup_key}"
-    return OutboxMessage(
-        organization_id=request.organization_id,
-        shop_id=request.shop_id,
-        destination=EVENTS_DESTINATION,
-        idempotency_key=key[:200],
-        payload=payload,
-        correlation_id=None if request.correlation_id is None else request.correlation_id[:200],
+    return publish(
+        DomainEvent(
+            event_type=NOTIFICATION_REQUESTED,
+            organization_id=request.organization_id,
+            shop_id=request.shop_id,
+            idempotency_key=key[:200],
+            occurred_at=now,
+            actor=NOTIFICATIONS_ACTOR,
+            payload=payload,
+            correlation_id=request.correlation_id,
+        )
     )
 
 
@@ -643,7 +671,7 @@ class RequestedNotifications:
     service: NotificationService
 
     async def handle(self, message: OutboxMessage) -> None:
-        payload = message.payload
+        payload = event_payload(message)
         raw = payload.get("params")
         user = payload.get("user_id")
         incident = payload.get("incident_id")
@@ -775,8 +803,8 @@ class SecurityNotices:
         return sent
 
     async def _add(self, request: NotificationRequest) -> int:
-        message = notification_requested(request)
         now = self.clock()
+        message = notification_requested(request, now=now)
         try:
             await self.offload(lambda: self.store.add(message, now=now))
         except Exception as error:

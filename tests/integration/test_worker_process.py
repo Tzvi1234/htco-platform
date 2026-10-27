@@ -19,7 +19,8 @@ import pytest
 
 from htco_application.automation.durable import EXECUTION_JOB
 from htco_application.jobs import JobSpec
-from htco_application.messaging import OUTBOX_DELIVERY_JOB, OutboxMessage
+from htco_application.kernel import OutboxMessage
+from htco_application.messaging import OUTBOX_DELIVERY_JOB
 from htco_domain.automation import RetryPolicy
 from htco_persistence.database import Database
 from htco_persistence.jobs import PostgresJobQueue
