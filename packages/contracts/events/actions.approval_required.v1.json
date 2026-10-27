@@ -2,122 +2,69 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ht-co.app/contracts/events/actions.approval_required.v1.json",
   "title": "actions.approval_required.v1",
-  "description": "An action started waiting for an approval. Envelope: SOFTWARE_DESIGN §8.4.",
+  "description": "An action started waiting for an approval. TEMPORARY: the flat v1 shape the Action Gateway writes today (`event_type` beside the facts, no envelope); remove after migration to publish() (#205).",
   "type": "object",
   "properties": {
-    "event_id": {
-      "type": "string",
-      "minLength": 36,
-      "maxLength": 36
-    },
     "event_type": {
       "type": "string",
       "enum": [
         "actions.approval_required.v1"
       ]
     },
-    "organization_id": {
+    "action_execution_id": {
       "type": "string",
       "minLength": 36,
       "maxLength": 36
     },
-    "shop_id": {
-      "description": "string or null: the shop, when the event is about one"
-    },
-    "occurred_at": {
-      "type": "string",
-      "minLength": 1
-    },
-    "correlation_id": {
-      "description": "string or null"
-    },
-    "causation_id": {
-      "description": "string or null"
-    },
-    "idempotency_key": {
+    "action": {
       "type": "string",
       "minLength": 1,
       "maxLength": 200
     },
-    "actor": {
-      "type": "object",
-      "properties": {
-        "type": {
-          "type": "string",
-          "enum": [
-            "user",
-            "employee",
-            "automation",
-            "advisor",
-            "system"
-          ]
-        },
-        "id": {
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "required": [
-        "type",
-        "id"
-      ],
-      "additionalProperties": false
-    },
-    "payload_version": {
+    "version": {
       "type": "integer",
+      "minimum": 1
+    },
+    "outcome": {
+      "type": "string",
       "enum": [
-        1
+        "succeeded",
+        "failed",
+        "denied",
+        "pending_approval",
+        "handed_to_human",
+        "deferred"
       ]
     },
-    "payload": {
-      "type": "object",
-      "properties": {
-        "action_execution_id": {
-          "type": "string"
-        },
-        "action": {
-          "type": "string"
-        },
-        "version": {
-          "type": "integer"
-        },
-        "outcome": {
-          "type": "string"
-        },
-        "error_code": {
-          "description": "string or null"
-        },
-        "actor": {
-          "type": "string"
-        },
-        "causation_id": {
-          "description": "string or null"
-        }
-      },
-      "required": [
-        "action_execution_id",
-        "action",
-        "version",
-        "outcome",
-        "error_code",
-        "actor",
-        "causation_id"
+    "error_code": {
+      "type": [
+        "string",
+        "null"
       ],
-      "additionalProperties": false
+      "maxLength": 100
+    },
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 200
     }
   },
   "required": [
-    "event_id",
     "event_type",
-    "organization_id",
-    "shop_id",
-    "occurred_at",
-    "correlation_id",
-    "causation_id",
-    "idempotency_key",
+    "action_execution_id",
+    "action",
+    "version",
+    "outcome",
+    "error_code",
     "actor",
-    "payload_version",
-    "payload"
+    "causation_id"
   ],
   "additionalProperties": false
 }

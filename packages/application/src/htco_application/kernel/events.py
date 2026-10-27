@@ -16,7 +16,7 @@ versions it reads as `accepted_versions` (default `ACCEPTED_VERSIONS`).
 import re
 import uuid
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from htco_application.kernel.errors import DeadLetterError
@@ -78,9 +78,19 @@ class DomainEvent:
         }
 
 
+def _bounded(value: str | None) -> str | None:
+    return None if value is None else value[:MAX_OUTBOX_KEY_LENGTH]
+
+
 def publish(event: DomainEvent, *, action_execution_id: uuid.UUID | None = None) -> OutboxMessage:
-    """The outbox message that publishes `event`; the producer adds it in its transaction."""
-    correlation = event.correlation_id
+    """The outbox message that publishes `event`; the producer adds it in its transaction. The
+    correlation and causation ids are cut to the outbox column's bound first, so the stored
+    envelope and the column hold the same values (Codex on #174)."""
+    event = replace(
+        event,
+        correlation_id=_bounded(event.correlation_id),
+        causation_id=_bounded(event.causation_id),
+    )
     return OutboxMessage(
         organization_id=event.organization_id,
         destination=EVENTS_DESTINATION,
@@ -88,7 +98,7 @@ def publish(event: DomainEvent, *, action_execution_id: uuid.UUID | None = None)
         payload=event.envelope(),
         shop_id=event.shop_id,
         action_execution_id=action_execution_id,
-        correlation_id=None if correlation is None else correlation[:MAX_OUTBOX_KEY_LENGTH],
+        correlation_id=event.correlation_id,
     )
 
 
@@ -111,6 +121,8 @@ class ReceivedEvent:
 # The versions a consumer reads unless it declares others (`accepted_versions`).
 ACCEPTED_VERSIONS: tuple[int, ...] = (1,)
 _ACTOR_KINDS = frozenset(kind.value for kind in ActorKind)
+# Fields only an envelope has: no flat row written before it carries any of them (Codex, #174).
+_ENVELOPE_ONLY = ("event_id", "organization_id", "payload", "idempotency_key")
 
 
 def read_event(
@@ -122,7 +134,10 @@ def read_event(
     if not isinstance(event_type, str) or not EVENT_TYPE.match(event_type):
         raise MalformedEventError("the message names no event type")
     if "payload_version" not in message:
-        # Written before the envelope: the facts sit beside the type (version 1).
+        # Written before the envelope: the facts sit beside the type (version 1). An envelope
+        # that lost its version is broken, never mistaken for one.
+        if any(name in message for name in _ENVELOPE_ONLY):
+            raise MalformedEventError(f"{event_type} has a broken envelope: payload_version")
         if accepted is not None and 1 not in accepted:
             raise UnknownEventVersionError(f"{event_type} version 1 is not accepted")
         facts = {k: v for k, v in message.items() if k != "event_type"}
@@ -174,10 +189,14 @@ def _broken_envelope_field(message: Mapping[str, JsonValue]) -> str | None:
             and isinstance(actor.get("id"), str) and bool(str(actor.get("id")).strip())),
         ("idempotency_key", isinstance(key, str) and bool(key.strip())
             and len(key) <= MAX_OUTBOX_KEY_LENGTH),
-        ("correlation_id", isinstance(message.get("correlation_id", 0), str | None)),
-        ("causation_id", isinstance(message.get("causation_id", 0), str | None)),
+        ("correlation_id", _is_bounded_id(message.get("correlation_id", 0))),
+        ("causation_id", _is_bounded_id(message.get("causation_id", 0))),
     )  # fmt: skip
     return next((name for name, ok in checks if not ok), None)
+
+
+def _is_bounded_id(value: JsonValue) -> bool:
+    return value is None or (isinstance(value, str) and len(value) <= MAX_OUTBOX_KEY_LENGTH)
 
 
 def event_payload(message: OutboxMessage) -> Mapping[str, JsonValue]:

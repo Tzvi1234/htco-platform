@@ -22,6 +22,10 @@
       "maxLength": 36
     },
     "shop_id": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "string or null: the shop, when the event is about one"
     },
     "occurred_at": {
@@ -29,9 +33,17 @@
       "minLength": 1
     },
     "correlation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "string or null"
     },
     "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "string or null"
     },
     "idempotency_key": {
@@ -91,6 +103,10 @@
           "type": "string"
         },
         "receipt_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
           "description": "integer or null"
         },
         "detected_at": {
