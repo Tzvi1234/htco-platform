@@ -375,3 +375,39 @@ async def test_succeeded__the_checked_output__stored_and_read_back_for_the_chain
     records = PostgresChainReader(admin).records(tenant.organization_id, execution.id)
     assert records is not None
     assert records.execution.output == {"order": "3412987711"}
+
+
+@pytest.mark.ac("AC-126.1")
+async def test_kill_switch__an_automation_set_to_draft_cancels_its_queued_execution(
+    admin: Database, worker_db: Database
+) -> None:
+    """#126: draft stops what is already queued, not only new triggers (on Postgres)."""
+    tenant = Tenant(admin)
+    book = EffectBook()
+    automation = register(admin)
+    execution = engine_on(admin, automation, book.handle).trigger(trigger(automation, tenant))
+    drafts = {name: {"status": "draft", "text": name} for name in AUTOMATION_SPEC_SECTIONS}
+    document = engine_document(automation, version=2, readiness="draft", specification=drafts)
+    PostgresAutomationCatalog(admin).upsert(
+        [
+            (
+                parse_automation(document),
+                DefinitionRow(document, document_hash(document), "local", NOW),
+            )
+        ]
+    )
+    worker = engine_on(worker_db, automation, book.handle)
+
+    stopped = await in_scope(tenant, worker, execution.id, worker=WORKER)
+
+    assert stopped.state is ExecutionState.CANCELLED
+    assert book.calls == 0
+    assert events(admin, execution.id)[-1][:2] == ("pending", "cancelled")
+    assert (
+        scalar(
+            admin,
+            "select count(*) from audit.audit_log where entity_id = %s and action = %s",
+            [str(execution.id), "automation.execution_stopped"],
+        )
+        == 1
+    )

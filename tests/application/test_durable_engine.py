@@ -584,3 +584,114 @@ async def test_completed__an_output_the_store_refuses__the_run_still_succeeds_wi
     assert (done.state, done.output) == (ExecutionState.SUCCEEDED, None)
     assert stored.execution.state is ExecutionState.SUCCEEDED
     assert any(r.getMessage() == "automation.output_not_saved" for r in caplog.records)
+
+
+# --- #126: the kill switch at execution time ----------------------------------------------------
+# Setting an automation's readiness to draft (or deprecated) stops new triggers, and it also stops
+# executions that are already queued, scheduled for a retry or resumed: each one is re-checked
+# when its job runs, and ends CANCELLED without calling the handler.
+
+DRAFT: dict[str, Any] = {
+    "readiness": "draft",
+    "specification": {name: {"status": "draft", "text": name} for name in AUTOMATION_SPEC_SECTIONS},
+}
+
+
+def switch_off(world: World, **changes: Any) -> None:
+    world.registry = registry(**(DRAFT | changes))
+
+
+@pytest.mark.ac("AC-126.1")
+async def test_kill_switch__a_queued_execution_is_cancelled_when_its_job_runs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    world = World()
+    execution = world.engine.trigger(paid())
+    switch_off(world)
+
+    with caplog.at_level(logging.WARNING):
+        stopped = await world.engine.execute(execution.id, worker=WORKER)
+    replayed = await world.engine.execute(execution.id, worker=WORKER)
+
+    assert stopped.state is ExecutionState.CANCELLED
+    assert replayed.state is ExecutionState.CANCELLED
+    assert world.book.calls == 0
+    assert (world.store.changes[-1].to_state, world.store.changes[-1].reason) == (
+        ExecutionState.CANCELLED,
+        "stopped:draft",
+    )
+    assert [job.kind for job in world.store.jobs] == [EXECUTION_JOB]  # no new job
+    record = next(r for r in caplog.records if r.getMessage() == "automation.stopped")
+    assert record.__dict__["reason"] == "draft"
+    # Audited in the same write as the cancellation (sage on #180, THREAT_MODEL T15).
+    [audit] = world.store.audits
+    assert (audit.action, audit.actor, audit.entity_type, audit.entity_id) == (
+        "automation.execution_stopped",
+        WORKER,
+        "automation_execution",
+        str(execution.id),
+    )
+    assert (audit.before, audit.after) == (
+        {"state": "pending"},
+        {"state": "cancelled", "reason": "stopped:draft"},
+    )
+    assert audit.correlation_id == execution.correlation_id
+
+
+@pytest.mark.ac("AC-126.1")
+async def test_kill_switch__a_scheduled_retry_does_not_run_again() -> None:
+    world = World()
+    world.book.failures = 1
+    execution = world.engine.trigger(paid())
+    failed = await world.engine.execute(execution.id, worker=WORKER)
+    switch_off(world)
+
+    stopped = await world.engine.execute(execution.id, worker=WORKER)
+
+    assert failed.state is ExecutionState.RETRY_SCHEDULED
+    assert stopped.state is ExecutionState.CANCELLED
+    assert world.book.calls == 1
+    assert world.book.effects == {}
+
+
+@pytest.mark.ac("AC-126.1")
+async def test_kill_switch__a_resumed_execution_is_cancelled_before_its_action() -> None:
+    world = World()
+    world.book.wait_for_approval = True
+    execution = world.engine.trigger(paid())
+    await world.engine.execute(execution.id, worker=WORKER)
+    world.engine.resume(ORG, execution.id, actor=ADMIN, reason="approval_decided")
+    switch_off(world)
+
+    stopped = await world.engine.execute(execution.id, worker=WORKER)
+
+    assert stopped.state is ExecutionState.CANCELLED
+    assert world.book.calls == 1  # only the first run, which asked for the approval
+
+
+@pytest.mark.ac("AC-126.1")
+async def test_kill_switch__a_run_whose_worker_died_is_not_retried() -> None:
+    world = World()
+    execution = world.engine.trigger(paid())
+    running = execution.transition(ExecutionState.RUNNING)
+    world.store.rows[execution.id] = StoredExecution(
+        running, world.store.rows[execution.id].payload
+    )
+    switch_off(world)
+
+    stopped = await world.engine.execute(execution.id, worker=WORKER)
+
+    assert stopped.state is ExecutionState.CANCELLED
+    assert world.book.calls == 0
+
+
+@pytest.mark.ac("AC-126.1")
+async def test_kill_switch__an_active_automation_still_runs() -> None:
+    world = World()
+    execution = world.engine.trigger(paid())
+    world.registry = registry()  # reloaded, still active
+
+    done = await world.engine.execute(execution.id, worker=WORKER)
+
+    assert done.state is ExecutionState.SUCCEEDED
+    assert world.book.calls == 1
