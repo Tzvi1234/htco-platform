@@ -35,7 +35,20 @@ The default window is **seven business days** from payment to the first tracking
 
 ## Out of scope here
 
-The relay that copies tracking from AutoVA into Etsy (6.10), writes to Etsy (6.6, 6.8), the timeline view on the Orders screen (needs 5.7).
+The relay's upload into Etsy (the guarded `etsy.shipments.create`, 6.8) and its screen (6.10 PR B), writes to Etsy (6.6, 6.8), the timeline view on the Orders screen (needs 5.7).
+
+## The AutoVA relay (slice 6.10, the Human-task path)
+
+The owner orders through AutoVA and copies each tracking number into Etsy by hand (A-05). The relay keeps that work in the office until Phase 8A reads AutoVA itself:
+
+- **Detect (AC-6.10.1).** Each inspection (`fulfillment.inspect`) opens one relay item per paid order without tracking strictly past the relay window: 2 business days after payment (A-20). One item per order, ever (`app.relay_items`, `shop_id, receipt_id` unique); the Owners get one `relay_tracking_needed` notification when it opens.
+- **Paste (AC-6.10.4).** `POST /v1/relay-items/{id}/tracking` (6.10 PR B; an Owner or Admin with a second factor: 403 `forbidden` or `mfa-required` otherwise) takes the carrier and the number as AutoVA shows it. `TrackingNumber.parse` runs before anything else; an unknown carrier or a number in the wrong format is a 422 `tracking-invalid` whose message names the carrier, never the number. Only an Owner or Admin may paste; Operations and Support get 403 `forbidden`.
+- **Never twice (AC-6.10.2).** A number Tracking Synchronization already saw on the receipt closes the item on that evidence and is not kept; a number pasted for another order of the shop is a 409 `tracking-already-used`; a second paste is a 409 `relay-item-moved`.
+- **Hand off (AC-6.10.3).** Otherwise the item moves to `handed_off`: a person copies the number into Etsy from `GET /v1/relay-items/{id}/code` (an Owner or Admin with a second factor; anyone else, a closed or an expired item gets a 404; every reveal audited; `no-store`). Never silently: the item stays open until the tracking shows on the receipt. No Etsy write here; the guarded upload is 6.8.
+- **Close on evidence.** When Tracking Synchronization records the order's tracking from Etsy, the item closes (`tracking_on_etsy`) and its code is deleted. Each inspection also closes the items of orders cancelled or refunded on Etsy (`cancelled`) and those handed off more than 30 days ago (`expired`), and the disconnect purge removes a shop's items with their codes. The relay's notification is asked for again while the item waits, so one that failed is sent later (deduplicated), and the window counts the shop's own business days (its SLA policy's calendar).
+- **Activation order.** Tracking Synchronization is activated before (or with) Incident Detection: without it, tracking that reached Etsy would not close the items (slice 6.7).
+
+Tests: `tests/application/test_autova_relay.py` (every AC), `tests/api/test_relay_routes.py`, `tests/integration/test_relay_store.py` (db), `supabase/tests/database/27_relay_items.test.sql`.
 
 ## Alerts (slice 6.9)
 

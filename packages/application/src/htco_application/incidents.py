@@ -27,10 +27,11 @@ from htco_application.kernel import (
     JsonValue,
     Offload,
     OutboxMessage,
+    event_payload,
     publish,
     run_inline,
 )
-from htco_domain.actors import ActorRef
+from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.incidents import (
     DEFAULT_SEVERITY,
     Cause,
@@ -44,6 +45,8 @@ from htco_domain.incidents import (
 )
 
 INCIDENT_OPENED = "incidents.opened.v1"
+# Who opens a dead-letter incident: the platform, on the engine's state-change event.
+ENGINE_ACTOR = ActorRef(ActorKind.SYSTEM, "automation-engine")
 INCIDENT_RESOLVED = "incidents.resolved.v1"
 # An incident moved to escalated (by the inspector's age rule or a person): the owner is told
 # once per incident (slice 6.7).
@@ -397,3 +400,45 @@ def drift_detection(drift: ObservedDrift) -> Detection:
         details={"drift_id": str(drift.drift_id), "drift_kind": drift.kind},
         correlation_id=drift.correlation_id,
     )
+
+
+@dataclass
+class DeadLetterIncidents:
+    """`automations.execution_state_changed.v1` to `dead_lettered` → one open
+    `automation_dead_lettered` incident per automation (AC-6.7.4), which the one notification
+    path tells the Owners and Admins. A later dead letter of the same automation while that
+    incident is open adds nothing; another automation's is another incident."""
+
+    incidents: IncidentService
+
+    async def handle(self, message: OutboxMessage) -> None:
+        # The event in either shape: the envelope of #174, or a row written before it.
+        payload = event_payload(message)
+        automation_id = payload.get("automation_id")
+        execution_id = payload.get("execution_id")
+        occurred = payload.get("occurred_at")
+        if (
+            payload.get("to_state") != "dead_lettered"
+            or not isinstance(automation_id, str)
+            or not automation_id
+            or not isinstance(execution_id, str)
+            or not isinstance(occurred, str)
+        ):
+            return
+        try:
+            detected_at = datetime.fromisoformat(occurred)
+        except ValueError:
+            return  # malformed: a retry would never parse it either (quill on #173)
+        await self.incidents.open(
+            Detection(
+                organization_id=message.organization_id,
+                cause=Cause.AUTOMATION_DEAD_LETTERED,
+                resource_kind=ResourceKind.AUTOMATION,
+                resource_id=automation_id[:120],
+                detected_at=detected_at,
+                source="automation_engine",
+                details={"execution_id": execution_id},
+                correlation_id=message.correlation_id,
+            ),
+            actor=ENGINE_ACTOR,
+        )

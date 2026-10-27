@@ -105,6 +105,13 @@
         },
         "occurred_at": {
           "type": "string"
+        },
+        "automation_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "string or null: the automation the execution belongs to (6.7: a dead letter names it)"
         }
       },
       "required": [
@@ -113,7 +120,8 @@
         "to_state",
         "status",
         "actor",
-        "occurred_at"
+        "occurred_at",
+        "automation_id"
       ],
       "additionalProperties": false
     }

@@ -326,3 +326,90 @@ async def test_worker__a_reviews_transaction_finds_its_order_in_its_own_shop_onl
 
     assert found == {910: 91, 920: 92}  # 930 is the other shop's, 999 is not stored
     assert store.receipts_for_transactions(integration.shop_id, ()) == {}
+
+
+async def test_worker__tracked_orders_names_the_receipts_with_tracking(
+    database: Database, worker_db: Database
+) -> None:
+    """Slice 6.10 (local Codex on #159): the relay closes an item whose order got tracking."""
+    tenant, integration = await connected(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    with tenant_scope(org):
+        await PostgresOrderStore(worker_db).ingest_receipts(
+            integration, [order(95), order(96)], context=WEBHOOK, now=NOW
+        )
+        incidents = IncidentService(PostgresIncidentStore(worker_db), clock=lambda: NOW)
+        recorder = TrackingRecorder(PostgresTrackingStore(worker_db), incidents, clock=lambda: NOW)
+        await recorder.record(
+            organization_id=org, shop_id=shop, receipt_id=95, carrier_name="USPS",
+            code="FAKE-DB-TRACK-95", source=TrackingSource.ETSY,
+            observed_via=ObservedVia.SCHEDULE, notified_at=NOW, actor=ACTOR,
+        )  # fmt: skip
+        store = PostgresSlaStore(worker_db)
+        found = store.tracked_orders(shop, (95, 96, 97))
+        none = store.tracked_orders(shop, ())
+
+    assert found == frozenset({95})
+    assert none == frozenset()
+
+
+async def test_worker__etsy_tracking_closes_the_relay_item_with_its_code_in_one_write(
+    database: Database, worker_db: Database
+) -> None:
+    """Local Codex on #159: Etsy's tracking closes the order's relay item and deletes its code in
+    the tracking event's own transaction; an AutoVA source (the paste itself) never does, and
+    reconciliation counts Etsy events only."""
+    from htco_application.audit import AuditRecord  # noqa: PLC0415
+    from htco_application.relay import RelayItem  # noqa: PLC0415
+    from htco_domain.fulfillment import tracking_fingerprint  # noqa: PLC0415
+    from htco_domain.relay import ClosedReason, RelayState  # noqa: PLC0415
+    from htco_persistence.relay import PostgresRelayStore  # noqa: PLC0415
+
+    tenant, integration = await connected(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    api, worker = PostgresRelayStore(database), PostgresRelayStore(worker_db)
+    items = {}
+    with tenant_scope(org):
+        await PostgresOrderStore(worker_db).ingest_receipts(
+            integration, [order(101), order(102)], context=WEBHOOK, now=NOW
+        )
+        for receipt in (101, 102):
+            opened = RelayItem(
+                id=uuid.uuid7(), organization_id=org, shop_id=shop, receipt_id=receipt,
+                state=RelayState.AWAITING_TRACKING, paid_at=NOW - timedelta(days=3),
+                opened_at=NOW, updated_at=NOW,
+            )  # fmt: skip
+            worker.open_item(opened)
+            items[receipt] = opened.id
+    for receipt, item_id in items.items():
+        code = f"9400100000000000000{receipt}"
+        api.hand_off(
+            item_id, carrier="usps", fingerprint=tracking_fingerprint(shop, code), last4="0101",
+            code=code, now=NOW,
+            audit=AuditRecord.new(
+                organization_id=org, actor=ACTOR, action="relay.tracking_pasted",
+                entity_type="relay_item", entity_id=str(item_id), after={"receipt_id": receipt},
+            ),
+        )  # fmt: skip
+    with tenant_scope(org):
+        incidents = IncidentService(PostgresIncidentStore(worker_db), clock=lambda: NOW)
+        recorder = TrackingRecorder(PostgresTrackingStore(worker_db), incidents, clock=lambda: NOW)
+        for receipt, source in ((101, TrackingSource.ETSY), (102, TrackingSource.AUTOVA_MANUAL)):
+            await recorder.record(
+                organization_id=org, shop_id=shop, receipt_id=receipt, carrier_name="USPS",
+                code=f"FAKE-DB-{receipt}", source=source, observed_via=ObservedVia.SCHEDULE,
+                notified_at=NOW, actor=ACTOR,
+            )  # fmt: skip
+        tracked = PostgresSlaStore(worker_db).tracked_orders(shop, (101, 102))
+
+    closed, waiting = api.item(org, items[101]), api.item(org, items[102])
+    assert closed is not None
+    assert waiting is not None
+    assert (closed.state, closed.closed_reason) == (
+        RelayState.CLOSED,
+        ClosedReason.TRACKING_ON_ETSY,
+    )
+    assert waiting.state is RelayState.HANDED_OFF
+    codes = "select count(*) from app.relay_item_codes where relay_item_id = %s"
+    assert (count(database, codes, [items[101]]), count(database, codes, [items[102]])) == (0, 1)
+    assert tracked == frozenset({101})

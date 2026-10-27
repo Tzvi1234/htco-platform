@@ -76,7 +76,7 @@ from htco_application.marketplace import (
     QuotaDeferredError,
 )
 from htco_application.messaging import OutboxMessage
-from htco_application.workforce.registry import Registry
+from htco_application.workforce.registry import Registry, restricted_grant_problems
 from htco_application.workforce.tool_access import ToolVerdict, decide_tool_access
 from htco_domain.actions import ActionState, ApprovalPolicy, VerifyMode, action_path
 from htco_domain.actors import ActorKind
@@ -362,6 +362,8 @@ class ActionGatewayService:
     def _authorize(self, request: ActionRequest, definition: ActionDefinition) -> bool:
         """Raises `Refusal`; True when this actor needs an approval even for a read."""
         kind = request.actor.kind
+        if definition.actor_kinds is not None and kind not in definition.actor_kinds:
+            raise Refusal("forbidden", f"{definition.name} is not for a {kind.value}")
         if kind is ActorKind.ADVISOR:
             raise Refusal("forbidden", "advisors never act")
         if kind is ActorKind.SYSTEM:
@@ -369,8 +371,15 @@ class ActionGatewayService:
                 raise Refusal("forbidden", "the platform runs R0 reads only")
             return False
         if kind is ActorKind.AUTOMATION:
-            automation = self._p.registry().automations.get(request.actor.id)
-            if automation is None or definition.name not in automation.allowed_actions:
+            registry = self._p.registry()
+            automation = registry.automations.get(request.actor.id)
+            if (
+                automation is None
+                or definition.name not in automation.allowed_actions
+                # A restricted read only for its own automation (AUD-06), whatever the registry
+                # provider returns after startup.
+                or restricted_grant_problems({automation.id: automation}, {})
+            ):
                 raise Refusal(
                     "forbidden", f"{definition.name} is outside {request.actor.id}'s permissions"
                 )

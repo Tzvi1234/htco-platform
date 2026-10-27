@@ -20,6 +20,7 @@ from htco_application.execution.schema import check_schema
 from htco_application.jobs import JsonValue
 from htco_application.secrets import secret_carrying_fields, secret_tool_names
 from htco_domain.actions import ApprovalPolicy, VerifyMode
+from htco_domain.actors import ActorKind
 from htco_domain.identity import Role
 from htco_domain.tooling import ToolDefinition
 
@@ -69,6 +70,9 @@ class ActionDefinition:
     concurrency_key: str | None = None
     # The policy capability a user needs to submit it (deny by default).
     user_capability: Capability | None = None
+    # Who may submit it (`actor_kinds`, #147 part B); None: not restricted by kind. The loader
+    # validates the list (`workforce.files`); the gateway refuses any other kind.
+    actor_kinds: frozenset[ActorKind] | None = None
 
     @property
     def name(self) -> str:
@@ -206,4 +210,7 @@ def _parse(
         rate_limit_key=document.get("rate_limit_key"),
         concurrency_key=document.get("concurrency_key"),
         user_capability=capability,
+        actor_kinds=None
+        if "actor_kinds" not in document
+        else frozenset(ActorKind(str(kind)) for kind in document["actor_kinds"]),
     )

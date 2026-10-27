@@ -195,6 +195,43 @@ class ReceiptSource(Protocol):
     ) -> Page[OrderReceipt]: ...
 
 
+class ReceiptPages(Protocol):
+    """One shop's receipts, page by page, for one run (#147, AC-3): the Etsy adapter with the
+    shop's pinned tokens (`adapter_pages`, the API process's fallback), or the Action Gateway
+    (`etsy_reads.OrderHistoryRead`, the worker's Etsy Order Intake)."""
+
+    async def page(self, *, changed_since: datetime | None, offset: int) -> Page[OrderReceipt]: ...
+
+
+@dataclass(frozen=True)
+class AdapterReceiptPages:
+    source: ReceiptSource
+    etsy_shop_id: int
+    tokens: AccessTokenProvider
+
+    async def page(self, *, changed_since: datetime | None, offset: int) -> Page[OrderReceipt]:
+        return await self.source.list_order_receipts(
+            self.etsy_shop_id,
+            min_created=None,
+            min_last_modified=changed_since,
+            limit=PAGE,
+            offset=offset,
+            tokens=self.tokens,
+        )
+
+
+def adapter_pages(
+    source: ReceiptSource, tokens: TokenPinning
+) -> Callable[[ShopIntegration], ReceiptPages]:
+    """The adapter's pages for a run, with the shop's tokens pinned to its connection."""
+
+    def pages(integration: ShopIntegration) -> ReceiptPages:
+        pinned = tokens.pinned(integration.shop_id, generation=integration.generation)
+        return AdapterReceiptPages(source, integration.etsy_shop_id, pinned)
+
+    return pages
+
+
 class SyncRequests(Protocol):
     """Asks the worker for a run of the shop's order history sync (slice 5.4)."""
 
@@ -222,8 +259,7 @@ class OrderSync:
         self,
         *,
         store: OrderStore,
-        source: ReceiptSource,
-        tokens: TokenPinning,
+        pages: Callable[[ShopIntegration], ReceiptPages],
         clock: Callable[[], datetime],
         audit: AuditAppender | None = None,
         sleep: Callable[[float], Awaitable[None]] = _sleep,
@@ -236,8 +272,7 @@ class OrderSync:
         self.requests = requests
         self.backfill_context = backfill_context
         self.sync_context = sync_context
-        self._source = source
-        self._tokens = tokens
+        self._pages = pages
         self._clock = clock
         self.audit = audit
         self._sleep = sleep
@@ -319,21 +354,21 @@ class OrderSync:
             if not held:
                 return False
             state = await self.store.state(integration.shop_id)
-            tokens = self._tokens.pinned(integration.shop_id, generation=integration.generation)
+            pages = self._pages(integration)
             if state is None or not state.complete_for(integration.etsy_shop_id):
                 offset = 0
                 if state is not None and state.etsy_shop_id == integration.etsy_shop_id:
                     offset = state.backfill_offset
-                await self._backfill(integration, tokens, offset)
-            await self._incremental(integration, tokens)
+                await self._backfill(integration, pages, offset)
+            await self._incremental(integration, pages)
             return True
 
     async def _backfill(
-        self, integration: ShopIntegration, tokens: AccessTokenProvider, offset: int
+        self, integration: ShopIntegration, pages: ReceiptPages, offset: int
     ) -> None:
         next_offset: int | None = offset
         while next_offset is not None:
-            page = await self._read(integration, tokens, offset=next_offset)
+            page = await self._read(pages, offset=next_offset)
             next_offset = page.next_offset
             await self.store.save_backfill_page(
                 integration,
@@ -343,12 +378,12 @@ class OrderSync:
                 context=self.backfill_context,
             )
 
-    async def _incremental(self, integration: ShopIntegration, tokens: AccessTokenProvider) -> None:
+    async def _incremental(self, integration: ShopIntegration, pages: ReceiptPages) -> None:
         started = self._clock()
         since = started - timedelta(days=INCREMENTAL_DAYS)
         offset: int | None = 0
         while offset is not None:
-            page = await self._read(integration, tokens, changed_since=since, offset=offset)
+            page = await self._read(pages, changed_since=since, offset=offset)
             offset = page.next_offset
             await self.store.save_incremental_page(
                 integration,
@@ -359,25 +394,13 @@ class OrderSync:
             )
 
     async def _read(
-        self,
-        integration: ShopIntegration,
-        tokens: AccessTokenProvider,
-        *,
-        changed_since: datetime | None = None,
-        offset: int,
+        self, pages: ReceiptPages, *, changed_since: datetime | None = None, offset: int
     ) -> Page[OrderReceipt]:
         """One page, routine (never urgent). A 429 that outlasted the adapter's own waits is
         waited out here a few times; any other failure ends the run (the checkpoint stays)."""
         for attempt in range(RATE_LIMIT_RETRIES + 1):
             try:
-                return await self._source.list_order_receipts(
-                    integration.etsy_shop_id,
-                    min_created=None,
-                    min_last_modified=changed_since,
-                    limit=PAGE,
-                    offset=offset,
-                    tokens=tokens,
-                )
+                return await pages.page(changed_since=changed_since, offset=offset)
             except MarketplaceRateLimitedError as error:
                 if attempt == RATE_LIMIT_RETRIES:
                     raise

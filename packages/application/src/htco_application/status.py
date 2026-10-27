@@ -50,6 +50,7 @@ def execution_state_event(change: StateChange) -> OutboxMessage:
         "status": status_kind(change.to_state).value,
         "actor": str(change.actor),
         "occurred_at": change.at.isoformat(),
+        "automation_id": change.automation_id,
     }
     return publish(
         DomainEvent(

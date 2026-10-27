@@ -46,7 +46,7 @@ from htco_application.jobs import JobError
 from htco_application.marketplace import MarketplacePort
 from htco_application.mfa import Enrollment, Factor
 from htco_application.notifications import SecurityNotices
-from htco_application.order_history import OrderSync
+from htco_application.order_history import OrderSync, adapter_pages
 from htco_application.order_intake import QueuedSyncRequests
 from htco_application.passkeys import (
     PASSKEY,
@@ -98,6 +98,7 @@ from htco_persistence.notifications import (
 )
 from htco_persistence.operations_health import PostgresOperationsHealth
 from htco_persistence.readiness import DatabaseCheck
+from htco_persistence.relay import PostgresRelayStore
 from htco_persistence.shop_integrations import (
     PostgresCapabilityStore,
     PostgresIntegrationReader,
@@ -534,6 +535,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
                 offload=anyio.to_thread.run_sync,
             ),
             inbox=PostgresNotificationInbox(database),
+            relay=PostgresRelayStore(database),
         ),
         security_notices=SecurityNotices(
             PostgresSecurityNoticeStore(database),
@@ -616,8 +618,7 @@ def _etsy_wiring(
     # HTCO_ORDER_SYNC_IN_API is off; until then this process runs it as the fallback.
     history = OrderSync(
         store=PostgresOrderStore(database),
-        source=adapter,
-        tokens=tokens,
+        pages=adapter_pages(adapter, tokens),
         clock=lambda: datetime.now(UTC),
         audit=PostgresAuditLog(database),
         requests=None

@@ -50,7 +50,6 @@ channel = "api"
 recipe = "list_order_history"
 requires_capability = "receipts_read"
 breaker_key = "etsy:api"
-disabled = true  # no recipe yet (#147 part B)
 
 # AUD-06 (#147 part B): the shipments' tracking codes, no buyer data. Granted to tracking-sync
 # only (tools/registry.py RESTRICTED_GRANTS); never to a user or employee.
@@ -68,7 +67,6 @@ channel = "api"
 recipe = "list_shipments"
 requires_capability = "receipts_read"
 breaker_key = "etsy:api"
-disabled = true  # no recipe yet (#147 part B)
 
 [[actions]]
 tool = "etsy.reviews.read"
@@ -113,6 +111,8 @@ output_schema = "etsy.shipments.create.output.json"
 rate_limit_key = "etsy:app"
 concurrency_key = "shop:{shop_id}:writes"
 user_capability = "confirm_shipment_write"
+# Never an advisor or the platform; only the Owner's own press runs without an approval.
+actor_kinds = ["user", "employee", "automation"]
 [[actions.bindings]]
 channel = "api"
 recipe = "create_receipt_shipment"
@@ -130,6 +130,8 @@ output_schema = "etsy.shop.update.output.json"
 rate_limit_key = "etsy:app"
 concurrency_key = "shop:{shop_id}:writes"
 user_capability = "update_shop_settings"
+# Never an advisor or the platform; only the Owner's own press runs without an approval.
+actor_kinds = ["user", "employee", "automation"]
 [[actions.bindings]]
 channel = "api"
 recipe = "update_shop_vacation"

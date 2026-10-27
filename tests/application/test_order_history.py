@@ -24,6 +24,7 @@ from htco_application.order_history import (
     FRESH_FOR,
     HistoryState,
     OrderSync,
+    adapter_pages,
     request_order_sync,
 )
 from htco_application.shop_capabilities import ShopNotConnectedError
@@ -126,8 +127,7 @@ class Setup:
 
         self.sync = OrderSync(
             store=self.store,
-            source=self.recording,
-            tokens=Pinning(),
+            pages=adapter_pages(self.recording, Pinning()),
             clock=self.world.clock,
             audit=self.audit,
             sleep=sleep,

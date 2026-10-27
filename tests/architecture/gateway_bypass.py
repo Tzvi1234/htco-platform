@@ -11,8 +11,9 @@ A function of the adapter's module sends a write when it hands the choke point (
 arguments), or reaches such a function through `self.` calls or the module's own helpers, private
 ones included. A write may be referenced only from the gateway's API channel.
 
-The scan is static and goes by name: it cannot tell a call through `GatewayReceipts` from one on
-the raw adapter (whoever adds a gateway row checks the object), and dispatch beyond these forms
+The scan is static and goes by name: it cannot tell a gateway client's method from the raw
+adapter's when they share a name (the typed clients of `etsy_reads` do not, #147; whoever adds a
+gateway row checks the object), and dispatch beyond these forms
 (`globals()`, `operator.attrgetter`, a name built at run time and passed to `getattr` on `self`) is
 out of its reach.
 """
