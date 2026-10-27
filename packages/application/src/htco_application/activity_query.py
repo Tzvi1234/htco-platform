@@ -80,6 +80,9 @@ class ActivityPage:
     next_before: ActivityCursor | None
     source: str
     read_at: datetime
+    # A task's trail reads oldest first: where its next page starts, None on the last page
+    # (quill2 on #200: a long trail is never cut silently).
+    next_after: ActivityCursor | None = None
 
     @property
     def empty_reason(self) -> str | None:
@@ -109,8 +112,10 @@ class ActivityReader(Protocol):
         *,
         shop_ids: frozenset[uuid.UUID] | None,
         limit: int,
+        after: ActivityCursor | None = None,
     ) -> Sequence[ActivityRecord]:
-        """The task's records and every record sharing their correlation IDs, oldest first."""
+        """The task's records and every record sharing their correlation IDs, oldest first,
+        after `after` when given."""
         ...
 
 
@@ -164,10 +169,22 @@ def task_trail(  # noqa: PLR0913 - the caller, the reader and the task
     organization_id: uuid.UUID | None,
     now: datetime,
     limit: int = MAX_PAGE,
+    after: ActivityCursor | None = None,
 ) -> ActivityPage:
-    """A task's trail across actors, in causal (recorded) order."""
+    """A task's trail across actors, in causal (recorded) order, one page at a time: every
+    record is reached by following `next_after` (AC-7.8.3)."""
     organization, shops = _scope(auth, organization_id, now)
-    rows = reader.task_trail(
-        organization, task_id, shop_ids=shops, limit=max(1, min(limit, MAX_PAGE))
+    limit = max(1, min(limit, MAX_PAGE))
+    # One more than the page says whether the trail continues.
+    rows = tuple(
+        reader.task_trail(organization, task_id, shop_ids=shops, limit=limit + 1, after=after)
     )
-    return ActivityPage(items=tuple(rows), next_before=None, source=ACTIVITY_SOURCE, read_at=now)
+    page = rows[:limit]
+    last = page[-1] if len(rows) > limit else None
+    return ActivityPage(
+        items=page,
+        next_before=None,
+        source=ACTIVITY_SOURCE,
+        read_at=now,
+        next_after=None if last is None else ActivityCursor(last.occurred_at, last.id),
+    )

@@ -86,6 +86,7 @@ class MemoryActivity:
         *,
         shop_ids: frozenset[uuid.UUID] | None,
         limit: int,
+        after: ActivityCursor | None = None,
     ) -> Sequence[ActivityRecord]:
         mine = [r for r in self.rows if r.organization_id == organization_id]
         correlations = {r.correlation_id for r in mine if r.task_id == task_id}
@@ -93,6 +94,7 @@ class MemoryActivity:
             r for r in mine
             if (r.task_id == task_id or r.correlation_id in correlations)
             and self._scoped(r, shop_ids)
+            and (after is None or (r.occurred_at, r.id) > (after.occurred_at, after.id))
         ]  # fmt: skip
         rows.sort(key=lambda r: (r.occurred_at, r.id))
         return rows[:limit]
@@ -256,3 +258,57 @@ def test_a_range_that_ends_before_it_starts_is_refused() -> None:
         ActivityFilter(since=NOW, until=NOW - timedelta(seconds=1))
     with pytest.raises(ValueError, match="timezone"):
         ActivityFilter(since=datetime(2026, 10, 27))  # noqa: DTZ001 - the test
+
+
+@pytest.mark.ac("AC-7.8.3")
+def test_a_tasks_trail_shows_a_shop_scoped_role_its_shops_only() -> None:
+    """Quill2 on #200: the trail keeps the role's shop scope. An Operations member granted
+    shop A sees the trail's shop A records, never shop B's or the organization-wide ones."""
+    in_a = record(NOW - timedelta(minutes=3), task=TASK, correlation="c-t")
+    reader = MemoryActivity(
+        [
+            in_a,
+            record(NOW - timedelta(minutes=2), shop=OTHER_SHOP, correlation="c-t"),
+            record(NOW - timedelta(minutes=1), shop=None, correlation="c-t"),
+        ]
+    )
+
+    page = task_trail(
+        acting(Role.OPERATIONS, frozenset({SHOP})), reader, TASK, organization_id=ORG, now=NOW
+    )
+
+    assert [r.id for r in page.items] == [in_a.id]
+
+
+@pytest.mark.ac("AC-7.8.3")
+def test_a_long_trail_is_never_cut_silently_it_continues() -> None:
+    """Quill2 on #200: "every record". A trail longer than one page says where it continues,
+    oldest first, and the next page picks up after the last record without a gap."""
+    rows = [
+        record(NOW - timedelta(minutes=500 - i), task=TASK, correlation="c-t") for i in range(5)
+    ]
+    reader = MemoryActivity(rows)
+
+    first = task_trail(acting(Role.OWNER), reader, TASK, organization_id=ORG, now=NOW, limit=2)
+    assert first.next_after is not None
+    second = task_trail(
+        acting(Role.OWNER), reader, TASK, organization_id=ORG, now=NOW, limit=2,
+        after=first.next_after,
+    )  # fmt: skip
+    assert second.next_after is not None
+    last = task_trail(
+        acting(Role.OWNER), reader, TASK, organization_id=ORG, now=NOW, limit=2,
+        after=second.next_after,
+    )  # fmt: skip
+
+    assert [r.id for r in (*first.items, *second.items, *last.items)] == [r.id for r in rows]
+    assert last.next_after is None
+
+
+def test_a_trail_of_exactly_one_page_has_nothing_after_it() -> None:
+    reader = MemoryActivity([record(NOW, task=TASK, correlation="c-t") for _ in range(2)])
+
+    page = task_trail(acting(Role.OWNER), reader, TASK, organization_id=ORG, now=NOW, limit=2)
+
+    assert len(page.items) == 2
+    assert page.next_after is None

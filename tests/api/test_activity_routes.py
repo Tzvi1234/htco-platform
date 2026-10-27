@@ -151,3 +151,39 @@ async def test_a_role_without_the_capability_is_403() -> None:
 async def test_without_a_reader_the_api_says_so() -> None:
     async with client(None) as http:
         assert (await http.get("/v1/activity")).status_code == 503
+
+
+@pytest.mark.ac("AC-7.8.3")
+async def test_a_tasks_trail_over_http_keeps_the_shop_scope() -> None:
+    """Quill2 on #200: an Operations member granted shop A gets the trail's shop A records only."""
+    in_a = record(NOW - timedelta(minutes=3), task=TASK, correlation="c-t")
+    reader = MemoryActivity(
+        [
+            in_a,
+            record(NOW - timedelta(minutes=2), shop=OTHER_SHOP, correlation="c-t"),
+            record(NOW - timedelta(minutes=1), shop=None, correlation="c-t"),
+        ]
+    )
+    async with client(reader, Role.OPERATIONS, frozenset({SHOP})) as http:
+        response = await http.get(f"/v1/tasks/{TASK}/activity")
+
+    assert response.status_code == 200
+    assert [i["id"] for i in response.json()["items"]] == [str(in_a.id)]
+
+
+@pytest.mark.ac("AC-7.8.3")
+async def test_a_long_trail_over_http_continues_with_a_cursor() -> None:
+    rows = [
+        record(NOW - timedelta(minutes=500 - i), task=TASK, correlation="c-t") for i in range(3)
+    ]
+    async with client(MemoryActivity(rows)) as http:
+        first = await http.get(f"/v1/tasks/{TASK}/activity", params={"limit": 2})
+        cursor = first.json()["next_cursor"]
+        rest = await http.get(f"/v1/tasks/{TASK}/activity", params={"limit": 2, "cursor": cursor})
+        bad = await http.get(f"/v1/tasks/{TASK}/activity", params={"cursor": "not-a-cursor"})
+
+    assert cursor is not None
+    ids = [i["id"] for i in (*first.json()["items"], *rest.json()["items"])]
+    assert ids == [str(r.id) for r in rows]
+    assert rest.json()["next_cursor"] is None
+    assert bad.status_code == 422

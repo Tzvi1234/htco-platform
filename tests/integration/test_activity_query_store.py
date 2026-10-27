@@ -94,3 +94,32 @@ async def test_a_tasks_trail_follows_its_correlation_ids_in_order(admin: Databas
     rows = PostgresActivityReader(admin).task_trail(org, task, shop_ids=None, limit=50)
 
     assert [r.id for r in rows] == [first, second]
+
+
+async def test_a_tasks_trail_continues_after_a_record(admin: Database) -> None:
+    """Quill2 on #200: the trail is read in pages, oldest first, after the last record read."""
+    org, shop = organization(admin)
+    task = uuid.uuid4()
+    ids = [
+        await append(admin, org, shop, minutes=m, correlation="c-p", task=task) for m in range(3)
+    ]
+    reader = PostgresActivityReader(admin)
+
+    first = reader.task_trail(org, task, shop_ids=None, limit=2)
+    rest = reader.task_trail(
+        org, task, shop_ids=None, limit=2,
+        after=ActivityCursor(first[-1].occurred_at, first[-1].id),
+    )  # fmt: skip
+
+    assert [r.id for r in (*first, *rest)] == ids
+
+
+async def test_a_tasks_trail_keeps_the_shop_scope(admin: Database) -> None:
+    org, shop = organization(admin)
+    task = uuid.uuid4()
+    mine = await append(admin, org, shop, minutes=1, correlation="c-s", task=task)
+    await append(admin, org, None, minutes=2, correlation="c-s")  # organization-wide
+
+    rows = PostgresActivityReader(admin).task_trail(org, task, shop_ids=frozenset({shop}), limit=10)
+
+    assert [r.id for r in rows] == [mine]

@@ -34,7 +34,7 @@ The summary is always a code template filled with identifiers. It is never model
 
 ## The query (slice 7.8)
 
-`GET /v1/activity` filters by actor (`employee:shon`), actor kind, shop, task, kind, outcome and a range (`since`/`until`) or a `day` in the caller's `timezone`, newest first in cursor pages of at most 200. "View agent runs" decides who reads: Owner and Admin the whole organization, Operations and Developer their granted shops' records only (no organization-wide ones), as the RLS policy. The shop scope is in the SQL, before the limit. `GET /v1/tasks/{id}/activity` is a task's trail: its records and every record sharing their correlation IDs, oldest first. Open: the department filter (from the registry's employees), saved queries and the web view "Activity" in `htco-clients` (ER-UX-07).
+`GET /v1/activity` filters by actor (`employee:shon`), actor kind, shop, task, kind, outcome and a range (`since`/`until`) or a `day` in the caller's `timezone`, newest first in cursor pages of at most 200. "View agent runs" decides who reads: Owner and Admin the whole organization, Operations and Developer their granted shops' records only (no organization-wide ones), as the RLS policy. The shop scope is in the SQL, before the limit. `GET /v1/tasks/{id}/activity` is a task's trail: its records and every record sharing their correlation IDs, oldest first, with the same shop scope, in pages of `limit` (at most 200); `next_cursor` continues after the last record, so a long trail is never cut (AC-7.8.3, quill2 on #200). Open: the department filter (from the registry's employees), saved queries and the web view "Activity" in `htco-clients` (ER-UX-07).
 
 ## Follow-ups (AC-7.7.1)
 

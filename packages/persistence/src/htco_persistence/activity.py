@@ -133,6 +133,7 @@ class PostgresActivityReader:
         *,
         shop_ids: frozenset[uuid.UUID] | None,
         limit: int,
+        after: ActivityCursor | None = None,
     ) -> Sequence[ActivityRecord]:
         with self._database.connection() as connection:
             rows = connection.execute(
@@ -142,6 +143,8 @@ class PostgresActivityReader:
                   and (task_id = %(task)s or correlation_id in (
                     select t.correlation_id from app.activity_records t
                     where t.organization_id = %(org)s and t.task_id = %(task)s))
+                  and (%(after_at)s::timestamptz is null
+                       or (occurred_at, id) > (%(after_at)s::timestamptz, %(after_id)s::uuid))
                 order by occurred_at, id
                 limit %(limit)s
                 """,  # noqa: S608 - constant column list and scope
@@ -150,6 +153,8 @@ class PostgresActivityReader:
                     "task": task_id,
                     "shops": None if shop_ids is None else list(shop_ids),
                     "limit": limit,
+                    "after_at": None if after is None else after.occurred_at,
+                    "after_id": None if after is None else after.id,
                 },
             ).fetchall()
         return tuple(_record(r) for r in rows)

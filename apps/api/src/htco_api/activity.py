@@ -149,11 +149,17 @@ def _view(r: ActivityRecord) -> ActivityRecordView:
 def _page(page: ActivityPage) -> ActivityPageView:
     return ActivityPageView(
         items=[_view(r) for r in page.items],
-        next_cursor=None if page.next_before is None else _encode(page.next_before),
+        next_cursor=_next_cursor(page),
         source=page.source,
         read_at=page.read_at,
         empty_reason=page.empty_reason,
     )
+
+
+def _next_cursor(page: ActivityPage) -> str | None:
+    """A list continues before its last record (newest first), a trail after it (oldest first)."""
+    following = page.next_before if page.next_before is not None else page.next_after
+    return None if following is None else _encode(following)
 
 
 def _reader(request: Request) -> ActivityReader:
@@ -230,19 +236,26 @@ def activity_router(*, clock: Callable[[], datetime]) -> APIRouter:
         summary="One task's activity trail across actors",
         responses=problem_responses(_COMMON),
     )
-    async def get_task_activity(
+    async def get_task_activity(  # noqa: PLR0913, PLR0917 - the task and the page
         task_id: uuid.UUID,
         response: Response,
         auth: CurrentAuth,
         reader: Reader,
         organization_id: uuid.UUID | None = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 200,
+        cursor: Annotated[str | None, Query(max_length=_CURSOR_MAX)] = None,
     ) -> ActivityPageView:
         """Every record of the task and every record sharing its correlation IDs, oldest
-        first (at most 200)."""
+        first, in pages of `limit`; pass `next_cursor` back as `cursor` for the rest of the
+        trail, so a long trail is never cut."""
+        after = None if cursor is None else _decode(cursor)
         now = clock()
         return await _answer(
             response,
-            lambda: task_trail(auth, reader, task_id, organization_id=organization_id, now=now),
-        )
+            lambda: task_trail(
+                auth, reader, task_id, organization_id=organization_id, now=now, limit=limit,
+                after=after,
+            ),
+        )  # fmt: skip
 
     return router

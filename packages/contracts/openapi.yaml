@@ -6329,7 +6329,9 @@ paths:
       summary: One task's activity trail across actors
       description: 'Every record of the task and every record sharing its correlation IDs, oldest
 
-        first (at most 200).'
+        first, in pages of `limit`; pass `next_cursor` back as `cursor` for the rest of the
+
+        trail, so a long trail is never cut.'
       operationId: get_task_activity
       security:
       - HTTPBearer: []
@@ -6350,6 +6352,24 @@ paths:
             format: uuid
           - type: 'null'
           title: Organization Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 200
+          title: Limit
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 256
+          - type: 'null'
+          title: Cursor
       responses:
         '200':
           description: Successful Response
