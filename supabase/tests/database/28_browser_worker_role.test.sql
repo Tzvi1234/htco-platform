@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_browser;
-select plan(26);
+select plan(27);
 
 insert into app.organizations (id, name) values
   ('b8a00000-0000-0000-0000-000000000000', 'Organization Browser A'),
@@ -42,7 +42,7 @@ select ok(not has_table_privilege('htco_browser', 'app.shop_integrations', 'sele
 select ok(not has_any_column_privilege('htco_browser', 'app.shop_integrations', 'select'),
   'AC-8A.1.2: nor on any of its columns');
 select ok(not has_schema_privilege('htco_browser', 'jobs', 'usage'),
-  'the browser role cannot reach the jobs schema yet (the outbox and queue come with 8A.2)');
+  'the browser role cannot reach the jobs schema (it claims browser jobs through the browser schema, 8A.2c)');
 select ok(not has_schema_privilege('htco_browser', 'private', 'usage'),
   'the browser role cannot reach the private schema');
 select is(
@@ -52,8 +52,8 @@ select is(
       and has_table_privilege('htco_browser', c.oid, 'select, insert, update, delete, truncate, references, trigger')
     order by 1
   ),
-  array['app.browser_profile_archives', 'app.browser_sessions', 'audit.audit_log'],
-  'AC-8A.1.2: the browser role holds table rights on its archives, its sessions (8A.2) and the audit log only'
+  array['app.browser_sessions', 'audit.audit_log'],
+  'AC-8A.1.2: the browser role holds table rights on its sessions (8A.2) and the audit log only; the archives only through a leased job (AC-8A.2.23)'
 );
 select is(
   array(
@@ -62,7 +62,7 @@ select is(
       and has_any_column_privilege('htco_browser', c.oid, 'select, insert, update, references')
     order by 1
   ),
-  array['app.browser_profile_archives', 'app.browser_sessions', 'app.shop_browser_environments', 'audit.audit_log'],
+  array['app.browser_sessions', 'app.shop_browser_environments', 'audit.audit_log'],
   'AC-8A.1.2: beyond those, its only column rights are on the browser environments'
 );
 select ok(
@@ -145,15 +145,15 @@ select results_eq(
   $$ values ('b8a20000-0000-0000-0000-000000000001'::uuid), ('b8a20000-0000-0000-0000-000000000002'::uuid) $$,
   'AC-8A.1.2: the browser role sees its organization''s environments only'
 );
-select is_empty(
+select throws_ok(
   $$ select environment_id from app.browser_profile_archives $$,
-  'AC-8A.1.2: and never another organization''s archive'
+  '42501', null, 'AC-8A.2.23: it reads no archive directly, not even its own organization''s'
 );
 select throws_ok(
   $$ select * from app.shop_integrations $$,
   '42501', null, 'AC-8A.1.2: reading shop_integrations is refused'
 );
-select lives_ok(
+select throws_ok(
   $$ insert into app.browser_profile_archives
        (environment_id, organization_id, shop_id, key_id, archive, sealed_at)
      values ('b8a20000-0000-0000-0000-000000000001', 'b8a00000-0000-0000-0000-000000000000',
@@ -162,7 +162,7 @@ select lives_ok(
        set profile_storage_key = 'browser-profiles/b8a00000-0000-0000-0000-000000000000/b8a10000-0000-0000-0000-000000000001/b8a20000-0000-0000-0000-000000000001',
            profile_key_id = 'browser-1'
        where id = 'b8a20000-0000-0000-0000-000000000001' $$,
-  'the browser role stores its own archive and records it on the environment'
+  '42501', null, 'AC-8A.2.23: it writes no archive directly, not even its own (only through a leased job)'
 );
 select throws_ok(
   $$ insert into app.browser_profile_archives
@@ -172,8 +172,11 @@ select throws_ok(
      on conflict (environment_id) do update set archive = excluded.archive $$,
   '42501', null, 'AC-8A.1.2: it cannot write another organization''s archive'
 );
-update app.shop_browser_environments set profile_key_id = 'stolen'
-  where id = 'b8b20000-0000-0000-0000-000000000001';
+select throws_ok(
+  $$ update app.shop_browser_environments set profile_key_id = 'stolen'
+     where id = 'b8b20000-0000-0000-0000-000000000001' $$,
+  '42501', null, 'AC-8A.2.23: it writes no profile record directly'
+);
 reset role;
 select is(
   (select profile_key_id from app.shop_browser_environments

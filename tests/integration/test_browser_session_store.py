@@ -24,6 +24,7 @@ from htco_persistence.browser_profiles import PostgresBrowserProfiles
 from htco_persistence.browser_sessions import PostgresProfileLocks, PostgresSessionLog, lock_key
 from htco_persistence.database import Database, tenant_scope
 from htco_platform.crypto import EnvelopeSealer, KeyRing
+from tests.integration.test_browser_dispatch_store import lease_for
 from tests.integration.test_browser_profile_store import an_environment
 from tests.integration.test_etsy_connection import Tenant, _url, scalar
 
@@ -104,8 +105,10 @@ async def test_session__a_timeout_is_recorded_and_counted(
     admin: Database, browser: Database, tmp_path: Path
 ) -> None:
     tenant = Tenant(admin)
-    _, environment_id = an_environment(admin, tenant)
-    profiles = PostgresBrowserProfiles(browser)
+    shop, environment_id = an_environment(admin, tenant)
+    profiles = PostgresBrowserProfiles(
+        browser, await lease_for(admin, browser, tenant.organization_id, shop)
+    )
     vault = ProfileVault(
         EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), profiles, lambda: datetime.now(UTC)
     )
@@ -205,8 +208,10 @@ async def test_profile__a_lost_lease_never_overwrites_a_newer_archive(
     connection drops while it packs. S2 takes the lock and commits newer cookies. S1's write
     is then refused inside the write itself, so the stale cookies never win."""
     tenant = Tenant(admin)
-    _, environment_id = an_environment(admin, tenant)
-    profiles = PostgresBrowserProfiles(browser)
+    shop, environment_id = an_environment(admin, tenant)
+    profiles = PostgresBrowserProfiles(
+        browser, await lease_for(admin, browser, tenant.organization_id, shop)
+    )
     vault = _vault(profiles)
     locks = PostgresProfileLocks(admin, poll_seconds=0.05)
     with tenant_scope(tenant.organization_id):
@@ -232,9 +237,12 @@ async def test_profile__a_fenced_write_needs_this_backend_to_hold_the_lock(
     """A lease that never took the lock, or another environment's lease, writes nothing; a lease
     that holds it writes, on its own connection, as the browser role in the tenant's scope."""
     tenant, other = Tenant(admin), Tenant(admin)
-    _, environment_id = an_environment(admin, tenant)
+    shop, environment_id = an_environment(admin, tenant)
     _, elsewhere_id = an_environment(admin, tenant)
-    profiles = PostgresBrowserProfiles(browser)
+    other_shop, _ = an_environment(admin, other)
+    profiles = PostgresBrowserProfiles(
+        browser, await lease_for(admin, browser, tenant.organization_id, shop)
+    )
     vault = _vault(profiles)
     locks = PostgresProfileLocks(admin, poll_seconds=0.05)
     with tenant_scope(tenant.organization_id):
@@ -265,10 +273,16 @@ async def test_profile__a_fenced_write_needs_this_backend_to_hold_the_lock(
             with pytest.raises(ProfileFenceLostError):
                 vault.seal(environment, b"unlocked", fence=lease)
         assert vault.open(environment) == b"held"
-    # Another organization's scope: RLS hides the row, so even a held lease writes nothing.
+    # A job leased for another organization's shop writes nothing here, even under a held
+    # profile lock and whatever the scope says (AC-8A.2.23).
+    foreign_vault = _vault(
+        PostgresBrowserProfiles(
+            browser, await lease_for(admin, browser, other.organization_id, other_shop)
+        )
+    )
     with tenant_scope(other.organization_id):
         async with locks.hold(environment_id, until=soon(2)) as lease:
             with pytest.raises(ProfileRecordError):
-                vault.seal(environment, b"other", fence=lease)
+                foreign_vault.seal(environment, b"other", fence=lease)
     with tenant_scope(tenant.organization_id):
         assert vault.open(environment) == b"held"

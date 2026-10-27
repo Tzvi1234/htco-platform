@@ -26,6 +26,7 @@ from htco_domain.browser import EnvironmentStatus
 from htco_persistence.browser_profiles import PostgresBrowserProfiles
 from htco_persistence.database import Database, tenant_scope
 from htco_platform.crypto import EnvelopeSealer, KeyRing, SealingError
+from tests.integration.test_browser_dispatch_store import lease_for
 from tests.integration.test_etsy_connection import Tenant, _url, scalar
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -75,10 +76,12 @@ async def test_profiles__sealed_in_postgres_bound_to_their_shop_and_organization
     admin: Database, browser: Database, tmp_path: Path
 ) -> None:
     tenant, other = Tenant(admin), Tenant(admin)
-    _, environment_id = an_environment(admin, tenant)
+    shop, environment_id = an_environment(admin, tenant)
     _, second_id = an_environment(admin, tenant)
-    _, foreign_id = an_environment(admin, other)
-    profiles = PostgresBrowserProfiles(browser)
+    foreign_shop, foreign_id = an_environment(admin, other)
+    profiles = PostgresBrowserProfiles(
+        browser, await lease_for(admin, browser, tenant.organization_id, shop)
+    )
     vault = ProfileVault(
         EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), profiles, lambda: datetime.now(UTC)
     )
@@ -126,9 +129,12 @@ async def test_profiles__sealed_in_postgres_bound_to_their_shop_and_organization
         with pytest.raises(SealingError):
             vault.open(second)
 
-    # The browser role cannot read another organization's archive or the shop integrations.
-    with tenant_scope(other.organization_id):
-        assert profiles.get(environment_id) is None
+    # A job leased for another organization's shop never reaches this archive (AC-8A.2.23),
+    # and the browser role cannot read the shop integrations.
+    foreign = PostgresBrowserProfiles(
+        browser, await lease_for(admin, browser, other.organization_id, foreign_shop)
+    )
+    assert foreign.get(environment_id) is None
     with tenant_scope(tenant.organization_id), browser.connection() as connection:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             connection.execute("select 1 from app.shop_integrations")
@@ -141,9 +147,11 @@ async def test_profiles__the_recorded_key_id_follows_every_re_seal(
     """CODEX (local) on #116: after a key rotation the next session re-seals under the new key,
     and the environment's `profile_key_id` says so, in the archive's own transaction."""
     tenant = Tenant(admin)
-    _, environment_id = an_environment(admin, tenant)
+    shop, environment_id = an_environment(admin, tenant)
     old_key, new_key = os.urandom(32), os.urandom(32)
-    profiles = PostgresBrowserProfiles(browser)
+    profiles = PostgresBrowserProfiles(
+        browser, await lease_for(admin, browser, tenant.organization_id, shop)
+    )
 
     def workspaces(ring: KeyRing) -> ProfileWorkspaces:
         vault = ProfileVault(EnvelopeSealer(ring), profiles, lambda: datetime.now(UTC))
@@ -171,21 +179,27 @@ async def test_profiles__the_recorded_key_id_follows_every_re_seal(
 async def test_profiles__no_archive_without_its_record_and_no_record_without_its_archive(
     admin: Database, browser: Database
 ) -> None:
-    """CODEX (local) on #116: a put or delete whose environment row is not there (another
-    organization's, or gone) writes nothing at all."""
+    """CODEX (local) on #116, and AC-8A.2.23: a put or delete through a job leased for another
+    organization's shop writes nothing at all."""
     tenant, other = Tenant(admin), Tenant(admin)
     shop, environment_id = an_environment(admin, tenant)
-    profiles = PostgresBrowserProfiles(browser)
+    other_shop, _ = an_environment(admin, other)
+    profiles = PostgresBrowserProfiles(
+        browser, await lease_for(admin, browser, tenant.organization_id, shop)
+    )
+    foreign = PostgresBrowserProfiles(
+        browser, await lease_for(admin, browser, other.organization_id, other_shop)
+    )
     archive = SealedArchive(
         environment_id=environment_id, organization_id=tenant.organization_id, shop_id=shop,
         key_id="browser-1", blob=b"\x01sealed", sealed_at=datetime.now(UTC),
         storage_key="browser-profiles/x",
     )  # fmt: skip
-    with tenant_scope(other.organization_id):  # RLS hides the row: zero rows updated
+    with tenant_scope(tenant.organization_id):  # the environment is visible, the lease is not its
         with pytest.raises(ProfileRecordError):
-            profiles.put(archive)
+            foreign.put(archive)
         with pytest.raises(ProfileRecordError):
-            profiles.delete(environment_id)
+            foreign.delete(environment_id)
     assert scalar(
         admin, "select count(*) from app.browser_profile_archives where environment_id = %s",
         [environment_id],
@@ -212,8 +226,10 @@ async def test_profiles__the_generation_compare_and_set_refuses_a_stale_write(
     archive written meanwhile stays, the stale write raises, and nothing of it is committed:
     neither the archive nor the environment's record."""
     tenant = Tenant(admin)
-    _, environment_id = an_environment(admin, tenant)
-    profiles = PostgresBrowserProfiles(browser)
+    shop, environment_id = an_environment(admin, tenant)
+    profiles = PostgresBrowserProfiles(
+        browser, await lease_for(admin, browser, tenant.organization_id, shop)
+    )
     vault = ProfileVault(
         EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), profiles, lambda: datetime.now(UTC)
     )
@@ -260,8 +276,10 @@ async def test_profiles__two_writers_at_one_generation_one_wins(
     two connections. Exactly one lands (the generation ends at 2); the other raises
     `ProfileStaleError` and commits nothing."""
     tenant = Tenant(admin)
-    _, environment_id = an_environment(admin, tenant)
-    profiles = PostgresBrowserProfiles(browser)
+    shop, environment_id = an_environment(admin, tenant)
+    profiles = PostgresBrowserProfiles(
+        browser, await lease_for(admin, browser, tenant.organization_id, shop)
+    )
     vault = ProfileVault(
         EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), profiles, lambda: datetime.now(UTC)
     )
