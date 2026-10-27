@@ -11,7 +11,30 @@
       "type": "array",
       "maxItems": 100,
       "items": {
-        "type": "object"
+        "type": "object",
+        "description": "A stored receipt, generic, but never with the buyer's e-mail or messages",
+        "properties": {
+          "buyer_email": {
+            "description": "Buyer contact data (ADR-0018, AUD-06): never in the order history output",
+            "enum": []
+          },
+          "message_from_buyer": {
+            "description": "Buyer contact data (ADR-0018, AUD-06): never in the order history output",
+            "enum": []
+          },
+          "message_from_seller": {
+            "description": "Buyer contact data (ADR-0018, AUD-06): never in the order history output",
+            "enum": []
+          },
+          "message_from_payment": {
+            "description": "Buyer contact data (ADR-0018, AUD-06): never in the order history output",
+            "enum": []
+          },
+          "gift_message": {
+            "description": "Buyer contact data (ADR-0018, AUD-06): never in the order history output",
+            "enum": []
+          }
+        }
       }
     },
     "count": {

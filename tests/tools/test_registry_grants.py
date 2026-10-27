@@ -4,11 +4,20 @@ one automation each, and the registry check refuses the grant to anything else."
 import shutil
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from htco_application.workforce.files import read_action_catalog, read_registry
-from htco_application.workforce.registry import Registry
+from htco_application.execution.contracts import ActionCatalogError
+from htco_application.execution.schema import validate
+from htco_application.workforce.files import (
+    read_action_actor_kinds,
+    read_action_catalog,
+    read_registry,
+)
+from htco_application.workforce.registry import RESTRICTED_GRANTS as REGISTRY_RESTRICTED_GRANTS
+from htco_application.workforce.registry import Registry, RegistryError
+from htco_domain.actors import ActorKind
 from tools.registry import ACTION_SCHEMAS, RESTRICTED_GRANTS, main, unauthorized_grants
 
 ROOT = Path(__file__).resolve().parents[2] / "registry"
@@ -75,31 +84,41 @@ def test_no_employee__holds_a_restricted_read() -> None:
     "automation_id", sorted(a for a in REGISTRY.automations if a != "etsy-order-intake")
 )
 def test_order_history_read__is_refused_to(automation_id: str) -> None:
-    problems = unauthorized_grants(_with_automation_grant(automation_id, ORDER_HISTORY))
+    with pytest.raises(RegistryError) as raised:
+        _with_automation_grant(automation_id, ORDER_HISTORY)
 
-    assert len(problems) == 1
-    assert automation_id in problems[0]
-    assert ORDER_HISTORY in problems[0]
+    [problem] = raised.value.problems
+    assert automation_id in problem
+    assert ORDER_HISTORY in problem
 
 
 @pytest.mark.parametrize(
     "automation_id", sorted(a for a in REGISTRY.automations if a != "tracking-sync")
 )
 def test_shipments_read__is_refused_to(automation_id: str) -> None:
-    problems = unauthorized_grants(_with_automation_grant(automation_id, SHIPMENTS))
+    with pytest.raises(RegistryError) as raised:
+        _with_automation_grant(automation_id, SHIPMENTS)
 
-    assert len(problems) == 1
-    assert automation_id in problems[0]
-    assert SHIPMENTS in problems[0]
+    [problem] = raised.value.problems
+    assert automation_id in problem
+    assert SHIPMENTS in problem
 
 
 @pytest.mark.parametrize("action", sorted(RESTRICTED_GRANTS))
 def test_a_restricted_read__is_refused_to_an_employee(action: str) -> None:
-    problems = unauthorized_grants(_with_employee_grant("eitan", action))
+    with pytest.raises(RegistryError) as raised:
+        _with_employee_grant("eitan", action)
 
-    assert len(problems) == 1
-    assert "eitan" in problems[0]
-    assert action in problems[0]
+    [problem] = raised.value.problems
+    assert "eitan" in problem
+    assert action in problem
+
+
+def test_the_restricted_grants__live_in_the_registry_the_runtime_loads() -> None:
+    """Sage2 on #207: the worker and the API load the registry through
+    `htco_application.workforce`, so the allowlist is enforced there; the CLI only reports it."""
+    assert RESTRICTED_GRANTS is REGISTRY_RESTRICTED_GRANTS
+    assert unauthorized_grants(REGISTRY) == []
 
 
 def test_main__an_unauthorized_grant__exits_1(
@@ -125,7 +144,7 @@ def test_main__an_unauthorized_grant__exits_1(
 # --- The contracts of the three receipts reads -----------------------------------------------
 
 
-def _actions() -> dict[str, dict]:
+def _actions() -> dict[str, dict[str, Any]]:
     document = tomllib.loads((ROOT / "actions" / "etsy_open_api.toml").read_text("utf-8"))
     return {action["tool"]: action for action in document["actions"]}
 
@@ -185,11 +204,38 @@ def test_order_history_and_shipments__take_the_same_input_without_a_mode_flag() 
     assert history["additionalProperties"] is False
 
 
-def test_order_history_output__keeps_receipts_generic() -> None:
+CONTACT_FIELDS = (
+    "buyer_email",
+    "message_from_buyer",
+    "message_from_seller",
+    "message_from_payment",
+    "gift_message",
+)
+
+
+def test_order_history_output__keeps_receipts_generic_but_never_contact_data() -> None:
+    output = CATALOG.actions[ORDER_HISTORY].output_schema
+    receipt = output["properties"]["receipts"]["items"]
+
+    assert set(output["properties"]) == {"receipts", "count"}
+    assert receipt["type"] == "object"
+    assert "additionalProperties" not in receipt  # generic: the receipt's other fields pass
+    assert set(receipt["properties"]) == set(CONTACT_FIELDS)
+    assert validate({"receipts": [{"receipt_id": 1, "name": "N"}], "count": 1}, output) == []
+
+
+@pytest.mark.parametrize("field", CONTACT_FIELDS)
+@pytest.mark.parametrize("value", ["x@example.test", "", None, 0])
+def test_order_history_output__refuses_a_receipt_with_contact_data(
+    field: str, value: object
+) -> None:
+    """Sage2 on #207: buyer e-mail and the messages are contact data (ADR-0018). Present at
+    all, with any value, the output fails its contract, so the gateway never returns it."""
     output = CATALOG.actions[ORDER_HISTORY].output_schema
 
-    assert output["properties"]["receipts"]["items"] == {"type": "object"}
-    assert set(output["properties"]) == {"receipts", "count"}
+    problems = validate({"receipts": [{"receipt_id": 1, field: value}], "count": 1}, output)
+
+    assert problems == [f"$.receipts[0].{field}: not one of the allowed values"]
 
 
 def test_shipments_output__carries_tracking_codes_and_no_buyer_field() -> None:
@@ -207,3 +253,68 @@ def test_shipments_output__carries_tracking_codes_and_no_buyer_field() -> None:
     assert output["additionalProperties"] is False
     assert receipt["additionalProperties"] is False
     assert shipment["additionalProperties"] is False
+
+
+# --- actor_kinds (sage2 on #207): parsed and validated with the catalog -------------------
+
+
+def test_actor_kinds__are_read_for_the_restricted_reads() -> None:
+    kinds = read_action_actor_kinds(ROOT)
+
+    assert kinds[ORDER_HISTORY] == frozenset({ActorKind.AUTOMATION})
+    assert kinds[SHIPMENTS] == frozenset({ActorKind.AUTOMATION})
+
+
+def _with_action(tmp_path: Path, tool: str, old: str, new: str) -> Path:
+    root = tmp_path / "registry"
+    shutil.copytree(ROOT, root)
+    path = root / "actions" / "etsy_open_api.toml"
+    text = path.read_text(encoding="utf-8")
+    block_start = text.index(f'tool = "{tool}"')
+    block_end = text.find("[[actions]]", block_start)
+    block = text[block_start : block_end if block_end != -1 else len(text)]
+    assert old in block, (tool, old)
+    path.write_text(text.replace(block, block.replace(old, new, 1)), encoding="utf-8")
+    return root
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ['actor_kinds = ["robot"]', "actor_kinds = []", 'actor_kinds = ["automation", "automation"]',
+     'actor_kinds = "automation"'],
+)  # fmt: skip
+def test_actor_kinds__an_unknown_empty_repeated_or_bare_value_is_refused(
+    tmp_path: Path, bad: str
+) -> None:
+    root = _with_action(tmp_path, ORDER_HISTORY, 'actor_kinds = ["automation"]', bad)
+
+    with pytest.raises(ActionCatalogError) as raised:
+        read_action_catalog(root, ACTION_SCHEMAS, REGISTRY)
+
+    assert any(ORDER_HISTORY in p and "actor_kinds" in p for p in raised.value.problems)
+
+
+@pytest.mark.parametrize("action", sorted(RESTRICTED_GRANTS))
+def test_actor_kinds__a_restricted_read_must_name_automations_only(
+    tmp_path: Path, action: str
+) -> None:
+    root = _with_action(
+        tmp_path, action, 'actor_kinds = ["automation"]', 'actor_kinds = ["automation", "employee"]'
+    )
+
+    with pytest.raises(ActionCatalogError) as raised:
+        read_action_catalog(root, ACTION_SCHEMAS, REGISTRY)
+
+    assert any(action in p and "automation" in p for p in raised.value.problems)
+
+
+def test_actor_kinds__a_user_capability_needs_the_user_kind(tmp_path: Path) -> None:
+    root = _with_action(
+        tmp_path, ORDER_HISTORY, 'actor_kinds = ["automation"]',
+        'actor_kinds = ["automation"]\nuser_capability = "view_orders"',
+    )  # fmt: skip
+
+    with pytest.raises(ActionCatalogError) as raised:
+        read_action_catalog(root, ACTION_SCHEMAS, REGISTRY)
+
+    assert any("user_capability" in p for p in raised.value.problems)

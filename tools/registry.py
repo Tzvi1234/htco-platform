@@ -8,25 +8,22 @@ Each employee, automation and advisor is one TOML file; tools are grouped by fam
 
 import argparse
 import sys
-from collections.abc import Mapping
 from pathlib import Path
-from types import MappingProxyType
 
 from htco_application.execution.contracts import ActionCatalogError
 from htco_application.workforce.files import read_action_catalog, read_registry
-from htco_application.workforce.registry import Registry, RegistryError
+from htco_application.workforce.registry import (
+    RESTRICTED_GRANTS,
+    Registry,
+    RegistryError,
+    restricted_grant_problems,
+)
 
 REGISTRY_ROOT = Path(__file__).resolve().parents[1] / "registry"
 ACTION_SCHEMAS = Path(__file__).resolve().parents[1] / "packages" / "contracts" / "actions"
 
-# AUD-06 (#147 part B): the Etsy reads that hand over buyer data or tracking codes, and the only
-# automations that may be granted each one. No employee may hold them.
-RESTRICTED_GRANTS: Mapping[str, frozenset[str]] = MappingProxyType(
-    {
-        "etsy.order_history.read": frozenset({"etsy-order-intake"}),
-        "etsy.shipments.read": frozenset({"tracking-sync"}),
-    }
-)
+# AUD-06's allowlist lives with the registry the runtime loads; re-exported for the check.
+__all__ = ["ACTION_SCHEMAS", "REGISTRY_ROOT", "RESTRICTED_GRANTS", "load_registry", "main"]
 
 
 def load_registry(root: Path = REGISTRY_ROOT) -> Registry:
@@ -34,19 +31,8 @@ def load_registry(root: Path = REGISTRY_ROOT) -> Registry:
 
 
 def unauthorized_grants(registry: Registry) -> list[str]:
-    """Every grant of a restricted read to an automation or an employee outside its allowlist."""
-    problems = [
-        f"automation {automation.id!r} may not be granted {action!r}"
-        for automation in sorted(registry.automations.values(), key=lambda a: a.id)
-        for action in sorted(automation.allowed_actions & RESTRICTED_GRANTS.keys())
-        if automation.id not in RESTRICTED_GRANTS[action]
-    ]
-    problems += [
-        f"employee {employee_id!r} may not be granted {tool!r}"
-        for employee_id, profile in sorted(registry.employees.items())
-        for tool in sorted(profile.allowed_tools & RESTRICTED_GRANTS.keys())
-    ]
-    return problems
+    """A loaded registry has none (the load refuses them); kept for the check's summary."""
+    return restricted_grant_problems(registry.automations, registry.employees)
 
 
 def main(argv: list[str]) -> int:
