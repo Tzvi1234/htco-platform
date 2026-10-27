@@ -9,10 +9,12 @@ import pytest
 from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
 from htco_application.kernel import (
     EVENTS_DESTINATION,
+    DomainEvent,
     JobError,
     JsonValue,
     OutboxMessage,
     event_payload,
+    publish,
 )
 from htco_application.messaging import (
     OUTBOX_DELIVERY_JOB,
@@ -23,6 +25,7 @@ from htco_application.messaging import (
     payload_hash,
 )
 from htco_application.notifications import EventDeliverer
+from htco_domain.actors import ActorKind, ActorRef
 
 pytestmark = pytest.mark.anyio
 
@@ -184,14 +187,16 @@ async def test_deliver__an_event_version_no_consumer_accepts__is_dead_at_once_an
     None
 ):
     store = Store()
-    envelope: dict[str, JsonValue] = {
-        "event_type": "orders.ingested.v1",
-        "payload_version": 9,
-        "payload": {},
-    }
+    # A complete envelope (Codex on #174: a broken one is refused for that reason instead).
     message_id = store.add(
-        OutboxMessage(ORG, EVENTS_DESTINATION, "orders.ingested.v1:9", envelope, SHOP)
-    )
+        publish(
+            DomainEvent(
+                event_type="orders.ingested.v1", organization_id=ORG, shop_id=SHOP,
+                idempotency_key="orders.ingested.v1:9", occurred_at=NOW,
+                actor=ActorRef(ActorKind.SYSTEM, "test"), payload_version=9,
+            )
+        )
+    )  # fmt: skip
     subscriber = Recording()
 
     delivered = await deliver_outbox_message(

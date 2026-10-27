@@ -15,6 +15,8 @@ from htco_application.kernel import (
     publish,
     read_event,
 )
+from htco_application.messaging import PendingDelivery
+from htco_application.notifications import EventDeliverer
 from htco_domain.actors import ActorKind, ActorRef
 
 ORG = uuid.UUID("0190a000-0000-7000-8000-0000000000aa")
@@ -144,3 +146,101 @@ def test_read_event__an_unknown_version__is_refused_with_its_type() -> None:
 def test_read_event__malformed__is_refused(payload: dict[str, object]) -> None:
     with pytest.raises(MalformedEventError):
         read_event(payload)  # type: ignore[arg-type]
+
+
+_ENVELOPE_BREAKS: list[tuple[str, object]] = [
+    ("event_id", None),
+    ("event_id", "not-a-uuid"),
+    ("organization_id", None),
+    ("organization_id", "acme"),
+    ("shop_id", "shop-1"),
+    ("occurred_at", None),
+    ("occurred_at", "yesterday"),
+    ("occurred_at", "2026-10-26T18:00:00"),  # naive
+    ("actor", None),
+    ("actor", {"type": "robot", "id": "x"}),
+    ("actor", {"type": "automation", "id": ""}),
+    ("actor", {"type": "automation"}),
+    ("idempotency_key", None),
+    ("idempotency_key", ""),
+    ("idempotency_key", "k" * 201),
+    ("correlation_id", 7),
+    ("causation_id", ["job:1"]),
+]
+
+
+@pytest.mark.ac("AUD-01.4")
+@pytest.mark.parametrize(("name", "value"), _ENVELOPE_BREAKS)
+def test_read_event__a_broken_envelope_field__is_refused(name: str, value: object) -> None:
+    """Codex (local) on #174: every required field of the envelope is checked, so a broken
+    envelope is dead-lettered, never processed."""
+    envelope: dict[str, object] = {**publish(_event()).payload}
+    if value is None:
+        envelope.pop(name)
+    else:
+        envelope[name] = value
+
+    with pytest.raises(MalformedEventError, match=name):
+        read_event(envelope)  # type: ignore[arg-type]
+
+
+@pytest.mark.ac("AUD-01.4")
+def test_read_event__an_envelope_without_a_shop_or_correlation__is_valid() -> None:
+    event = read_event(
+        publish(_event(shop_id=None, correlation_id=None, causation_id=None)).payload
+    )
+
+    assert event.payload == {"receipt_id": 1}
+
+
+@pytest.mark.ac("AUD-01.5")
+def test_read_event__a_legacy_row__is_refused_when_version_1_is_not_accepted() -> None:
+    """Codex (local) on #174: a row from before the envelope is version 1, and a consumer that
+    accepts only later versions refuses it like any other."""
+    legacy: dict[str, JsonValue] = {"event_type": "orders.ingested.v1", "receipt_id": 1}
+
+    with pytest.raises(UnknownEventVersionError, match="version 1"):
+        read_event(legacy, accepted=(2,))
+    assert read_event(legacy, accepted=(1, 2)).payload == {"receipt_id": 1}
+
+
+class _Recorder:
+    def __init__(self, accepted_versions: tuple[int, ...] | None = None) -> None:
+        if accepted_versions is not None:
+            self.accepted_versions = accepted_versions
+        self.seen: list[OutboxMessage] = []
+
+    async def handle(self, message: OutboxMessage) -> None:
+        self.seen.append(message)
+
+
+def _version_2() -> PendingDelivery:
+    message = publish(_event(payload_version=2))
+    return PendingDelivery(id=uuid.uuid7(), message=message, attempts=0, delivered=False)
+
+
+@pytest.mark.anyio
+@pytest.mark.ac("AUD-01.4")
+async def test_deliverer__a_subscriber_receives_the_versions_it_declares() -> None:
+    """Codex (local) on #174: a subscriber names the versions it reads; the deliverer passes
+    them to `read_event`, so a version-2 consumer is reachable."""
+    reader = _Recorder(accepted_versions=(1, 2))
+
+    await EventDeliverer({"orders.ingested.v1": reader}).deliver(_version_2())
+
+    assert len(reader.seen) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.ac("AUD-01.4")
+async def test_deliverer__a_version_the_subscriber_does_not_read__is_dead_lettered() -> None:
+    reader = _Recorder()  # version 1 only, the default
+
+    with pytest.raises(UnknownEventVersionError, match="version 2"):
+        await EventDeliverer({"orders.ingested.v1": reader}).deliver(_version_2())
+    assert reader.seen == []
+
+
+@pytest.mark.anyio
+async def test_deliverer__an_event_nobody_reads__is_accepted_as_a_record_in_any_version() -> None:
+    await EventDeliverer({}).deliver(_version_2())

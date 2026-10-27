@@ -20,13 +20,14 @@ destination; `EventDeliverer` hands it to `IncidentNotifications`.
 
 import logging
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape
 from typing import Protocol
 
 from htco_application.kernel import (
+    ACCEPTED_VERSIONS,
     DomainEvent,
     JsonValue,
     Offload,
@@ -243,14 +244,24 @@ class IncidentNotifications:
 class EventDeliverer:
     """The `events.publish` destination: events with a subscriber are handed to it (which must
     be idempotent: a replayed delivery calls it again); all others are accepted as records.
-    It reads the envelope first: a version it does not accept, or a message that is not an
-    event, is dead-lettered with its type and never handed on."""
+    It reads the envelope first: a version the subscriber does not read (its
+    `accepted_versions`, by default version 1), a broken envelope or a message that is not an
+    event is dead-lettered with its type and never handed on. An event nobody reads is
+    accepted as a record in any version."""
 
     subscribers: Mapping[str, EventSubscriber]
 
     async def deliver(self, delivery: PendingDelivery) -> None:
-        event = read_event(delivery.message.payload)
-        subscriber = self.subscribers.get(event.event_type)
+        payload = delivery.message.payload
+        event_type = payload.get("event_type")
+        subscriber = self.subscribers.get(event_type) if isinstance(event_type, str) else None
+        # Codex (local) on #174: the subscriber names the versions it reads.
+        accepted: Collection[int] | None = (
+            None
+            if subscriber is None
+            else getattr(subscriber, "accepted_versions", ACCEPTED_VERSIONS)
+        )
+        event = read_event(payload, accepted=accepted)
         if subscriber is not None:
             await subscriber.handle(delivery.message)
         _log.info("event.accepted: %s outbox=%s", event.event_type, delivery.id)
