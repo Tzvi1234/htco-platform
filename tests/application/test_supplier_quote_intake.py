@@ -8,10 +8,11 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import override
 
 import pytest
 
-from htco_application.quote_parser import QuoteMail, QuoteParser
+from htco_application.quote_parser import ParsedQuote, ParseResult, QuoteMail, QuoteParser
 from htco_application.suppliers import (
     IntakeOutcome,
     QuoteIntake,
@@ -202,3 +203,28 @@ async def test_a_forged_autova_sender__quarantined_no_quote_and_one_human_task(n
     [(organization, shop, message_id, why)] = world.reviews.opened
     assert (organization, shop, why) == (ORG, SHOP, "unauthenticated_sender")
     assert message_id.startswith("<forged-")
+
+
+class SlippedParser(QuoteParser):
+    """A parser that lets a value through that the domain refuses (a 150-character method)."""
+
+    def __init__(self) -> None:
+        super().__init__("quotes@autova.example.com")
+
+    @override
+    def parse(self, mail: QuoteMail) -> ParseResult:
+        parsed = super().parse(mail)
+        assert isinstance(parsed, ParsedQuote)
+        return replace(parsed, shipping_method="Y" * 150)
+
+
+@pytest.mark.ac("AC-7.15.1")
+async def test_a_value_the_domain_refuses__one_human_task_never_an_error() -> None:
+    world = World()
+    intake = replace(world.intake, parser=SlippedParser())
+
+    outcome = await intake.handle(mail("01_en_usd.eml.txt"), TARGET)
+
+    assert outcome is IntakeOutcome.NEEDS_REVIEW
+    assert world.store.quotes == {}
+    assert world.reviews.opened == [(ORG, SHOP, "<q-88213@autova.example.com>", "invalid_value")]

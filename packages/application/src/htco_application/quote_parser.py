@@ -34,7 +34,7 @@ from enum import StrEnum
 from typing import NamedTuple
 
 from htco_domain.orders import Money
-from htco_domain.suppliers import autova_quote_reference
+from htco_domain.suppliers import MAX_METHOD, MAX_NAME, autova_quote_reference
 
 MAX_MAIL_CHARACTERS = 200_000
 MAX_DAYS = 365
@@ -253,7 +253,9 @@ _WORDS_IN_A_LABEL = 4
 
 _SYMBOLS = {"$": "USD", "€": "EUR", "£": "GBP", "₪": "ILS"}
 _CURRENCIES = frozenset({"USD", "EUR", "GBP", "ILS", "CNY", "CAD", "AUD", "JPY", "HKD", "TRY"})
-_AMOUNT = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,4})?"
+_AMOUNT = r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{1,4})?"  # ASCII digits only
+# The money columns are numeric(14, 4): at most 10 digits before the point, 4 after (as read).
+_MAX_AMOUNT = Decimal("9999999999.9999")
 _MONEY = (
     re.compile(rf"^(?P<amount>{_AMOUNT})\s*(?P<code>[A-Z]{{3}})$"),
     re.compile(rf"^(?P<code>[A-Z]{{3}})\s*(?P<amount>{_AMOUNT})$"),
@@ -261,13 +263,16 @@ _MONEY = (
     re.compile(rf"^(?P<amount>{_AMOUNT})\s*(?P<symbol>[$€£₪])$"),
 )
 _FREE = frozenset({"free", "חינם"})
-_DAYS = re.compile(r"^(?P<low>\d{1,3})(?:\s*[-–]\s*(?P<high>\d{1,3}))?\s*(?:days?|ימים|יום)$")  # noqa: RUF001 - an en dash in a range
-_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_LISTING = re.compile(r"^[1-9]\d{0,18}$")
+_DAYS = re.compile(r"^(?P<low>[0-9]{1,3})(?:\s*[-–]\s*(?P<high>[0-9]{1,3}))?\s*(?:days?|ימים|יום)$")  # noqa: RUF001 - an en dash in a range
+_ISO_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_LISTING = re.compile(r"^[1-9][0-9]{0,18}$")
+_MAX_LISTING = 2**63 - 1  # the listing_id columns are bigint
 _CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,59}$")
 _VARIANT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 _QUOTE_ID = re.compile(r"^[A-Z]{1,4}-[0-9]{1,12}$")  # ASCII digits, as the database's CHECK
-_TEXT = re.compile(r"^[^\x00-\x1f<>]{1,200}$")
+# Free text with no control characters or angle brackets, no longer than its column allows.
+_NAME = re.compile(rf"^[^\x00-\x1f<>]{{1,{MAX_NAME}}}$")
+_METHOD = re.compile(rf"^[^\x00-\x1f<>]{{1,{MAX_METHOD}}}$")
 
 
 class _UnreadableError(ValueError):
@@ -291,6 +296,8 @@ def _money(field: _Field, value: str) -> Money:
             amount = Decimal(groups["amount"].replace(",", ""))
         except InvalidOperation:
             raise _UnreadableError(field) from None
+        if amount > _MAX_AMOUNT:
+            raise _UnreadableError(field)
         return Money(amount, code)
     raise _UnreadableError(field)
 
@@ -310,6 +317,13 @@ def _matching(field: _Field, value: str, pattern: re.Pattern[str]) -> str:
     if not pattern.match(value):
         raise _UnreadableError(field)
     return value
+
+
+def _listing(field: _Field, value: str) -> int:
+    listing = int(_matching(field, value, _LISTING))
+    if listing > _MAX_LISTING:
+        raise _UnreadableError(field)
+    return listing
 
 
 def _date(field: _Field, value: str) -> date:
@@ -387,15 +401,15 @@ class QuoteParser:
         sku = fields.get(f.SKU)
         return ParsedQuote(
             autova_product=_matching(f.PRODUCT, fields[f.PRODUCT], _CODE),
-            listing_id=int(_matching(f.LISTING, fields[f.LISTING], _LISTING)),
+            listing_id=_listing(f.LISTING, fields[f.LISTING]),
             variant=_matching(f.VARIANT, fields[f.VARIANT], _VARIANT)
             if f.VARIANT in fields
             else "",
             sku=None if sku is None else _matching(f.SKU, sku, _CODE),
-            supplier=_matching(f.SUPPLIER, fields[f.SUPPLIER], _TEXT),
+            supplier=_matching(f.SUPPLIER, fields[f.SUPPLIER], _NAME),
             unit_price=unit_price,
             shipping_cost=shipping,
-            shipping_method=_matching(f.SHIPPING_METHOD, fields[f.SHIPPING_METHOD], _TEXT),
+            shipping_method=_matching(f.SHIPPING_METHOD, fields[f.SHIPPING_METHOD], _METHOD),
             processing_days=_days(f.PROCESSING, fields[f.PROCESSING]),
             shipping_days=_days(f.SHIPPING_TIME, fields[f.SHIPPING_TIME]),
             valid_until=None if valid is None else _date(f.VALID_UNTIL, valid),

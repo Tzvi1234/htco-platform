@@ -128,13 +128,40 @@ def test_the_source_reference__is_the_autova_quote_not_the_mail_content() -> Non
         ("Processing time: 2-4 days", "Processing time: soon"),
         ("Shipping time: 7-12 days", "Shipping time: 7-400 days"),
         ("Quote ID: Q-88213", "Quote ID: <script>"),
+        # Beyond what the domain or the columns hold: refused here, never an error later.
+        ("Shipping method: Yun Express", "Shipping method: " + "Y" * 121),
+        ("Supplier: Guangzhou Leather Works", "Supplier: " + "G" * 201),
+        ("Etsy listing: 1234567890", "Etsy listing: 9223372036854775808"),
+        ("Etsy listing: 1234567890", "Etsy listing: 9999999999999999999"),
+        ("Unit price: 7.40 USD", "Unit price: 12345678901.00 USD"),
+        ("Shipping: 2.10 USD", "Shipping: 10,000,000,000 USD"),
+        # Digits from other scripts read as numbers in Python, never in the columns' checks.
+        ("Etsy listing: 1234567890", "Etsy listing: ١٢٣"),
+        ("Unit price: 7.40 USD", "Unit price: ٧.40 USD"),  # noqa: RUF001 - Arabic-Indic digits on purpose
+        ("Processing time: 2-4 days", "Processing time: ٢-4 days"),
     ],
 )
 def test_a_value_that_does_not_read_exactly__is_refused(field: str, value: str) -> None:
     text = (FIXTURES / "01_en_usd.eml.txt").read_text(encoding="utf-8").replace(field, value)
+    assert value in text
     result = QuoteParser(SENDER).parse(from_text(text))
     assert isinstance(result, Refused)
     assert result.reason is RefusalReason.INVALID_VALUE
+
+
+def test_the_largest_values_the_columns_hold__still_parse() -> None:
+    text = (
+        (FIXTURES / "01_en_usd.eml.txt")
+        .read_text(encoding="utf-8")
+        .replace("Etsy listing: 1234567890", "Etsy listing: 9223372036854775807")
+        .replace("Unit price: 7.40 USD", "Unit price: 9,999,999,999.9999 USD")
+        .replace("Shipping method: Yun Express", "Shipping method: " + "Y" * 120)
+        .replace("Supplier: Guangzhou Leather Works", "Supplier: " + "G" * 200)
+    )
+    quote = QuoteParser(SENDER).parse(from_text(text))
+    assert isinstance(quote, ParsedQuote), quote
+    assert quote.listing_id == 2**63 - 1
+    assert quote.unit_price.amount == Decimal("9999999999.9999")
 
 
 def test_a_mail_with_no_quote_fields__is_not_a_quote() -> None:

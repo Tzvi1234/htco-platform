@@ -103,3 +103,5 @@ The parser (`htco_application.quote_parser`) reads one layout: `Label: value` li
 | Quote ID | Quote ID | מזהה הצעה | Yes | `Q-88213` (the quote's source reference) |
 
 Refused: an unknown label, a field twice, a required field missing, a value that does not read exactly, a price and shipping in two currencies, or a mail over 200,000 characters.
+
+Every value is read within what its column holds, in ASCII digits only: a listing up to 2^63 - 1 (bigint), money with at most 10 digits before the point and 4 after (numeric(14,4)), a supplier name up to 200 characters and a shipping method up to 120. Anything beyond is refused like any value that does not read; should a value still fail the domain's checks, the intake opens the same Human task (`invalid_value`) instead of failing.

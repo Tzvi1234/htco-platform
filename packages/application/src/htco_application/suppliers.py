@@ -24,7 +24,13 @@ from enum import StrEnum
 from typing import Protocol
 
 from htco_application.kernel import Offload, run_inline
-from htco_application.quote_parser import ParsedQuote, Quarantined, QuoteMail, QuoteParser
+from htco_application.quote_parser import (
+    ParsedQuote,
+    Quarantined,
+    QuoteMail,
+    QuoteParser,
+    RefusalReason,
+)
 from htco_domain.suppliers import ProductRef, SupplierQuote
 
 
@@ -122,8 +128,20 @@ class QuoteIntake:
             )
             return IntakeOutcome.NEEDS_REVIEW
         now = self.clock()
-        product = ProductRef(target.shop_id, result.listing_id, result.variant)
-        quote = _supplier_quote(result, target.organization_id, now)
+        try:
+            product = ProductRef(target.shop_id, result.listing_id, result.variant)
+            quote = _supplier_quote(result, target.organization_id, now)
+        except ValueError:
+            # The parser reads every value within the domain's limits; should one still slip
+            # through, the mail is a Human task like any value that does not read (AC-7.15.1),
+            # never an exception in the inbox job.
+            await self.reviews.check_this_quote(
+                target.organization_id,
+                target.shop_id,
+                message_id=mail.message_id,
+                reason=RefusalReason.INVALID_VALUE.value,
+            )
+            return IntakeOutcome.NEEDS_REVIEW
         recorded = await self.offload(
             lambda: self.store.record(
                 target.organization_id, product, result.supplier, quote, now=now
