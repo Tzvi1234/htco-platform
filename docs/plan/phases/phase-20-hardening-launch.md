@@ -17,8 +17,10 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 20.2 Recovery: objectives, drill, documented results
 - [ ] 20.3 Security review: ASVS L2 evidence, agentic controls, penetration-style test of tenant isolation
 - [ ] 20.4 Runbooks, SLOs, alert review
+- [ ] 20.4a Runbook links and SLOs on the web
 - [ ] 20.5 Release pipelines and SBOMs for platform and clients
 - [ ] 20.6 Privacy operations: retention jobs, export and deletion requests
+- [ ] 20.6a Privacy requests and retention on the web
 - [ ] 20.7 Office readiness review
 
 ## Architecture upgrade (2026-10-23)
@@ -45,8 +47,10 @@ Make HTCO OS dependable for the long run: a staging environment, verified recove
 | 20.2 | Recovery: objectives, drill, documented results | Restore within the agreed RTO; data loss within RPO; agent sessions and automation executions resume or are recovered by the nightly supervisor after the restore |
 | 20.3 | Security review: ASVS L2 evidence, agentic controls per active employee, penetration-style test of tenant isolation | No open high or critical findings |
 | 20.4 | Runbooks, SLOs, alert review | Every alert, monitor and automation links to a runbook entry |
+| 20.4a | Web: each monitor (10.7), automation (15.5) and alert in the Engineering Console (15.7) links to its runbook entry, and the console shows each SLO with its current value and error budget | Every alert, monitor and automation shown on the web has a working runbook link |
 | 20.5 | Release pipelines and SBOMs for platform and clients | Reproducible tagged releases with notes |
 | 20.6 | Privacy operations: retention jobs, export and deletion requests | Retention verified on real tables, including activity records, messages and agent memory |
+| 20.6a | Web: Admin › Privacy: record an export or deletion request, run it with step-up, and see its status and evidence of completion; each retention job shows its last run and how many rows it removed | Every request and run is audited, with no personal data in the audit; a deletion needs step-up |
 | 20.7 | Office readiness review | See the checks below |
 
 ### Office readiness checks (slice 20.7)

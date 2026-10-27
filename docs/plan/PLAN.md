@@ -139,6 +139,7 @@ A phase is complete only when all of these hold:
 6. Open risks and new assumptions recorded in [ASSUMPTIONS.md](../product/ASSUMPTIONS.md).
 7. **No employee or automation is activated without** a fully defined specification, a passed evaluation and the owner's approval of its autonomy level.
 8. The owner has seen the demo and approved moving on.
+9. **Every user-facing slice of the phase has its web step**, built in the phase or named in a later one, or says "No UI: <reason>" ([ER-UX-07](../engineering/ENGINEERING_RULES.md#13-user-experience-accessibility-and-language-er-ux), [UI_COVERAGE.md](UI_COVERAGE.md)).
 
 ## 6. Status
 

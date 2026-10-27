@@ -98,6 +98,8 @@ Endpoints under `/v1/auth/*`: sign in (password), MFA enroll (TOTP QR), MFA veri
 | AC-3.5.7 | An action that requires recent re-authentication returns 403 with a `step-up-required` problem type until the user re-enters TOTP; the elevation expires after 10 minutes (tested with an injected clock). |
 | AC-3.5.8 | The documented recovery path for a lost authenticator works (second factor, or owner-assisted reset with an audit record). |
 | AC-3.5.9 | An invited user who opens the invitation link sets a password and is signed in with the same cookie as a sign-in; an invalid, expired or used link is refused with 401, a weak password with 422, and failures are throttled like sign-ins. |
+| AC-3.5.10 | Settings › Security lists the user's active sessions (this browser marked) with a revoke button on each, the recorded sign-ins from new devices, and the enrolled authenticator apps with an option to add a second one; revoking a session there signs that device out on its next request (AC-3.5.4, verified on the web). |
+| AC-3.5.11 | An action answered with `step-up-required` opens a dialog that asks for the second factor and then retries the action once; a wrong or throttled code shows its error, and the action is not retried without a new confirmation. |
 
 ### 3.6 — Generated API client and contract job
 
@@ -133,6 +135,10 @@ Users and roles, shop access and sessions, built on the slice 2.6 endpoints.
 |---|---|
 | AC-3.9.1 | The owner can invite a user, set the role, grant a shop and see each change in the audit view, all from the web app. |
 | AC-3.9.2 | Non-admin roles do not see the Administration section, and its routes show the no-permission state (the API refuses anyway). |
+| AC-3.9.3 | The audit view in the Administration section lists the organization's audit records newest first (time, actor kind and ID, action, entity, before and after, correlation ID), cursor-paginated and filterable by actor and entity, for the Owner and Admins only, from a read-only API scoped by RLS; nothing in the view can change a record. |
+| AC-3.9.4 | The Owner or an Admin can change a role, revoke a shop grant and remove a member from the web app, each after a confirmation dialog, and each member shows whether two-step sign-in is on; an Admin is offered no way to grant the Owner role or remove the Owner. |
+| AC-3.9.5 | A new invitation's one-time link is shown once, with a copy button and a note that it cannot be shown again, and is never kept in browser storage; inviting an email that already has an account says the person was added, with no link. |
+| AC-3.9.6 | The Owner can reset a member's lost authenticator from the Administration section after step-up; the member must enroll a new one at the next sign-in, and the reset writes one audit record (the owner-assisted path of AC-3.5.8). |
 
 ## Test plan
 

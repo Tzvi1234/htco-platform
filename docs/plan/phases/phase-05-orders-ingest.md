@@ -336,6 +336,8 @@ Alerts go through the error-monitoring service's alert rules until Grafana arriv
 | AC-5.9.2 | A dead-lettered job appears in the admin view with its last error and can be retried by an admin (audited). |
 | AC-5.9.3 | A shop whose last successful sync is older than its window shows as stale in the UI and raises one alert. |
 | AC-5.9.4 | `/metrics` exposes the series above with no organization or buyer data in labels (only IDs that are not personal, and shop IDs). |
+| AC-5.9.5 | Admin › Health lists each Etsy webhook event type with the events received in the last day and those not yet processed, unknown types included, and says when webhook intake is off, so the owner can see whether webhooks arrive after registering the endpoint. |
+| AC-5.9.6 | Admin › Health shows each circuit breaker of slice 5.15 (`etsy:api`, `etsy:web`) with its state and, while it is open, when it next lets a call through, so a deferred sync is explained instead of only showing as stale. |
 
 **Moved (the owner's decision of 2026-10-23).** AC-5.9.1's alert is raised through the single alert model: Phase 6.4's notifications now, Phase 10's declared monitors later; 5.9 shows the stopped worker on the admin screen. AC-5.9.4's Prometheus `/metrics` moves to Phase 8A's monitoring slice, because no monitoring host is chosen yet. AC-5.9.2 and the view parts of AC-5.9.1 and AC-5.9.3 are built here.
 
@@ -372,6 +374,7 @@ Every business step of these automations goes through the Action Gateway (Intern
 | AC-5.11.5 | Product Sales Counters never count a cancelled or refunded order, and replaying a cancellation does not decrement twice (property tests). |
 | AC-5.11.6 | Each automation has a recovery runbook in `docs/features/orders-ingest/operations.md` and metrics visible in the 5.9 view. |
 | AC-5.11.7 | An import-linter contract and a test prove that the three automations' handlers import nothing from `htco_agent_runtime`, the model gateway or Browser Use. |
+| AC-5.11.8 | The Products screen shows each listing's units sold and order count from Product Sales Counters (net of cancellations and refunds), with the time they were last updated, and says so while the automation is not active. |
 
 ### 5.12 — Action Gateway and the generic execution contract
 
