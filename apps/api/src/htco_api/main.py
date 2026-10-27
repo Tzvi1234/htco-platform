@@ -18,7 +18,7 @@ from htco_api.access import InvitationFailedError
 from htco_api.app import AppOptions, Resource, create_app
 from htco_api.auth import Authenticator, VerifiedTokenReader
 from htco_api.automations import AutomationServices
-from htco_api.browser_environments import BrowserEnvironmentServices
+from htco_api.browser_environments import BrowserEnvironmentServices, DashboardShopLanguages
 from htco_api.incidents import IncidentCenter
 from htco_api.problems import AUTH_UNAVAILABLE, ProblemError
 from htco_api.settings import ApiSettings, Environment
@@ -36,6 +36,7 @@ from htco_application.automation.durable import (
     HandlerOutcome,
 )
 from htco_application.automation.records import registry_from_rows
+from htco_application.browser_configuration import ConfigurationServices, SharedEgressOnly
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_tokens import VaultAccessTokenProvider
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WebhookSecret, WindowLimiter
@@ -71,6 +72,7 @@ from htco_persistence.automation import (
     PostgresExecutionReader,
     PostgresExecutionStore,
 )
+from htco_persistence.browser_configuration import PostgresBrowserConfigurations
 from htco_persistence.browser_environments import (
     PostgresEnvironmentReader,
     PostgresEnvironmentStore,
@@ -463,7 +465,9 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         automations=automation_services(database, enabled=settings.automations_enabled),
         etsy_webhooks=etsy_webhook_ingress(settings, database),
         browser_environments=BrowserEnvironmentServices(
-            PostgresEnvironmentReader(database), PostgresEnvironmentStore(database)
+            PostgresEnvironmentReader(database),
+            PostgresEnvironmentStore(database),
+            configuration=_browser_configuration(database, dashboard),
         ),
         execution_chain=PostgresChainReader(database),
         incident_center=IncidentCenter(
@@ -496,6 +500,21 @@ def etsy_webhook_ingress(settings: ApiSettings, database: Database) -> EtsyWebho
         shops=PostgresWebhookShops(database),
         clock=lambda: datetime.now(UTC),
         offload=anyio.to_thread.run_sync,
+    )
+
+
+def _browser_configuration(
+    database: Database, dashboard: ShopDashboard | None
+) -> ConfigurationServices | None:
+    """Browser configuration profiles (slice 8A.2b): on when the marketplace reads are, because
+    the locale is checked against the shop's languages from its profile. Every shop uses the
+    shared egress until 8A.3's `NetworkProvider` allocates a dedicated one."""
+    if dashboard is None:
+        return None
+    return ConfigurationServices(
+        store=PostgresBrowserConfigurations(database),
+        languages=DashboardShopLanguages(dashboard, lambda: datetime.now(UTC)),
+        egress=SharedEgressOnly(),
     )
 
 

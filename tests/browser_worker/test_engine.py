@@ -1,7 +1,9 @@
 """The Playwright engine (slice 8A.2): one honest Chromium persistent context per profile.
 
 The unit tests use a fake Playwright and pin exactly what reaches Chromium: no user agent,
-proxy, switches, locale, time zone or viewport (ADR-0020). The `browser` test runs a real
+proxy, time zone, screen or coordinate (ADR-0020), and only the platform baseline's typed options
+and pinned switches (8A.2b; the locale too when a session has its settings, in
+`test_engine_configuration.py`). The `browser` test runs a real
 Chromium against a page served on 127.0.0.1 only (never a live site), through the Browser
 Controller, and shows that a cookie survives from one sealed session to the next. It runs when
 `HTCO_TEST_BROWSER=1` and Chromium is installed (`uv run playwright install chromium`).
@@ -36,15 +38,18 @@ from htco_application.browser_profiles import (
 )
 from htco_browser_worker.engine import PlaywrightEngine, PlaywrightHandle
 from htco_domain.browser import BrowserEnvironment, EnvironmentStatus
+from htco_domain.browser_configuration import PINNED_SWITCHES
 from htco_platform.crypto import EnvelopeSealer, KeyRing
 
 pytestmark = pytest.mark.anyio
 
-# Anything here would change what the browser says about itself or where it comes from.
+# Anything here would change what the browser says about itself or where it comes from. The
+# configuration profile's typed options (`args` with the pinned switches, `viewport`,
+# `color_scheme`, `permissions` and `locale`) are pinned by value instead (8A.2b).
 _DISHONEST = frozenset(
     {
-        "user_agent", "proxy", "args", "ignore_default_args", "locale", "timezone_id",
-        "geolocation", "viewport", "screen", "extra_http_headers", "device_scale_factor",
+        "user_agent", "proxy", "ignore_default_args", "timezone_id",
+        "geolocation", "screen", "extra_http_headers", "device_scale_factor",
         "is_mobile", "has_touch", "executable_path", "channel", "env", "bypass_csp",
         "ignore_https_errors",
     }
@@ -112,6 +117,8 @@ async def test_launch__opens_the_profile_with_honest_options_only(tmp_path: Path
     assert user_data_dir == str(tmp_path)
     assert options == {
         "headless": True, "chromium_sandbox": True, "timeout": 30_000, "accept_downloads": False,
+        "args": list(PINNED_SWITCHES), "viewport": {"width": 1280, "height": 900},
+        "color_scheme": "light", "permissions": [],
     }  # fmt: skip
     assert not _DISHONEST & options.keys()
     assert repr(handle) == "PlaywrightHandle(<context>)"

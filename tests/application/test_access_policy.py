@@ -52,6 +52,9 @@ ROWS = {
     "View agent sessions, routing decisions and traces": Capability.VIEW_AGENT_RUNS,
     "View audit log": Capability.VIEW_AUDIT_LOG,
     "View a shop's browser environment status": Capability.VIEW_BROWSER_ENVIRONMENT,
+    "Edit a shop's browser configuration profile (the egress: Owner only)": (
+        Capability.EDIT_BROWSER_CONFIGURATION
+    ),
 }
 ROLE_COLUMNS = [
     Role.OWNER,

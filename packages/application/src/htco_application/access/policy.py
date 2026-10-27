@@ -43,6 +43,7 @@ class Capability(StrEnum):
     VIEW_AGENT_RUNS = "view_agent_runs"
     VIEW_AUDIT_LOG = "view_audit_log"
     VIEW_BROWSER_ENVIRONMENT = "view_browser_environment"
+    EDIT_BROWSER_CONFIGURATION = "edit_browser_configuration"
 
 
 class Scope(Enum):
@@ -181,6 +182,8 @@ _MATRIX: dict[Capability, dict[Role, Grant]] = {
     Capability.VIEW_AGENT_RUNS: {_O: _ORG, _AD: _ORG, _OP: _SHOPS, _DE: _SHOPS},
     Capability.VIEW_AUDIT_LOG: {_O: _ORG, _AD: _ORG, _DE: _SHOPS},
     Capability.VIEW_BROWSER_ENVIRONMENT: {_O: _ORG, _AD: _ORG},
+    # The egress inside it stays Owner-only (ADR-0025 §2); the use case enforces that part.
+    Capability.EDIT_BROWSER_CONFIGURATION: {_O: _ORG_MFA_STEP_UP, _AD: _ORG_MFA_STEP_UP},
 }
 
 # Read-only view: the matrix changes only through a reviewed change to this file and the doc.

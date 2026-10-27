@@ -5,10 +5,15 @@
 storage live in the shop's own profile, which the controller re-seals after the session.
 
 The browser is honest by default (ADR-0020 §2 and §4). The adapter has no way to set a user
-agent, a proxy, extra command-line switches, a locale, a time zone, a geolocation or a
-viewport, and it removes none of Playwright's default switches. Chromium keeps its stock
-fingerprint, and the egress is the worker's own. Downloads are off until a recipe allows them
-(8A.5). The call in `launch` is the complete list of what is passed, and a test pins it.
+agent, a proxy, a time zone, a coordinate or a screen, and it removes none of Playwright's
+default switches. Chromium keeps its stock fingerprint, and the egress is the worker's own.
+
+It passes only the typed options of the configuration profile (slice 8A.2b, ADR-0025 §2): the
+platform baseline's viewport, color scheme, permissions (nothing granted unless a recipe's
+scope row records a need) and pinned switch list, which turns off the browser's own background
+traffic and Safe Browsing; and, from the shop's settings, its locale. Downloads stay off until a
+recipe allows them (8A.5). The call in `launch` is the complete list of what is passed, and a
+test pins it.
 
 Starting and stopping Chromium are owned tasks that always run to their end (Codex on #122). A
 cancellation that arrives meanwhile (the session's deadline, a shutdown) waits for them: a
@@ -24,6 +29,8 @@ from pathlib import Path
 from typing import Any, override
 
 from playwright.async_api import BrowserContext, Playwright, async_playwright
+
+from htco_domain.browser_configuration import PLATFORM_BASELINE, LaunchSettings
 
 LAUNCH_TIMEOUT_MS = 30_000
 
@@ -65,8 +72,14 @@ class PlaywrightEngine:
         self._timeout_ms = timeout_ms
         self._start = start
 
-    async def launch(self, profile_directory: Path) -> PlaywrightHandle:
-        opening = asyncio.ensure_future(self._open(profile_directory))
+    async def launch(
+        self, profile_directory: Path, *, settings: LaunchSettings | None = None
+    ) -> PlaywrightHandle:
+        """`settings`: the session's validated launch settings (`check_session`). Without
+        them, the platform baseline alone, in the worker's own locale."""
+        if settings is not None and settings.downloads:
+            raise ValueError("downloads arrive with the recipes that declare them (8A.5)")
+        opening = asyncio.ensure_future(self._open(profile_directory, settings))
         try:
             return await _to_the_end(opening)
         except asyncio.CancelledError:
@@ -80,20 +93,42 @@ class PlaywrightEngine:
                     _log.warning("browser.close_failed_after_cancel: %s", type(error).__name__)
             raise
 
-    async def _open(self, profile_directory: Path) -> PlaywrightHandle:
+    async def _open(
+        self, profile_directory: Path, settings: LaunchSettings | None
+    ) -> PlaywrightHandle:
         playwright: Playwright = await self._start().start()
         try:
             context = await playwright.chromium.launch_persistent_context(
-                str(profile_directory),
-                headless=self._headless,
-                chromium_sandbox=self._sandbox,
-                timeout=self._timeout_ms,
-                accept_downloads=False,
+                str(profile_directory), **launch_options(settings, self._honest())
             )
         except BaseException:
             await playwright.stop()
             raise
         return PlaywrightHandle(context, playwright)
+
+    def _honest(self) -> dict[str, Any]:
+        return {
+            "headless": self._headless,
+            "chromium_sandbox": self._sandbox,
+            "timeout": self._timeout_ms,
+            "accept_downloads": False,
+        }
+
+
+def launch_options(settings: LaunchSettings | None, engine: dict[str, Any]) -> dict[str, Any]:
+    """Everything `launch_persistent_context` receives besides the profile directory."""
+    baseline = PLATFORM_BASELINE if settings is None else settings
+    options: dict[str, Any] = {
+        **engine,
+        "args": list(baseline.switches),
+        "viewport": {"width": baseline.viewport.width, "height": baseline.viewport.height},
+        "color_scheme": baseline.color_scheme,
+        "permissions": [] if settings is None else sorted(settings.granted_permissions),
+    }
+    if settings is not None:
+        # Sets the browser's language and its Accept-Language: the shop's real one.
+        options["locale"] = settings.locale
+    return options
 
 
 async def _to_the_end[T](work: Awaitable[T]) -> T:
