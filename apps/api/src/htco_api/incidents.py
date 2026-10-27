@@ -8,7 +8,8 @@
 - `GET /v1/notifications`, `POST /v1/notifications/read`: the caller's own inbox.
 - `GET /v1/relay-items`, `POST /v1/relay-items/{id}/tracking`, `GET /v1/relay-items/{id}/code`:
   the AutoVA relay (slice 6.10): the open items, the owner's paste, and the code for the person
-  who copies it into Etsy (buyer-data roles only; never in a list, a log or an audit).
+  who copies it into Etsy (an Owner or Admin with a second factor only; never in a list, a log
+  or an audit).
 
 Identifiers, states and codes only; never buyer data (an order is its receipt number).
 """
@@ -31,7 +32,7 @@ from htco_api.identity import (
     encode_cursor,
     problem_responses,
 )
-from htco_api.policy_guard import FORBIDDEN
+from htco_api.policy_guard import FORBIDDEN, MFA_REQUIRED
 from htco_api.problems import NOT_FOUND, Problem, ProblemError, ProblemType, ValidationProblem
 from htco_application.access.authentication import NoMembershipError
 from htco_application.incident_center import (
@@ -49,14 +50,22 @@ from htco_application.incident_center import (
 from htco_application.incidents import IncidentRecord, IncidentService, StaleIncident
 from htco_application.notifications import Notification
 from htco_application.relay import (
+    DuplicateTrackingError,
     RelayCursorError,
     RelayItem,
+    RelayItemMovedError,
+    RelayItemNotVisibleError,
     RelayStore,
+    SecondFactorRequiredError,
     list_relay_page,
+    relay_code,
+    submit_tracking,
 )
 from htco_application.shops import OrganizationRequiredError
 from htco_domain.actors import ActorKind, ActorRef
+from htco_domain.fulfillment import TrackingFormatError
 from htco_domain.incidents import IncidentState, ResolutionRefused
+from htco_domain.relay import RelayState
 from htco_domain.state_machine import IllegalTransition
 
 INCIDENTS_UNAVAILABLE = ProblemType(
@@ -81,6 +90,10 @@ RELAY_UNAVAILABLE = ProblemType(
     "relay-unavailable", "Relay not available", 503,
     "The AutoVA relay is not set up on this server.",
 )  # fmt: skip
+TRACKING_ALREADY_USED = ProblemType(
+    "tracking-already-used", "Tracking number in use", 409,
+    "This tracking number is already pasted for another order of the shop.",
+)  # fmt: skip
 RELAY_ITEM_MOVED = ProblemType(
     "relay-item-moved", "Relay item changed", 409,
     "This order's tracking was pasted already, or the item closed. Reload it.",
@@ -97,8 +110,7 @@ class IncidentCenter:
 
 
 class RelayItemView(BaseModel):
-    """No code and nothing of it (the code is buyer data, revealed by the parcels' audited
-    route)."""
+    """No code and nothing of it (the code is buyer data, revealed by the audited code route)."""
 
     id: uuid.UUID
     shop_id: uuid.UUID
@@ -116,6 +128,27 @@ class RelayItemListView(BaseModel):
     next_cursor: str | None = None
 
 
+class TrackingPaste(BaseModel):
+    carrier: str = Field(min_length=1, max_length=20)
+    # Spaces and dashes as AutoVA shows them are fine; the number is normalised and validated.
+    code: str = Field(min_length=1, max_length=60)
+
+
+class RelayPasteView(BaseModel):
+    """The item after a paste: the carrier and last four characters, never the code."""
+
+    id: uuid.UUID
+    shop_id: uuid.UUID
+    receipt_id: int
+    state: Literal["handed_off", "closed"]
+    closed_reason: Literal["tracking_on_etsy"] | None
+    carrier: str | None
+    last4: str | None
+    paid_at: datetime
+    opened_at: datetime
+    updated_at: datetime
+
+
 class RelayCodeView(BaseModel):
     code: str
 
@@ -124,6 +157,16 @@ def _invalid_cursor() -> RequestValidationError:
     return RequestValidationError(
         [{"loc": ("query", "cursor"), "msg": "Invalid cursor", "type": "value_error"}]
     )
+
+
+def _paste_view(item: RelayItem) -> RelayPasteView:
+    return RelayPasteView(
+        id=item.id, shop_id=item.shop_id, receipt_id=item.receipt_id,
+        state="closed" if item.state is RelayState.CLOSED else "handed_off",
+        closed_reason=None if item.closed_reason is None else "tracking_on_etsy",
+        carrier=item.carrier, last4=item.last4,
+        paid_at=item.paid_at, opened_at=item.opened_at, updated_at=item.updated_at,
+    )  # fmt: skip
 
 
 def _relay_view(item: RelayItem) -> RelayItemView:
@@ -480,5 +523,97 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
             items=[_relay_view(i) for i in items],
             next_cursor=encode_cursor(items[-1].id) if more else None,
         )
+
+    @router.post(
+        "/relay-items/{item_id}/tracking",
+        summary="Paste the tracking number from AutoVA for one relay item",
+        responses=problem_responses(
+            {
+                **relay_problems,
+                403: "Not an Owner or Admin (forbidden), or no second factor (mfa-required)",
+                404: "No such relay item for the caller",
+                409: "Pasted already or closed (relay-item-moved), or the number is used for "
+                "another order (tracking-already-used)",
+                422: (
+                    "An unknown carrier or a number in the wrong format (tracking-invalid)",
+                    Problem,
+                ),
+            }
+        ),
+    )
+    async def paste_tracking(  # noqa: PLR0913, PLR0917 - the route's inputs
+        item_id: uuid.UUID,
+        body: TrackingPaste,
+        request: Request,
+        response: Response,
+        auth: CurrentAuth,
+        center: Center,
+        organization_id: uuid.UUID | None = None,
+    ) -> RelayPasteView:
+        """An Owner or Admin with a second factor (6.10 PR B). Validated before anything else
+        (AC-6.10.4); a number the Etsy receipt already carries closes the item on that evidence
+        (AC-6.10.2); otherwise the item is handed off for the copy into Etsy (AC-6.10.3). Replay
+        safe: a second paste is a 409. Audited, never with the number; no Etsy call."""
+        store = _relay(center)
+        correlation = getattr(request.state, "request_id", None)
+        try:
+            item = await _run(
+                lambda: submit_tracking(
+                    auth, store, organization_id=organization_id, item_id=item_id,
+                    carrier=body.carrier, code=body.code, now=clock(), correlation_id=correlation,
+                )
+            )  # fmt: skip
+        except OrganizationRequiredError:
+            raise ProblemError(ORGANIZATION_REQUIRED) from None
+        except RelayItemNotVisibleError, NoMembershipError:
+            raise ProblemError(NOT_FOUND) from None
+        except SecondFactorRequiredError:
+            raise ProblemError(MFA_REQUIRED) from None
+        except PermissionError:
+            raise ProblemError(FORBIDDEN) from None
+        except TrackingFormatError as error:
+            # The message is safe to show: it names the carrier, never the number.
+            invalid = ProblemType("tracking-invalid", "Invalid tracking", 422, str(error))
+            raise ProblemError(invalid) from None
+        except RelayItemMovedError:
+            raise ProblemError(RELAY_ITEM_MOVED) from None
+        except DuplicateTrackingError:
+            raise ProblemError(TRACKING_ALREADY_USED) from None
+        response.headers["Cache-Control"] = "no-store"
+        return _paste_view(item)
+
+    @router.get(
+        "/relay-items/{item_id}/code",
+        summary="The pasted tracking number, for the person who copies it into Etsy",
+        responses=problem_responses(
+            {**relay_problems, 404: "No code for the caller (none, closed, expired or not allowed)"}
+        ),
+    )
+    async def get_relay_code(  # noqa: PLR0913, PLR0917 - the route's inputs
+        item_id: uuid.UUID,
+        request: Request,
+        response: Response,
+        auth: CurrentAuth,
+        center: Center,
+        organization_id: uuid.UUID | None = None,
+    ) -> RelayCodeView:
+        """An Owner or Admin with a second factor; every reveal audited
+        (`relay.code_revealed`, never the code); never cached. Anyone else, or an item that
+        closed or expired, gets a 404 that never says whether a code exists."""
+        store = _relay(center)
+        correlation = getattr(request.state, "request_id", None)
+        try:
+            code = await _run(
+                lambda: relay_code(
+                    auth, store, organization_id=organization_id, item_id=item_id, now=clock(),
+                    correlation_id=correlation,
+                )
+            )  # fmt: skip
+        except OrganizationRequiredError:
+            raise ProblemError(ORGANIZATION_REQUIRED) from None
+        except RelayItemNotVisibleError, NoMembershipError:
+            raise ProblemError(NOT_FOUND) from None
+        response.headers["Cache-Control"] = "no-store"
+        return RelayCodeView(code=code)
 
     return router

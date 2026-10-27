@@ -11,6 +11,7 @@ from htco_api.auth import Authenticator
 from htco_api.incidents import IncidentCenter
 from htco_application.access.authentication import Membership
 from htco_application.relay import LIST_LIMIT, RelayItem
+from htco_domain.fulfillment import tracking_fingerprint
 from htco_domain.identity import Role
 from htco_domain.relay import RelayState
 from htco_platform.jwt import JwtVerifier
@@ -18,6 +19,7 @@ from tests.api.test_incident_routes import NOW, ORG, SHOP, Inbox, Reader
 from tests.api.test_me_and_shops import KEY, Memberships
 from tests.auth_tokens import AUDIENCE, ISSUER, FakeJwks, claims
 from tests.fulfillment_fakes import MemoryIncidentStore
+from tests.log_capture import capture_logs
 from tests.relay_fakes import MemoryRelayStore
 
 pytestmark = pytest.mark.anyio
@@ -37,6 +39,8 @@ def client(
     store: MemoryRelayStore | None,
     role: Role = Role.OWNER,
     shops: frozenset[uuid.UUID] = frozenset({SHOP}),
+    *,
+    aal: str = "aal2",
 ) -> httpx.AsyncClient:
     from htco_application.incidents import IncidentService  # noqa: PLC0415
 
@@ -57,7 +61,7 @@ def client(
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://api.test",
-        headers={"Authorization": f"Bearer {KEY.sign(claims())}"},
+        headers={"Authorization": f"Bearer {KEY.sign(claims(aal=aal))}"},
     )
 
 
@@ -135,3 +139,144 @@ async def test_unwired__503_relay_unavailable() -> None:
     async with client(None) as http:
         answer = await http.get("/v1/relay-items")
     assert answer.status_code == 503
+
+
+# --- 6.10 PR B: the paste and the copy -------------------------------------------------------
+
+CODE = "9400100000000000001234"
+
+
+@pytest.mark.ac("AC-6.10.3")
+async def test_pr_b_paste__handed_off_with_its_last_four_and_the_code_only_from_the_copy() -> None:
+    store = MemoryRelayStore()
+    item = an_item(store)
+    with capture_logs() as logs:
+        async with client(store) as http:
+            pasted = await http.post(
+                f"/v1/relay-items/{item.id}/tracking", json={"carrier": "usps", "code": CODE}
+            )
+            copy = await http.get(f"/v1/relay-items/{item.id}/code")
+
+    assert pasted.status_code == 200
+    body = pasted.json()
+    assert (body["state"], body["carrier"], body["last4"]) == ("handed_off", "usps", "1234")
+    assert body["closed_reason"] is None
+    assert CODE not in pasted.text
+    assert pasted.headers["Cache-Control"] == "no-store"
+    assert copy.status_code == 200
+    assert copy.json() == {"code": CODE}
+    assert copy.headers["Cache-Control"] == "no-store"
+    assert [a.action for a in store.audits] == ["relay.tracking_pasted", "relay.code_revealed"]
+    assert CODE not in str(logs.lines())
+
+
+@pytest.mark.ac("AC-6.10.4")
+async def test_pr_b_paste__an_invalid_number_is_a_422_naming_the_carrier_only() -> None:
+    store = MemoryRelayStore()
+    item = an_item(store)
+    async with client(store) as http:
+        answer = await http.post(
+            f"/v1/relay-items/{item.id}/tracking", json={"carrier": "usps", "code": "12345"}
+        )
+
+    assert answer.status_code == 422
+    problem = answer.json()
+    assert problem["type"].endswith("tracking-invalid")
+    assert "usps" in problem["detail"]
+    assert "12345" not in answer.text
+    assert store.items[item.id].state is RelayState.AWAITING_TRACKING
+
+
+@pytest.mark.ac("AC-6.10.1")
+async def test_pr_b_paste__again_or_a_number_used_already_is_a_409() -> None:
+    store = MemoryRelayStore()
+    first, second = an_item(store, receipt=51), an_item(store, receipt=52)
+    async with client(store) as http:
+        await http.post(
+            f"/v1/relay-items/{first.id}/tracking", json={"carrier": "usps", "code": CODE}
+        )
+        again = await http.post(
+            f"/v1/relay-items/{first.id}/tracking", json={"carrier": "usps", "code": CODE}
+        )
+        used = await http.post(
+            f"/v1/relay-items/{second.id}/tracking", json={"carrier": "usps", "code": CODE}
+        )
+
+    assert (again.status_code, again.json()["type"].rsplit("/", 1)[-1]) == (409, "relay-item-moved")
+    assert (used.status_code, used.json()["type"].rsplit("/", 1)[-1]) == (
+        409,
+        "tracking-already-used",
+    )
+
+
+@pytest.mark.ac("AC-6.10.2")
+async def test_pr_b_paste__a_number_already_on_etsy_closes_the_item() -> None:
+    store = MemoryRelayStore()
+    item = an_item(store)
+    store.on_etsy.add((SHOP, 51, tracking_fingerprint(SHOP, CODE)))
+    async with client(store) as http:
+        pasted = await http.post(
+            f"/v1/relay-items/{item.id}/tracking", json={"carrier": "usps", "code": CODE}
+        )
+        copy = await http.get(f"/v1/relay-items/{item.id}/code")
+
+    assert pasted.status_code == 200
+    assert (pasted.json()["state"], pasted.json()["closed_reason"]) == (
+        "closed",
+        "tracking_on_etsy",
+    )
+    assert copy.status_code == 404  # nothing to copy: the number is on Etsy already
+
+
+@pytest.mark.parametrize("role", [Role.OPERATIONS, Role.SUPPORT, Role.VIEWER, Role.DEVELOPER])
+async def test_pr_b_only_an_owner_or_admin_pastes_and_copies(role: Role) -> None:
+    store = MemoryRelayStore()
+    item = an_item(store)
+    async with client(store) as http:
+        await http.post(
+            f"/v1/relay-items/{item.id}/tracking", json={"carrier": "usps", "code": CODE}
+        )
+    handed_off = store.item(ORG, item.id)
+    async with client(store, role) as http:
+        pasted = await http.post(
+            f"/v1/relay-items/{item.id}/tracking", json={"carrier": "usps", "code": CODE}
+        )
+        copy = await http.get(f"/v1/relay-items/{item.id}/code")
+
+    if role in {Role.OPERATIONS, Role.SUPPORT}:
+        assert (pasted.status_code, pasted.json()["type"].rsplit("/", 1)[-1]) == (403, "forbidden")
+    else:
+        assert pasted.status_code in {403, 404}
+    assert copy.status_code == 404
+    assert CODE not in copy.text
+    assert [a.action for a in store.audits] == ["relay.tracking_pasted"]
+    assert store.item(ORG, item.id) == handed_off
+
+
+async def test_pr_b_without_a_second_factor_403_mfa_required_and_no_code() -> None:
+    store = MemoryRelayStore()
+    item = an_item(store)
+    async with client(store) as http:
+        await http.post(
+            f"/v1/relay-items/{item.id}/tracking", json={"carrier": "usps", "code": CODE}
+        )
+    async with client(store, Role.OWNER, aal="aal1") as http:
+        pasted = await http.post(
+            f"/v1/relay-items/{item.id}/tracking", json={"carrier": "usps", "code": CODE}
+        )
+        copy = await http.get(f"/v1/relay-items/{item.id}/code")
+
+    assert (pasted.status_code, pasted.json()["type"].rsplit("/", 1)[-1]) == (403, "mfa-required")
+    assert copy.status_code == 404
+
+
+async def test_pr_b_unknown_item__404_and_unwired__503() -> None:
+    async with client(MemoryRelayStore()) as http:
+        unknown = await http.get(f"/v1/relay-items/{uuid.uuid4()}/code")
+    async with client(None) as http:
+        unwired = await http.post(
+            f"/v1/relay-items/{uuid.uuid4()}/tracking", json={"carrier": "usps", "code": CODE}
+        )
+
+    assert unknown.status_code == 404
+    assert unwired.status_code == 503
