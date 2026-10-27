@@ -20,6 +20,7 @@ class NotificationKind(StrEnum):
     ALERT_LOW_REVIEW = "alert_low_review"  # slice 6.9
     ALERT_OUT_OF_STOCK = "alert_out_of_stock"  # slice 6.9
     RELAY_TRACKING_NEEDED = "relay_tracking_needed"  # slice 6.10
+    NEW_PRODUCT_QUOTE = "new_product_quote"  # slice 7.16
     SIGN_IN_NEW_DEVICE = "sign_in_new_device"
     MFA_CHANGED = "mfa_changed"
     SHOP_CONNECTED = "shop_connected"
@@ -60,6 +61,8 @@ AUDIENCE: Mapping[NotificationKind, Audience] = {
     NotificationKind.ALERT_LOW_REVIEW: Audience.OWNERS_AND_ADMINS,
     NotificationKind.ALERT_OUT_OF_STOCK: Audience.OWNERS_AND_ADMINS,
     NotificationKind.RELAY_TRACKING_NEEDED: Audience.OWNERS,
+    # The quote's approvers (7.17): the owner and the admins.
+    NotificationKind.NEW_PRODUCT_QUOTE: Audience.OWNERS_AND_ADMINS,
     NotificationKind.SIGN_IN_NEW_DEVICE: Audience.THE_USER,
     NotificationKind.MFA_CHANGED: Audience.OWNERS,
     NotificationKind.SHOP_CONNECTED: Audience.OWNERS,
@@ -76,6 +79,8 @@ EMAIL_BY_DEFAULT = SECURITY_KINDS | {
     NotificationKind.ALERT_SHIP_BY,
     NotificationKind.ALERT_LOW_REVIEW,
     NotificationKind.RELAY_TRACKING_NEEDED,
+    # In-app at once plus an email; the owner can turn the email off (7.6 preferences).
+    NotificationKind.NEW_PRODUCT_QUOTE,
 }
 
 
@@ -90,6 +95,7 @@ _PARAMS: Mapping[str, re.Pattern[str]] = {
     "listing_id": re.compile(r"^[1-9]\d{0,18}$"),
     "incident_id": re.compile(r"^[0-9a-f-]{36}$"),
     "relay_item_id": re.compile(r"^[0-9a-f-]{36}$"),
+    "quote_request_id": re.compile(r"^[0-9a-f-]{36}$"),
     "shop_id": re.compile(r"^[0-9a-f-]{36}$"),
     "cause": re.compile(r"^[a-z_]{1,40}$"),
     "severity": re.compile(r"^(low|medium|high|critical)$"),

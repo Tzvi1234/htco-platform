@@ -13,7 +13,7 @@ import pytest
 from htco_application.quote_parser import QuoteMail, QuoteParser
 from htco_application.suppliers import IntakeOutcome, QuoteIntake, ShopForMail
 from htco_persistence.database import Database, tenant_scope
-from htco_persistence.suppliers import PostgresSupplierQuoteStore
+from htco_persistence.suppliers import PostgresQuoteBoardReader, PostgresSupplierQuoteStore
 from tests.integration.test_etsy_connection import NOW, _url, scalar
 from tests.integration.test_order_history import connected
 
@@ -133,3 +133,28 @@ async def test_worker__quotes_recorded_once_under_one_request_and_alternatives_m
 
     assert alternative is IntakeOutcome.ALTERNATIVE
     assert variant is IntakeOutcome.NEW_PRODUCT_QUOTE  # the variant is its own product
+
+
+async def test_board__the_owner_reads_the_open_request_with_its_quotes(
+    database: Database, worker_db: Database
+) -> None:
+    """Slice 7.16: the board's read runs as the user (RLS), with the supplier's name."""
+    tenant, integration = await connected(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    intake = QuoteIntake(
+        QuoteParser("quotes@autova.example.com"),
+        PostgresSupplierQuoteStore(worker_db),
+        NoReviews(),
+        clock=lambda: NOW,
+        owner_mailbox="owner@shop.example.com",
+    )
+    with tenant_scope(org):
+        await intake.handle(mail("01_en_usd.eml.txt"), ShopForMail(org, shop))
+        await intake.handle(mail("03_en_eur_free_shipping.eml.txt"), ShopForMail(org, shop))
+
+    rows = PostgresQuoteBoardReader(database).open_quotes(tenant.claims(tenant.owner), shop)
+
+    assert {r.supplier for r in rows} >= {"Guangzhou Leather Works"}
+    assert {r.state for r in rows} == {"quotes_received"}
+    assert len({r.request_id for r in rows}) == 1
+    assert all(r.unit_price is not None and r.processing_days is not None for r in rows)

@@ -21,6 +21,7 @@ from htco_api.automations import AutomationServices
 from htco_api.browser_environments import BrowserEnvironmentServices
 from htco_api.incidents import IncidentCenter
 from htco_api.problems import AUTH_UNAVAILABLE, ProblemError
+from htco_api.quotes import QuoteBoardServices
 from htco_api.settings import ApiSettings, Environment
 from htco_api.web_auth import WebAuth
 from htco_application.access.management import (
@@ -98,6 +99,7 @@ from htco_persistence.shop_integrations import (
 )
 from htco_persistence.shops import PostgresShopReader, PostgresShopRemover
 from htco_persistence.status import PostgresChainReader
+from htco_persistence.suppliers import PostgresQuoteBoardReader
 from htco_persistence.web_sessions import PostgresSessionStore
 from htco_platform.crypto import EnvelopeSealer, Sealer
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter, SentryErrorReporter
@@ -213,6 +215,7 @@ def main(
         if wiring.etsy_webhooks is None
         else WindowLimiter(settings.etsy_webhook_rate_per_second),
         browser_environments=wiring.browser_environments,
+        quote_board=wiring.quote_board,
         execution_chain=wiring.execution_chain,
         incident_center=wiring.incident_center,
         security_notices=wiring.security_notices,
@@ -379,6 +382,7 @@ class _Wiring:
     # _ETSY_SHOP_ID.
     autova_quotes: QuoteMailboxIngress | None = None
     browser_environments: BrowserEnvironmentServices | None = None
+    quote_board: QuoteBoardServices | None = None
     execution_chain: PostgresChainReader | None = None
     incident_center: IncidentCenter | None = None
     security_notices: SecurityNotices | None = None
@@ -474,6 +478,10 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
             PostgresEnvironmentReader(database), PostgresEnvironmentStore(database)
         ),
         execution_chain=PostgresChainReader(database),
+        # The "New product quotes" board (slice 7.16): read as the user, Owner and Admins.
+        quote_board=QuoteBoardServices(
+            PostgresQuoteBoardReader(database), PostgresEnvironmentStore(database)
+        ),
         incident_center=IncidentCenter(
             reader=PostgresIncidentReader(database),
             service=IncidentService(

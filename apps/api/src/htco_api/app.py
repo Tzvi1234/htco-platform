@@ -26,6 +26,7 @@ from htco_api.incidents import IncidentCenter, incidents_router
 from htco_api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from htco_api.operations import OperationsPorts, operations_router
 from htco_api.problems import PROBLEM_MEDIA_TYPE, UNEXPECTED_ERROR_RESPONSES, add_problem_handlers
+from htco_api.quotes import QuoteBoardServices, quotes_router
 from htco_api.shop_data import shop_data_router
 from htco_api.web_auth import WebAuth, web_auth_router
 from htco_api.webhooks import webhooks_router
@@ -141,6 +142,8 @@ class AppOptions:
     etsy_webhook_limiter: WindowLimiter | None = None
     # The quote mailbox (slice 7.14): without it, `POST /webhooks/autova-quotes` answers 404.
     autova_quotes: QuoteMailboxIngress | None = None
+    # The "New product quotes" board (slice 7.16); without it, that route answers 503.
+    quote_board: QuoteBoardServices | None = None
     # Browser environment statuses (slice 5.16), read only; without it, that route answers 503.
     browser_environments: BrowserEnvironmentServices | None = None
     # The chain view of one execution (slice 5.18); without it, that route answers 503.
@@ -198,6 +201,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.etsy_webhooks = options.etsy_webhooks
     app.state.etsy_webhook_limiter = options.etsy_webhook_limiter
     app.state.autova_quotes = options.autova_quotes
+    app.state.quote_board = options.quote_board
     app.state.browser_environments = options.browser_environments
     app.state.execution_chain = options.execution_chain
     app.state.incident_center = options.incident_center
@@ -224,6 +228,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
         browser_environments_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES
     )
     app.include_router(executions_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
+    app.include_router(quotes_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(incidents_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(operations_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     if options.diagnostics:

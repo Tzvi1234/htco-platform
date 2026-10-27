@@ -5,11 +5,13 @@ supplier, its product's open quote request and the quote, each found or created 
 """
 
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
 import psycopg
 
+from htco_application.quote_board import OPEN_STATES, QuoteRow
 from htco_application.suppliers import RecordedQuote
 from htco_domain.suppliers import ProductRef, SupplierQuote
 from htco_persistence.database import Database
@@ -149,3 +151,48 @@ class PostgresSupplierQuoteStore:
                 [now, request_id],
             )
         return request_id
+
+
+# At most this many rows per board: a shop has a handful of products waiting at a time.
+BOARD_LIMIT = 1000
+
+
+class PostgresQuoteBoardReader:
+    """The "New product quotes" board (slice 7.16), read as the signed-in user: row-level
+    security keeps it to the caller's organization and shops."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def open_quotes(self, claims: Mapping[str, Any], shop_id: uuid.UUID) -> list[QuoteRow]:
+        with self._database.user_transaction(claims) as connection:
+            rows = connection.execute(
+                """
+                select r.id, r.listing_id, r.variant, r.state, r.created_at,
+                       q.id, s.name, q.currency, q.unit_price, q.shipping_cost,
+                       q.shipping_method, q.processing_days_min, q.processing_days_max,
+                       q.shipping_days_min, q.shipping_days_max, q.valid_until, q.received_at
+                from app.quote_requests r
+                left join app.supplier_quotes q
+                  on q.quote_request_id = r.id and q.organization_id = r.organization_id
+                left join app.suppliers s
+                  on s.id = q.supplier_id and s.organization_id = q.organization_id
+                where r.shop_id = %s and r.state = any(%s)
+                order by r.created_at, r.id, q.received_at
+                limit %s
+                """,
+                [shop_id, list(OPEN_STATES), BOARD_LIMIT],
+            ).fetchall()
+        return [_board_row(row) for row in rows]
+
+
+def _board_row(row: tuple[Any, ...]) -> QuoteRow:
+    has_quote = row[5] is not None
+    return QuoteRow(
+        request_id=row[0], listing_id=int(row[1]), variant=row[2], state=row[3],
+        requested_at=row[4], quote_id=row[5], supplier=row[6], currency=row[7],
+        unit_price=row[8], shipping_cost=row[9], shipping_method=row[10],
+        processing_days=(row[11], row[12]) if has_quote else None,
+        shipping_days=(row[13], row[14]) if has_quote else None,
+        valid_until=row[15], received_at=row[16],
+    )  # fmt: skip

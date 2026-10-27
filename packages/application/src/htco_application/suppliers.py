@@ -91,6 +91,21 @@ class QuoteReviews(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class NewQuote:
+    """A new product's quote, for the notification of slice 7.16 (quote_board)."""
+
+    organization_id: uuid.UUID
+    shop_id: uuid.UUID
+    quote_request_id: uuid.UUID
+    listing_id: int
+    source_reference: str  # the quote's own, stable per AutoVA quote
+
+
+class QuoteAlerts(Protocol):
+    async def new_product_quote(self, quote: NewQuote) -> None: ...
+
+
 # The Human task's reason for a quote whose signed `To` is not the owner's mailbox (#192): it
 # may be another AutoVA customer's quote, replayed to us.
 UNKNOWN_LISTING = "unknown_listing"
@@ -130,6 +145,8 @@ class QuoteIntake:
     # is recorded only when the sender's DKIM signature covers a `To` naming it (#192).
     owner_mailbox: str
     offload: Offload = run_inline
+    # The "new product quote" notification (slice 7.16); None raises none.
+    alerts: QuoteAlerts | None = None
 
     def __post_init__(self) -> None:
         mailbox = self.owner_mailbox.strip().lower()
@@ -172,6 +189,18 @@ class QuoteIntake:
                 target.organization_id, product, result.supplier, quote, now=now
             )
         )
+        if not recorded.alternative and self.alerts is not None:
+            # Also for a quote already recorded: a retried job whose first run stopped before
+            # the notification still sends it, and the notification's key keeps it to one.
+            await self.alerts.new_product_quote(
+                NewQuote(
+                    organization_id=target.organization_id,
+                    shop_id=target.shop_id,
+                    quote_request_id=recorded.quote_request_id,
+                    listing_id=result.listing_id,
+                    source_reference=quote.source_reference,
+                )
+            )
         if not recorded.created:
             return IntakeOutcome.ALREADY_RECORDED
         if recorded.alternative:
