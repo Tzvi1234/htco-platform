@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.order_history.read.output.json",
+  "title": "etsy.order_history.read output",
+  "type": "object",
+  "required": [
+    "receipts"
+  ],
+  "properties": {
+    "receipts": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object"
+      }
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}
