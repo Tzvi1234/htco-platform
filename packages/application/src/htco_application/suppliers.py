@@ -4,7 +4,9 @@
 the shop the mailbox serves) and:
 
 1. parses it with the deterministic `QuoteParser` (no model, AC-7.15.2);
-2. a quarantined mail (not the configured AutoVA sender) records nothing and opens no task;
+2. a quarantined mail records nothing. Another sender opens no task; a mail whose `From` names
+   AutoVA but which our receiving server did not see signed by AutoVA's domain (an aligned DKIM
+   pass) opens one Human task "check this quote", as a possible forgery;
 3. a refused mail (not the known layout) opens one Human task "check this quote", naming the mail
    and the reason; nothing is guessed (AC-7.15.1);
 4. a parsed quote is recorded in one transaction: its supplier (found by the name AutoVA shows, or
@@ -31,7 +33,7 @@ class IntakeOutcome(StrEnum):
     ALTERNATIVE = "alternative"  # the product already has a supplier: no new-product alert
     ALREADY_RECORDED = "already_recorded"  # the same quote mail again
     NEEDS_REVIEW = "needs_review"  # one Human task "check this quote"
-    QUARANTINED = "quarantined"  # not from the configured AutoVA sender
+    QUARANTINED = "quarantined"  # not from the configured AutoVA sender, or not proven to be
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,13 @@ class QuoteIntake:
     async def handle(self, mail: QuoteMail, target: ShopForMail) -> IntakeOutcome:
         result = self.parser.parse(mail)
         if isinstance(result, Quarantined):
+            if result.needs_review:
+                await self.reviews.check_this_quote(
+                    target.organization_id,
+                    target.shop_id,
+                    message_id=result.message_id,
+                    reason=result.reason.value,
+                )
             return IntakeOutcome.QUARANTINED
         if not isinstance(result, ParsedQuote):
             await self.reviews.check_this_quote(

@@ -74,6 +74,15 @@ AutoVA signs in with email and password and has no TOTP (A-08, 2026-10-23). The 
 
 AutoVA's sending address is still unknown (A-09). The parser accepts only mail from the confirmed sender, and anything else is quarantined.
 
+**The sender is authenticated, never taken from `From`.** Anyone can write `From: <AutoVA's address>`, so a quote mail is read only when our receiving server vouches for it (`dkim_aligned` in `htco_application.quote_parser`, RFC 8601):
+
+1. Only the Authentication-Results header whose authserv-id is our receiving server's counts (`HTCO_AUTOVA_QUOTE_AUTHSERV_ID`, configuration like the sender).
+2. It must be the topmost one, the one our server added on arrival, and the only one with our ID: a second one was written by the sender, so the mail fails.
+3. It must report `dkim=pass` with `header.d` (or else the domain of `header.i`) equal to the configured sender's domain: strict DMARC alignment. DKIM survives the mailbox's forwarding (D-23 (a)); SPF does not, so SPF and DMARC results alone never count.
+4. A header that is missing, unreadable (quoted strings, unbalanced comments) or ambiguous fails closed.
+
+Order in the parser: a mail from another `From` is quarantined with no task; a mail whose `From` is AutoVA's but fails the verdict is quarantined and opens one Human task "check this quote" (`unauthenticated_sender`, a possible forgery), naming its message ID only when that reads as a plain message ID. Both happen before the body is read, and nothing is recorded.
+
 ## The quote mail's layout (slice 7.15)
 
 The parser (`htco_application.quote_parser`) reads one layout: `Label: value` lines, in English or Hebrew, with no model involved. Until the owner sends real mails, the layout is **made up** (the fixtures in `tests/application/quote_mails/`); a real mail that differs is refused and opens one Human task, never a guessed quote, and the layout is adjusted with its own golden file.

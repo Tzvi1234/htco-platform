@@ -103,6 +103,19 @@ def test_settings__the_autova_quote_sender_is_an_address(environment: pytest.Mon
         load_settings(WorkerSettings)
 
 
+@pytest.mark.usefixtures("environment")
+def test_settings__no_receiving_server_for_quote_mail_by_default() -> None:
+    assert load_settings(WorkerSettings).autova_quote_authserv_id is None
+
+
+def test_settings__the_receiving_server_is_a_host_name(environment: pytest.MonkeyPatch) -> None:
+    environment.setenv("HTCO_AUTOVA_QUOTE_AUTHSERV_ID", "mx.quotes.example.com")
+    assert load_settings(WorkerSettings).autova_quote_authserv_id == "mx.quotes.example.com"
+    environment.setenv("HTCO_AUTOVA_QUOTE_AUTHSERV_ID", "mx.quotes.example.com; dkim=pass")
+    with pytest.raises(ConfigurationError):
+        load_settings(WorkerSettings)
+
+
 def test_settings__unknown_schedule__is_refused(environment: pytest.MonkeyPatch) -> None:
     environment.setenv("HTCO_WORKER_SCHEDULES", "maintenance.purge_disconnected_shops,nope.nope")
 

@@ -29,7 +29,11 @@ SHOP = uuid.UUID("71500000-0000-0000-0000-000000000002")
 
 
 def mail(name: str) -> QuoteMail:
-    return QuoteMail.from_text((FIXTURES / name).read_text(encoding="utf-8"))
+    return QuoteMail.from_text(
+        (FIXTURES / name).read_text(encoding="utf-8"),
+        authserv_id="mx.quotes.example.com",
+        sender="quotes@autova.example.com",
+    )
 
 
 @dataclass
@@ -172,3 +176,29 @@ async def test_another_sender__quarantined_no_quote_and_no_task() -> None:
     assert outcome is IntakeOutcome.QUARANTINED
     assert world.store.quotes == {}
     assert world.reviews.opened == []
+
+
+@pytest.mark.ac("AC-7.14.2")
+@pytest.mark.parametrize(
+    "name",
+    [
+        "13_forged_from_unsigned.eml.txt",
+        "14_no_authentication_results.eml.txt",
+        "15_forged_results_below_ours.eml.txt",
+        "16_results_from_another_server.eml.txt",
+        "17_dkim_pass_for_another_domain.eml.txt",
+        "18_dkim_fail.eml.txt",
+    ],
+)
+async def test_a_forged_autova_sender__quarantined_no_quote_and_one_human_task(name: str) -> None:
+    """From says AutoVA but our server saw no aligned DKIM pass: nothing is recorded, and one
+    Human task names the mail and the reason, never anything from its body."""
+    world = World()
+    outcome = await world.intake.handle(mail(name), TARGET)
+
+    assert outcome is IntakeOutcome.QUARANTINED
+    assert world.store.quotes == {}
+    assert world.store.suppliers == {}
+    [(organization, shop, message_id, why)] = world.reviews.opened
+    assert (organization, shop, why) == (ORG, SHOP, "unauthenticated_sender")
+    assert message_id.startswith("<forged-")

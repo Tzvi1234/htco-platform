@@ -52,5 +52,11 @@
   "09_other_sender.eml.txt": {"quarantined": "unknown_sender"},
   "10_duplicate_field.eml.txt": {"refused": "duplicate_field"},
   "11_missing_price.eml.txt": {"refused": "missing_field"},
-  "12_bad_values.eml.txt": {"refused": "invalid_value"}
+  "12_bad_values.eml.txt": {"refused": "invalid_value"},
+  "13_forged_from_unsigned.eml.txt": {"quarantined": "unauthenticated_sender"},
+  "14_no_authentication_results.eml.txt": {"quarantined": "unauthenticated_sender"},
+  "15_forged_results_below_ours.eml.txt": {"quarantined": "unauthenticated_sender"},
+  "16_results_from_another_server.eml.txt": {"quarantined": "unauthenticated_sender"},
+  "17_dkim_pass_for_another_domain.eml.txt": {"quarantined": "unauthenticated_sender"},
+  "18_dkim_fail.eml.txt": {"quarantined": "unauthenticated_sender"}
 }

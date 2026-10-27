@@ -85,6 +85,12 @@ class WorkerSettings(BaseSettings):
     autova_quote_sender: str | None = Field(
         default=None, pattern=r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$"
     )
+    # Our receiving mail server's authserv-id (RFC 8601): a quote mail is read only when that
+    # server's own Authentication-Results header reports an aligned DKIM pass for the sender's
+    # domain; a From header alone can be forged. Unset, the intake stays off as well.
+    autova_quote_authserv_id: str | None = Field(
+        default=None, pattern=r"^[a-z0-9]([a-z0-9-]{0,62})(\.[a-z0-9]([a-z0-9-]{0,62}))*$"
+    )
 
     @field_validator(
         "etsy_keystring",

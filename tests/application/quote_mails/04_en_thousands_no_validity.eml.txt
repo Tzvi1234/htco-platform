@@ -1,6 +1,7 @@
 From: AutoVA Quotes <quotes@autova.example.com>
 Subject: New supplier quote for AV-PRD-31002
 Message-ID: <q-91877@autova.example.com>
+Authentication-Results: mx.quotes.example.com; dkim=pass header.d=autova.example.com header.s=sel1; spf=pass smtp.mailfrom=autova.example.com
 
 A supplier sent a quote for one of your products.
 

@@ -11,8 +11,11 @@ reason, and the intake opens one Human task "check this quote". A quote is never
   a date that is not ISO, an identifier with odd characters);
 - a price and a shipping cost in two currencies.
 
-Only mail from the configured AutoVA sender is read at all (`HTCO_AUTOVA_QUOTE_SENDER`, A-09);
-any other is quarantined (AC-7.14.2). The layout is the made-up one of the fixtures
+Only mail from the configured AutoVA sender is read at all (`HTCO_AUTOVA_QUOTE_SENDER`, A-09),
+and only when our receiving server (`HTCO_AUTOVA_QUOTE_AUTHSERV_ID`) recorded an aligned DKIM
+pass for that sender's domain (`dkim_aligned`): a `From` header alone can be forged. Any other mail
+is quarantined (AC-7.14.2); one whose `From` claims AutoVA without that proof also opens a Human
+task. The layout is the made-up one of the fixtures
 (tests/application/quote_mails/) until the owner's real sample mails arrive.
 
 The application layer uses dataclasses rather than Pydantic (ER-ARCH-01; the deviation recorded in
@@ -20,6 +23,7 @@ execution-engine.md §2): every field is validated here and again by `htco_domai
 """
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -30,31 +34,102 @@ from enum import StrEnum
 from typing import NamedTuple
 
 from htco_domain.orders import Money
+from htco_domain.suppliers import autova_quote_reference
 
 MAX_MAIL_CHARACTERS = 200_000
 MAX_DAYS = 365
 
 _ADDRESS = re.compile(r"^[^@\s<>]{1,64}@[a-z0-9-]+(\.[a-z0-9-]+)+$")
+_MESSAGE_ID = re.compile(r"<[A-Za-z0-9._%+=$#-]{1,128}@[A-Za-z0-9.-]{1,128}>")
+
+
+_AUTHSERV_ID = re.compile(r"^[a-z0-9]([a-z0-9-]{0,62})(\.[a-z0-9]([a-z0-9-]{0,62}))*$")
+_COMMENT = re.compile(r"\([^()]*\)")
+_RESULT = re.compile(r"^(?P<method>[a-z0-9_-]+)\s*=\s*(?P<result>[a-z]+)(?P<properties>(\s.*)?)$")
+_PROPERTY = re.compile(r"(?P<name>[a-z0-9_-]+\.[a-z0-9_-]+)\s*=\s*(?P<value>\S+)")
+
+
+def _domain(address: str) -> str:
+    return address.rpartition("@")[2]
+
+
+def _resinfos(header: str) -> tuple[str, list[str]] | None:
+    """An Authentication-Results value as (its authserv-id, its result clauses), comments
+    removed; None when it does not read plainly (quoted strings, nested comments, no ID)."""
+    text = " ".join(header.split()).casefold()
+    if '"' in text or "\\" in text:
+        return None
+    for _ in range(3):
+        text = _COMMENT.sub(" ", text)
+    if "(" in text or ")" in text:
+        return None
+    parts = [part.strip() for part in text.split(";")]
+    head = parts[0].split()
+    if not head or _AUTHSERV_ID.match(head[0]) is None:
+        return None
+    return head[0], [part for part in parts[1:] if part]
+
+
+def dkim_aligned(authentication_results: Sequence[str], *, authserv_id: str, sender: str) -> bool:
+    """The receiving server's verdict on a mail, from its Authentication-Results headers in their
+    order in the mail (topmost first; RFC 8601). True only when:
+
+    1. exactly one header carries our receiving server's authserv-id (a sender can write these
+       headers too; one with our ID that our server did not remove is a forgery, so two fail),
+    2. it is the topmost one, the one our server added on arrival, and
+    3. it reports `dkim=pass` with `header.d` equal to the configured sender's domain (strict
+       DMARC alignment; DKIM survives the mailbox's forwarding, D-23 (a), where SPF does not).
+
+    Anything missing, unreadable or ambiguous is False: the mail is quarantined.
+    """
+    ours = authserv_id.strip().casefold()
+    domain = _domain(_address(sender))
+    if _AUTHSERV_ID.match(ours) is None or not domain:
+        return False
+    read = [_resinfos(header) for header in authentication_results]
+    if not read or read[0] is None or read[0][0] != ours:
+        return False
+    if sum(1 for one in read if one is None or one[0] == ours) != 1:
+        return False
+    for clause in read[0][1]:
+        found = _RESULT.match(clause)
+        if found is None or found["method"] != "dkim" or found["result"] != "pass":
+            continue
+        properties = {p["name"]: p["value"] for p in _PROPERTY.finditer(found["properties"])}
+        # The signing domain: header.d, or else the domain of header.i (some receivers give only
+        # the identity, for example "header.i=@autova.example.com").
+        signed = properties.get("header.d") or _domain(properties.get("header.i", ""))
+        if signed == domain:
+            return True
+    return False
 
 
 class QuoteMail(NamedTuple):
-    """One mail as the intake (7.14) hands it over: never stored or logged by the parser."""
+    """One mail as the intake (7.14) hands it over: never stored or logged by the parser.
+
+    `sender_authenticated` is the receiving side's verdict (`dkim_aligned`), never the sender's
+    word: without it the mail is quarantined, whatever its `From` says."""
 
     sender: str
     subject: str
     message_id: str
     body: str
+    sender_authenticated: bool
 
     @classmethod
-    def from_text(cls, text: str) -> QuoteMail:
-        """A plain-text mail (headers, a blank line, the body), as in the fixtures."""
+    def from_text(cls, text: str, *, authserv_id: str, sender: str) -> QuoteMail:
+        """A plain-text mail (headers, a blank line, the body), as in the fixtures; the verdict
+        comes from its Authentication-Results headers for our server and the configured
+        sender."""
         parsed = message_from_string(text, policy=default_policy)
         body = parsed.get_payload()
+        results = [str(value) for value in parsed.get_all("Authentication-Results", [])]
         return cls(
             sender=str(parsed.get("From", "")),
             subject=str(parsed.get("Subject", "")),
             message_id=str(parsed.get("Message-ID", "")),
             body=body if isinstance(body, str) else "",
+            sender_authenticated=dkim_aligned(results, authserv_id=authserv_id, sender=sender),
         )
 
 
@@ -68,11 +143,25 @@ class RefusalReason(StrEnum):
     TOO_LARGE = "too_large"
 
 
+class QuarantineReason(StrEnum):
+    UNKNOWN_SENDER = "unknown_sender"  # another From: kept aside, no task
+    # From says AutoVA, but our server saw no aligned DKIM pass: a possible forgery, so one
+    # Human task "check this quote" as well.
+    UNAUTHENTICATED_SENDER = "unauthenticated_sender"
+
+
 @dataclass(frozen=True)
 class Quarantined:
-    """Not from the configured AutoVA sender: kept aside and counted, never parsed."""
+    """Not from the configured AutoVA sender, or not proven to be: kept aside, never parsed."""
 
-    reason: str
+    reason: QuarantineReason
+    # Only for an unauthenticated mail (its Human task names it), and only when it reads as a
+    # plain message ID: the sender chose it, so no free text reaches the task.
+    message_id: str = ""
+
+    @property
+    def needs_review(self) -> bool:
+        return self.reason is QuarantineReason.UNAUTHENTICATED_SENDER
 
 
 @dataclass(frozen=True)
@@ -106,7 +195,7 @@ class ParsedQuote:
     @property
     def source_reference(self) -> str:
         """Stable per AutoVA quote, so the same mail twice stores one quote."""
-        return f"autova-quote:{self.autova_quote_id}"
+        return autova_quote_reference(self.autova_quote_id)
 
 
 type ParseResult = ParsedQuote | Refused | Quarantined
@@ -177,7 +266,7 @@ _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _LISTING = re.compile(r"^[1-9]\d{0,18}$")
 _CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,59}$")
 _VARIANT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
-_QUOTE_ID = re.compile(r"^[A-Z]{1,4}-\d{1,12}$")
+_QUOTE_ID = re.compile(r"^[A-Z]{1,4}-[0-9]{1,12}$")  # ASCII digits, as the database's CHECK
 _TEXT = re.compile(r"^[^\x00-\x1f<>]{1,200}$")
 
 
@@ -246,8 +335,14 @@ class QuoteParser:
         self._sender = address
 
     def parse(self, mail: QuoteMail) -> ParseResult:  # noqa: PLR0911 - one return per refusal
+        # Both quarantines come before anything in the body is read.
         if _address(mail.sender) != self._sender:
-            return Quarantined("unknown_sender")
+            return Quarantined(QuarantineReason.UNKNOWN_SENDER)
+        if not mail.sender_authenticated:
+            plain = _MESSAGE_ID.fullmatch(mail.message_id) is not None
+            return Quarantined(
+                QuarantineReason.UNAUTHENTICATED_SENDER, mail.message_id if plain else ""
+            )
         if len(mail.body) > MAX_MAIL_CHARACTERS:
             return Refused(RefusalReason.TOO_LARGE, mail.message_id)
         fields: dict[_Field, str] = {}

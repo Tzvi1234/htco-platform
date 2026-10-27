@@ -49,8 +49,14 @@ class NoReviews:
         raise AssertionError(f"no review expected: {reason}")
 
 
+def from_text(text: str) -> QuoteMail:
+    return QuoteMail.from_text(
+        text, authserv_id="mx.quotes.example.com", sender="quotes@autova.example.com"
+    )
+
+
 def mail(name: str) -> QuoteMail:
-    return QuoteMail.from_text((FIXTURES / name).read_text(encoding="utf-8"))
+    return from_text((FIXTURES / name).read_text(encoding="utf-8"))
 
 
 @pytest.mark.ac("AC-7.14.1")
@@ -114,7 +120,7 @@ async def test_worker__quotes_recorded_once_under_one_request_and_alternatives_m
     later = later.replace("Q-88213", "Q-88999").replace("7.40 USD", "7.05 USD")
 
     with tenant_scope(org):
-        alternative = await intake.handle(QuoteMail.from_text(later), target)
+        alternative = await intake.handle(from_text(later), target)
         variant = await intake.handle(mail("05_he_usd_variant.eml.txt"), target)
 
     assert alternative is IntakeOutcome.ALTERNATIVE
