@@ -18,6 +18,7 @@ from htco_application.notifications import (
     EmailTemporaryError,
     EventDeliverer,
     IncidentNotifications,
+    Notification,
     NotificationRequest,
     NotificationService,
     Recipient,
@@ -30,6 +31,7 @@ from htco_application.notifications import (
 from htco_domain.notifications import (
     Locale,
     NotificationKind,
+    NotificationSeverity,
     Preference,
     UnsafeParameter,
     check_params,
@@ -515,3 +517,99 @@ async def test_a_resolved_incident_notifies_once() -> None:
     kinds = {(n.kind, n.dedup_key) for n in store.rows.values()}
     assert kinds == {(NotificationKind.INCIDENT_RESOLVED, f"incident_resolved:{INCIDENT}")}
     assert store.outbox == {}  # resolutions are in-app only by default
+
+
+# --- Preferences per severity and per shop (slice 7.6) ------------------------------------------
+
+
+def _alert(
+    kind: NotificationKind, *, shop: uuid.UUID | None = SHOP, **params: object
+) -> NotificationRequest:
+    return NotificationRequest(ORG, kind, f"{kind.value}:{uuid.uuid4().hex[:8]}", params,
+                               shop_id=shop)  # fmt: skip
+
+
+def _owner_rows(store: MemoryNotificationStore) -> list[Notification]:
+    return [n for (_, user, _), n in store.rows.items() if user == OWNER]
+
+
+def _owner_emails(store: MemoryNotificationStore) -> list[OutboxMessage]:
+    return [m for m in store.outbox.values() if m.payload["user_id"] == str(OWNER)]
+
+
+@pytest.mark.ac("AC-7.6.1")
+async def test_ac_7_6_1_a_muted_shop_sends_nothing_non_critical() -> None:
+    store = members()
+    store.members[0].muted_shops = {SHOP}
+    service = NotificationService(store, clock=lambda: NOW)
+
+    await service.notify(_alert(NotificationKind.ALERT_SHIP_BY, receipt_id=7, ship_by="2026-10-30"))
+    await service.notify(_alert(NotificationKind.ALERT_LOW_REVIEW, rating=2))
+
+    assert _owner_rows(store) == []
+    assert _owner_emails(store) == []
+    assert {key[1] for key in store.rows} == {ADMIN}  # the admin did not mute it
+
+
+@pytest.mark.ac("AC-7.6.1")
+async def test_ac_7_6_1_a_muted_shop_still_sends_a_critical_incident() -> None:
+    store = members()
+    store.members[0].muted_shops = {SHOP}
+    service = NotificationService(store, clock=lambda: NOW)
+
+    await service.notify(
+        _alert(NotificationKind.INCIDENT_OPENED, receipt_id=7, cause="tracking_missing",
+               severity="critical")
+    )  # fmt: skip
+
+    assert len(_owner_rows(store)) == 1
+    assert len(_owner_emails(store)) == 1
+
+
+@pytest.mark.ac("AC-7.6.1")
+async def test_ac_7_6_1_security_notices_cannot_be_muted() -> None:
+    store = members()
+    off = Preference(in_app=False, email=False)
+    store.members[0].muted_shops = {SHOP}
+    store.members[0].recipient = Recipient(OWNER, preference=off)
+    store.members[0].severity_preferences = dict.fromkeys(NotificationSeverity, off)
+    service = NotificationService(store, clock=lambda: NOW)
+
+    await service.notify(_alert(NotificationKind.SHOP_DISCONNECTED, shop_id=str(SHOP)))
+
+    [row] = _owner_rows(store)
+    assert row.in_app is True
+    assert len(_owner_emails(store)) == 1
+    assert store.severities == [NotificationSeverity.CRITICAL]
+
+
+async def test_a_severity_preference_turns_off_its_email() -> None:
+    store = members()
+    store.members[0].severity_preferences = {
+        NotificationSeverity.HIGH: Preference(in_app=True, email=False)
+    }
+    service = NotificationService(store, clock=lambda: NOW)
+
+    await service.notify(_alert(NotificationKind.ALERT_SHIP_BY, receipt_id=7, ship_by="2026-10-30"))
+    await service.notify(
+        _alert(NotificationKind.INCIDENT_OPENED, receipt_id=8, cause="tracking_missing",
+               severity="medium")
+    )  # fmt: skip
+
+    assert len(_owner_rows(store)) == 2  # both reach the inbox
+    assert [m.payload["kind"] for m in _owner_emails(store)] == ["incident_opened"]
+    assert store.severities == [NotificationSeverity.HIGH, NotificationSeverity.MEDIUM]
+
+
+async def test_a_muted_shop_never_mutes_another_shop_or_the_organization() -> None:
+    store = members()
+    store.members[0].muted_shops = {uuid.UUID(int=99)}
+    service = NotificationService(store, clock=lambda: NOW)
+
+    await service.notify(_alert(NotificationKind.ALERT_SHIP_BY, receipt_id=7, ship_by="2026-10-30"))
+    await service.notify(
+        _alert(NotificationKind.INCIDENT_OPENED, shop=None, receipt_id=8, cause="tracking_missing",
+               severity="low")
+    )  # fmt: skip
+
+    assert len(_owner_rows(store)) == 2

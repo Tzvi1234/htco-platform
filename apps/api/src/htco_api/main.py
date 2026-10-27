@@ -85,6 +85,7 @@ from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.jobs import PostgresJobQueue
 from htco_persistence.notifications import (
     PostgresNotificationInbox,
+    PostgresNotificationPreferences,
     PostgresSecurityNoticeStore,
 )
 from htco_persistence.operations_health import PostgresOperationsHealth
@@ -474,6 +475,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
                 offload=anyio.to_thread.run_sync,
             ),
             inbox=PostgresNotificationInbox(database),
+            preferences=PostgresNotificationPreferences(database),
         ),
         security_notices=SecurityNotices(
             PostgresSecurityNoticeStore(database),

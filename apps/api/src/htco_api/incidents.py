@@ -6,6 +6,8 @@
 - `POST /v1/incidents/{id}/transitions`: a person's step along the machine ("Open or update
   incidents"); `resolved` is refused (409 `evidence-required`): incidents resolve on evidence.
 - `GET /v1/notifications`, `POST /v1/notifications/read`: the caller's own inbox.
+- `GET`/`PUT /v1/notifications/preferences`: the caller's own preferences per kind, per severity
+  and the muted shops (slice 7.6). Security kinds are shown locked and cannot be set.
 
 Identifiers, states and codes only; never buyer data (an order is its receipt number).
 """
@@ -43,10 +45,19 @@ from htco_application.incident_center import (
     may_update,
 )
 from htco_application.incidents import IncidentRecord, IncidentService, StaleIncident
+from htco_application.notification_preferences import (
+    NotificationPreferenceStore,
+    PreferenceRefusedError,
+    PreferenceSet,
+    default_preference,
+    preferences_of,
+    set_preferences,
+)
 from htco_application.notifications import Notification
 from htco_application.shops import OrganizationRequiredError
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.incidents import IncidentState, ResolutionRefused
+from htco_domain.notifications import NotificationKind, NotificationSeverity, Preference
 from htco_domain.state_machine import IllegalTransition
 
 INCIDENTS_UNAVAILABLE = ProblemType(
@@ -72,6 +83,8 @@ class IncidentCenter:
     reader: IncidentReader
     service: IncidentService
     inbox: NotificationInbox
+    # Slice 7.6: each member's notification preferences; without it, those routes answer 503.
+    preferences: NotificationPreferenceStore | None = None
 
 
 class IncidentSummaryView(BaseModel):
@@ -139,6 +152,75 @@ class NotificationView(BaseModel):
 class InboxView(BaseModel):
     items: list[NotificationView]
     unread_count: int
+
+
+class ChannelsView(BaseModel):
+    in_app: bool
+    email: bool
+
+
+class KindPreferenceView(ChannelsView):
+    kind: str
+    # Security kinds always go out on both channels and cannot be changed.
+    locked: bool
+
+
+class SeverityPreferenceView(ChannelsView):
+    severity: str
+    # A critical notification always reaches the inbox: only its email can be turned off.
+    in_app_locked: bool
+
+
+class PreferencesView(BaseModel):
+    kinds: list[KindPreferenceView]
+    severities: list[SeverityPreferenceView]
+    muted_shops: list[uuid.UUID]
+
+
+class ChannelsChoice(BaseModel):
+    in_app: bool
+    email: bool
+
+
+class PreferencesRequest(BaseModel):
+    """The member's whole choice; anything left out returns to its default."""
+
+    kinds: dict[NotificationKind, ChannelsChoice] = Field(default_factory=dict)
+    severities: dict[NotificationSeverity, ChannelsChoice] = Field(default_factory=dict)
+    muted_shops: list[uuid.UUID] = Field(default_factory=list, max_length=200)
+
+
+PREFERENCE_REFUSED = ProblemType(
+    "preference-refused", "Preference not allowed", 422,
+    "Security notifications always go out, critical ones always reach the inbox, and only a "
+    "shop you can see can be muted.",
+)  # fmt: skip
+
+
+def _preferences_view(stored: PreferenceSet) -> PreferencesView:
+    kinds = []
+    for kind in NotificationKind:
+        chosen = stored.kinds.get(kind, default_preference(kind))
+        if kind.is_security:
+            chosen = Preference(in_app=True, email=True)
+        kinds.append(
+            KindPreferenceView(
+                kind=kind.value, in_app=chosen.in_app, email=chosen.email, locked=kind.is_security
+            )
+        )
+    severities = []
+    for severity in NotificationSeverity:
+        chosen = stored.severities.get(severity, Preference())
+        critical = severity is NotificationSeverity.CRITICAL
+        severities.append(
+            SeverityPreferenceView(
+                severity=severity.value, in_app=chosen.in_app or critical, email=chosen.email,
+                in_app_locked=critical,
+            )
+        )  # fmt: skip
+    return PreferencesView(
+        kinds=kinds, severities=severities, muted_shops=sorted(stored.muted_shops)
+    )
 
 
 class MarkReadRequest(BaseModel):
@@ -351,6 +433,78 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
             raise ProblemError(FORBIDDEN) from None
         response.headers["Cache-Control"] = "no-store"
         return InboxView(items=[_notification(n) for n in items], unread_count=unread)
+
+    def preferences_store(center: IncidentCenter) -> NotificationPreferenceStore:
+        if center.preferences is None:
+            raise ProblemError(INCIDENTS_UNAVAILABLE)
+        return center.preferences
+
+    @router.get(
+        "/notifications/preferences",
+        summary="The caller's notification preferences in the organization",
+        responses=problem_responses({**_COMMON, 403: "Not a member of the organization"}),
+    )
+    async def get_notification_preferences(
+        response: Response,
+        auth: CurrentAuth,
+        center: Center,
+        organization_id: uuid.UUID | None = None,
+    ) -> PreferencesView:
+        """Every kind and severity with its channels (defaults filled in) and the muted shops."""
+        store = preferences_store(center)
+        try:
+            _, stored = await _run(
+                lambda: preferences_of(auth, store, organization_id=organization_id)
+            )
+        except OrganizationRequiredError:
+            raise ProblemError(ORGANIZATION_REQUIRED) from None
+        except NoMembershipError:
+            raise ProblemError(FORBIDDEN) from None
+        response.headers["Cache-Control"] = "no-store"
+        return _preferences_view(stored)
+
+    @router.put(
+        "/notifications/preferences",
+        summary="Replace the caller's notification preferences",
+        responses=problem_responses(
+            {
+                **_COMMON,
+                403: "Not a member of the organization",
+                422: (
+                    "Invalid body, or a preference the rules refuse (preference-refused)",
+                    ValidationProblem,
+                ),
+            }
+        ),
+    )
+    async def put_notification_preferences(
+        body: PreferencesRequest,
+        response: Response,
+        auth: CurrentAuth,
+        center: Center,
+        organization_id: uuid.UUID | None = None,
+    ) -> PreferencesView:
+        """Muting a shop stops its non-critical notifications; security ones always go out."""
+        store = preferences_store(center)
+        wanted = PreferenceSet(
+            kinds={k: Preference(c.in_app, c.email) for k, c in body.kinds.items()},
+            severities={s: Preference(c.in_app, c.email) for s, c in body.severities.items()},
+            muted_shops=frozenset(body.muted_shops),
+        )
+        try:
+            _, stored = await _run(
+                lambda: set_preferences(
+                    auth, store, wanted, organization_id=organization_id, now=clock()
+                )
+            )
+        except OrganizationRequiredError:
+            raise ProblemError(ORGANIZATION_REQUIRED) from None
+        except NoMembershipError:
+            raise ProblemError(FORBIDDEN) from None
+        except PreferenceRefusedError as refused:
+            raise ProblemError(PREFERENCE_REFUSED, extra={"reason": str(refused)}) from None
+        response.headers["Cache-Control"] = "no-store"
+        return _preferences_view(stored)
 
     @router.post(
         "/notifications/read",

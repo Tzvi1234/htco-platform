@@ -113,6 +113,8 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "move_incident",
         "get_notifications",
         "read_notifications",
+        "get_notification_preferences",
+        "put_notification_preferences",
     }
 
 
