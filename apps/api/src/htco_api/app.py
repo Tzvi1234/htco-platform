@@ -25,6 +25,7 @@ from htco_api.identity import identity_router
 from htco_api.incidents import IncidentCenter, incidents_router
 from htco_api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from htco_api.operations import OperationsPorts, operations_router
+from htco_api.passkeys import passkeys_router
 from htco_api.problems import PROBLEM_MEDIA_TYPE, UNEXPECTED_ERROR_RESPONSES, add_problem_handlers
 from htco_api.shop_data import shop_data_router
 from htco_api.web_auth import WebAuth, web_auth_router
@@ -210,6 +211,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.include_router(identity_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(access_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(web_auth_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
+    app.include_router(passkeys_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(etsy_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(shop_data_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(
