@@ -21,8 +21,9 @@ Every decision also says what it reaches (`PolicyDecision.shops` and `masked`, q
 a request on a shop reaches that shop; one without a shop (a list) reaches what the identity may
 list. For a user that is v0's scope (every shop for an organization-wide cell, the granted shops
 for an `S` cell) with v0's masking; for an employee, what the originating user reaches (every
-shop for an Owner or Admin, the granted shops otherwise, none without an originating user); for
-an automation or a system component, every shop of its organization. A denial reaches nothing.
+shop for an Owner or Admin, the granted shops otherwise, none without an originating user) with
+that user's order masking (masked without one, sage2 on #189); for an automation or a system
+component, every shop of its organization. A denial reaches nothing.
 
 `baseline_policy` builds an organization's first policy from the registry. The engine does not
 yet replace the Action Gateway's own checks in `execution/` (follow-up, see the feature docs).
@@ -133,15 +134,27 @@ def _reach(request: PolicyRequest) -> tuple[frozenset[uuid.UUID] | None, bool]:
         if request.shop is None:
             reaches = None if decision.scope is Scope.ORGANIZATION else principal.granted_shops
             return reaches, masked
+    if request.actor.kind is ActorKind.EMPLOYEE:
+        # Never more than the user it acts for (sage2 on #189): that user's order masking, and
+        # masked when there is no such user or the user may not view the orders.
+        masked = _originating_users_masking(request)
     if request.shop is not None:
         return frozenset({request.shop.id}), masked
     if request.actor.kind is ActorKind.EMPLOYEE:
         if principal is None:
-            return frozenset(), False
+            return frozenset(), masked
         if principal.role in _ORGANIZATION_ROLES:
-            return None, False
-        return principal.granted_shops, False
+            return None, masked
+        return principal.granted_shops, masked
     return None, False  # an automation or a system component: every shop of its organization
+
+
+def _originating_users_masking(request: PolicyRequest) -> bool:
+    principal = request.principal
+    if principal is None:
+        return True
+    decision = decide(principal, Capability.VIEW_ORDERS, shop=request.shop, now=request.now)
+    return decision.masked if decision.outcome is Outcome.ALLOW else True
 
 
 def _reason(policy: PolicyVersion | None, request: PolicyRequest) -> Reason:  # noqa: PLR0911 - one return per rule, in order

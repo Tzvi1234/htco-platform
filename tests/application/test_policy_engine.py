@@ -657,3 +657,34 @@ def test_an_actor_kind_without_a_section__has_no_grants_never_a_key_error() -> N
     document = baseline_policy(read_registry(REGISTRY).registry())
     for kind in (ActorKind.USER, ActorKind.ADVISOR):
         assert _grants_of(document, ActorRef(kind, "someone")) is None
+
+
+@pytest.mark.ac("AC-7.2.4")
+@pytest.mark.parametrize("shop", [SHOP_A, None], ids=["on-a-shop", "a-list"])
+def test_employee__acting_for_a_viewer_keeps_the_viewers_masking(shop: ShopRef | None) -> None:
+    """Sage2 on #189: an employee never sees more than the user it acts for; a Viewer's orders
+    are masked (PERMISSION_MATRIX section 1, "S (masked)"), so are the employee's."""
+    viewer = a_principal(Role.VIEWER, shops=frozenset({SHOP_A.id}))
+
+    decision = answer(ActorKind.EMPLOYEE, "noa", "orders.read", shop=shop, principal=viewer)
+
+    assert decision.reason is Reason.GRANTED
+    assert (decision.shops, decision.masked) == (frozenset({SHOP_A.id}), True)
+
+
+@pytest.mark.ac("AC-7.2.4")
+@pytest.mark.parametrize("shop", [SHOP_A, None], ids=["on-a-shop", "a-list"])
+def test_employee__acting_for_an_owner_is_unmasked(shop: ShopRef | None) -> None:
+    owner = a_principal(Role.OWNER)
+
+    decision = answer(ActorKind.EMPLOYEE, "noa", "orders.read", shop=shop, principal=owner)
+
+    assert decision.masked is False
+
+
+@pytest.mark.ac("AC-7.2.4")
+def test_employee__without_an_originating_user_is_masked() -> None:
+    """Fails closed: nobody's masking to inherit, so buyer details stay masked."""
+    decision = answer(ActorKind.EMPLOYEE, "noa", "orders.read", shop=None)
+
+    assert (decision.shops, decision.masked) == (frozenset(), True)

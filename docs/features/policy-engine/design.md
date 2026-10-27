@@ -69,6 +69,7 @@ Every decision also says what it reaches (`PolicyDecision.shops`, `masked`; quil
 - a request on a shop reaches that shop;
 - without a shop, **a user** reaches v0's scope: every shop for an organization-wide cell (`✓`), the granted shops for an `S` cell, with `(masked)` as `masked`;
 - without a shop, **an employee** reaches what the originating user reaches: every shop for an Owner or Admin, the granted shops for any other role, none without an originating user;
+- **an employee** is masked as the originating user's orders are (a Viewer's are), and masked without an originating user or when that user may not view the orders (sage2 on #189);
 - without a shop, **an automation or a system component** reaches every shop of its organization;
 - `shops` is `None` for every shop of the organization and empty for none; a denial reaches nothing, and the domain refuses one that claims more.
 
