@@ -6,6 +6,7 @@ Only the Owner, at `aal2` with a recent step-up, publishes a change ("Edit model
 budgets, kill switches"), and each change is audited.
 """
 
+import dataclasses
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -171,6 +172,23 @@ async def test_decide__every_decision_is_recorded_with_its_shop_and_time(
     (recorded,) = store.decisions
     assert recorded.decision == decision
     assert (recorded.organization_id, recorded.shop_id, recorded.decided_at) == (ORG, SHOP.id, NOW)
+
+
+@pytest.mark.anyio
+async def test_decide__a_shop_of_another_tenant_is_never_recorded(
+    service: PolicyService, store: FakePolicyStore
+) -> None:
+    """Codex on #189: a request naming another tenant's shop is refused, and the recorded
+    denial keeps only the reason, never that tenant's shop ID in this organization's trail."""
+    await service.ensure_baseline(ORG, V1, now=NOW)
+    foreign = ShopRef(uuid.UUID("00000000-0000-7000-8000-00000000000f"), organization_id=OTHER_ORG)
+    request = dataclasses.replace(a_request("orders.read"), shop=foreign)
+
+    decision = await service.decide(request, correlation_id="c-1")
+
+    (recorded,) = store.decisions
+    assert decision.reason is Reason.OTHER_ORGANIZATION
+    assert (recorded.organization_id, recorded.shop_id) == (ORG, None)
 
 
 @pytest.mark.anyio

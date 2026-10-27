@@ -179,11 +179,15 @@ class PolicyService:
         version before it is returned."""
         policy = await self.active(request.organization_id)
         decision = evaluate(policy, request)
+        # Only a shop of this organization is recorded (Codex on #189): a request naming another
+        # tenant's shop is refused, and its trail keeps the reason, never that tenant's shop ID.
+        shop = request.shop
+        own_shop = shop is not None and shop.organization_id == request.organization_id
         recorded = RecordedDecision(
             id=self._ids(),
             organization_id=request.organization_id,
             decision=decision,
-            shop_id=None if request.shop is None else request.shop.id,
+            shop_id=shop.id if own_shop and shop is not None else None,
             correlation_id=correlation_id[:MAX_CORRELATION_ID],
             decided_at=request.now,
         )
