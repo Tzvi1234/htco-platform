@@ -4,7 +4,7 @@
 -- archives only through a leased job.
 begin;
 create extension if not exists pgtap with schema extensions;
-grant usage on schema extensions to htco_browser;
+grant usage on schema extensions to htco_browser, htco_worker, authenticated;
 select plan(46);
 
 -- A scratch table for the tokens the functions hand out (the tests' own, not the schema's).
