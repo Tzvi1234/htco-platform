@@ -1,11 +1,14 @@
 """Activity record writer (slice 7.7, ADR-0012 rule 4, ER-AI-16).
 
 Every use case that changes state writes one `ActivityEntry` through an `ActivityWriter`, in its
-own transaction, next to its audit record or events. An entry's summary is a `Summary`, and a
-`Summary` is made only by `summarize`: a code template from `TEMPLATES` filled with identifier
-parameters (ids, receipt numbers, counts). So no prompt, model output, buyer text or raw
-external payload can reach `activity_records` (AC-7.7.4). The template key is stored with the
-text, so a screen can show the statement in the reader's language later.
+own transaction, next to its audit record or events. An entry's summary is a `Summary`: a code
+template from `TEMPLATES` and its identifier parameters (ids, receipt numbers, counts). A
+`Summary` is valid by construction: it renders its own `text`, which is never an argument, so
+every route to one (`summarize`, the constructor, `dataclasses.replace`, `copy.replace`) is
+checked (sage2 on #191). The actor, correlation and causation ids are identifiers too. So no
+prompt, model output, buyer text or raw external payload can reach `activity_records`
+(AC-7.7.4). The template key is stored with the text, so a screen can show the statement in the
+reader's language later.
 """
 
 import re
@@ -21,8 +24,11 @@ from htco_domain.activity import ActivityKind, ActivityOutcome, ActivityRecord
 from htco_domain.actors import ActorRef
 
 MAX_CORRELATION_ID = 200
-_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,63}$")
-_ACTION = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+# Always `fullmatch`: `$` alone lets a final newline through.
+_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,63}")  # a summary parameter
+# The actor, correlation and causation ids; the migration's checks use the same pattern.
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,199}")
+_ACTION = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+")
 
 # Business statements, one per kind of operation. Parameters are identifiers only.
 TEMPLATES: Mapping[str, str] = MappingProxyType(
@@ -38,8 +44,6 @@ TEMPLATES: Mapping[str, str] = MappingProxyType(
     }
 )
 
-_SEALED = object()  # only `summarize` holds the key to `Summary`
-
 
 def _placeholders(text: str) -> frozenset[str]:
     return frozenset(name for _, name, _, _ in string.Formatter().parse(text) if name)
@@ -47,28 +51,34 @@ def _placeholders(text: str) -> frozenset[str]:
 
 @dataclass(frozen=True)
 class Summary:
-    """A rendered template. Build it with `summarize`, never directly."""
+    """A code template and its identifier parameters, rendered here. Build it with `summarize`.
+
+    `text` is not an init field: `replace(summary, text=...)` raises, and any other copy runs
+    these checks again."""
 
     template: str
-    text: str
-    _seal: object = field(default=None, repr=False, compare=False)
+    params: tuple[tuple[str, str], ...]
+    text: str = field(init=False)
 
     def __post_init__(self) -> None:
-        if self._seal is not _SEALED:
-            raise TypeError("build a Summary with summarize(template, **identifiers)")
+        try:  # text where the parameters belong is not a set of (name, value) pairs
+            params = dict(self.params)
+        except TypeError, ValueError:
+            raise TypeError("build a Summary with summarize(template, **identifiers)") from None
+        text = TEMPLATES.get(self.template)
+        if text is None:
+            raise ValueError(f"unknown activity template {self.template!r}")
+        expected = _placeholders(text)
+        if len(params) != len(self.params) or set(params) != expected:
+            raise ValueError(f"{self.template} takes the parameters {sorted(expected)}")
+        for name, value in params.items():
+            if not _IDENTIFIER.fullmatch(value):
+                raise ValueError(f"{self.template}: {name} must be an identifier")
+        object.__setattr__(self, "text", text.format(**params))
 
 
 def summarize(template: str, **params: str) -> Summary:
-    text = TEMPLATES.get(template)
-    if text is None:
-        raise ValueError(f"unknown activity template {template!r}")
-    expected = _placeholders(text)
-    if set(params) != expected:
-        raise ValueError(f"{template} takes the parameters {sorted(expected)}")
-    for name, value in params.items():
-        if not _IDENTIFIER.match(value):
-            raise ValueError(f"{template}: {name} must be an identifier")
-    return Summary(template, text.format(**params), _SEALED)
+    return Summary(template, tuple(sorted(params.items())))
 
 
 @dataclass(frozen=True)
@@ -102,11 +112,18 @@ def new_activity(  # noqa: PLR0913 - one argument per field of the record
 ) -> ActivityEntry:
     if not isinstance(summary, Summary):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise TypeError("an activity summary must be a Summary from summarize()")
-    if not _ACTION.match(action):
+    if not _ACTION.fullmatch(action):
         raise ValueError(f"an activity action is a dotted name, not {action[:40]!r}")
-    for name, value in (("correlation", correlation_id), ("causation", causation_id)):
-        if value is not None and len(value) > MAX_CORRELATION_ID:
-            raise ValueError(f"a {name} id has at most {MAX_CORRELATION_ID} characters")
+    # Identifiers only (sage2 on #191): never a buyer's message, an address or model output.
+    for name, value in (
+        ("actor", actor.id),
+        ("correlation", correlation_id),
+        ("causation", causation_id),
+    ):
+        if value is not None and not _ID.fullmatch(value):
+            raise ValueError(
+                f"a {name} id is an identifier of 1 to {MAX_CORRELATION_ID} characters"
+            )
     record = ActivityRecord(
         id=ids(),
         kind=kind,

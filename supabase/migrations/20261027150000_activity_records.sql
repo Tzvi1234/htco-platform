@@ -4,14 +4,18 @@
 -- office, supervision and optimization read. The domain rules of `htco_domain.activity` are
 -- checked again here (AC-7.7.2). A summary is a code template's rendering with identifier
 -- parameters, and the row names that template (AC-7.7.4): never a prompt, model output or raw
--- external payload. Append-only for every role, even the table owner; only removing the whole
--- organization or shop (a cascade) removes rows.
+-- external payload. The actor, correlation and causation ids are identifiers
+-- (`^[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,199}$`, as `htco_application.activity`), never free text.
+-- Append-only: a row trigger refuses every update or delete, even the table owner's (no
+-- application role holds TRUNCATE); only removing the whole organization or shop (a cascade)
+-- removes rows.
 --
 -- Partitioned by month on `occurred_at`. Partitions exist through 2027-12; a month without its
 -- partition lands in the default partition, so a write never fails for lack of one (the monthly
 -- maintenance job that creates them ahead is a follow-up; see docs/features/activity-records).
 --
--- Members read their organization's records, a shop's record only with that shop (AC-7.7.3).
+-- Members read their organization's records: a shop's record only with that shop, and an
+-- organization-wide record (no shop) only as an Owner or Admin, as the source tables do (AC-7.7.3).
 -- The worker appends and reads its job's organization's records. Nobody reaches a partition
 -- directly. `task_id` has no foreign key yet: `app.tasks` arrives with slice 7.1.
 --
@@ -29,8 +33,9 @@ create table app.activity_records (
   actor_kind text not null constraint activity_records_actor_kind_check check (
     actor_kind in ('user', 'employee', 'automation', 'advisor', 'system')
   ),
-  actor_id text not null
-    constraint activity_records_actor_id_check check (char_length(btrim(actor_id)) between 1 and 200),
+  actor_id text not null constraint activity_records_actor_id_check check (
+    actor_id ~ '^[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,199}$'
+  ),
   action text not null constraint activity_records_action_check check (
     char_length(action) <= 100 and action ~ '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'
   ),
@@ -44,10 +49,10 @@ create table app.activity_records (
     constraint activity_records_summary_check check (char_length(btrim(summary)) between 1 and 500),
   occurred_at timestamptz not null,
   correlation_id text not null constraint activity_records_correlation_id_check check (
-    char_length(btrim(correlation_id)) between 1 and 200
+    correlation_id ~ '^[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,199}$'
   ),
   causation_id text constraint activity_records_causation_id_check check (
-    char_length(btrim(causation_id)) between 1 and 200
+    causation_id ~ '^[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,199}$'
   ),
   task_id uuid,
   created_at timestamptz not null default now(),
@@ -104,12 +109,17 @@ create trigger activity_records_append_only before update or delete on app.activ
 alter table app.activity_records enable row level security;
 revoke all on app.activity_records from public, anon, authenticated, service_role;
 
--- Members: their organization's records; a shop's record only with that shop.
+-- Members: their organization's records; a shop's record only with that shop; an
+-- organization-wide record only for Owners and Admins (sage2 on #191), as
+-- automation_executions_select, action_executions_select and tasks_select.
 grant select on app.activity_records to authenticated;
 create policy activity_records_select on app.activity_records for select to authenticated
   using (
     organization_id = any (array(select private.user_org_ids()))
-    and (shop_id is null or shop_id = any (array(select private.user_shop_ids())))
+    and (
+      (shop_id is null and organization_id = any (array(select private.user_admin_org_ids())))
+      or shop_id = any (array(select private.user_shop_ids()))
+    )
   );
 
 -- The worker: appends and reads its job's organization's records.

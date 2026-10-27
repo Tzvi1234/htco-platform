@@ -25,8 +25,8 @@ The summary is always a code template filled with identifiers. It is never model
 |---|---|---|
 | AC-7.7.1 | Every task transition, approval decision, incident transition and automation execution writes exactly one record | Partly done. The writer is ready, and the writers in the use cases are follow-ups (below) |
 | AC-7.7.2 | The application role cannot update or delete; an over-long summary, a missing correlation ID or a naive timestamp is rejected | Done |
-| AC-7.7.3 | A record of organization A is invisible to B; a shop record is invisible without that shop (pgTAP) | Done |
-| AC-7.7.4 | No column can hold a prompt, model output or raw payload: summaries come from code templates, and a test fails on free text | Done |
+| AC-7.7.3 | A record of organization A is invisible to B; a shop record is invisible without that shop; an organization-wide record is for Owners and Admins only (pgTAP) | Done |
+| AC-7.7.4 | No column can hold a prompt, model output or raw payload: summaries come from code templates, the actor, correlation and causation ids are identifiers, and a test fails on free text | Done |
 
 ## Follow-ups (AC-7.7.1)
 

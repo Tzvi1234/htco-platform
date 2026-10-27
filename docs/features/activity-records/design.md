@@ -13,6 +13,6 @@
 ## The table
 
 - **Partitioning:** `app.activity_records` is partitioned by range on `occurred_at`. The primary key is `(id, occurred_at)`. Partitions are named `activity_records_YYYY_MM` and exist from 2026-10 to 2027-12. A default partition catches any other month, so a write never fails for lack of a partition. `private.create_activity_partition(month)` creates a month idempotently, with RLS on and no direct grants.
-- **Append-only:** a trigger refuses update and delete for every role, including the table owner. Rows are removed only when their organization or shop is removed, through a cascade at trigger depth > 0.
+- **Append-only:** a row trigger refuses update and delete for every role, including the table owner; no application role holds TRUNCATE, which row triggers do not see. Rows are removed only when their organization or shop is removed, through a cascade at trigger depth > 0.
 - **Indexes:** by organization and time; by shop; by actor; and by correlation ID, for 7.8's filters and a task's trail.
 - **`task_id`:** no foreign key yet, because `app.tasks` is in #181.

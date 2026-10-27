@@ -1,15 +1,18 @@
 -- Activity records (slice 7.7): a monthly-partitioned, append-only store (AC-7.7.2); members see
--- their organization's records and a shop's record only with that shop (AC-7.7.3); the worker
--- appends its job's organization's records only; partitions are never reached directly.
+-- their organization's records, a shop's record only with that shop, and an organization-wide
+-- record only as an Owner or Admin (AC-7.7.3); identifier columns hold no free text (AC-7.7.4);
+-- the worker appends its job's organization's records only; partitions are never reached
+-- directly.
 begin;
 create extension if not exists pgtap with schema extensions;
 grant usage on schema extensions to htco_worker;
-select plan(22);
+select plan(32);
 
 insert into auth.users (id, email) values
   ('41e00000-0000-0000-0000-000000000001', 'owner-a@example.test'),
   ('41e00000-0000-0000-0000-000000000002', 'support-a@example.test'),
-  ('41e00000-0000-0000-0000-000000000003', 'owner-b@example.test');
+  ('41e00000-0000-0000-0000-000000000003', 'owner-b@example.test'),
+  ('41e00000-0000-0000-0000-000000000004', 'admin-a@example.test');
 insert into app.organizations (id, name) values
   ('41a00000-0000-0000-0000-000000000000', 'Organization A'),
   ('41b00000-0000-0000-0000-000000000000', 'Organization B');
@@ -19,7 +22,9 @@ insert into app.memberships (id, organization_id, user_id, role) values
   ('41d00000-0000-0000-0000-000000000002', '41a00000-0000-0000-0000-000000000000',
    '41e00000-0000-0000-0000-000000000002', 'support'),
   ('41d00000-0000-0000-0000-000000000003', '41b00000-0000-0000-0000-000000000000',
-   '41e00000-0000-0000-0000-000000000003', 'owner');
+   '41e00000-0000-0000-0000-000000000003', 'owner'),
+  ('41d00000-0000-0000-0000-000000000004', '41a00000-0000-0000-0000-000000000000',
+   '41e00000-0000-0000-0000-000000000004', 'admin');
 insert into app.shops (id, organization_id, name, marketplace, status) values
   ('41f00000-0000-0000-0000-000000000001', '41a00000-0000-0000-0000-000000000000', 'Shop A1', 'etsy', 'active'),
   ('41f00000-0000-0000-0000-000000000002', '41a00000-0000-0000-0000-000000000000', 'Shop A2', 'etsy', 'active');
@@ -101,6 +106,28 @@ select throws_ok(
        '41f00000-0000-0000-0000-000000000001', 'decision', 'system', 's', 'policy.decided', 'denied',
        'policy.decided', 'ok', now(), 'c') $$,
   '23503', null, 'a shop of another organization is refused');
+-- No free text in an identifier column (AC-7.7.4, sage2 on #191): a space, an address, a newline.
+select throws_ok(
+  format(
+    $$ insert into app.activity_records (id, organization_id, kind, actor_kind, actor_id, action,
+         outcome, summary_template, summary, occurred_at, correlation_id, causation_id)
+       values (gen_random_uuid(), '41a00000-0000-0000-0000-000000000000', 'decision', 'system',
+         %L, 'policy.decided', 'denied', 'policy.decided', 'ok', now(), %L, %L) $$,
+    v.actor_id, v.correlation_id, v.causation_id
+  ),
+  '23514', null, format('the %s is an identifier, never %s', v.column_name, v.label)
+)
+from (values
+  ('actor id', 'a space', 'a b', 'c', null),
+  ('actor id', 'an address', 'dana@example.test', 'c', null),
+  ('actor id', 'a newline', E'a\n', 'c', null),
+  ('correlation id', 'a space', 's', 'c d', null),
+  ('correlation id', 'an address', 's', 'dana@example.test', null),
+  ('correlation id', 'a newline', 's', E'c\n', null),
+  ('causation id', 'a space', 's', 'c', 'e f'),
+  ('causation id', 'an address', 's', 'c', 'dana@example.test'),
+  ('causation id', 'a newline', 's', 'c', E'e\n')
+) as v (column_name, label, actor_id, correlation_id, causation_id);
 select throws_ok(
   $$ update app.activity_records set summary = 'x' where id = '41c00000-0000-0000-0000-000000000001' $$,
   '42501', null, 'records are append-only, even for the owner of the table');
@@ -117,7 +144,7 @@ reset role;
 select set_config('request.jwt.claims', '{"sub":"41e00000-0000-0000-0000-000000000002","role":"authenticated","aal":"aal1"}', true);
 set local role authenticated;
 select is((select array_agg(correlation_id order by correlation_id) from app.activity_records),
-  array['c', 'c-1', 'c-2'], 'a shop role sees organization-wide records and its granted shop''s only');
+  array['c-2'], 'a shop role sees its granted shop''s records only, never organization-wide ones');
 select throws_ok(
   $$ insert into app.activity_records (id, organization_id, kind, actor_kind, actor_id, action, outcome,
        summary_template, summary, occurred_at, correlation_id)
@@ -127,6 +154,12 @@ select throws_ok(
 select throws_ok(
   $$ select count(*) from app.activity_records_2026_10 $$,
   '42501', null, 'a partition is never read directly');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"41e00000-0000-0000-0000-000000000004","role":"authenticated","aal":"aal2"}', true);
+set local role authenticated;
+select is((select array_agg(correlation_id order by correlation_id) from app.activity_records
+           where shop_id is null),
+  array['c', 'c-1'], 'an Admin sees the organization-wide records');
 reset role;
 select set_config('request.jwt.claims', '{"sub":"41e00000-0000-0000-0000-000000000003","role":"authenticated","aal":"aal2"}', true);
 set local role authenticated;

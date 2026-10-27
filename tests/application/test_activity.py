@@ -6,6 +6,8 @@ and a `Summary` is made only by `summarize`. The domain rules of `ActivityRecord
 entry (AC-7.7.2).
 """
 
+import copy
+import dataclasses
 import string
 import uuid
 from datetime import UTC, datetime
@@ -64,6 +66,7 @@ def test_summarize__renders_the_template_with_identifiers() -> None:
         "a" * 65,
         "",
         "line\nbreak",
+        "t-1\n",  # `$` alone would let a final newline through (sage2)
         "<script>",
         "{receipt}",
     ],
@@ -92,7 +95,34 @@ def test_summarize__needs_exactly_the_templates_parameters(params: dict[str, str
 @pytest.mark.ac("AC-7.7.4")
 def test_summary__cannot_be_built_from_free_text() -> None:
     with pytest.raises(TypeError, match="summarize"):
-        Summary("incident.opened", "Whatever a model wrote")
+        Summary("incident.opened", "Whatever a model wrote")  # type: ignore[arg-type]
+
+
+@pytest.mark.ac("AC-7.7.4")
+def test_summary__replace_cannot_swap_in_free_text() -> None:
+    """Sage2 on #191: a copy is checked like a new one; `text` is never set from outside."""
+    summary = summarize("incident.opened", incident="inc-1", receipt="123")
+
+    with pytest.raises(TypeError, match="init=False"):
+        dataclasses.replace(summary, text="Whatever a model wrote")
+    with pytest.raises(TypeError, match="init=False"):
+        copy.replace(summary, text="Whatever a model wrote")  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="identifier"):
+        dataclasses.replace(summary, params=(("incident", "inc-1"), ("receipt", "a buyer's words")))
+    with pytest.raises(ValueError, match="parameters"):
+        copy.replace(summary, params=(("incident", "inc-1"),))
+    with pytest.raises(ValueError, match="unknown activity template"):
+        dataclasses.replace(summary, template="free.text")
+
+
+@pytest.mark.ac("AC-7.7.4")
+def test_summary__a_valid_copy_renders_its_own_text() -> None:
+    summary = summarize("incident.opened", incident="inc-1", receipt="123")
+
+    again = dataclasses.replace(summary, params=(("incident", "inc-2"), ("receipt", "9")))
+
+    assert again.text == "Opened incident inc-2 for receipt 9"
+    assert summary == summarize("incident.opened", receipt="123", incident="inc-1")
 
 
 @pytest.mark.ac("AC-7.7.4")
@@ -154,10 +184,47 @@ def test_entry__a_correlation_id_over_200_characters_is_refused() -> None:
         an_entry(correlation_id="c" * 201)
 
 
-@pytest.mark.parametrize("action", ["", "opened", "Incidents.Opened", "incidents opened"])
+@pytest.mark.parametrize(
+    "action", ["", "opened", "Incidents.Opened", "incidents opened", "incidents.opened\n"]
+)
 def test_entry__an_action_is_a_dotted_name(action: str) -> None:
     with pytest.raises(ValueError, match="action"):
         an_entry(action=action)
+
+
+_NOT_IDENTIFIERS = ["a b", "dana@example.test", "c-1\n", "line\nbreak"]
+
+
+@pytest.mark.ac("AC-7.7.4")
+@pytest.mark.parametrize("value", _NOT_IDENTIFIERS)
+@pytest.mark.parametrize("field_name", ["correlation", "causation"])
+def test_entry__a_correlation_or_causation_id_that_is_not_an_identifier_is_refused(
+    field_name: str, value: str
+) -> None:
+    """Sage2 on #191: no free text in any column, so these ids are identifiers too."""
+    with pytest.raises(ValueError, match=field_name):
+        an_entry(**{f"{field_name}_id": value})
+
+
+@pytest.mark.ac("AC-7.7.4")
+@pytest.mark.parametrize("value", _NOT_IDENTIFIERS)
+def test_entry__an_actor_id_that_is_not_an_identifier_is_refused(value: str) -> None:
+    with pytest.raises(ValueError, match="actor"):
+        an_entry(actor=ActorRef(ActorKind.USER, value))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        str(uuid.UUID(int=5)), "job:0190a000-0000-7000-8000-0000000000ee", "order-sync:shop-1",
+        "etsy-webhook:evt_1", "agent-worker:test", "c" * 200,
+    ],
+)  # fmt: skip
+def test_entry__the_ids_main_produces_today_are_identifiers(value: str) -> None:
+    entry = an_entry(actor=ActorRef(ActorKind.SYSTEM, value), correlation_id=value,
+                     causation_id=value)  # fmt: skip
+
+    assert (entry.record.actor.id, entry.record.correlation_id) == (value, value)
 
 
 def test_new_activity__gets_a_fresh_id() -> None:
