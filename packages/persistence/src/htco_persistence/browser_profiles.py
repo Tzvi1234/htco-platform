@@ -178,14 +178,18 @@ def _write(
         written = connection.execute(
             """
             update app.browser_profile_archives
-            set key_id = %s, archive = %s, sealed_at = %s, generation = generation + 1
+            set key_id = %s, archive = %s, sealed_at = %s, generation = %s
             where environment_id = %s and organization_id = %s and shop_id = %s
               and generation = %s
             """,
+            # The next generation as a literal (sage-arch on #186): the table's trigger allows
+            # only old + 1, so a stale write is refused by the database even without the
+            # predicate, which stays for the row count that raises `ProfileStaleError`.
             [
                 archive.key_id,
                 archive.blob,
                 archive.sealed_at,
+                expected + 1,
                 archive.environment_id,
                 archive.organization_id,
                 archive.shop_id,

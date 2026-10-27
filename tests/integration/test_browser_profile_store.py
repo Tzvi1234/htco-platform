@@ -3,6 +3,7 @@ only ciphertext, an archive copied to another shop's row does not open (AC-8A.1.
 reaches one organization at a time (AC-8A.1.2)."""
 
 import os
+import threading
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -249,3 +250,50 @@ async def test_profiles__the_generation_compare_and_set_refuses_a_stale_write(
             "where environment_id = %s",
             [environment_id],
         )
+
+
+@pytest.mark.ac("AC-8A.2.8")
+async def test_profiles__two_writers_at_one_generation_one_wins(
+    admin: Database, browser: Database
+) -> None:
+    """sage-arch on #186: two sessions that both read generation 1 write at the same moment on
+    two connections. Exactly one lands (the generation ends at 2); the other raises
+    `ProfileStaleError` and commits nothing."""
+    tenant = Tenant(admin)
+    _, environment_id = an_environment(admin, tenant)
+    profiles = PostgresBrowserProfiles(browser)
+    vault = ProfileVault(
+        EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), profiles, lambda: datetime.now(UTC)
+    )
+    with tenant_scope(tenant.organization_id):
+        environment = profiles.by_id(environment_id)
+        assert environment is not None
+        vault.seal(environment, b"first")  # provisioning: generation 1
+        assert vault.read(environment)[1] == 1
+
+    start = threading.Barrier(2)
+    outcomes: list[str] = []
+    lock = threading.Lock()
+
+    def write(blob: bytes) -> None:
+        with tenant_scope(tenant.organization_id):
+            start.wait(timeout=10)
+            try:
+                vault.seal(environment, blob, expected=1)
+                outcome = "written"
+            except ProfileStaleError:
+                outcome = "stale"
+        with lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=write, args=(blob,)) for blob in (b"one", b"two")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert sorted(outcomes) == ["stale", "written"]
+    with tenant_scope(tenant.organization_id):
+        blob, generation = vault.read(environment)
+    assert generation == 2
+    assert blob in (b"one", b"two")

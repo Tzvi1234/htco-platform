@@ -5,7 +5,8 @@
 --    that opened generation N can only replace generation N, so a stale profile never replaces
 --    a newer one, even if the lease fence (#169, the write on the lock's own connection) were
 --    bypassed. The trigger makes this a database rule, not only the adapter's habit: an insert
---    starts at 1 and an update must name the next generation.
+--    starts at 1 and an update must name the next generation. The adapter writes that next
+--    generation as a literal (the one it read + 1), so the trigger alone refuses a stale write.
 --    (Agreed with #169/#172: that PR fenced the write on the lease's connection, with no
 --    migration; this column is the compare-and-set half of ADR-0025's fenced write-back.)
 --
