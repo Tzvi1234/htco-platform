@@ -5,7 +5,7 @@ delivery lost after the report was stored. All values are invented."""
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -254,3 +254,27 @@ def test_the_report_carries_identifiers_only() -> None:
     assert ReportType.DAILY.value == "daily"
     fields = set(OperationsReport.__dataclass_fields__)
     assert fields == {"id", "organization_id", "key", "period", "figures", "generated_at"}
+
+
+async def test_an_errors_text_never_reaches_the_report() -> None:
+    """Sage2 on #196: a source that raises with SQL or data in its message is shown as
+    `unavailable`, never with that message, which would be stored and mailed."""
+
+    @dataclass
+    class Leaky(Rows):
+        @override
+        def collect(
+            self, organization_id: uuid.UUID, period: ReportPeriod
+        ) -> tuple[SourceRef, ...]:
+            raise SourceUnavailable(
+                'duplicate key value violates unique constraint "k" (x@example.test)'
+            )
+
+    reporting = Reporting(sources=[Leaky(SectionName.INCIDENTS_OPENED)])
+
+    await reporting.handler(reporting.context({"report_type": "daily"}))
+
+    [report] = reporting.store.reports.values()
+    figure = report.figure(SectionName.INCIDENTS_OPENED)
+    assert (figure.count, figure.unavailable) == (None, "unavailable")
+    assert "example.test" not in repr(report)

@@ -7,6 +7,7 @@ only: the figure is the number of rows it links to, never a separate number, and
 source is unavailable has no number at all, never a zero (AC-7.9.1).
 """
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
@@ -14,6 +15,12 @@ from enum import StrEnum
 from zoneinfo import ZoneInfo
 
 MAX_REF_LENGTH = 120
+# Identifier shapes (sage2 on #196): a source is an activity kind or a table, a row's ID is an
+# identifier as `htco_application.activity` writes them, and why a source is unavailable is a
+# code. None of them can carry a name, an address or an error's text into a stored, mailed report.
+SOURCE_PATTERN = re.compile(r"[a-z][a-z0-9_.]{0,59}")
+ROW_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,119}")
+UNAVAILABLE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
 class ReportType(StrEnum):
@@ -79,6 +86,8 @@ class SourceRef:
     def __post_init__(self) -> None:
         if not self.source or not self.id or max(len(self.source), len(self.id)) > MAX_REF_LENGTH:
             raise ValueError(f"a reference names its source and row (1..{MAX_REF_LENGTH})")
+        if not SOURCE_PATTERN.fullmatch(self.source) or not ROW_ID_PATTERN.fullmatch(self.id):
+            raise ValueError("a reference's source and row are identifier-shaped")
 
 
 @dataclass(frozen=True)
@@ -96,6 +105,8 @@ class SectionFigure:
                 raise ValueError("a figure is the number of rows it links to")
         elif self.count is not None or self.refs:
             raise ValueError("an unavailable source has no number and no rows")
+        elif not UNAVAILABLE_PATTERN.fullmatch(self.unavailable):
+            raise ValueError("why a source is unavailable is a short code, never text")
 
     @property
     def available(self) -> bool:

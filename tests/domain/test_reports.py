@@ -96,3 +96,32 @@ def test_a_reference_names_its_source_and_row() -> None:
         SourceRef("", "a")
     with pytest.raises(ValueError, match="source"):
         SourceRef("etsy_orders", "")
+
+
+@pytest.mark.parametrize(
+    ("source", "row"),
+    [
+        ("etsy orders", "a"),
+        ("etsy_orders", "buyer@example.test"),
+        ("etsy_orders", "a b"),
+        ("etsy_orders\n", "a"),
+        ("etsy_orders", "a\n"),
+        ("Etsy_Orders", "a"),
+    ],
+)
+def test_a_reference_is_identifier_shaped(source: str, row: str) -> None:
+    """Sage2 on #196: a row's source and ID are identifiers, never a name, an address or text."""
+    with pytest.raises(ValueError, match="identifier"):
+        SourceRef(source, row)
+
+
+def test_identifier_shaped_references_are_accepted() -> None:
+    assert SourceRef("activity.incident", "0192f1c2-7a00-7000-8000-000000000001").id
+    assert SourceRef("etsy_orders", "shop:42/receipt#4000000001").source == "etsy_orders"
+
+
+@pytest.mark.parametrize("reason", ["Duplicate key", "activity store", "a" * 65, "1abc", "x\n"])
+def test_an_unavailable_reason_is_a_short_code(reason: str) -> None:
+    """Sage2 on #196: why a source is unavailable is a code, never an error's text."""
+    with pytest.raises(ValueError, match="code"):
+        SectionFigure.unavailable_source(SectionName.APPROVALS_PENDING, reason)

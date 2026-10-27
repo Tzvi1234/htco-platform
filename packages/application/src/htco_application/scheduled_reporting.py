@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from htco_application.automation.durable import Completed, HandlerContext, HandlerOutcome
 from htco_application.kernel import JobError, Offload, run_inline
 from htco_domain.reports import (
+    UNAVAILABLE_PATTERN,
     ReportPeriod,
     ReportType,
     SectionFigure,
@@ -131,7 +132,11 @@ class ScheduledReporting:
         try:
             refs = await self.offload(lambda: source.collect(organization_id, period))
         except SourceUnavailable as error:
-            return SectionFigure.unavailable_source(source.section, str(error)[:64])
+            # Only a code passes (sage2 on #196): any other message, which could hold SQL or
+            # data, becomes "unavailable", so a bad message degrades instead of failing the run.
+            reason = str(error)
+            code = reason if UNAVAILABLE_PATTERN.fullmatch(reason) else "unavailable"
+            return SectionFigure.unavailable_source(source.section, code)
         return SectionFigure.of(source.section, refs)
 
 
