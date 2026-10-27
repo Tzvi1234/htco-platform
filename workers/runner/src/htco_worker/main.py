@@ -64,6 +64,7 @@ from htco_application.incidents import (
     INCIDENT_ESCALATED,
     INCIDENT_OPENED,
     INCIDENT_RESOLVED,
+    DeadLetterIncidents,
     IncidentService,
 )
 from htco_application.jobs import ClaimedJob, JobQueue
@@ -125,6 +126,7 @@ from htco_application.order_intake import (
 )
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.sla_inspector import DriftIncidents, IncidentDetection
+from htco_application.status import EXECUTION_STATE_CHANGED
 from htco_application.tracking_sync import EngineTrackingSync, TrackingRecorder, TrackingSync
 from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_domain.actors import ActorKind, ActorRef
@@ -310,6 +312,14 @@ def notification_deliverers(
                 INCIDENT_ESCALATED: IncidentNotifications(service),
                 OUT_OF_STOCK_EVENT: StockAlerts(service),
                 NOTIFICATION_REQUESTED: RequestedNotifications(service),
+                # A dead-lettered execution opens its incident, which notifies (AC-6.7.4).
+                EXECUTION_STATE_CHANGED: DeadLetterIncidents(
+                    IncidentService(
+                        PostgresIncidentStore(database),
+                        clock=_now,
+                        offload=anyio.to_thread.run_sync,
+                    )
+                ),
                 **(order_events or {}),
             }
         ),
