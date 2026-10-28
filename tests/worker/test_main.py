@@ -338,9 +338,7 @@ class Runs:
         return True
 
 
-def _serve_with(
-    environment: pytest.MonkeyPatch, roles: tuple[str, str, bool]
-) -> tuple[int, Runs]:
+def _serve_with(environment: pytest.MonkeyPatch, roles: tuple[str, str, bool]) -> tuple[int, Runs]:
     """The real `main()` and `_serve`, with the pool and the job loop replaced."""
     environment.setenv("HTCO_WORKER_HEALTH_PORT", "0")
     environment.setenv("HTCO_WORKER_DATABASE_URL", "postgresql://htco_worker_login@db.invalid/h")

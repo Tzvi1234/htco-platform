@@ -14,8 +14,10 @@ So every `EtsyApiChannel(..., writes=...)` in a composition root must either
   (empty until 6.6 part B). The worker and the browser worker run automations, so they can never
   be on that list.
 
-Any other use of `EtsyApiChannel` in a composition root (an alias, `**kwargs`) fails too, since
-this guard could not see what it wires.
+Any other use of `EtsyApiChannel` in a composition root (the class as a value, an import under
+another name, a star import, its name as a string, `**kwargs`, `writes` set after construction)
+fails too, since this guard could not see what it wires. A module alias is followed: its calls
+read `<module>.EtsyApiChannel(...)`.
 """
 
 import ast
@@ -94,13 +96,28 @@ def sites_in(source: str, *, path: str, root: str) -> list[Site]:
                      durable, memory)
             )  # fmt: skip
         for node in own:
-            referenced = (isinstance(node, ast.Name) and node.id == CHANNEL) or (
-                isinstance(node, ast.Attribute) and node.attr == CHANNEL
-            )
-            if referenced and id(node) not in callee_ids:
+            if id(node) not in callee_ids and _hidden_reference(node):
                 line = getattr(node, "lineno", 0)
                 found.append(Site(path, root, function, line, True, True, durable, memory))
     return found
+
+
+def _hidden_reference(node: ast.AST) -> bool:
+    """A use of the channel this guard cannot follow to its call: the class as a value (an
+    assignment, an argument), an import under another name (`import EtsyApiChannel as Ch`,
+    whose calls read `Ch(...)`), its name as a string (`getattr`, `importlib`), a star import
+    (any name may be the channel), or `writes` set after construction."""
+    if isinstance(node, ast.Name):
+        return node.id == CHANNEL
+    if isinstance(node, ast.Attribute):
+        is_target = isinstance(node.ctx, ast.Store)
+        return node.attr == CHANNEL or (is_target and node.attr in {"writes", "_writes"})
+    if isinstance(node, ast.alias):
+        last = node.name.rsplit(".", 1)[-1]
+        return node.name == "*" or (last == CHANNEL and node.asname not in {None, CHANNEL})
+    if isinstance(node, ast.Constant):
+        return node.value == CHANNEL
+    return False
 
 
 def _scope_of(node: ast.AST, tree: ast.Module, parents: dict[int, ast.AST]) -> ast.AST:
@@ -174,6 +191,39 @@ def test_guard__catches_writes_without_any_approval_service() -> None:
 def test_guard__catches_an_alias_or_unpacked_arguments() -> None:
     assert len(_check("channel = EtsyApiChannel\n")) == 1
     assert len(_check("def g(a, f, k):\n    return EtsyApiChannel(a, f, **k)\n")) == 1
+
+
+def test_guard__catches_an_import_under_another_name() -> None:
+    """`Ch(a, f, writes=w)` names no channel, so the renaming import itself fails."""
+    renamed = """
+from htco_integrations.etsy import EtsyApiChannel as Ch
+
+def g(a, f, w):
+    return Ch(a, f, writes=w)
+"""
+    assert _check(renamed) == [
+        "x.py:2 (<module>): EtsyApiChannel used in a way this guard cannot read"
+    ]
+    assert len(_check("import htco_integrations.etsy.EtsyApiChannel as Ch\n")) == 1
+    assert len(_check("from htco_integrations.etsy import *\n")) == 1
+    assert len(_check("def g(m):\n    return getattr(m, 'EtsyApiChannel')\n")) == 1
+    # The plain import stays readable: its calls are checked where they are made.
+    assert _check("from htco_integrations.etsy import EtsyApiChannel\n") == []
+    assert _check("from htco_integrations.etsy import EtsyApiChannel as EtsyApiChannel\n") == []
+
+
+def test_guard__follows_a_module_alias_and_a_late_writes() -> None:
+    module_alias = """
+import htco_integrations.etsy as etsy
+
+def g(a, f, w):
+    return etsy.EtsyApiChannel(a, f, writes=w)
+"""
+    assert len(_check(module_alias)) == 1
+    assert _check(module_alias.replace(", writes=w", "")) == []
+    assert len(_check("from htco_integrations import etsy as e\nCh = e.EtsyApiChannel\n")) == 1
+    late = "def g(a, f, w):\n    channel = EtsyApiChannel(a, f)\n    channel.writes = w\n"
+    assert len(_check(late)) == 1
 
 
 def test_guard__allows_reads_only_and_durable_approvals() -> None:

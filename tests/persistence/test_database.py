@@ -1,4 +1,4 @@
-﻿"""The connection pool wrapper (slice 2.3); its Postgres behavior is in tests/integration."""
+"""The connection pool wrapper (slice 2.3); its Postgres behavior is in tests/integration."""
 
 from psycopg.conninfo import conninfo_to_dict
 
