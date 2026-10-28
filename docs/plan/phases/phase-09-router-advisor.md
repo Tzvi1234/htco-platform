@@ -92,6 +92,8 @@ Phase 8 proved the runtime with a fake gateway. Real model calls carry cost, pri
 | AC-9.1.4 | When a provider fails repeatedly, its circuit opens and calls go to the policy's fallback; when its kill switch is on, no call reaches it. |
 | AC-9.1.5 | One live smoke test per provider with a tiny budget passes in the deployed environment (manual, recorded). |
 
+**OpenRouter as a routing layer (the owner's note of 2026-10-28). OPEN: ask the owner when 9.1 starts; he researches it first.** Consider OpenRouter as one more provider adapter behind the `ModelGateway` port, giving the router access to open-source models (for example the Llama, Qwen or DeepSeek families) beside Anthropic and OpenAI, possibly combined with Jev, which is already listed there (A-17, V-09). If chosen: OpenRouter's models enter the catalog of 9.2 as ordinary rows with prices, as-of dates and sources, behind aliases; they are benchmarked in 9.6 and 9.9 before any policy names them; the masking of AC-9.1.3, the data-class limits and the circuit and kill switch of AC-9.1.4 apply to it like any provider; and its data-retention terms are checked first. Nothing in 9.1 is built on this until the owner decides ([owner reminders](../../operations/OWNER_REMINDERS.md)).
+
 ### 9.2 — Verified model catalog as data
 
 `model_catalog` rows: provider, model ID, API version, tier (economy, balanced, advanced, critical, vision, image), capabilities, context size, input and output prices with an as-of date and a source link, health, evaluation scores. Seeded and changed only by pull request after checking the provider's documentation; no model ID appears in code or in a routing policy (policies name tiers, or catalog aliases when pinned).

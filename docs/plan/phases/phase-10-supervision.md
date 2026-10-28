@@ -18,6 +18,7 @@
 - [ ] 10.5 Quality Review Scheduling automation
 - [ ] 10.6 Noa activated
 - [ ] 10.7 Supervision views
+- [ ] 10.8 Platform health alerts (added 2026-10-28: AC-5.9.1's and AC-5.9.3's alerts, moved from 5.9)
 
 **Foundation already in code.** `htco_domain.activity` (`ActivityKind.QUALITY_FINDING`, `RECONCILIATION`), `htco_domain.tasks` and `htco_domain.automation` give the records supervision reads; the draft specifications of Noa ([`registry/employees/noa.toml`](../../../registry/employees/noa.toml)), Order & Financial Reconciliation and Quality Review Scheduling are in `registry/`. Monitors, findings, the nightly supervisor and the views are planned in this phase.
 
@@ -166,6 +167,16 @@ Web views: findings list and detail (evidence, owner, follow-up, verification), 
 | AC-10.7.3 | **Acting on a finding.** From a finding's detail, a permitted person assigns its owner, dismisses it with a required reason, or attaches verification evidence. The server applies the 10.2 rules (AC-10.2.1, AC-10.2.2), each action writes an activity record, and roles without the permission see no controls. |
 | AC-10.7.4 | **Refund patterns.** The refunds-by-reason statistics show Etsy's reasons and Eitan's suggested reasons (AC-9.7.6) apart, and each recurring cause links to the one finding and improvement task that the refund-pattern monitor (10.1) opened for it. |
 | AC-10.7.5 | **Repeat customers.** The shop's Statistics tab shows the share of orders from returning buyers beside the existing share of repeat buyers, computed on demand from the stored order history with no stored customer list (ADR-0018), with the period and the number of orders it is based on. |
+
+### 10.8 — Platform health alerts (from 5.9)
+
+Added by the audit of 2026-10-28. Slice 5.9 built the admin view of a stopped worker and a stale shop, and the owner's decision of 2026-10-23 sent their alerts to "the one alert model"; no slice built them. They are two of 10.1's monitors (worker heartbeats, and a shop's sync freshness), raised through the one notification path of 6.4 (P2-2), with no alert table of their own. Web step: the alerts open Admin › Health (5.9), and the monitors appear in 10.7's monitor status.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-10.8.1 | **A stopped worker.** A worker whose heartbeat is older than its threshold (the same one Admin › Health uses) raises one critical notification to the Owners and Admins, in-app and by email, naming the worker kind and the age of its last heartbeat; the condition repeating raises nothing new while the first is open, and the worker's recovery sends one "recovered" notice. Seeded-condition and healthy-case tests (AC-10.1.1). |
+| AC-10.8.2 | **A stale shop sync.** A shop whose last successful sync is older than its window (AC-5.9.3) raises one notification to the Owners and Admins of that shop, naming the shop, the last success and the window; it is not repeated while the shop stays stale, and a successful sync closes it. A shop whose Etsy circuit breaker is open says so in the notification. |
+| AC-10.8.3 | Neither alert carries buyer data. Muting a shop (AC-7.6.1) can silence AC-10.8.2 for that shop, never AC-10.8.1. |
 
 ## Test plan
 

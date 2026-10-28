@@ -346,6 +346,8 @@ AutoVA is the owner's supplier platform (`beta.autova.io`). These recipes run in
 
   The allowed actions exclude every payment control. A payment step on the page stops the run and hands it to the owner. The result is verified by A-01 showing the order as confirmed, and only then is the supplier mapping recorded.
 
+**Record before activating (the owner's note of 2026-10-28).** The VA and Etsy browser automations of this phase (A-01, A-02, B-12 and every browser row after them) are built now from our best knowledge of the sites. Before any one of them is activated (its flag switched on for a shop), a person runs the same flow once by hand in our own browser, in the live session of 8A.11 (Live View and Takeover on that environment), and the run is recorded: the pages visited, the elements used and the result, with no frame, password, code or buyer data kept beyond what 8A.11 allows. The recipe is then re-implemented or verified against that recording, and the difference, if any, is fixed before activation. AC-8A.10.7: no browser recipe's flag can be switched on for a shop until its recorded reference run and the verification result are linked from the recipe's registry entry (a registry check fails otherwise); a recipe changed after that needs a new recording when the site's flow changed.
+
 | ID | Acceptance criterion |
 |---|---|
 | AC-8A.10.1 | With a valid export, A-01 stores one snapshot per AutoVA order and never reads the screen; with a broken export, it falls back to the screen once and records the fallback. |

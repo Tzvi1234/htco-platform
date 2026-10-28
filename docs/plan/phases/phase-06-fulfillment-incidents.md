@@ -7,29 +7,37 @@
 | **Size** | M |
 | **Depends on** | Phase 5 |
 | **Requirements** | FR-AUT-05, FR-EML-01, FR-INC-01, FR-INC-02, FR-INC-03, FR-INC-04 (allowlist only), FR-INC-05, FR-INC-06, FR-NTF-01, FR-ORD-03, FR-ORD-05, FR-ORD-06, FR-ORD-07 |
-| **Status** | In progress (started 2026-10-25, in parallel with the end of Phase 5) |
+| **Status** | In progress (started 2026-10-25, in parallel with the end of Phase 5). Audit 2026-10-28: 6.1 and 6.4 are partial (AC-6.1.2, AC-6.4.3); nothing of this phase runs in production yet, because both automations are `draft` until 6.7's activation and Resend waits for the owner's DNS |
 
 ## Progress
 
 - [ ] 6.1 (reopened 2026-10-27: AC-6.1.2 is met on the web only with AC-6.5.3) Tracking detection (migration `20261025100000_fulfillment_incidents.sql`, pgTAP `19_fulfillment_incidents`; [feature docs](../../features/fulfillment-monitoring/overview.md); inactive until 6.7)
 - [x] 6.2 SLA policies and inspector (default window 7 business days, the owner's decision of 2026-10-23, replacing 10; schedule `fulfillment.inspect`, off by flag)
 - [x] 6.3 Incidents ([feature docs](../../features/incidents/overview.md); AC-6.3.4's trigger from `sync_drifts` is `DriftIncidents`, 6.7 PR #129; the drift's shop must be the execution's own, and the guard fails closed)
-- [x] 6.4 Notifications and email (migration `20261025110000_notifications.sql`, pgTAP `25_notifications`; [feature docs](../../features/notifications/overview.md); Resend built and OFF until the owner's DNS for `office.ht-co.app`)
+- [ ] 6.4 (partial, audit 2026-10-28: AC-6.4.3's admin view of permanent email failures is only an RLS policy on `email_deliveries`, with no route and no screen; its web step is AC-6.5.6) Notifications and email (migration `20261025110000_notifications.sql`, pgTAP `25_notifications`; [feature docs](../../features/notifications/overview.md); Resend built and OFF until the owner's DNS for `office.ht-co.app`)
 - [x] 6.5 Incident center UI (htco-clients #48: the incident center and the notification bell, on the 6.4 API)
 - [ ] 6.6 Guarded shipment write: the gateway, adapter and channel part is built (W3, every write flag off, the kill switch re-checked at execution, scope `transactions_w`, re-read before and after; fakes only). Open: the API route with the confirm sheet and the re-consent (part B), the 6.8 UI (lyra)
 - [ ] 6.7 Fulfillment automations activated. Part 1 (#111): both specifications fully defined and true of the code (AC-6.7.1, tested in `tests/tools/test_registry_files.py`), `readiness` still `draft`. Part 2: AC-6.7.2 (the schedule and event paths replayed together) and AC-6.7.3 (breach → incident → notification → email replayed end to end) tested in `tests/application/test_fulfillment_replay.py`. AC-6.7.4 built (#173: a dead-lettered execution opens its `automation_dead_lettered` incident, which notifies the Owners and Admins, and logs at ERROR; #212: the worker reports it to Sentry through the engine's `on_dead_letter`, identifiers and the stored error only). Open: AC-6.7.5 (a remediation becomes a person's task; waits for the 7.1 task model, #181), the AC-6.3.4 drift trigger, and a notification on escalation; then the owner's activation
 - [ ] 6.8 Owner-triggered fulfillment writes (receipt and shipment tools), plus vacation mode (pulled forward from 7.12): the tracking upload and vacation mode are built with 6.6 (W3: the Owner's press after a step-up, or an agent's request the Owner approves each time). `etsy.receipts.update` waits for the owner
 - [x] 6.9 Ship-by SLA, holiday calendar and low-review alerts (deterministic). Ship-by and stock alerts built on the 6.4 notification path (migration `20261025120000_fulfillment_alerts.sql`, pgTAP `26`); the holidays come from the shop's SLA-policy calendar until `etsy.holiday_preferences` is read; low-review alerts (AC-6.9.2, #108): Incident Detection's hourly `reviews` mode reads `etsy.reviews.read` (R0, GET) through the gateway and alerts each review of 3 stars or fewer once, with its listing and order; no migration
-- [ ] 6.10 AutoVA tracking relay (copy tracking from AutoVA to Etsy). PR A: relay items, the paste, the hand-off and close on evidence (migration `20261026160000_relay_items.sql`, pgTAP `27`, window A-20); PR B: the screen; the upload waits for 6.8
+- [ ] 6.10 AutoVA tracking relay (copy tracking from AutoVA to Etsy). PR A: relay items, the paste, the hand-off and close on evidence (migration `20261026160000_relay_items.sql`, pgTAP `27`, window A-20); PR B: the screen, done (#213, the paste and copy routes; htco-clients #82, the screen at `/commerce/tracking`); the upload waits for 6.8 (part B of 6.6)
 
 Slices 6.1 to 6.4 are built as two automations on the engine of [Phase 5](phase-05-orders-ingest.md): **Tracking Synchronization** (slice 6.1) and **Incident Detection & Escalation** (slices 6.2 to 6.4). Slice 6.7 completes their specifications and activates them.
+
+**Audit 2026-10-28.**
+
+- **6.1 is partial.** AC-6.1.2 is not met: the order timeline shows the `shipped` transition and its ingest source, but no API or screen reads `tracking_events` (first seen, source `etsy` or `autova_*`). The web step is AC-6.5.3.
+- **6.7's progress line, corrected here** (the line is left as it is so the pull requests that edit 6.6 and 6.8 beside it, such as #220, merge cleanly): the Sentry report of AC-6.7.4 merged as **#219**, not #212; the AC-6.3.4 drift trigger (#129) and the notification on escalation (#163) are **done**, not open. Still open: AC-6.7.5 (see the owner's decision below), the Sentry new-issue alert rule and the worker's DSN in production, the runbook entries, then the owner's activation.
+- **6.6 and 6.8: the write console.** Every Phase 6 write (`etsy.shipments.create`, vacation mode through `etsy.shop.update`, `etsy.receipts.update` and `etsy.holiday_preferences.update`) is runnable by the Owner from the write actions console (6.6 part B's API, then the console of 7.18), with its flag off until the owner switches it on. Policy is W3 for all of them (the owner's decision of 2026-10-26); AC-6.8.1 is rewritten for it below.
+- **Overdue items now in progress.** Pull requests opened on 2026-10-28 build the items the audit found overdue: the audit-log read API (for AC-3.9.1 and the audit view), the remaining daily Etsy quota on the shop card (AC-4.1.2), tracking on the order timeline (AC-6.1.2, AC-6.5.3), the failed-email admin view (AC-6.4.3, AC-6.5.6), and 6.6 part B, the owner's write routes for `etsy.shipments.create` and `etsy.shop.update` (the confirm sheet, the re-consent and the "reconnect to grant" path; AC-6.6.1, AC-6.8.2). Each slice's tick follows its merge.
+- **Owner decision 2026-10-28: AC-6.7.5 waits for 7.1.** P1-4 (Architecture audit follow-ups, below) says Phase 6 does not depend on Phase 7, and that AC-6.7.5's "task for a person" is the relay item or Human-channel contract of 5.13 until Phase 7; 6.7's progress line says AC-6.7.5 waits for the 7.1 task model (#181). The owner kept it as it is for now: AC-6.7.5 waits for 7.1, an exception to P1-4 for this one criterion, revisited when 7.1 lands ([ASSUMPTIONS](../../product/ASSUMPTIONS.md) D-26, [owner reminders](../../operations/OWNER_REMINDERS.md)). Its web step is AC-7.19.4.
 
 ## Architecture upgrade (2026-10-23)
 
 Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md) (Action Gateway, four channels), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) (Etsy write tools and browser scope):
 
 - Tracking Synchronization and Incident Detection & Escalation perform every business step through the Action Gateway (Internal and API channels). Neither has an AI step.
-- Slice 6.6 (guarded shipment write) becomes the `etsy.shipments.create` and `etsy.receipts.update` tools, policy W2. On each shop they start **owner-trigger only**: the owner runs the first write himself (slice 6.8). Only after a verified success may Tracking Synchronization request them, and each request is an approval.
+- Slice 6.6 (guarded shipment write) becomes the `etsy.shipments.create` and `etsy.receipts.update` tools, policy **W3** (the owner's decision of 2026-10-26, which replaced W2): the Owner's own press after a step-up runs a write, and every request from an automation or an employee waits for the Owner's approval, each time. The registry (`registry/actions/etsy_open_api.toml`) and the gateway enforce it for `etsy.shipments.create` (and `etsy.shop.update`, vacation mode); `etsy.receipts.update` is not in the registry yet and enters it as W3 when it is built (it waits for the owner, 6.8).
 - Webhooks `order.shipped`, `order.delivered` and `inventory.out_of_stock` from slice 5.3 feed this phase's automations.
 - Where tracking upload is blocked for an Israeli key (A-04), the order moves to a Human task, or to a POD partner's tracking (Phase 13, browser row only if scoped). Phase 6 never uses a browser.
 
@@ -37,8 +45,8 @@ Changes from [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gatew
 
 - **One alert model, one path (P2-2).** Incidents (6.3), alerts (6.9) and security notices all reach people through the one notification path of 6.4: a `NotificationRequest` (in the worker) or a `notifications.requested.v1` / `incidents.opened.v1` event through the outbox, then `notifications` rows and `email.send` messages. 6.9 adds no alert table of its own. Phase 10's monitors later emit into the same path. The incident's `incident_events` is that aggregate's own state history (like `automation_execution_events`), not a second activity trail; the audit and `order_status_events` stay as they are.
 - **Status vocabulary (P2-2).** `IncidentState` maps to `htco_domain.status.StatusKind`, covered by the status tests.
-- **Gateway bypass (P1-1).** Before any write tool lands (6.6, 6.8), an architecture test asserts that every Etsy write goes through the Action Gateway, with a documented allow-list of the existing read bypasses. Done: `tests/architecture/test_gateway_bypass.py` (#105); the webhook re-reads stay on its list as a read bypass until they move onto read actions. Phase 6's own Etsy reads (Tracking Synchronization) already go through `etsy.receipts.read`.
-- **Phase 6 → 7 direction (P1-4).** Phase 6 does not depend on Phase 7. The 6.10 relay keeps its own minimal relay item (owned by Phase 6); Phase 7's task store later **extends** it (a relay item becomes a kind of task), not the other way round. AC-6.7.5's "task for a person" is the relay item / Human-channel contract of 5.13 until then.
+- **Gateway bypass (P1-1).** Before any write tool lands (6.6, 6.8), an architecture test asserts that every Etsy write goes through the Action Gateway, with a documented allow-list of the existing read bypasses. Done: `tests/architecture/test_gateway_bypass.py` (#106); the webhook re-reads stay on its list as a read bypass until they move onto read actions. Phase 6's own Etsy reads (Tracking Synchronization) already go through `etsy.receipts.read`.
+- **Phase 6 → 7 direction (P1-4).** Phase 6 does not depend on Phase 7. The 6.10 relay keeps its own minimal relay item (owned by Phase 6); Phase 7's task store later **extends** it (a relay item becomes a kind of task), not the other way round. AC-6.7.5's "task for a person" is the relay item / Human-channel contract of 5.13 until then. Exception (the owner's decision of 2026-10-28, D-26): AC-6.7.5 waits for the 7.1 task model (#181), revisited when 7.1 lands.
 
 ## Goal
 
@@ -153,11 +161,11 @@ Tracking Synchronization runs on a schedule and on `order.shipped` events (idemp
 
 ### 6.8 — Owner-triggered fulfillment writes
 
-The Owner re-consents to `transactions_w` and runs `etsy.shipments.create` or `etsy.receipts.update` by hand on one real order, through the gateway (W2: step-up, flag, audit, re-read). The first result, success or Etsy's error, is shown as it is and recorded as the tool's first run on that shop.
+The Owner re-consents to `transactions_w` and runs `etsy.shipments.create` or `etsy.receipts.update` by hand on one real order, through the gateway (W3, the owner's decision of 2026-10-26: step-up, flag, kill switch, audit, re-read). The first result, success or Etsy's error, is shown as it is and recorded as the tool's first run on that shop.
 
 | ID | Acceptance criterion |
 |---|---|
-| AC-6.8.1 | Before the owner's first verified run on a shop, every automation or employee request for these tools is refused with `owner_trigger_required`. |
+| AC-6.8.1 | (Rewritten for W3 on 2026-10-28.) The Owner's own press runs one of these tools only after a recent step-up; any other actor's request (an automation, an employee or an agent) creates an Owner approval and sends nothing to Etsy until the Owner approves that request, every time, with no standing permission after a first verified run; an Admin's trigger is refused. Tested before any Etsy call, with fakes. |
 | AC-6.8.2 | A missing `transactions_w` scope refuses the write before any Etsy call, with a "reconnect to grant" link. |
 | AC-6.8.3 | Tests and CI never reach Etsy for these tools (fakes only); the adapter refuses a write without an owner-trigger record or a decided approval. |
 | AC-6.8.4 | **The tools' state on the shop page.** The shop page lists `etsy.shipments.create` and `etsy.receipts.update` with their state on that shop: owner-trigger only, first run verified (with its date and result), or `transactions_w` missing (with the reconnect link of AC-6.8.2), before any write is tried. The Owner's run starts from the order, behind step-up, and its result is shown as Etsy returned it. |
@@ -186,7 +194,7 @@ The owner orders from suppliers through AutoVA and today copies each tracking nu
    - **From Phase 8A:** the read-only browser recipe A-01 (AutoVA order status and tracking) in the owner's own AutoVA environment (password and TOTP from the vault and the Authenticator of Phase 8B), within AutoVA's terms (A-08).
    - **If AutoVA sends an email with the tracking** (A-09): the email intake of Phase 14 reads it; if confirmed early, that slice moves forward.
 3. **Upload to Etsy:**
-   - **API first:** `etsy.shipments.create` (W2, owner-trigger first, slice 6.8).
+   - **API first:** `etsy.shipments.create` (W3: the Owner's press, or his approval of each request, slice 6.8).
    - **If the API is blocked for our key (A-04):** the approved browser row B-12 ("mark as shipped with tracking" in Shop Manager, W2, the owner's approval each time, D-16).
    - **Otherwise:** a Human task with a copy button.
 4. **Verify:** re-read the receipt and record the shipment with its source (`autova_manual`, `autova_browser`, `autova_email`). A mismatch opens one incident (6.3). The same number is never uploaded twice (idempotency key per receipt and tracking code).

@@ -23,7 +23,7 @@ Accepted ADRs are not rewritten. Two things may be added later: a status change,
 | [0006](0006-web-auth-bff.md) | Web authentication through a backend-for-frontend | Accepted |
 | [0007](0007-job-queue.md) | Postgres-native job queue behind a port | Accepted (2026-10-22: in-house queue); amended by 0019 |
 | [0008](0008-etsy-integration.md) | Etsy integration: Seller App, webhooks plus reconciliation, read-first tracking | Accepted (validated in Phases 0 and 4); amended by 0022 |
-| [0009](0009-autova-integration.md) | AutoVA behind a port, tracking read from Etsy | Accepted |
+| [0009](0009-autova-integration.md) | AutoVA behind a port, tracking read from Etsy | Accepted; amended 2026-10-28 (AutoVA does not write tracking to Etsy) |
 | [0010](0010-test-first-development.md) | Test-first development with mechanical enforcement | Accepted |
 | [0011](0011-data-access-and-migrations.md) | psycopg with explicit SQL; Supabase CLI migrations as the single schema source | Accepted |
 | [0012](0012-living-office-organization.md) | The living office: 16 AI employees, automations, tools and engineering as separate concepts | Accepted; supersedes PRD 1.0 §8 (18 roles); amended by 0019 |
