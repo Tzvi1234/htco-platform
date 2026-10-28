@@ -6,7 +6,7 @@ import os
 import socket
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import override
 
 import pytest
@@ -32,7 +32,14 @@ class _RecordingReporter(ErrorReporter):
         self._events = events
 
     @override
-    def report(self, error: BaseException, *, request_id: str | None, trace_id: str | None) -> None:
+    def report(
+        self,
+        error: BaseException,
+        *,
+        request_id: str | None,
+        trace_id: str | None,
+        tags: Mapping[str, str] | None = None,
+    ) -> None:
         self._events.append("report")
 
     @override

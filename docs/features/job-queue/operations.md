@@ -22,6 +22,7 @@ The process logs `worker.starting` with its ID and enabled schedules, serves `GE
 | `HTCO_WORKER_SHUTDOWN_GRACE_SECONDS` | 20 | How long SIGTERM waits for the current job; if blocking database work still holds the loop 5 s later, the process exits with 75 (`worker.forced_exit`) and the job returns after its lease |
 | `HTCO_WORKER_ID` (limit) | | At most 200 characters (the queue's columns); longer values stop the worker at startup |
 | `HTCO_WORKER_HEALTH_PORT` | 8081 (0 = off) | `GET /healthz`: 200 while the loop runs, 503 when it stalled |
+| `HTCO_SENTRY_DSN` | unset (secret; blank = off) | A dead-lettered automation execution is reported to Sentry as `DeadLetteredExecutionError`, with the automation ID, execution ID and stored error only (AC-6.7.4), tagged `automation_id`, `error_type` and `execution_id`; one Sentry issue per dead letter (no fingerprint), so the "new issue" alert fires for each; closed at shutdown so queued reports are sent |
 | `HTCO_TOKEN_VAULT_KEY`, `HTCO_TOKEN_VAULT_PREVIOUS_KEYS` | unset | Needed by the probes and the expiry check (startup fails otherwise) |
 | `HTCO_ETSY_KEYSTRING`, `HTCO_ETSY_SHARED_SECRET`, `HTCO_ETSY_DAILY_QUOTA_FLOOR` | unset, 500 | Needed by the probes |
 

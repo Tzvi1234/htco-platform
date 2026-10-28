@@ -7,6 +7,7 @@ captured, and `scrub_event` drops request, user and breadcrumb data as a second 
 defence. The client is isolated: the process-wide Sentry state stays untouched.
 """
 
+from collections.abc import Mapping
 from typing import Any, Protocol, Self, cast, override
 
 import sentry_sdk
@@ -18,8 +19,16 @@ from htco_platform.scrubbing import safe_texts
 
 class ErrorReporter(Protocol):
     def report(
-        self, error: BaseException, *, request_id: str | None, trace_id: str | None
-    ) -> None: ...
+        self,
+        error: BaseException,
+        *,
+        request_id: str | None,
+        trace_id: str | None,
+        tags: Mapping[str, str] | None = None,
+    ) -> None:
+        """`tags` are extra filterable identifiers (never personal data), e.g. which automation
+        dead-lettered (AC-6.7.4)."""
+        ...
 
     def close(self) -> None:
         """Deliver pending reports before the process exits; called once, at shutdown."""
@@ -30,7 +39,14 @@ class NoErrorReporter(ErrorReporter):
     """Used when error monitoring is not configured."""
 
     @override
-    def report(self, error: BaseException, *, request_id: str | None, trace_id: str | None) -> None:
+    def report(
+        self,
+        error: BaseException,
+        *,
+        request_id: str | None,
+        trace_id: str | None,
+        tags: Mapping[str, str] | None = None,
+    ) -> None:
         return None
 
 
@@ -90,9 +106,18 @@ class SentryErrorReporter(ErrorReporter):
         return cls(client)
 
     @override
-    def report(self, error: BaseException, *, request_id: str | None, trace_id: str | None) -> None:
+    def report(
+        self,
+        error: BaseException,
+        *,
+        request_id: str | None,
+        trace_id: str | None,
+        tags: Mapping[str, str] | None = None,
+    ) -> None:
         with sentry_sdk.isolation_scope() as scope:
             scope.set_client(self._client)
+            for name, value in (tags or {}).items():
+                scope.set_tag(name, value)
             if request_id is not None:
                 scope.set_tag("request_id", request_id)
             if trace_id is not None:

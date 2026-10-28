@@ -281,6 +281,7 @@ def test_deploy_never_puts_the_whole_app_object_in_a_step_environment() -> None:
 
 WORKER_SECRETS = {
     "PGPASSWORD",
+    "HTCO_SENTRY_DSN",  # AC-6.7.4: dead letters reach Sentry
     "HTCO_TOKEN_VAULT_KEY",
     "HTCO_TOKEN_VAULT_PREVIOUS_KEYS",
     "HTCO_ETSY_KEYSTRING",

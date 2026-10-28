@@ -111,6 +111,23 @@ type OutputCheck = Callable[[str, Mapping[str, JsonValue]], Mapping[str, JsonVal
 _log = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class DeadLetter:
+    """What the error report of a dead-lettered execution carries (AC-6.7.4): its identifiers
+    and the stored error (`describe_error`: the type, and a `JobError`'s own message), never
+    the execution's payload or output, so no buyer data reaches error monitoring."""
+
+    automation_id: str
+    execution_id: uuid.UUID
+    error_type: str
+    error: str
+
+
+# Reports a dead letter to error monitoring (Sentry in the worker, AC-6.7.4). Best effort: a
+# reporter that raises is logged and never changes the execution.
+type DeadLetterReporter = Callable[[DeadLetter], None]
+
+
 @dataclass(frozen=True)
 class StateChange:
     """One recorded transition of an execution (AC-5.10.6)."""
@@ -213,6 +230,7 @@ class DurableAutomationEngine:
         new_id: Callable[[], uuid.UUID] = uuid.uuid7,
         offload: Offload = run_inline,
         output_check: OutputCheck | None = None,
+        on_dead_letter: DeadLetterReporter | None = None,
     ) -> None:
         self._registry = registry
         self._store = store
@@ -223,6 +241,7 @@ class DurableAutomationEngine:
         self._new_id = new_id
         self._offload = offload
         self._output_check = output_check
+        self._on_dead_letter = on_dead_letter
 
     def definition(self, automation_id: str) -> AutomationDefinition | None:
         return self._registry().automations.get(automation_id)
@@ -540,8 +559,32 @@ class DurableAutomationEngine:
         steps, job = self._failure_steps(
             definition, running, error, worker, now, retry_after=retry_after
         )
-        self._store.advance(running, steps, job=job)
+        if self._store.advance(running, steps, job=job):
+            self._report_dead_letter(steps[-1][0])
         return steps[-1][0]
+
+    def _report_dead_letter(self, execution: AutomationExecution) -> None:
+        """Once the dead letter is stored, report it; a failing reporter costs the report only."""
+        if execution.state is not ExecutionState.DEAD_LETTERED or self._on_dead_letter is None:
+            return
+        error = execution.last_error or "unknown"
+        report = DeadLetter(
+            automation_id=execution.automation_id,
+            execution_id=execution.id,
+            error_type=error.split(":", 1)[0],
+            error=error,
+        )
+        try:
+            self._on_dead_letter(report)
+        except Exception as failure:  # best effort: the dead letter is already stored
+            _log.warning(
+                "automation.dead_letter_report_failed",
+                extra={
+                    "automation_id": execution.automation_id,
+                    "execution_id": str(execution.id),
+                    "error": describe_error(failure),
+                },
+            )
 
     def _failure_steps(  # noqa: PLR0913 - the failure, and the wait it may ask for
         self,
@@ -558,7 +601,8 @@ class DurableAutomationEngine:
         if failed.attempts >= definition.retry.max_attempts:
             dead = failed.transition(ExecutionState.DEAD_LETTERED)
             steps.append((dead, self._change(failed, failed.state, dead.state, worker, now)))
-            # The Phase 1 alert rules see errors (Sentry); the type name only, never the text.
+            # The log line; error monitoring hears of it through `on_dead_letter` once the dead
+            # letter is stored (AC-6.7.4). The type name only, never a library's text.
             _log.error(
                 "automation.dead_lettered: %s execution=%s error=%s",
                 running.automation_id,
@@ -587,6 +631,7 @@ class DurableAutomationEngine:
         steps, _ = self._failure_steps(definition, running, LEASE_EXPIRED, worker, now)
         if not self._store.advance(running, steps):
             return None
+        self._report_dead_letter(steps[-1][0])
         return steps[-1][0]
 
     async def _reload(self, execution_id: uuid.UUID) -> AutomationExecution:
