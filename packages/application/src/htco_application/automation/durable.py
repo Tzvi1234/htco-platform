@@ -175,7 +175,8 @@ class DurableExecutionStore(Protocol):
         job: JobSpec | None = None,
         audit: AuditRecord | None = None,
     ) -> bool:
-        """In one transaction, only while the execution is still in `before.state`: store the
+        """In one transaction, only while the execution is still as `before` (its state, attempts
+        and the action it waits for, `waiting_for`): store the
         last step's execution, every step's state change, the job and the audit record. False
         when another run changed it first (nothing is written)."""
         ...
@@ -430,7 +431,11 @@ class DurableAutomationEngine:
             )
         now = self._clock()
         if isinstance(outcome, Waiting):
-            waiting = running.transition(ExecutionState.WAITING)
+            # The wait is bound to its action, so only that action's decision resumes it.
+            waiting = replace(
+                running.transition(ExecutionState.WAITING),
+                waiting_for=outcome.action_execution_id,
+            )
             change = self._change(
                 running, running.state, waiting.state, worker, now, outcome.reason
             )
@@ -495,10 +500,14 @@ class DurableAutomationEngine:
         *,
         actor: ActorRef,
         reason: str,
+        waiting_for: uuid.UUID | None = None,
     ) -> AutomationExecution:
         """A waiting execution runs again (an approval was decided, a task was done): back to
-        `RETRY_SCHEDULED` with a new job, without using an attempt of its retry policy."""
-        execution, definition = self._waiting(organization_id, execution_id)
+        `RETRY_SCHEDULED` with a new job, without using an attempt of its retry policy.
+
+        `waiting_for` names the action whose decision this is: an execution that now waits for
+        another action (a replayed decision after a later wait) raises `NotWaitingError`."""
+        execution, definition = self._waiting(organization_id, execution_id, waiting_for)
         now = self._clock()
         resumed = replace(execution.transition(ExecutionState.RETRY_SCHEDULED))
         # The waiting run did not fail: its attempt is given back.
@@ -516,9 +525,11 @@ class DurableAutomationEngine:
         *,
         actor: ActorRef,
         reason: str,
+        waiting_for: uuid.UUID | None = None,
     ) -> AutomationExecution:
-        """A waiting execution ends (the approval was rejected or expired)."""
-        execution, _ = self._waiting(organization_id, execution_id)
+        """A waiting execution ends (the approval was rejected or expired); `waiting_for` as in
+        `resume`."""
+        execution, _ = self._waiting(organization_id, execution_id, waiting_for)
         cancelled = execution.transition(ExecutionState.CANCELLED)
         change = self._change(
             execution, execution.state, cancelled.state, actor, self._clock(), reason
@@ -528,13 +539,19 @@ class DurableAutomationEngine:
         return cancelled
 
     def _waiting(
-        self, organization_id: uuid.UUID, execution_id: uuid.UUID
+        self,
+        organization_id: uuid.UUID,
+        execution_id: uuid.UUID,
+        waiting_for: uuid.UUID | None,
     ) -> tuple[AutomationExecution, AutomationDefinition]:
         stored = self._store.load(execution_id)
         if stored is None or stored.execution.organization_id != organization_id:
             raise ExecutionNotFoundError(f"no execution {execution_id}")
         if stored.execution.state is not ExecutionState.WAITING:
             raise NotWaitingError(f"{execution_id} is {stored.execution.state.value}")
+        if waiting_for is not None and stored.execution.waiting_for != waiting_for:
+            # The store's `advance` checks the same wait, so a change in between is refused too.
+            raise NotWaitingError(f"{execution_id} waits for another action now")
         definition = self._registry().automations.get(stored.execution.automation_id)
         if definition is None:
             raise ExecutionNotFoundError(f"no definition for {stored.execution.automation_id}")

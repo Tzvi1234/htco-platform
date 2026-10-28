@@ -21,7 +21,7 @@ import httpx
 import structlog
 
 from htco_application.alerts import OUT_OF_STOCK_EVENT, StockAlerts
-from htco_application.approvals import GatewayApprovals, MemoryApprovalService
+from htco_application.approvals import APPROVAL_DECIDED, ApprovalResumer, NoApprovals
 from htco_application.automation.durable import (
     EXECUTION_JOB,
     DeadLetterReporter,
@@ -408,7 +408,7 @@ def worker_gateway(
 ) -> ActionGateway:
     """The real Action Gateway for reads (`HTCO_WORKER_ACTION_GATEWAY=reads`, the default), or
     `UnavailableGateway` (`off`, or without the Etsy app). Writes never run: they wait for an
-    approval that only Phase 7's approval store can give."""
+    approval that only Phase 7's approval store can give (`NoApprovals`)."""
     if settings.worker_action_gateway == "off" or adapter is None:
         return UnavailableGateway()
     tools = read_registry(settings.registry_path).registry()
@@ -424,9 +424,9 @@ def worker_gateway(
             store=PostgresActionStore(database),
             principals=users,
             shops=users,
-            # The shared approval contract (5.14) in memory: a write waits for an approval
-            # no one can give in the worker (Postgres approvals are Phase 7), so none runs.
-            approvals=GatewayApprovals(MemoryApprovalService(clock=_now), clock=_now),
+            # Until the Postgres approvals of slice 7.11, a write waits for an approval that
+            # nothing in the worker can give, so none runs (AUD-03).
+            approvals=NoApprovals(),
             adapters={Channel.API: EtsyApiChannel(adapter, facts)},
             capabilities=facts,
             clock=_now,
@@ -455,6 +455,12 @@ def order_event_subscribers(engine: DurableAutomationEngine) -> dict[str, EventS
     """The order events that start the order automations (slice 5.11)."""
     triggers = OrderEventTriggers(engine, offload=anyio.to_thread.run_sync)
     return dict.fromkeys(sorted(VERIFIED_EVENTS | COUNTED_EVENTS), triggers)
+
+
+def approval_event_subscribers(engine: DurableAutomationEngine) -> dict[str, EventSubscriber]:
+    """A decision taken in any process resumes or cancels the execution waiting for it, once
+    (AUD-03): the API writes `approvals.decided.v1`, and the worker delivers it here."""
+    return {APPROVAL_DECIDED: ApprovalResumer(engine, offload=anyio.to_thread.run_sync)}
 
 
 def fulfillment_event_subscribers(engine: DurableAutomationEngine) -> dict[str, EventSubscriber]:
@@ -721,7 +727,9 @@ async def _serve(settings: WorkerSettings) -> None:
             settings,
             database,
             http,
-            order_events=order_event_subscribers(engine) | fulfillment_event_subscribers(engine),
+            order_events=order_event_subscribers(engine)
+            | fulfillment_event_subscribers(engine)
+            | approval_event_subscribers(engine),
         ),
     )
     handlers |= automation_handlers(engine, settings.worker_id)

@@ -212,7 +212,12 @@ class ApprovalGate(Protocol):
     """The shared approval contract (slice 5.14; Postgres in Phase 7)."""
 
     def request(
-        self, request: ActionRequest, *, request_hash: str, definition: ActionDefinition
+        self,
+        request: ActionRequest,
+        *,
+        request_hash: str,
+        definition: ActionDefinition,
+        action_execution_id: uuid.UUID,  # the action that waits, which a decision resumes
     ) -> uuid.UUID: ...
 
     def is_approved(self, approval_id: uuid.UUID, *, request_hash: str) -> bool: ...
@@ -453,7 +458,10 @@ class ActionGatewayService:
         now: datetime,
     ) -> ActionResult:
         approval_id = claim.approval_id or self._p.approvals.request(
-            request, request_hash=digest, definition=definition
+            request,
+            request_hash=digest,
+            definition=definition,
+            action_execution_id=claim.execution_id,
         )
         result = self._result(claim.execution_id, ActionOutcome.PENDING_APPROVAL)
         self._record(

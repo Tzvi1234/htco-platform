@@ -2,7 +2,8 @@
 
 Every lifecycle keeps its own state machine: automation executions (`ExecutionState`), action
 executions (`ActionState`), browser environments (`EnvironmentStatus`), business tasks
-(`TaskState`) and incidents (`IncidentState`, Phase 6). For the office, each state also has one
+(`TaskState`), incidents (`IncidentState`, Phase 6), jobs (`JobState`), approvals
+(`ApprovalState`) and orders (`OrderState`, AUD-03). For the office, each state also has one
 `StatusKind`, so a screen or a monitor can say "running", "waiting", "done", "failed" or
 "stopped" the same way for all of them. A task or an execution that waits says why with a
 `WaitingReason`; the engine records these on the task rather than as new task states.
@@ -12,9 +13,12 @@ from collections.abc import Mapping
 from enum import Enum, StrEnum
 
 from htco_domain.actions import ActionState
+from htco_domain.approvals import ApprovalState
 from htco_domain.automation import ExecutionState
 from htco_domain.browser import EnvironmentStatus
 from htco_domain.incidents import IncidentState
+from htco_domain.jobs import JobState
+from htco_domain.orders import OrderState
 from htco_domain.tasks import TaskState
 
 
@@ -37,6 +41,9 @@ _A = ActionState
 _V = EnvironmentStatus
 _T = TaskState
 _I = IncidentState
+_J = JobState
+_P = ApprovalState
+_O = OrderState
 
 _KINDS: Mapping[type[Enum], Mapping[Enum, StatusKind]] = {
     ExecutionState: {
@@ -71,6 +78,23 @@ _KINDS: Mapping[type[Enum], Mapping[Enum, StatusKind]] = {
         _I.APPROVAL_REQUIRED: _K.WAITING, _I.DEVELOPER_REQUIRED: _K.WAITING,
         _I.VERIFYING: _K.WAITING, _I.ESCALATED: _K.ACTIVE, _I.RESOLVED: _K.SUCCEEDED,
     },
+    # Jobs: a retry waits for its time; dead is the dead-letter state.
+    JobState: {
+        _J.QUEUED: _K.ACTIVE, _J.RUNNING: _K.ACTIVE, _J.RETRY_SCHEDULED: _K.WAITING,
+        _J.SUCCEEDED: _K.SUCCEEDED, _J.DEAD: _K.FAILED,
+    },
+    # Approvals: a request waits for a person; approved is ready to run once.
+    ApprovalState: {
+        _P.REQUESTED: _K.WAITING, _P.APPROVED: _K.ACTIVE, _P.REJECTED: _K.STOPPED,
+        _P.EXPIRED: _K.STOPPED, _P.EXECUTED: _K.SUCCEEDED, _P.FAILED: _K.FAILED,
+        _P.CANCELLED: _K.STOPPED,
+    },
+    # Orders: unpaid waits for the buyer; the fulfillment steps are active until delivered.
+    OrderState: {
+        _O.UNPAID: _K.WAITING, _O.PAID: _K.ACTIVE, _O.INGESTED: _K.ACTIVE,
+        _O.AWAITING_SHIPMENT: _K.ACTIVE, _O.SHIPPED: _K.ACTIVE, _O.DELIVERED: _K.SUCCEEDED,
+        _O.CANCELLED: _K.STOPPED, _O.REFUNDED: _K.STOPPED,
+    },
 }  # fmt: skip
 
 _WAITING_REASONS: Mapping[Enum, WaitingReason] = {
@@ -82,13 +106,27 @@ _WAITING_REASONS: Mapping[Enum, WaitingReason] = {
 
 
 def status_kind(
-    state: ExecutionState | ActionState | EnvironmentStatus | TaskState | IncidentState,
+    state: ExecutionState
+    | ActionState
+    | EnvironmentStatus
+    | TaskState
+    | IncidentState
+    | JobState
+    | ApprovalState
+    | OrderState,
 ) -> StatusKind:
     return _KINDS[type(state)][state]
 
 
 def waiting_reason(
-    state: ExecutionState | ActionState | EnvironmentStatus | TaskState | IncidentState,
+    state: ExecutionState
+    | ActionState
+    | EnvironmentStatus
+    | TaskState
+    | IncidentState
+    | JobState
+    | ApprovalState
+    | OrderState,
 ) -> WaitingReason | None:
     """Why a waiting state waits, when the state itself says it."""
     return _WAITING_REASONS.get(state)

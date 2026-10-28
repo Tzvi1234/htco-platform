@@ -175,10 +175,15 @@ class AutomationExecution:
     # A succeeded run's handler output, as far as its typed model allows (#127): per-run IDs,
     # counts and codes, never buyer data. None otherwise.
     output: Mapping[str, object] | None = None
+    # While WAITING: the action execution the run waits for (an approval or a person), so a
+    # decision resumes or ends only the wait it was taken for (Codex on #175). None otherwise.
+    waiting_for: uuid.UUID | None = None
 
     def __post_init__(self) -> None:
         if not self.idempotency_key.strip():
             raise ValueError("an execution needs an idempotency key")
+        if self.waiting_for is not None and self.state is not ExecutionState.WAITING:
+            raise ValueError("only a waiting execution waits for an action")
 
     def transition(
         self, target: ExecutionState, *, error: str | None = None
@@ -188,7 +193,10 @@ class AutomationExecution:
         last_error = error if target is ExecutionState.FAILED else self.last_error
         if target is ExecutionState.SUCCEEDED:
             last_error = None
-        return replace(self, state=target, attempts=attempts, last_error=last_error)
+        # Leaving WAITING ends the wait; the engine names a new wait when it enters WAITING.
+        return replace(
+            self, state=target, attempts=attempts, last_error=last_error, waiting_for=None
+        )
 
     @property
     def is_terminal(self) -> bool:

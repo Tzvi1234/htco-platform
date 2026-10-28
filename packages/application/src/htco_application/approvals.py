@@ -19,7 +19,17 @@ the Postgres store, the inbox UI and notifications are Phase 7.
   job. By convention the handler passes its own execution ID as the request's `causation_id`;
   the approval keeps it, and `ApprovalResumer` resumes that execution once when the approval is
   approved, or cancels it with the reason when it is rejected or expires.
-- `GatewayApprovals` adapts the service to the gateway's `ApprovalGate` port.
+- **Across processes** (AUD-03): the API decides while the worker holds the waiting execution, so
+  a decision never calls the resumer itself. It writes `approvals.decided.v1` to the outbox in the
+  decision's own transaction (`decision_event`), and `ApprovalResumer` is that event's subscriber
+  on the worker's `events.publish` deliverer. Each decided state is its own event (an approved
+  approval that lapses before it runs also sends `expired`). A replayed delivery resumes nothing
+  twice: the event names the gateway's action execution the run waits on, the engine records it
+  as the execution's `waiting_for`, and a decision moves only that wait, so a replay after the
+  run reached a later wait is ignored.
+- `GatewayApprovals` adapts the service to the gateway's `ApprovalGate` port. Until the Postgres
+  store (slice 7.11), the worker's gateway uses `NoApprovals`: a write waits, and nothing in the
+  worker can approve it.
 """
 
 import re
@@ -35,7 +45,16 @@ from htco_application.access.policy import STEP_UP_WINDOW
 from htco_application.automation.durable import ExecutionNotFoundError, NotWaitingError
 from htco_application.execution.contracts import ActionDefinition, Evidence
 from htco_application.execution.gateway import ActionRef, ActionRequest
-from htco_application.kernel import JsonValue
+from htco_application.kernel import (
+    DomainEvent,
+    JsonValue,
+    MalformedEventError,
+    Offload,
+    OutboxMessage,
+    event_payload,
+    publish,
+    run_inline,
+)
 from htco_domain.actions import ApprovalPolicy
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.approvals import (
@@ -50,6 +69,8 @@ from htco_domain.identity import AssuranceLevel, Role
 from htco_domain.tooling import RiskLevel
 
 DEFAULT_TTL = timedelta(days=3)
+APPROVAL_DECIDED = "approvals.decided.v1"
+APPROVALS_ACTOR = ActorRef(ActorKind.SYSTEM, "approvals")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _A = ApprovalState
 
@@ -73,6 +94,8 @@ class ApprovalRequest:
     evidence: tuple[Evidence, ...] = ()
     # The automation execution that waits for the decision (the request's causation_id).
     waiting_execution_id: uuid.UUID | None = None
+    # The gateway's action execution it waits on: the decision resumes that wait only.
+    action_execution_id: uuid.UUID | None = None
 
     def __post_init__(self) -> None:
         if not _SHA256.match(self.request_hash):
@@ -157,12 +180,15 @@ def check_decider(approval: Approval, by: AuthContext, *, shown_hash: str, now: 
 
 @dataclass
 class MemoryApprovalService:
-    """The contract in memory, for the gateway's and the engine's tests (Postgres: Phase 7)."""
+    """The contract in memory, for the gateway's and the engine's tests (Postgres: 7.11).
+
+    It calls no one: each decision or expiry adds its `approvals.decided.v1` to `outbox` with
+    the change, as the Postgres store does in the decision's transaction. Two instances that
+    share `approvals` behave like two processes on one database."""
 
     clock: Callable[[], datetime]
     approvals: dict[uuid.UUID, Approval] = field(default_factory=dict)
-    # Called once per decision or expiry, after it is stored (the resumer, notifications).
-    listeners: list[Callable[[Approval], None]] = field(default_factory=list)
+    outbox: list[OutboxMessage] = field(default_factory=list)
     _lock: threading.RLock = field(default_factory=threading.RLock)
 
     def request(self, request: ApprovalRequest) -> Approval:
@@ -193,7 +219,7 @@ class MemoryApprovalService:
                 target, decided_by=by.user_id, decided_at=now, shown_hash=shown_hash
             )
             self.approvals[approval_id] = decided
-        self._tell(decided)
+            self.outbox.append(decision_event(decided, at=now))
         return decided
 
     def status(self, approval_id: uuid.UUID) -> Approval:
@@ -216,25 +242,56 @@ class MemoryApprovalService:
 
     def _lapse(self, approval: Approval) -> Approval:
         """An open approval past its time is EXPIRED (checked whenever it is read)."""
-        if approval.is_final or self.clock() < approval.request.expires_at:
+        now = self.clock()
+        if approval.is_final or now < approval.request.expires_at:
             return approval
         expired = approval.transition(_A.EXPIRED)
         self.approvals[approval.id] = expired
-        self._tell(expired)
+        self.outbox.append(decision_event(expired, at=now))
         return expired
 
-    def _tell(self, approval: Approval) -> None:
-        for listener in self.listeners:
-            listener(approval)
+
+def decision_event(approval: Approval, *, at: datetime) -> OutboxMessage:
+    """`approvals.decided.v1`: the approval reached approved, rejected or expired. IDs and the
+    outcome only (EVENT_CATALOG rule 3): never the parameters, the summary or the evidence."""
+    if approval.state not in _ENDINGS and approval.state is not _A.APPROVED:
+        raise ValueError(f"an approval is not decided while {approval.state.value}")
+    request = approval.request
+    decider = approval.decided_by
+    waiting = request.waiting_execution_id
+    action = request.action_execution_id
+    return publish(
+        DomainEvent(
+            event_type=APPROVAL_DECIDED,
+            organization_id=request.organization_id,
+            shop_id=request.shop_id,
+            # One event per decided state (Codex on #175): an approved approval may still expire
+            # before it runs, and that second event needs its own key (and event ID), or the
+            # outbox's `on conflict (idempotency_key) do nothing` drops it.
+            idempotency_key=f"{APPROVAL_DECIDED}:{approval.id}:{approval.state.value}",
+            occurred_at=at,
+            actor=APPROVALS_ACTOR if decider is None else ActorRef(ActorKind.USER, str(decider)),
+            payload={
+                "approval_id": str(approval.id),
+                "state": approval.state.value,
+                "action": request.action.name,
+                "action_version": request.action.version,
+                "waiting_execution_id": None if waiting is None else str(waiting),
+                "action_execution_id": None if action is None else str(action),
+                "decided_by": None if decider is None else str(decider),
+            },
+        )
+    )
 
 
-def approval_request_for(
+def approval_request_for(  # noqa: PLR0913 - the request, its checks and the action that waits
     request: ActionRequest,
     *,
     request_hash: str,
     definition: ActionDefinition,
     now: datetime,
     ttl: timedelta = DEFAULT_TTL,
+    action_execution_id: uuid.UUID | None = None,
 ) -> ApprovalRequest:
     """The approval for a gateway request; every text is a template, never model output."""
     policy = definition.approval_policy
@@ -261,6 +318,7 @@ def approval_request_for(
         decided_by_roles=decider_roles(policy),
         requires_step_up=needs_step_up(policy),
         waiting_execution_id=waiting,
+        action_execution_id=action_execution_id,
     )
 
 
@@ -272,11 +330,20 @@ class GatewayApprovals:
         self._clock = clock
 
     def request(
-        self, request: ActionRequest, *, request_hash: str, definition: ActionDefinition
+        self,
+        request: ActionRequest,
+        *,
+        request_hash: str,
+        definition: ActionDefinition,
+        action_execution_id: uuid.UUID,
     ) -> uuid.UUID:
         return self._service.request(
             approval_request_for(
-                request, request_hash=request_hash, definition=definition, now=self._clock()
+                request,
+                request_hash=request_hash,
+                definition=definition,
+                now=self._clock(),
+                action_execution_id=action_execution_id,
             )
         ).id
 
@@ -293,15 +360,60 @@ class GatewayApprovals:
         self._service.executed(approval_id, execution_id=execution_id)
 
 
+class NoApprovals:
+    """The worker's `ApprovalGate` until the Postgres store (slice 7.11): a write is recorded as
+    pending and waits, and nothing can approve it here, so no write ever runs in the worker."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.pending: dict[uuid.UUID, str] = {}  # approval ID -> request hash
+
+    def request(
+        self,
+        request: ActionRequest,  # noqa: ARG002 - the port
+        *,
+        request_hash: str,
+        definition: ActionDefinition,  # noqa: ARG002 - the port
+        action_execution_id: uuid.UUID,  # noqa: ARG002 - the port
+    ) -> uuid.UUID:
+        approval_id = uuid.uuid5(_NO_APPROVALS, request_hash)
+        with self._lock:
+            self.pending[approval_id] = request_hash
+        return approval_id
+
+    def is_approved(self, approval_id: uuid.UUID, *, request_hash: str) -> bool:  # noqa: ARG002
+        return False
+
+    def executed(self, approval_id: uuid.UUID, *, execution_id: uuid.UUID) -> None:
+        raise AlreadyExecutedError(
+            f"{approval_id} was never approved, so {execution_id} cannot run"
+        )
+
+
+_NO_APPROVALS = uuid.UUID("0b6f4f1e-2a8c-5d3b-9e47-6c1a2f8d0e35")
+
+
 class WaitingExecutions(Protocol):
     """What the resumer needs of the durable engine."""
 
     def resume(
-        self, organization_id: uuid.UUID, execution_id: uuid.UUID, *, actor: ActorRef, reason: str
+        self,
+        organization_id: uuid.UUID,
+        execution_id: uuid.UUID,
+        *,
+        actor: ActorRef,
+        reason: str,
+        waiting_for: uuid.UUID | None = None,
     ) -> object: ...
 
     def cancel_waiting(
-        self, organization_id: uuid.UUID, execution_id: uuid.UUID, *, actor: ActorRef, reason: str
+        self,
+        organization_id: uuid.UUID,
+        execution_id: uuid.UUID,
+        *,
+        actor: ActorRef,
+        reason: str,
+        waiting_for: uuid.UUID | None = None,
     ) -> object: ...
 
 
@@ -309,29 +421,59 @@ _ENDINGS = {_A.REJECTED: "approval_rejected", _A.EXPIRED: "approval_expired"}
 
 
 class ApprovalResumer:
-    """On a decision, the waiting automation execution resumes once or ends CANCELLED."""
+    """The `approvals.decided.v1` subscriber: the waiting automation execution resumes once, or
+    ends CANCELLED with the reason. It runs in whichever process delivers the event (the worker),
+    never in the process that took the decision."""
 
-    def __init__(self, engine: WaitingExecutions) -> None:
+    def __init__(self, engine: WaitingExecutions, *, offload: Offload = run_inline) -> None:
         self._engine = engine
+        self._offload = offload
 
-    def __call__(self, approval: Approval) -> None:
-        execution_id = approval.request.waiting_execution_id
-        if execution_id is None:
-            return
-        organization = approval.request.organization_id
-        actor = (
-            ActorRef(ActorKind.USER, str(approval.decided_by))
-            if approval.decided_by is not None
-            else ActorRef(ActorKind.SYSTEM, "approvals")
-        )
+    async def handle(self, message: OutboxMessage) -> None:
+        facts = event_payload(message)
+        raw_execution, raw_state = facts.get("waiting_execution_id"), facts.get("state")
+        if not isinstance(raw_execution, str) or not isinstance(raw_state, str):
+            return  # nothing waits for this approval
+        raw_action = facts.get("action_execution_id")
         try:
-            if approval.state is _A.APPROVED:
+            execution_id, state = uuid.UUID(raw_execution), ApprovalState(raw_state)
+            # The wait the decision was taken for (Codex on #175): never another one.
+            action_id = uuid.UUID(raw_action) if isinstance(raw_action, str) else None
+        except ValueError:
+            raise MalformedEventError(f"{APPROVAL_DECIDED} names no execution or state") from None
+        if action_id is None:
+            raise MalformedEventError(f"{APPROVAL_DECIDED} names no action the execution waits on")
+        decider = facts.get("decided_by")
+        actor = ActorRef(ActorKind.USER, decider) if isinstance(decider, str) else APPROVALS_ACTOR
+        organization = message.organization_id
+        await self._offload(lambda: self._move(organization, execution_id, action_id, state, actor))
+
+    def _move(
+        self,
+        organization: uuid.UUID,
+        execution_id: uuid.UUID,
+        action_id: uuid.UUID,
+        state: ApprovalState,
+        actor: ActorRef,
+    ) -> None:
+        try:
+            if state is _A.APPROVED:
                 self._engine.resume(
-                    organization, execution_id, actor=actor, reason="approval_approved"
+                    organization,
+                    execution_id,
+                    actor=actor,
+                    reason="approval_approved",
+                    waiting_for=action_id,
                 )
-            elif approval.state in _ENDINGS:
+            elif state in _ENDINGS:
                 self._engine.cancel_waiting(
-                    organization, execution_id, actor=actor, reason=_ENDINGS[approval.state]
+                    organization,
+                    execution_id,
+                    actor=actor,
+                    reason=_ENDINGS[state],
+                    waiting_for=action_id,
                 )
         except NotWaitingError, ExecutionNotFoundError:
-            return  # resumed or ended already: a decision moves a waiting execution once
+            # Resumed or ended already, or waiting for another action now (a replay after a
+            # later wait): a decision moves the wait it was taken for, once.
+            return
