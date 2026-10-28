@@ -231,6 +231,11 @@ workers:
         scope: RUN_TIME
         type: SECRET
         value: ${PGPASSWORD}
+      # AC-6.7.4: a dead-lettered automation execution is reported to Sentry (blank means off).
+      - key: HTCO_SENTRY_DSN
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_SENTRY_DSN}
       # The daily maintenance (job-queue operations): read-only Etsy probes, refresh-token expiry
       # checks, the purge of disconnected shops after their date, pruning of finished jobs. And
       # reconciliation (5.5; activation step 4 of 5.11) at HTCO_RECONCILIATION_SCHEDULE's times.

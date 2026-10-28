@@ -24,6 +24,7 @@ from htco_application.alerts import OUT_OF_STOCK_EVENT, StockAlerts
 from htco_application.approvals import GatewayApprovals, MemoryApprovalService
 from htco_application.automation.durable import (
     EXECUTION_JOB,
+    DeadLetterReporter,
     DurableAutomationEngine,
     Handler,
     OutputCheck,
@@ -173,6 +174,7 @@ from htco_platform.http import new_async_http_client
 from htco_platform.logs import configure_logging
 from htco_platform.settings import ConfigurationError, load_settings
 from htco_platform.tracing import new_tracer_provider
+from htco_worker.error_reports import dead_letter_reporter, worker_error_reporter
 from htco_worker.health import serve_health
 from htco_worker.runner import JobHandler, Worker, WorkerConfig
 from htco_worker.settings import SCHEDULES, WorkerSettings
@@ -372,6 +374,7 @@ def worker_engine(
     gateway: ActionGateway | None = None,
     handlers: Mapping[str, Handler] | None = None,
     output_check: OutputCheck | None = None,
+    on_dead_letter: DeadLetterReporter | None = None,
 ) -> DurableAutomationEngine:
     """The engine on the worker's pool: definitions from the database, the deployed handlers
     (Etsy Order Intake, slice 5.4) and the Action Gateway. A deployed handler still runs only once
@@ -386,6 +389,7 @@ def worker_engine(
         gateway=gateway or UnavailableGateway(),
         offload=anyio.to_thread.run_sync,
         output_check=output_check,
+        on_dead_letter=on_dead_letter,
     )
 
 
@@ -701,9 +705,15 @@ async def _serve(settings: WorkerSettings) -> None:
     gateway = worker_gateway(settings, database, etsy.gateway_adapter)
     deployed = {} if vault is None or adapter is None else intake_handlers(database, vault)
     deployed |= fulfillment_handlers(database, None if adapter is None else vault)
+    # Sentry when HTCO_SENTRY_DSN is set; a dead letter reaches it (AC-6.7.4).
+    error_reporter = worker_error_reporter(settings)
     # A completed run keeps only what its automation's typed output model allows (#127).
     engine = worker_engine(
-        database, gateway=gateway, handlers=deployed, output_check=TypedOutputs().check
+        database,
+        gateway=gateway,
+        handlers=deployed,
+        output_check=TypedOutputs().check,
+        on_dead_letter=dead_letter_reporter(error_reporter),
     )
     handlers |= outbox_handlers(
         PostgresOutbox(database),
@@ -766,6 +776,8 @@ async def _serve(settings: WorkerSettings) -> None:
     finally:
         await http.aclose()
         await database.stop()
+        # Reports queued just before a deploy or restart are delivered, not lost.
+        error_reporter.close()
 
 
 async def stop_on_signal(stop: anyio.Event) -> None:

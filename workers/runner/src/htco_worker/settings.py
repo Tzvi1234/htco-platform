@@ -44,6 +44,8 @@ class WorkerSettings(BaseSettings):
     environment: Literal["local", "test", "staging", "production"]
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     release: str | None = None
+    # Error monitoring (AC-6.7.4: dead-lettered executions) is off without a DSN. A secret.
+    sentry_dsn: SecretStr | None = None
     # The same database as the API; the worker's connections switch to the `htco_worker` role.
     database_url: SecretStr
     # Defaults to the host name and process ID, unique per running process.
@@ -86,6 +88,7 @@ class WorkerSettings(BaseSettings):
     office_url: str = Field(default="https://office.ht-co.app", pattern=r"^https://[^\s]+$")
 
     @field_validator(
+        "sentry_dsn",
         "etsy_keystring",
         "etsy_shared_secret",
         "token_vault_key",
