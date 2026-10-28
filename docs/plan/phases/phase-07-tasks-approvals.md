@@ -12,7 +12,7 @@
 ## Progress
 
 - [ ] 7.1 Tasks
-- [ ] 7.2 Policy engine v1
+- [x] 7.2 Policy engine v1
 - [ ] 7.3 Approvals
 - [ ] 7.4 Step-up rules for approvals
 - [ ] 7.5 Approvals inbox and task views
