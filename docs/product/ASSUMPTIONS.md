@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Purpose** | Every unverified assumption and every pending decision, with an owner and a deadline. Nothing here may silently become "fact" in code. |
-| **Last updated** | 2026-10-23 |
+| **Last updated** | 2026-10-28 (audit: D-08, D-11, A-01, A-02, A-03 and A-22 recorded; the duplicate A-20 renumbered) |
 
 Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong; plan adjusted) · **Decided**.
 
@@ -18,10 +18,10 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 | D-05 | Native app order: Android after the operational core, Windows last | Yes | Phase 15 | Open |
 | D-06 | Monthly AI budget cap for the pilot | Owner sets a number | Phase 9 | Open |
 | D-07 | Repository license while private | Proprietary, all rights reserved; revisit before going public | Now | Decided (proprietary) |
-| D-08 | A machine account for AI agents' pull requests, so the owner can review and approve them | Yes, from Phase 1 | Phase 1 | Open |
+| D-08 | A machine account for AI agents' pull requests, so the owner can review and approve them | Yes, from Phase 1 | Phase 1 | Decided in practice (recorded by the audit of 2026-10-28; the owner confirms): no machine account yet; the AI build team opens its pull requests from the owner's account with the GitHub no-reply identity, and each one passes the review gate (security, architecture, feature and Codex reviews) before it merges. A machine account for engineering employees stays D-15's question (Phase 19) |
 | D-09 | Point-in-time recovery (about $100+/month) vs daily backups | Daily backups for the pilot; decide before launch | Phase 20 | Open |
 | D-10 | Hermes integration as a channel for Lia (Owner Assistant) | Decide in Phase 15 | Phase 15 | Open |
-| D-11 | DNS provider for `ht-co.app` | Same provider as the owner's other domains, or Cloudflare | Phase 1 | Open |
+| D-11 | DNS provider for `ht-co.app` | Same provider as the owner's other domains, or Cloudflare | Phase 1 | Decided (recorded by the audit of 2026-10-28): Cloudflare DNS; `api.ht-co.app` is a DNS-only CNAME to App Platform ([platform-skeleton operations](../features/platform-skeleton/operations.md)), and `dash.ht-co.app` serves the web app |
 | D-12 | Git commit identity for these repositories (current global email or the GitHub no-reply address) before they ever become public | GitHub no-reply address | Before going public | Open |
 | D-13 | The living-office organization (16 employees, Jev, automations, tools, engineering) | Accepted as [ADR-0012](../adr/0012-living-office-organization.md) | Now | Decided (owner's brief, 2026-10-14) |
 | D-14 | Autonomy level of each employee at activation | Start at the level in PRD §8.1; promote only after its evaluation | Each activation phase | Open |
@@ -41,16 +41,16 @@ Status: **Open** (not yet checked) · **Verified** · **Rejected** (proved wrong
 
 | ID | Assumption | How to verify | Owner | By | Status |
 |---|---|---|---|---|---|
-| A-01 | The domain `ht-co.app` is available or owned | Registrar search | Owner | Phase 0 | Open |
-| A-02 | The owner can register an Etsy Seller App for the pilot shop | Etsy developer portal | Owner | Phase 0 | Open |
-| A-03 | Etsy order webhooks are available to a Seller App | Developer portal "webhooks" option | Owner + platform | Phase 0 | Open |
+| A-01 | The domain `ht-co.app` is available or owned | Registrar search | Owner | Phase 0 | Verified (recorded by the audit of 2026-10-28): owned; `api.ht-co.app` and `dash.ht-co.app` are live |
+| A-02 | The owner can register an Etsy Seller App for the pilot shop | Etsy developer portal | Owner | Phase 0 | Verified (recorded by the audit of 2026-10-28): the app is registered, and LeatherPY is connected in production through the Phase 4 OAuth flow |
+| A-03 | Etsy order webhooks are available to a Seller App | Developer portal "webhooks" option | Owner + platform | Phase 0 | Verified (recorded by the audit of 2026-10-28): webhooks work for personal apps since 2026-02-17; the endpoint `https://api.ht-co.app/webhooks/etsy` is registered and `HTCO_ETSY_WEBHOOKS_ENABLED` is on in production since #162 ([orders-ingest operations](../features/orders-ingest/operations.md#registering-the-webhook-in-the-etsy-developer-portal)) |
 | A-04 | `createReceiptShipment` is permitted for our app in the shop's region | Capability probe on a real receipt without sending a shipment | Platform | Phase 4 | Open |
 | A-05 | AutoVA writes tracking numbers to Etsy for every fulfilled order | Compare 20 recent orders in Etsy and AutoVA | Owner | Phase 0 | Answered 2026-10-23: no; the owner copies tracking from AutoVA to Etsy by hand. Covered by the relay (slice 6.10) |
 | A-06 | AutoVA offers an API, export or partner integration | Ask AutoVA support | Owner | Phase 0 | Open |
 | A-07 | AutoVA's automatic supplier ordering is active for the shop (their site calls it a concept demonstration) | Owner's AutoVA account | Owner | Phase 0 | Answered 2026-10-23: yes. AutoVA creates the supplier order for a mapped product and pays with its Auto Pay; for a new product it requests quotes by email ([AutoVA integration](../architecture/autova-integration.md)) |
 | A-08 | Where AutoVA shows tracking, how its account signs in (password, TOTP or another provider), and whether its terms allow reading the owner's own account with a browser | The owner checks his AutoVA account and AutoVA's terms | Owner | Phase 6 | Partly answered 2026-10-23: tracking is on the Orders page (with carrier, status, paid flag and profit) and in its Export file; sign-in is email and password with no TOTP. **Open:** whether AutoVA's terms allow reading the account (A-01) and approving quotes (A-02) with a browser |
 | A-09 | AutoVA's quote emails: the sending address, the layout, and whether tracking emails also exist | The owner forwards three sample quote mails and names the sender | Owner | Phase 7 | Changed 2026-10-23: every new-product quote arrives by email (slice 7.14); the sending address is not known yet. Tracking comes from AutoVA's Export and Orders page (A-01), not email |
-| A-20 | Etsy rate limits for our key are enough for polling every few minutes (numbered A-08 until 2026-10-23) | Developer portal numbers | Owner | Phase 0 | Open |
+| A-22 | Etsy rate limits for our key are enough for polling every few minutes (numbered A-08 until 2026-10-23 and A-20 until 2026-10-28, when the audit found A-20 used twice; A-20 stays the relay window, which code cites) | Developer portal numbers | Owner | Phase 0 | Verified (recorded by the audit of 2026-10-28): the limits are per app key, about 10 requests a second and 10,000 a day ([dashboard data](../features/etsy-integration/dashboard-data.md)), read from the `x-limit-*` and `x-remaining-*` headers; the design polls nothing every few minutes (webhooks first, reconciliation twice a day, about 8 calls a day for the pilot shop, slice 5.5). Still open: the exact figures for 5.15's configured QPS and QPD, an owner question |
 | A-21 | Etsy's current API Terms allow storing order data for our retention periods and sending buyer data to AI models when needed (numbered A-09 until 2026-10-23; ADR-0018's "assumption A-09" means this row) | Owner reads the live terms | Owner | Phase 4 | Open |
 | A-10 | LangGraph works on Python 3.14 in our setup | Smoke test in Phase 1 CI | Platform | Phase 1 | Verified 2026-10-14 (langgraph 1.2.14 on CPython 3.14.8, `tests/agent_runtime`) |
 | A-11 | The Python Supabase client supports a server-side PKCE exchange (or the Auth REST API is used directly) | Spike | Platform | Phase 2 | Open |

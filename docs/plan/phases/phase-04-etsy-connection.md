@@ -99,7 +99,7 @@ Shop card: connection status, scopes, capabilities with plain-language explanati
 
 | ID | Acceptance criterion |
 |---|---|
-| AC-4.6.1 | "Capability blocked" states explain the allowed alternative (for example, "AutoVA writes tracking for you; HTCO reads it"). |
+| AC-4.6.1 | "Capability blocked" states explain the allowed alternative (for example, "Copy the tracking number into Etsy; HTCO reads it there"; AutoVA does not write tracking to Etsy, A-05). |
 | AC-4.6.2 | All states (connected, needs re-auth, disconnected, probing, error) have screenshot tests in he/en × light/dark. |
 
 ### 4.7 — Disconnect and data protection baseline

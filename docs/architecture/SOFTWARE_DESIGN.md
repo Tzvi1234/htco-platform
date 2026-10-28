@@ -213,7 +213,7 @@ All external systems sit behind ports owned by the application layer.
 |---|---|---|
 | `MarketplacePort` | `EtsyAdapter` (later `ShopifyAdapter`) | OAuth with PKCE, token refresh with a per-shop lock, `x-api-key` header, rate-limit budget per app key (Etsy's limits are per app) read from response headers, deferring routine calls below a daily floor, typed errors for 401, 403, 404, 409, 429 and 5xx |
 | `WebhookVerifier` | Standard Webhooks (HMAC-SHA256 over `id.timestamp.body`) | Shared by Etsy and Resend webhooks; 5-minute timestamp tolerance; raw body only |
-| `AutoVaPort` | `ManualAutoVaAdapter` first; API adapter if AutoVA offers one; browser adapter only by ADR | Tracking does not need AutoVA access: AutoVA writes tracking to Etsy and we read it there |
+| `AutoVaPort` | `ManualAutoVaAdapter` first; API adapter if AutoVA offers one; browser adapter only by ADR | Tracking does not need AutoVA access: we read it from Etsy. AutoVA does not write it there (A-05); the owner copies it, helped by the relay of slice 6.10 (ADR-0009, amended 2026-10-28) |
 | `EmailPort` | `ResendAdapter` | Idempotency keys on send; inbound via `email.received` webhook then fetch content; attachments copied within one hour |
 | `ModelGateway` | `AnthropicAdapter`, `OpenAIAdapter` (official SDKs) | Only path to models; see §9 |
 | `DecisionAdvisor` | TypeSafe Jev adapter, economy model through the gateway (Phase 9) | Typed decisions (choice or score) after deterministic rules; schema-validated; benchmarked before use ([ADR-0015](../adr/0015-decision-advisor-and-routing.md)) |
