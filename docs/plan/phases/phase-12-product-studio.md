@@ -22,6 +22,9 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 12.7 Catalog Draft Creation & Publishing automation
 - [ ] 12.8 Shon and Nika activated
 - [ ] 12.9 Product Studio UI
+- [ ] 12.9a Product page panels
+- [ ] 12.10 Shop structure writes on the web
+- [ ] 12.11 Catalog checks on the web
 
 ## Architecture upgrade (2026-10-23)
 
@@ -77,6 +80,9 @@ Daniel and Noam are already active (Phase 11); their sheets get a new profile ve
 | 12.7 | Catalog Draft Creation & Publishing: draft → images → inventory → approval → activate; verify by re-read; replaces the Phase 11 listing-update handler | Activation only after approval; listing fee charged only then; replaying a trigger creates no second draft |
 | 12.8 | Shon and Nika activated; Daniel and Noam re-evaluated for their new responsibilities | Sheets defined, evaluations passed, autonomy approved, routing measured |
 | 12.9 | Product Studio UI: pipeline board, product page, approvals, who did what from activity records | Pipeline state visible per product, from recorded activity only |
+| 12.9a | Product page, one panel per stage: variants and sources; Shon's research with its cited sources, estimates labelled as estimates; the screening result (`APPROVED`, `REVIEW`, `REJECTED` or `NOT_ALLOWED_ON_ETSY`) with reasons, sources and confidence, where the owner decides a `REVIEW` case; Noam's copy with the validator's result; Nika's images with provenance and edit history; Daniel's computed price with its inputs, the margin floor and his explanation; Noa's review or sampling decision; each publishing step with its re-read result | Every panel shows recorded data only, with its time and actor; only the owner decides a `REVIEW` case; the price shown is the `pricing.calculate` result |
+| 12.10 | Shop structure on the web: shipping profiles, return policies and processing profiles edited on the Shipping screen through `etsy.shipping_profiles.manage`, `etsy.return_policies.manage` and `etsy.processing_profiles.manage` (W2), and a draft or listing deleted through `etsy.listings.delete` (W3); sections stay with 7.12 | Owner-trigger first on each shop; each change shows its before and after, needs step-up, is re-read and audited, and Etsy's error is shown as it is; a delete needs an Owner (W3) approval |
+| 12.11 | Catalog checks on the web: listings per return policy, with duplicate policies proposed for consolidation; listings whose production partner is missing or inconsistent with the catalog's supplier; digital listings without files or with outdated files; Noam's drafted translations for missing languages | Each check lists its listings with evidence; a consolidation or a translation is applied only after approval |
 
 ## Test plan
 

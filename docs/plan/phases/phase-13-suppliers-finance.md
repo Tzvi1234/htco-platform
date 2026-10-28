@@ -15,14 +15,23 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 
 - [ ] 13.1 AutoVA read side and non-AutoVA suppliers on the Phase 7 quote model
 - [ ] 13.2 Supplier Quote Request & Follow-up automation
+- [ ] 13.2a Suppliers and quote requests on the web
 - [ ] 13.3 Hard rules in code
+- [ ] 13.3a Refused quotes on the quote screen
 - [ ] 13.4 Tom's evaluation and optional ranking
 - [ ] 13.5 Inventory & Supplier Price Monitoring automation
+- [ ] 13.5a Monitored mappings on the web
 - [ ] 13.6 Finance Ledger Ingestion automation
 - [ ] 13.7 P&L views and unit costs
+- [ ] 13.7a Order profit and fee share
+- [ ] 13.7b Sales insights
+- [ ] 13.7c Accountant report and exports
+- [ ] 13.7d Payout matching
 - [ ] 13.8 Roni's review and narrative
+- [ ] 13.8a Roni's narrative on the web
 - [ ] 13.9 Tom and Roni activated
 - [ ] 13.10 Money actions that the API cannot do (Human channel; browser rows B-08 to B-11 only if scoped)
+- [ ] 13.10a Money actions and statements on the web
 
 ## Architecture upgrade (2026-10-23)
 
@@ -58,6 +67,8 @@ Supplier quotes are collected and approved once per product or variant, and beco
 
 No scraping of etsy.com.
 
+**Placement (2026-10-27).** The Shop Manager CSV upload is built in Phase 11 (AC-11.8.3), which comes before this phase in [EXECUTION_ORDER](../EXECUTION_ORDER.md) (row 31) and matches FEATURE_BACKLOG. At this phase's kickoff, only an App Marketplace tool's API or export is still evaluated, as an extra source.
+
 
 **In:** quote requests, quotes and mappings; the Supplier Quote Request & Follow-up automation (records the request, waits in `WAITING_FOR_QUOTES` without model calls, collects quotes, applies hard rules, notifies Tom); hard-rule filtering in code; Tom's evaluation of valid quotes, with optional ranking through the Decision Advisor only after a benchmark on 200+ labelled cases; approval by risk; supplier mappings; Inventory & Supplier Price Monitoring opening re-sourcing tasks; `AutoVaPort` adapters (manual first; API if AutoVA provides one); Finance Ledger Ingestion from Etsy payment and ledger endpoints, refunds, payouts, cost snapshots, AI and infrastructure costs (from `model_usage`); P&L views; unit costs per listing, ticket, inspected order, repair, shop, employee and department; CSV export with audit; Roni's monthly narrative and anomaly review (explains, never records).
 
@@ -88,14 +99,23 @@ Employees follow the activation rule of [Phase 9](phase-09-router-advisor.md) sl
 |---|---|---|
 | 13.1 | Builds on the Phase 7 model (7.13): the `AutoVaPort` read side over `autova_orders` (A-01) and manual entries for non-AutoVA suppliers | No second quote or mapping table (schema inventory test); changes open re-sourcing tasks |
 | 13.2 | Supplier Quote Request & Follow-up (active since Phase 7 for AutoVA quotes) extended to non-AutoVA suppliers: requests, multi-day waits, follow-ups | Waits without model calls or open runtime sessions; replay sends no second request |
+| 13.2a | Web: a Suppliers screen lists AutoVA and manual suppliers with their active mappings; a permitted user adds or edits a non-AutoVA supplier and enters its quote; the quote screen (7.16) shows each request's state, the follow-ups sent and the next one due | Manual entries are validated (Decimal with currency) and audited; request states and follow-up times come from recorded jobs |
 | 13.3 | Hard rules (variant match, stock, price and shipping limits) in code | Invalid quotes never reach Tom or ranking (property tests) |
+| 13.3a | Web: a quote that fails a hard rule stays on the quote screen, greyed out with the rule it failed and the values compared | A refused quote cannot be chosen, on the screen or through the API |
 | 13.4 | Tom evaluates valid quotes and recommends one on the Phase 7 quote screen; optional ranking through the Decision Advisor after a benchmark of 200+ labelled cases; the owner still decides each quote (W3) | False-approve rate under threshold, else rules only; money math stays in code |
 | 13.5 | Inventory & Supplier Price Monitoring for active mappings | A price, stock or validity change opens one re-sourcing task for Tom |
+| 13.5a | Web: each active supplier mapping shows its last monitored price, stock and validity with the check time, and its open re-sourcing task or inventory approval, if any | Every value names its source and check time; a check past its schedule is shown as stale |
 | 13.6 | Finance Ledger Ingestion from Etsy payments and ledger entries; refunds; payouts; FX source; AI cost from `model_usage` | Ledger reconciles with Etsy payouts for a full month (through Order & Financial Reconciliation); Decimal only |
 | 13.7 | P&L views with `ESTIMATED`/`VERIFIED` labels; unit costs per employee and department | Every figure links to its source entries |
+| 13.7a | Web: profit per order on the order detail, AutoVA's figure labelled `ESTIMATED` until the ledger's `VERIFIED` figure replaces it, with the difference when it opened a finding; Etsy fees as a share of revenue per month, by fee type (transaction, processing, listing, ads, offsite ads) | Every figure is labelled `ESTIMATED` or `VERIFIED` and links to its source entries |
+| 13.7b | Web: sales insights: units per listing by week and month, this year against last year, a forecast with its stock-out date, and for each sale or coupon the orders, revenue and margin before, during and after it | Each chart states its method (seasonal naive, then exponential smoothing), period and source; money in Decimal |
+| 13.7c | Web: the monthly accountant report (revenue, fees, refunds, payouts and VAT-relevant totals per country, reconciled with the ledger) as CSV and PDF, and CSV export of the P&L views | Exports are limited to finance roles and audited; every total equals the ledger for its month |
+| 13.7d | Web: payout matching: the owner uploads the bank's CSV, and each ledger disbursement shows as matched or unmatched to a deposit | The file is validated before anything is stored; an unmatched disbursement opens one finding |
 | 13.8 | Roni's monthly narrative and anomaly review | No figure in the narrative differs from the ledger; Roni has no tool that records entries |
+| 13.8a | Web: Roni's monthly narrative and anomaly review beside the P&L views | Every figure in the narrative links to its ledger entries; the narrative is labelled as Roni's explanation |
 | 13.9 | Tom and Roni activated | Sheets defined, evaluations passed, autonomy approved, routing measured |
 | 13.10 | Refunds, cancellations, coupons, sales and Ads budget changes as Human tasks with approved values; the monthly statement download (B-11) as a recipe if scoped | No money action runs without an Owner (W3) approval; a browser money action is refused while its scope row is empty or the written confirmation is missing |
+| 13.10a | Web: the order detail offers Refund and Cancel, and a Promotions screen offers a coupon, a sale or an Ads budget change, each with its amount or terms and a reason; each creates an Owner (W3) approval and, once approved, a Human task with the approved values and a "done in Etsy" confirmation; the monthly statement (B-11), where scoped, is listed by month | A Human task carries only the approved values; every confirmation is audited |
 
 ## Test plan
 

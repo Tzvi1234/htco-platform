@@ -16,7 +16,7 @@
 - [x] 4.3 OAuth connect flow ([connect flow](../../features/etsy-integration/connect-flow.md))
 - [x] 4.4 Token refresh (platform; the shop card warning and overview banner are shown by slice 4.6)
 - [x] 4.5 Capability probes (platform; the shop card shows them in `htco-clients`; [operations](../../features/etsy-integration/operations.md#capability-probes))
-- [x] 4.6 Shops UI (the shop card in `htco-clients`), and the shop's live data on the dashboard: Shops, Home, Orders, Products, Shipping and Customers read Etsy through read-only endpoints ([dashboard data](../../features/etsy-integration/dashboard-data.md))
+- [ ] 4.6 (reopened 2026-10-27 for its web step, AC-4.6.3) Shops UI (the shop card in `htco-clients`), and the shop's live data on the dashboard: Shops, Home, Orders, Products, Shipping and Customers read Etsy through read-only endpoints ([dashboard data](../../features/etsy-integration/dashboard-data.md))
 - [ ] 4.7 Disconnect and data protection baseline (disconnect done at the platform; the restore rehearsal waits for the owner, see [operations](../../features/etsy-integration/operations.md#rehearsal-record))
 
 ## Goal
@@ -99,6 +99,7 @@ Shop card: connection status, scopes, capabilities with plain-language explanati
 |---|---|
 | AC-4.6.1 | "Capability blocked" states explain the allowed alternative (for example, "AutoVA writes tracking for you; HTCO reads it"). |
 | AC-4.6.2 | All states (connected, needs re-auth, disconnected, probing, error) have screenshot tests in he/en × light/dark. |
+| AC-4.6.3 | For the Owner and Admins, the shop card's token health shows the access and refresh tokens' expiry, the failed-refresh count and the key metadata of FR-ADM-02 (the vault key ID and the Etsy app key's fingerprint), never a token, secret or key value. |
 
 ### 4.7 — Disconnect and data protection baseline
 
@@ -108,6 +109,7 @@ Disconnect deletes the tokens (and revokes them at Etsy if Etsy offers a way, A-
 |---|---|
 | AC-4.7.1 | After disconnect, no Etsy call is made for that shop (verified by a test with a strict HTTP mock). |
 | AC-4.7.2 | Restore rehearsal record exists in `docs/features/etsy-integration/operations.md` before the real shop is connected in production. |
+| AC-4.7.3 | The disconnect confirmation says the shop's synced data is deleted 30 days later (records under legal retention excepted), and a disconnected shop card shows its purge date (`purge_after`) and that reconnecting before that date keeps the data. |
 
 ## Test plan
 

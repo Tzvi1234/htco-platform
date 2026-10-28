@@ -112,6 +112,7 @@ Approvals inbox with approval cards (action, impact, cost range, risk, evidence,
 | AC-7.5.1 | Screen reader reads the approval card's action, reason, impact and risk in order. |
 | AC-7.5.2 | Approve and reject buttons are disabled with an explanation when the approval is expired or the user lacks permission. |
 | AC-7.5.3 | The card shows server time to expiry, not client time. |
+| AC-7.5.4 | **Working a task.** A task's detail shows its resources, assignee, SLA and history. A person completes it by recording its evidence (a pasted value, a confirmation or a linked record) or cancels it with a reason, and only the steps its state allows are offered. A Human task's detail then shows whether its waiting execution resumed or was cancelled (AC-7.11.2). |
 
 ### 7.6 — Notification preferences
 
@@ -120,6 +121,7 @@ Per severity and per shop; applied to in-app and email notifications.
 | ID | Acceptance criterion |
 |---|---|
 | AC-7.6.1 | Muting a shop stops its non-critical notifications; critical security notifications cannot be muted. |
+| AC-7.6.2 | **Preferences on the web.** On a Notifications page in their own settings, each user chooses in-app and email delivery per kind, severity and shop, email at once or in the morning summary, and the language of their emails. Critical security notices are shown as always on and cannot be switched off, and a change applies from the next notification. |
 
 ### 7.7 — Activity record store
 
@@ -152,6 +154,7 @@ Builds the daily and weekly operations summary from recorded activity only: orde
 | AC-7.9.1 | Every number in a report links to the activity records or rows it was computed from; a section whose source is unavailable says so instead of showing zero. |
 | AC-7.9.2 | Running the daily report twice for the same day sends one report (idempotency key per organization, report type and period). |
 | AC-7.9.3 | The specification has all 18 sections defined; replay, failure and recovery tests pass. |
+| AC-7.9.4 | **Reports on the web.** Each daily and weekly report opens in the web app from its notification, with the same sections and links as its email, and earlier reports stay listed, newest first. Phase 10's daily operations report (10.7) extends this page rather than adding a second one. |
 
 ### 7.10 — Agent Task Scheduling & Recovery automation
 
@@ -187,6 +190,7 @@ The Owner re-consents to `shops_w`. Each tool runs through the gateway with appr
 |---|---|
 | AC-7.12.1 | Turning vacation mode on and off from HTCO changes the shop and is verified by re-reading it; both runs are audited. |
 | AC-7.12.2 | A write that Etsy refuses shows Etsy's error, records it, and leaves the tool owner-trigger only. |
+| AC-7.12.3 | **The three tools on the shop page.** The shop page shows the announcement, the sale message, vacation mode with its message, the sections and the holiday preferences as re-read from Etsy, and the Owner changes each there behind step-up. Each tool shows its state on that shop as in AC-6.8.4 (with `shops_w` in place of `transactions_w`), and each run ends showing the re-read result or Etsy's error. |
 
 ### 7.13 — Supplier and quote model
 
@@ -227,6 +231,7 @@ Owner prerequisites:
 | AC-7.14.1 | The same quote mail delivered twice (or forwarded twice) produces one inbox row and one parse job. |
 | AC-7.14.2 | Mail from any sender other than the confirmed AutoVA address is quarantined and creates no quote. |
 | AC-7.14.3 | Option (a): an unsigned or wrongly signed inbound webhook is rejected. Option (b): the token's scope is `gmail.readonly` only, and the query is limited to the AutoVA sender. |
+| AC-7.14.4 | **The quote mailbox on Admin › Health.** The Owner and Admins see the option in use, when the last accepted mail arrived, and the quarantined mails counted by reason, never their content. With option (b), the Owner connects and disconnects the read-only Gmail account from the same panel, with step-up. |
 
 ### 7.15 — Deterministic AutoVA quote parser
 
@@ -243,6 +248,7 @@ A mail that does not parse exactly opens a Human task "check this quote" with th
 | AC-7.15.1 | Each sample mail parses to the expected quote (golden-file tests); a changed layout fails parsing and opens one Human task, never a wrong quote. |
 | AC-7.15.2 | An architecture test proves the parser imports nothing from the model gateway or the agent runtime. |
 | AC-7.15.3 | A quote for a product that already has an active mapping is stored as an alternative and raises no "new product" alert. |
+| AC-7.15.4 | **"Check this quote" on the web.** The task shows the mail as inert text (no scripts, no remote images, no live links) beside the parser's error. The person completes it by entering the quote in a form validated by the same Pydantic model, which links the quote to the mail, or cancels it with a reason. |
 
 ### 7.16 — "New product quotes" screen and notification
 
@@ -253,6 +259,7 @@ A mail that does not parse exactly opens a Human task "check this quote" with th
 |---|---|
 | AC-7.16.1 | A parsed quote appears under the right product within one minute of the mail's arrival. |
 | AC-7.16.2 | Totals are computed in code (Decimal) and match a property test; a quote past its validity is greyed out and cannot be chosen. |
+| AC-7.16.3 | **States and mappings on the screen.** Each product's card shows its quote request's state, from `WAITING_FOR_QUOTES` to `MAPPED` or `CANCELLED`. A mapped product shows its active supplier mapping with the quote and the approval it came from, and a closed mapping stays listed with its reason (AC-7.13.1). |
 
 ### 7.17 — The owner's choice of a quote, and the hand-off to AutoVA
 

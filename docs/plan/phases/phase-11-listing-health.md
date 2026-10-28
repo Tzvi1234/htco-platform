@@ -136,6 +136,9 @@ Dashboard (risk distribution, top findings, cost), finding detail with evidence 
 | ID | Acceptance criterion |
 |---|---|
 | AC-11.8.1 | The diff view is readable in Hebrew and English UI with English listing text kept LTR. |
+| AC-11.8.2 | **Revert an applied fix.** An applied fix's detail offers Revert, which creates an approval whose diff restores the stored "before" version. On approval it is applied and verified by the same write path as the fix (11.5), and a failed revert opens an incident. |
+| AC-11.8.3 | **Stats and Ads uploads.** The Owner uploads Shop Manager's stats CSV and the Ads report CSV on the web. Each file is validated before anything is stored, and rejected rows are listed with their reason. The views show visits, views, conversion, traffic sources and search terms (`shop_traffic_daily`, `listing_metrics`) and Ads spend and results (`ads_daily`) per day and per listing, with each file's period and upload time. Where recipe B-02 or B-03 is scoped, each figure names its source. |
+| AC-11.8.4 | **Deterministic checks on the web.** The dashboard shows the findings of each deterministic listing check, filterable by check, each with its listing and evidence: tags, title, photos and video, attributes required by the taxonomy node, processing and shipping profiles, ECGT fields, translation coverage, personalization questions against the orders' personalization errors, featured listings that are inactive, out of stock or unhealthy, and listings ending within 14 days. An expiring listing offers renewal as an approval that states its fee. A listing edit that HTCO did not make is shown with its diff against the last approved state. |
 
 ## Test plan
 
