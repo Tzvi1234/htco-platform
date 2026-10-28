@@ -40,7 +40,6 @@ from htco_application.access.authentication import AuthContext, NoMembershipErro
 from htco_application.owner_writes import (
     HOLIDAY_PREFERENCE,
     MARK_SHIPPED,
-    RECONNECT_PATH,
     TRACKING_UPLOAD,
     VACATION_MODE,
     HolidaysUnavailableError,
@@ -206,7 +205,7 @@ def _state_view(state: OwnerWriteState) -> OwnerWriteStateView:
         required_scope=state.scope, flag_on=state.flag_on, writes_halted=state.halted,
         enabled=state.enabled, scope_granted=state.scope_granted,
         reconsent_required=state.reconsent_required,
-        reconnect_url=RECONNECT_PATH if state.reconsent_required else None,
+        reconnect_url=state.reconnect_path,
         last_run=None if last is None else LastRunView(
             execution_id=last.execution_id, state=last.state, outcome=last.outcome,
             error_code=last.error_code, verified=last.verified,
@@ -263,7 +262,8 @@ def _problem(error: Exception) -> ProblemError:  # noqa: PLR0911 - one answer pe
         if error.code == "scope_missing":
             return ProblemError(
                 SCOPE_MISSING,
-                extra={"scope": error.state.scope or "", "reconnect_url": RECONNECT_PATH},
+                extra={"scope": error.state.scope or "",
+                       "reconnect_url": error.state.reconnect_path or ""},
             )
         return ProblemError(_REFUSALS[error.code])
     if isinstance(error, PressKeyReusedError):

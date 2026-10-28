@@ -51,8 +51,9 @@ from htco_domain.fulfillment import Carrier, TrackingNumber
 from htco_domain.identity import Role
 from htco_domain.relay import ClosedReason, RelayState
 
-# Where the web app starts the Etsy connect flow again, for a scope the grant lacks (AC-6.8.2).
-RECONNECT_PATH = "/v1/shops/etsy/connect"
+# Where the web app starts the Etsy connect flow again for one write's scope (AC-6.8.2): the
+# read scopes plus exactly that write scope, the Owner after a step-up (`reconsent_scope`).
+RECONNECT_PATH = "/v1/shops/{shop_id}/owner-writes/{key}/reconnect"
 VACATION_MESSAGE_MAX = 500
 
 # Why a press would be refused now, in the order the confirm sheet shows them.
@@ -249,6 +250,14 @@ class OwnerWriteState:
     halted: bool
     scope_granted: bool
     last_run: LastRun | None
+    shop_id: uuid.UUID | None = None
+
+    @property
+    def reconnect_path(self) -> str | None:
+        """The re-consent route for this write's scope, while the grant lacks it."""
+        if not self.reconsent_required or self.shop_id is None:
+            return None
+        return RECONNECT_PATH.format(shop_id=self.shop_id, key=self.write.key)
 
     @property
     def enabled(self) -> bool:
@@ -385,6 +394,7 @@ def _state(
     *,
     scopes: frozenset[str],
     last: LastRun | None,
+    shop_id: uuid.UUID,
 ) -> OwnerWriteState:
     definition = _definition(services, write)
     scope = _scope_of(definition)
@@ -397,6 +407,7 @@ def _state(
         halted=services.switches.halted(),
         scope_granted=scope is None or scope in scopes,
         last_run=last,
+        shop_id=shop_id,
     )
 
 
@@ -408,7 +419,8 @@ def _states(
 ) -> tuple[OwnerWriteState, ...]:
     scopes = services.shops.scopes_of(shop_id)
     last = services.history.last_runs(organization_id, shop_id, frozenset(w.action for w in writes))
-    return tuple(_state(services, w, scopes=scopes, last=last.get(w.action)) for w in writes)
+    return tuple(_state(services, w, scopes=scopes, last=last.get(w.action), shop_id=shop_id)
+        for w in writes)
 
 
 def owner_write_console(
@@ -770,3 +782,22 @@ async def upload_relay_tracking(  # noqa: PLR0913 - the caller, the item and the
         after = closed or services.relay.item(organization, item.id)
     [state] = _states(services, organization, item.shop_id, (TRACKING_UPLOAD,))
     return OwnerWriteRun(result, state, after)
+
+
+def reconsent_scope(
+    auth: AuthContext,
+    services: OwnerWriteServices,
+    *,
+    organization_id: uuid.UUID | None,
+    shop_id: uuid.UUID,
+    key: str,
+) -> tuple[uuid.UUID, str]:
+    """The organization and the one write scope to re-consent to for write `key` on the shop
+    (AC-6.8.2), for the Owner only. Raises the console's errors, `LookupError` for an unknown
+    write or one that needs no scope."""
+    organization = _organization(auth, organization_id)
+    _owner(auth, services, organization, shop_id)
+    scope = _scope_of(_definition(services, services.write(key)))
+    if scope is None:
+        raise LookupError(key)
+    return organization, scope
