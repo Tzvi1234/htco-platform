@@ -130,6 +130,18 @@ class SignedRequest:
     raw_timestamp: str
 
 
+def has_signature_headers(headers: Mapping[str, str]) -> bool:
+    """`webhook-id` (at most 200 characters), `webhook-timestamp` and `webhook-signature` are
+    all present and non-empty. Checked before the body is read: without them, refused at once."""
+    lower = {name.lower(): value for name, value in headers.items()}
+    webhook_id = lower.get("webhook-id", "").strip()
+    return (
+        0 < len(webhook_id) <= 200  # noqa: PLR2004
+        and bool(lower.get("webhook-timestamp", "").strip())
+        and bool(lower.get("webhook-signature", "").strip())
+    )
+
+
 def verify_signature(
     secret: WebhookSecret,
     headers: Mapping[str, str],
@@ -141,12 +153,12 @@ def verify_signature(
     """Standard Webhooks verification on the raw body. Raises `WebhookRejectedError`."""
     if len(body) > MAX_BODY_BYTES:
         raise WebhookRejectedError(Rejection.TOO_LARGE)
-    lower = {name.lower(): value for name, value in headers.items()}
-    webhook_id = lower.get("webhook-id", "").strip()
-    raw_timestamp = lower.get("webhook-timestamp", "").strip()
-    signatures = lower.get("webhook-signature", "").strip()
-    if not webhook_id or not raw_timestamp or not signatures or len(webhook_id) > 200:  # noqa: PLR2004
+    if not has_signature_headers(headers):
         raise WebhookRejectedError(Rejection.MISSING_HEADERS)
+    lower = {name.lower(): value for name, value in headers.items()}
+    webhook_id = lower["webhook-id"].strip()
+    raw_timestamp = lower["webhook-timestamp"].strip()
+    signatures = lower["webhook-signature"].strip()
     if not raw_timestamp.isdigit() or len(raw_timestamp) > 12:  # noqa: PLR2004
         raise WebhookRejectedError(Rejection.BAD_TIMESTAMP)
     sent = datetime.fromtimestamp(int(raw_timestamp), UTC)
@@ -346,9 +358,16 @@ class EtsyWebhookIngress:
     # Events stored without a job, by reason (the 5.9 metrics read these).
     unrouted: Counter[str] = field(default_factory=Counter)
 
+    def verify(self, headers: Mapping[str, str], body: bytes) -> SignedRequest:
+        """Step 1 alone: size, headers, timestamp and signature. Raises `WebhookRejectedError`."""
+        return verify_signature(self.secret, headers, body, now=self.clock())
+
     async def receive(self, headers: Mapping[str, str], body: bytes) -> Accepted:
+        return await self.accept(self.verify(headers, body), body)
+
+    async def accept(self, signed: SignedRequest, body: bytes) -> Accepted:
+        """Steps 2 and 3, for a body `verify` has just accepted."""
         now = self.clock()
-        signed = verify_signature(self.secret, headers, body, now=now)
         event = parse_event(body)
         shop = await self.shops.connected_shop(event.etsy_shop_id)
         inbox_event = InboxEvent(
@@ -401,16 +420,31 @@ def _unrouted_reason(event: EtsyWebhookEvent, shop: TenantShop | None) -> str | 
 @dataclass
 class WindowLimiter:
     """At most `limit` requests per `window` for each source; the rest get 429 with the seconds
-    until the window ends. In memory per API instance: a guard against floods, not a budget."""
+    until the window ends. In memory per API instance: a guard against floods, not a budget.
+
+    `POST /webhooks/etsy` uses two: a coarse one per client IP before anything is read, and the
+    Etsy-wide one (source `"etsy"`) charged only once the signature verifies, so unsigned traffic
+    cannot spend Etsy's allowance. At most `max_sources` windows are kept: past that, ended
+    windows are dropped, and a new source waits until one ends (bounded under a wide flood)."""
 
     limit: int
     window: timedelta = timedelta(seconds=1)
+    max_sources: int = 10_000
     _windows: dict[str, tuple[datetime, int]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def admit(self, source: str, *, now: datetime) -> float | None:
         """None when admitted; otherwise the seconds to wait."""
         with self._lock:
+            if source not in self._windows and len(self._windows) >= self.max_sources:
+                self._windows = {
+                    key: (start, used)
+                    for key, (start, used) in self._windows.items()
+                    if now - start < self.window
+                }
+                if len(self._windows) >= self.max_sources:
+                    oldest = min(start for start, _ in self._windows.values())
+                    return max(0.0, (oldest + self.window - now).total_seconds())
             start, used = self._windows.get(source, (now, 0))
             if now - start >= self.window:
                 start, used = now, 0

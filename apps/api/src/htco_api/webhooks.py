@@ -4,11 +4,15 @@ Off unless `HTCO_ETSY_WEBHOOKS_ENABLED` is true and `HTCO_ETSY_WEBHOOK_SECRET` i
 then answers 404 like any unknown path. Not signed in and not CSRF-checked (Etsy calls it); the
 Standard Webhooks signature is its authentication. What each refusal answers:
 
+The checks run in this order, so unsigned traffic never spends Etsy's allowance:
+
 | Case | Answer | Etsy retries? |
 |---|---|---|
-| Over the per-source rate limit | 429 with `Retry-After` | yes, and is accepted after the window |
+| Over the per-IP limit (before anything is read) | 429 with `Retry-After` | yes |
+| Missing signature headers (before the body is read) | 401 | yes |
 | Body over 64 KiB | 413 | yes (it never fits: the event stays in Etsy's portal) |
-| Missing headers, bad signature or timestamp, outside the 5-minute window | 401 | yes |
+| Bad signature or timestamp, outside the 5-minute window | 401 | yes |
+| Verified, but over the Etsy-wide rate limit | 429 with `Retry-After` | yes, accepted later |
 | Signed, but not an Etsy event (not JSON, no type or shop) | 400 | yes |
 | A `webhook-id` already received | 204 (ignored, nothing new is stored) | no |
 | Accepted (routed, or stored without a job: unknown type or shop) | 204 | no |
@@ -28,6 +32,7 @@ from htco_api.problems import (
     ProblemError,
     ProblemType,
 )
+from htco_api.web_auth import client_info
 from htco_application.etsy_webhooks import (
     MAX_BODY_BYTES,
     WEBHOOK_SOURCE,
@@ -35,6 +40,7 @@ from htco_application.etsy_webhooks import (
     Rejection,
     WebhookRejectedError,
     WindowLimiter,
+    has_signature_headers,
 )
 
 _log = structlog.get_logger(__name__)
@@ -62,7 +68,10 @@ _PROBLEM_FOR = {
 
 
 async def _body(request: Request) -> bytes:
-    """The raw body, refused as soon as it passes the limit (never read whole first)."""
+    """The raw body, refused as soon as it passes the limit (never read whole first). Without
+    the signature headers nothing is read at all."""
+    if not has_signature_headers(request.headers):
+        raise WebhookRejectedError(Rejection.MISSING_HEADERS)
     declared = request.headers.get("content-length")
     if declared is not None and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
         raise WebhookRejectedError(Rejection.TOO_LARGE)
@@ -100,20 +109,29 @@ def webhooks_router() -> APIRouter:
         },
     )
     async def receive_etsy_webhook(request: Request) -> Response:
-        ingress = getattr(request.app.state, "etsy_webhooks", None)
-        limiter = getattr(request.app.state, "etsy_webhook_limiter", None)
+        state = request.app.state
+        ingress = getattr(state, "etsy_webhooks", None)
         if not isinstance(ingress, EtsyWebhookIngress):
             raise ProblemError(NOT_FOUND)
-        if isinstance(limiter, WindowLimiter):
-            wait = limiter.admit(WEBHOOK_SOURCE, now=ingress.clock())
-            if wait is not None:
-                _log.warning("etsy.webhook_rejected", reason="rate_limited")
-                raise ProblemError(
-                    WEBHOOK_RATE_LIMITED, headers={"Retry-After": str(max(1, math.ceil(wait)))}
-                )
+        # Before authentication: a coarse window per client IP, so one address cannot flood us.
+        _admit(
+            getattr(state, "etsy_webhook_ip_limiter", None),
+            f"ip:{client_info(request).ip or 'unknown'}",
+            ingress,
+            reason="ip_rate_limited",
+        )
+        headers = dict(request.headers)
         try:
             body = await _body(request)
-            await ingress.receive(dict(request.headers), body)
+            signed = ingress.verify(headers, body)
+            # Only a verified delivery spends the Etsy-wide allowance (Codex security review P2).
+            _admit(
+                getattr(state, "etsy_webhook_limiter", None),
+                WEBHOOK_SOURCE,
+                ingress,
+                reason="rate_limited",
+            )
+            await ingress.accept(signed, body)
         except WebhookRejectedError as rejected:
             _log.warning("etsy.webhook_rejected", reason=rejected.reason.value)
             raise ProblemError(
@@ -122,3 +140,15 @@ def webhooks_router() -> APIRouter:
         return Response(status_code=204)
 
     return router
+
+
+def _admit(limiter: object, source: str, ingress: EtsyWebhookIngress, *, reason: str) -> None:
+    """429 with `Retry-After` when `source` is over its window (no limiter: always admitted)."""
+    if not isinstance(limiter, WindowLimiter):
+        return
+    wait = limiter.admit(source, now=ingress.clock())
+    if wait is not None:
+        _log.warning("etsy.webhook_rejected", reason=reason)
+        raise ProblemError(
+            WEBHOOK_RATE_LIMITED, headers={"Retry-After": str(max(1, math.ceil(wait)))}
+        )

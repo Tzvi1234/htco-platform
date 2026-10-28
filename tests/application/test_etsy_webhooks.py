@@ -26,6 +26,7 @@ from htco_application.etsy_webhooks import (
     WebhookRejectedError,
     WebhookSecret,
     WindowLimiter,
+    has_signature_headers,
     parse_event,
     verify_signature,
 )
@@ -355,6 +356,27 @@ def test_limiter__over_the_limit_waits_until_the_window_ends_then_admits() -> No
     assert wait == pytest.approx(0.6)
     assert limiter.admit("other", now=NOW) is None  # per source
     assert limiter.admit("etsy", now=NOW + timedelta(seconds=1)) is None  # Etsy's retry
+
+
+def test_limiter__many_sources__the_table_stays_bounded() -> None:
+    # The per-IP limiter must not grow without end under a flood from many addresses.
+    limiter = WindowLimiter(5, max_sources=3)
+    for n in range(3):
+        assert limiter.admit(f"ip:{n}", now=NOW) is None
+    wait = limiter.admit("ip:new", now=NOW + timedelta(milliseconds=250))
+    assert wait == pytest.approx(0.75)
+    assert limiter.admit("ip:0", now=NOW) is None  # a known source keeps its window
+    # Once the windows end they are dropped and a new source is admitted.
+    assert limiter.admit("ip:new", now=NOW + timedelta(seconds=1)) is None
+    assert len(limiter._windows) == 1
+
+
+def test_signature_headers__all_three_needed_before_the_body_is_read() -> None:
+    headers = {"Webhook-Id": "msg_1", "Webhook-Timestamp": "1", "Webhook-Signature": "v1,x"}
+    assert has_signature_headers(headers)
+    for name in headers:
+        assert not has_signature_headers({k: v for k, v in headers.items() if k != name})
+    assert not has_signature_headers(headers | {"Webhook-Id": "m" * 201})
 
 
 # --- The worker's job --------------------------------------------------------------------------

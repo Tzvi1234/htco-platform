@@ -35,6 +35,7 @@ class Server:
     inbox: MemoryWebhookInbox = field(default_factory=MemoryWebhookInbox)
     now: datetime = NOW
     limit: int = 1000
+    ip_limit: int = 1000
     enabled: bool = True
 
     def app(self) -> FastAPI:
@@ -45,6 +46,7 @@ class Server:
             AppOptions(
                 etsy_webhooks=ingress if self.enabled else None,
                 etsy_webhook_limiter=WindowLimiter(self.limit),
+                etsy_webhook_ip_limiter=WindowLimiter(self.ip_limit),
                 clock=lambda: self.now,
             )
         )
@@ -189,6 +191,61 @@ async def test_webhook__over_the_rate_limit__429_with_retry_after_then_accepted(
         )
         assert retried.status_code == 204
     assert len(server.inbox.rows) == 3
+
+
+ATTACKER = {"do-connecting-ip": "203.0.113.66"}
+ETSY = {"do-connecting-ip": "198.51.100.7"}
+
+
+def _unsigned_flood(n: int) -> list[tuple[bytes, dict[str, str]]]:
+    """Requests an attacker can make without the secret: no headers, or a forged signature."""
+    body = _event()
+    forged = signed(body) | {"webhook-signature": "v1,Zm9yZ2Vk"} | ATTACKER
+    return [(body, ATTACKER if i % 2 else forged) for i in range(n)]
+
+
+async def test_webhook__unsigned_flood__does_not_spend_the_etsy_wide_budget() -> None:
+    # Codex security review P2: unsigned requests used to leave Etsy's own deliveries at 429.
+    server = Server(limit=2)
+    async for client in _client(server):
+        for body, headers in _unsigned_flood(50):
+            response = await client.post(PATH, content=body, headers=headers)
+            assert response.status_code == 401
+        bodies = [_event(kind) for kind in ("order.paid", "order.shipped")]
+        for n, body in enumerate(bodies):
+            headers = signed(body, webhook_id=f"msg_fake000{n}") | ETSY
+            assert (await client.post(PATH, content=body, headers=headers)).status_code == 204
+    assert len(server.inbox.rows) == 2
+
+
+async def test_webhook__flood_from_one_ip__429_there_while_etsy_is_accepted() -> None:
+    server = Server(limit=50, ip_limit=5)
+    async for client in _client(server):
+        flood = [
+            (await client.post(PATH, content=body, headers=headers)).status_code
+            for body, headers in _unsigned_flood(20)
+        ]
+        assert flood[:5] == [401] * 5
+        assert set(flood[5:]) == {429}
+        body = _event()
+        delivered = await client.post(PATH, content=body, headers=signed(body) | ETSY)
+        assert delivered.status_code == 204
+    assert len(server.inbox.rows) == 1
+
+
+async def test_webhook__missing_signature_headers__401_before_the_body_is_read() -> None:
+    server = Server()
+
+    async def chunks() -> AsyncIterator[bytes]:
+        for _ in range(20):
+            yield b" " * 4096
+
+    async for client in _client(server):
+        # Over 64 KiB: reading it would answer 413, so a 401 shows it was never read.
+        response = await client.post(PATH, content=chunks(), headers={"webhook-id": "msg_x"})
+        assert response.status_code == 401
+        assert response.json()["type"] == PROBLEMS + "webhook-signature-invalid"
+    assert server.inbox.rows == {}
 
 
 @pytest.mark.ac("AC-5.3.2")

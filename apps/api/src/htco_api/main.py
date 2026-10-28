@@ -221,6 +221,9 @@ def main(
         etsy_webhook_limiter=None
         if wiring.etsy_webhooks is None
         else WindowLimiter(settings.etsy_webhook_rate_per_second),
+        etsy_webhook_ip_limiter=None
+        if wiring.etsy_webhooks is None
+        else WindowLimiter(settings.etsy_webhook_ip_rate_per_second),
         browser_environments=wiring.browser_environments,
         execution_chain=wiring.execution_chain,
         incident_center=wiring.incident_center,
