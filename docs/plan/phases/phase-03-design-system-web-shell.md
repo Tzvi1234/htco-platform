@@ -19,7 +19,7 @@
 - [ ] 3.6 Generated API client and contract job
 - [ ] 3.7 Overview and shops screens
 - [ ] 3.8 Web deployment
-- [ ] 3.9 Administration screens
+- [ ] 3.9 Administration screens (AC-3.9.1's audit read API `GET /v1/audit-log` built, pgTAP `33_audit_view`; the web audit view is still the clients' part)
 
 Slices 3.1 to 3.3 need no backend, so they started early (the plan lets design-system work overlap Phase 2). Slice 3.1 ships in two parts: workspace tooling and CI first; the logical-CSS lint rule with the web app (3.3), and Storybook with axe with the core components (3.4). Slice 3.3 ships in two parts: the shell, languages, themes and states first ([htco-clients#4](https://github.com/Tzvi1234/htco-clients/pull/4)); the Playwright journeys with axe and screenshots second. Slice 3.5 ships in three parts: sign-in, sessions and CSRF first; MFA enrollment and verification, step-up, recovery and the session list second; password reset third ([docs/features/auth-bff](../../features/auth-bff/overview.md)): done at the API (`POST /v1/auth/password/forgot` and `/password/reset`, with the web pages in htco-clients); email verification at sign-up is not needed because accounts are invite-only. Still open for AC-3.5.6 end to end: the owner connects Resend as Supabase Auth's custom SMTP and adds the reset page to the redirect URLs ([operations](../../features/auth-bff/operations.md#connecting-resend-for-auth-emails)). The token pipeline's `HighContrast` XAML dictionary moves to Phase 17, with the Windows app ([client ADR-0003](https://github.com/Tzvi1234/htco-clients/blob/main/docs/adr/0003-design-token-pipeline.md)).
 

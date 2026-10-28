@@ -17,7 +17,7 @@
 | Criterion | Tests |
 |---|---|
 | AC-6.1.1 | `test_ac_6_1_1_each_shipment_once_however_often_it_is_observed`, `test_ac_6_1_1_fingerprint_is_one_per_parcel_and_shop`, `test_worker__each_parcel_once_and_its_event_once`, pgTAP "a parcel is recorded once per order" |
-| AC-6.1.2 | `test_ac_6_1_2_the_first_sighting_keeps_its_time_source_and_trigger` (the timeline view itself arrives with the Orders UI, 5.7) |
+| AC-6.1.2 | `test_ac_6_1_2_the_first_sighting_keeps_its_time_source_and_trigger`; the order detail's `tracking` (`GET /v1/shops/{shop_id}/orders/{order_id}`: carrier, last four, source, trigger, first seen): `test_order__each_parcels_tracking_first_seen_oldest_first` (application), `test_one_order__tracking_first_seen_with_source_and_last_four_only` (API), `test_one_order__its_tracking_first_seen_oldest_first_without_the_fingerprint` (integration). The web timeline renders it in clients |
 | AC-6.2.1 | `test_ac_6_2_1_an_order_at_exactly_its_deadline_is_not_breached`, `test_ac_6_2_1_business_day_boundary`, `test_ac_6_2_1_at_exactly_the_deadline_no_breach_one_microsecond_later_one` |
 | AC-6.2.2 | `test_ac_6_2_2_business_days_skip_the_weekend`, `..._skip_configured_holidays`, `..._an_order_paid_on_a_weekend_counts_from_the_next_business_day`, `test_ac_6_2_2_business_day_policies_wait_over_the_weekend` |
 | AC-6.7.2 (part) | `test_order_shipped_starts_intake_and_tracking_sync_once_each`; the full replay test arrives with 6.7 |

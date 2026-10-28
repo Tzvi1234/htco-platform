@@ -25,6 +25,8 @@
 | Persistence | The database check fails fast on a closed port, is named `database`, hides its connection string | `tests/persistence/test_database_check.py` |
 | API | Deployed environments refuse to start without `HTCO_DATABASE_URL`; with it, `/readyz` reports the database; without it locally, configuration only | `tests/api/test_main.py` |
 | Integration (`-m db`) | `/readyz` against real Postgres through a TCP relay: 200, 503 when the relay closes, 200 again without a restart | `tests/integration/test_database_readiness.py` |
+| Application, API | The audit view `GET /v1/audit-log` (AC-3.9.1): Owner and Admin only (every other role 403, a developer too), filters by shop, actor, action or action family (`membership.*`) and time range, cursor pages, `no-store`, sensitive keys and email-shaped values redacted | `tests/application/test_audit_log.py`, `tests/api/test_audit_log_routes.py` |
+| Integration (`-m db`), pgTAP | The audit reader as the caller: Owner and Admin read their organization's records newest first, a developer none (RLS), every filter and the cursor in SQL | `tests/integration/test_audit_log_reader.py`, `supabase/tests/database/33_audit_view.test.sql` |
 | Application | The documented matrix parsed from `PERMISSION_MATRIX.md` equals `PERMISSIONS`; every role × capability (140 cases) for a fully assured user; shop scope (granted, not granted, organization-wide, another organization's shop for every role × capability, lists); masked and approval grants; MFA; step-up window boundaries; check order; naive clocks | `tests/application/test_access_policy.py` |
 
 ## Acceptance criteria coverage
