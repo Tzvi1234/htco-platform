@@ -20,6 +20,10 @@ from htco_application.browser_profiles import (
     ProfileVault,
     ProfileWorkspaces,
 )
+from htco_browser_worker.managed_chromium import (
+    ManagedChromiumProvider,
+    managed_chromium_capabilities,
+)
 from htco_persistence.browser_profiles import PostgresBrowserProfiles
 from htco_persistence.browser_sessions import PostgresProfileLocks, PostgresSessionLog, lock_key
 from htco_persistence.database import Database, tenant_scope
@@ -110,7 +114,10 @@ async def test_session__a_timeout_is_recorded_and_counted(
         EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), profiles, lambda: datetime.now(UTC)
     )
     controller = BrowserController(
-        profiles, ProfileWorkspaces(vault, tmp_path), Engine(),
+        profiles,
+        ManagedChromiumProvider(
+            ProfileWorkspaces(vault, tmp_path), Engine(), managed_chromium_capabilities("test")
+        ),
         PostgresProfileLocks(admin, poll_seconds=0.05), PostgresSessionLog(browser),
         clock=lambda: datetime.now(UTC),
     )  # fmt: skip

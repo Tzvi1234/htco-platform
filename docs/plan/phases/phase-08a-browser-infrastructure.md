@@ -138,6 +138,47 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.2.8 | Parallel profiles, tested with fixtures. On one worker, sessions for as many different profiles as the declared capacity run at once, each holding its own profile lock. One more session waits for a slot, and the same profile is never open twice. `renew` re-seals refreshed cookies under the lock. `recover` restores the last good archive and runs a health check. **The fence:** session S1's lock connection drops and S2 takes the lock. S1's write-back is then refused, because its lease is checked on its own connection, never by environment. The archive write is fenced too, on that connection or with a generation compare-and-set. Red first, on a fake lock server and on Postgres. |
 | AC-8A.2.9 | The provider, configuration, network and dispatch ports are async (AUD-05). A test runs a browser session while the worker's heartbeat task keeps its schedule, with no blocking database call on the event loop. |
 
+**As built (8A.2a, first part: the contract, no migration):**
+- **`htco_application.browser_provider`** (standard library only):
+  - `ProviderLayer`, `ProviderCapabilities` and `ProviderNeeds`. A declaration no provider may make is refused when it is built: a non-pipe CDP transport, no parallel slot, an engine other than Chromium, no engine version, an unknown execution engine, or a lifecycle without a connection.
+  - The async protocols `ProfileProvisioning`, `SessionLifecycle`, `EngineConnection`, `EngineExecution` and `ProviderMonitoring`.
+  - `ProfileFence`, which is the session's own `ProfileLease`.
+  - Authentication (8A.4) and Networking (8A.3) join with their slices, and until then no provider may declare them. The configuration and egress parameters of `open` arrive with 8A.2b and 8A.3.
+- **`BrowserController`** takes a `BrowserProvider` instead of the workspaces and the engine:
+  - It refuses a session whose `needs` the provider does not declare (`CapabilityRefusedError`). This happens before any lock, record or browser exists.
+  - It hands out the provider's `parallel_profiles` slots. A slot is taken only under a held lock. One more session waits for a slot until its deadline, then is `DEFERRED`.
+  - It calls the provider's `open`, `connect`, `save_session(fence=lease)` and `close` inside the lock, the deadline and the record. The re-seal runs after the deadline is lifted, so a clean session that commits its profile is never a timeout.
+  - `ControllerSession.connection` is the provider's pipe connection.
+- **`htco_browser_worker.managed_chromium.ManagedChromiumProvider`** maps the existing code onto the contract: 8A.1's workspace and vault, #169's fenced re-seal and `PlaywrightEngine`. It adds:
+  - `renew`: a health check, then the fenced re-seal;
+  - `recover`: the last good archive in a fresh workspace and a health check, with nothing written back;
+  - a health probe that reads the running browser's version over the CDP pipe (`PlaywrightHandle.probe`), and `PlaywrightEngine.version`;
+  - its own capacity guard.
+
+  `managed_chromium_capabilities(version)` declares Provisioning, Lifecycle, Connection, Execution (Playwright) and Monitoring, plus `renew` and `recover`, no downloads, and CDP on a pipe.
+- **The shared contract suite** `tests/contracts/browser_provider/` runs against three providers:
+  - a fake, `FakeBrowserProvider`, written against the contract only;
+  - `ManagedChromiumProvider` over a fake engine;
+  - `ManagedChromiumProvider` over a real Chromium on `127.0.0.1`, in CI's `browser` job.
+
+  It checks:
+  - each declared layer, and fails on a declared layer it cannot confirm;
+  - the fence: a dropped lock, S1 dropped while S2 holds the lock, and a lease of another profile;
+  - `renew` and `recover`;
+  - one connection per session;
+  - the health check against the declared engine version;
+  - the parallel capacity, directly and through the controller;
+  - on Linux, that Chromium runs with `--remote-debugging-pipe`, never with `--remote-debugging-port`, and that no process in its tree listens on TCP.
+- **Import contracts (AUD-13).**
+  - import-linter forbids `browser_use`, as well as `playwright`, outside the browser worker. It forbids the model SDKs in every package until the gateway package exists.
+  - `tests/architecture/test_browser_provider_imports.py` also reads the sources, because import-linter cannot see a module that is not installed. It finds no provider class and no Chromium or Browser Use import in the domain, the application layer, the agent runtime, the API, the worker, persistence, the integrations or the platform package.
+- **Still to come in the second part of 8A.2a:**
+  - Migration `20261026150000`: the `generation` compare-and-set on `app.browser_profile_archives`. This was agreed with #169 (#172), which closed the window on the lease's own connection without a migration.
+  - The leased-job `security definer` archive functions (AC-8A.2.23, pgTAP 33).
+  - `shop_browser_environments.provider`, which only the Owner changes (AC-8A.2.6).
+
+  The production URL allowlist in AC-8A.2.5 lands with the egress rules of AC-8A.2.20.
+
 **8A.2b — Browser Configuration Profiles** ([ADR-0025](../../adr/0025-browser-and-network-providers.md) §2).
 - **One versioned configuration profile per environment.** It has two parts:
   - **The platform baseline, the same for every shop:**

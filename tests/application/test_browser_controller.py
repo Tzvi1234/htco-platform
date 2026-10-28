@@ -23,6 +23,7 @@ import pytest
 
 from htco_application.browser_controller import (
     BrowserController,
+    CapabilityRefusedError,
     MemoryLease,
     MemoryProfileLocks,
     MemorySessionLog,
@@ -43,10 +44,26 @@ from htco_application.browser_profiles import (
     ProfileWorkspaces,
     SealedArchive,
 )
+from htco_application.browser_provider import ProviderLayer, ProviderNeeds
+from htco_browser_worker.managed_chromium import (
+    BrowserEngine,
+    ManagedChromiumProvider,
+    managed_chromium_capabilities,
+)
 from htco_domain.browser import BrowserEnvironment, EnvironmentStatus
 from htco_platform.crypto import EnvelopeSealer, KeyRing
 
 pytestmark = pytest.mark.anyio
+
+
+def provider(
+    workspaces: ProfileWorkspaces, engine: BrowserEngine, *, parallel: int = 4
+) -> ManagedChromiumProvider:
+    """The controller drives `ManagedChromiumProvider` over a fake engine here; the real
+    Chromium runs in `tests/browser_worker` and the shared contract suite."""
+    capabilities = managed_chromium_capabilities("0.0.0-fake", parallel_profiles=parallel)
+    return ManagedChromiumProvider(workspaces, engine, capabilities, clock=now)
+
 
 COOKIE = b"controller-cookie"
 ORG = uuid.UUID("0a000000-0000-0000-0000-000000000002")
@@ -110,7 +127,7 @@ def setup(tmp_path: Path, *environments: BrowserEnvironment) -> Setup:
     records = MemoryProfileRecords({env.id: env for env in environments})
     engine, log, locks = FakeEngine(), MemorySessionLog(), MemoryProfileLocks()
     controller = BrowserController(
-        records, ProfileWorkspaces(vault, tmp_path), engine, locks, log, clock=now
+        records, provider(ProfileWorkspaces(vault, tmp_path), engine), locks, log, clock=now
     )
     return Setup(controller, engine, log, locks, vault, tmp_path)
 
@@ -316,7 +333,8 @@ async def test_session__an_engine_that_fails_to_start_is_a_failed_session(tmp_pa
             raise OSError("chromium did not start")
 
     controller = BrowserController(
-        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(s.vault, tmp_path), Broken(),
+        MemoryProfileRecords({env.id: env}),
+        provider(ProfileWorkspaces(s.vault, tmp_path), Broken()),
         s.locks, s.log, clock=now,
     )  # fmt: skip
     with pytest.raises(OSError, match="chromium"):
@@ -363,7 +381,8 @@ async def test_session__cleanup_finishes_even_when_the_task_is_cancelled_during_
             return SlowHandle()
 
     controller = BrowserController(
-        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(s.vault, tmp_path), SlowEngine(),
+        MemoryProfileRecords({env.id: env}),
+        provider(ProfileWorkspaces(s.vault, tmp_path), SlowEngine()),
         s.locks, s.log, clock=now,
     )  # fmt: skip
 
@@ -427,7 +446,8 @@ class WatchedLocks(MemoryProfileLocks):
 
 def slow_controller(s: Setup, env: BrowserEnvironment, **delays: float) -> BrowserController:
     return BrowserController(
-        MemoryProfileRecords({env.id: env}), SlowWorkspaces(s.vault, s.root, **delays), s.engine,
+        MemoryProfileRecords({env.id: env}),
+        provider(SlowWorkspaces(s.vault, s.root, **delays), s.engine),
         s.locks, s.log, clock=now,
     )  # fmt: skip
 
@@ -441,7 +461,7 @@ async def test_session__cancelled_during_unpack_cleans_up_before_the_lock_is_rel
     workspaces = SlowWorkspaces(s.vault, tmp_path, enter=0.3)
     locks = WatchedLocks(root=tmp_path, workspaces=workspaces)
     controller = BrowserController(
-        MemoryProfileRecords({env.id: env}), workspaces, s.engine, locks, s.log, clock=now
+        MemoryProfileRecords({env.id: env}), provider(workspaces, s.engine), locks, s.log, clock=now
     )
 
     async def run() -> None:
@@ -465,7 +485,7 @@ async def test_session__rechecks_the_status_after_waiting_for_the_lock(tmp_path:
     records = MemoryProfileRecords({env.id: env})
     s = setup(tmp_path, env)
     controller = BrowserController(
-        records, ProfileWorkspaces(s.vault, tmp_path), s.engine, s.locks, s.log, clock=now
+        records, provider(ProfileWorkspaces(s.vault, tmp_path), s.engine), s.locks, s.log, clock=now
     )
     first_in = asyncio.Event()
     refused: list[Exception] = []
@@ -577,7 +597,8 @@ async def test_session__slow_storage_never_blocks_the_event_loop(tmp_path: Path)
     env = environment()
     s = setup(tmp_path, env)
     controller = BrowserController(
-        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(s.vault, tmp_path), s.engine,
+        MemoryProfileRecords({env.id: env}),
+        provider(ProfileWorkspaces(s.vault, tmp_path), s.engine),
         s.locks, SlowLog(), clock=now,
     )  # fmt: skip
     beats: list[float] = []
@@ -603,7 +624,8 @@ async def test_session__setup_time_counts_against_the_deadline(tmp_path: Path) -
     s = setup(tmp_path, env)
     log = SlowLog(delay=0.3)
     controller = BrowserController(
-        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(s.vault, tmp_path), s.engine,
+        MemoryProfileRecords({env.id: env}),
+        provider(ProfileWorkspaces(s.vault, tmp_path), s.engine),
         s.locks, log, clock=now,
     )  # fmt: skip
 
@@ -670,7 +692,8 @@ async def test_session__a_lock_lost_between_the_check_and_the_write_never_writes
     vault = ProfileVault(EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), store, now)
     engine, log = FakeEngine(), MemorySessionLog()
     controller = BrowserController(
-        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(vault, tmp_path), engine, locks,
+        MemoryProfileRecords({env.id: env}),
+        provider(ProfileWorkspaces(vault, tmp_path), engine), locks,
         log, clock=now,
     )  # fmt: skip
     async with controller.session(env.id, purpose="test.good", deadline=soon()):
@@ -713,7 +736,8 @@ async def test_session__cancelled_while_recording_its_start_still_ends_the_recor
     s = setup(tmp_path, env)
     log = SlowLog(delay=0.3)
     controller = BrowserController(
-        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(s.vault, tmp_path), s.engine,
+        MemoryProfileRecords({env.id: env}),
+        provider(ProfileWorkspaces(s.vault, tmp_path), s.engine),
         s.locks, log, clock=now,
     )  # fmt: skip
 
@@ -751,7 +775,8 @@ async def test_session__cancelled_while_a_failing_start_write_runs_ends_nothing(
     s = setup(tmp_path, env)
     log = BrokenSlowLog()
     controller = BrowserController(
-        MemoryProfileRecords({env.id: env}), ProfileWorkspaces(s.vault, tmp_path), s.engine,
+        MemoryProfileRecords({env.id: env}),
+        provider(ProfileWorkspaces(s.vault, tmp_path), s.engine),
         s.locks, log, clock=now,
     )  # fmt: skip
 
@@ -848,3 +873,121 @@ async def test_memory_locks__a_lease_answers_for_itself_only() -> None:
             assert await locks.still_held(second)
         assert locks.held == set()
     assert locks.held == set()
+
+
+# --- 8A.2a: the provider contract under the controller -----------------------------------------
+
+
+@pytest.mark.ac("AC-8A.2.4")
+@pytest.mark.parametrize(
+    ("needs", "missing"),
+    [
+        (
+            ProviderNeeds(layers=frozenset({ProviderLayer.AUTHENTICATION})),
+            ("layer:authentication",),
+        ),
+        (ProviderNeeds(execution_engines=frozenset({"browser_use"})), ("engine:browser_use",)),
+        (ProviderNeeds(downloads=True), ("downloads",)),
+    ],
+)
+async def test_session__a_need_the_provider_does_not_declare_is_refused_before_it_starts(
+    tmp_path: Path, needs: ProviderNeeds, missing: tuple[str, ...]
+) -> None:
+    env = environment()
+    s = setup(tmp_path, env)
+    with pytest.raises(CapabilityRefusedError) as refused:
+        async with s.controller.session(env.id, purpose="test.run", deadline=soon(), needs=needs):
+            pytest.fail("the session must not start")  # pragma: no cover
+    assert refused.value.missing == missing
+    # Refused before anything: no lock, no record, no engine.
+    assert s.log.records == {}
+    assert s.engine.handles == []
+    assert s.locks.held == set()
+
+
+async def test_session__a_declared_need_runs(tmp_path: Path) -> None:
+    env = environment()
+    s = setup(tmp_path, env)
+    needs = ProviderNeeds(layers=frozenset({ProviderLayer.MONITORING}), renew=True, recover=True)
+    async with s.controller.session(env.id, purpose="test.run", deadline=soon(), needs=needs):
+        pass
+    (record,) = s.log.records.values()
+    assert record.outcome is SessionOutcome.SUCCEEDED
+
+
+def one_slot_setup(tmp_path: Path, *environments: BrowserEnvironment) -> Setup:
+    s = setup(tmp_path, *environments)
+    controller = BrowserController(
+        MemoryProfileRecords({env.id: env for env in environments}),
+        provider(ProfileWorkspaces(s.vault, tmp_path), s.engine, parallel=1), s.locks, s.log,
+        clock=now,
+    )  # fmt: skip
+    return Setup(controller, s.engine, s.log, s.locks, s.vault, tmp_path)
+
+
+@pytest.mark.ac("AC-8A.2.8")
+async def test_session__one_more_profile_than_the_capacity_waits_for_a_slot(
+    tmp_path: Path,
+) -> None:
+    shop_a, shop_b = environment(), environment()
+    s = one_slot_setup(tmp_path, shop_a, shop_b)
+    order: list[str] = []
+
+    async def run(name: str, env: BrowserEnvironment, hold: float) -> None:
+        async with s.controller.session(env.id, purpose="test.run", deadline=soon(3)):
+            order.append(f"{name} start")
+            await anyio.sleep(hold)
+            order.append(f"{name} end")
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(run, "a", shop_a, 0.3)
+        await anyio.sleep(0.05)
+        group.start_soon(run, "b", shop_b, 0.0)
+
+    assert order == ["a start", "a end", "b start", "b end"]
+    assert s.engine.most == 1
+    # The waiting session held its own profile's lock, and gave it back.
+    assert s.locks.held == set()
+
+
+@pytest.mark.ac("AC-8A.2.8")
+async def test_session__no_slot_by_the_deadline_is_deferred_and_frees_its_lock(
+    tmp_path: Path,
+) -> None:
+    shop_a, shop_b = environment(), environment()
+    s = one_slot_setup(tmp_path, shop_a, shop_b)
+    a_in = anyio.Event()
+    deferred: list[Exception] = []
+
+    async def first() -> None:
+        async with s.controller.session(shop_a.id, purpose="test.long", deadline=soon(3)):
+            a_in.set()
+            await anyio.sleep(0.5)
+
+    async def second() -> None:
+        await a_in.wait()
+        try:
+            async with s.controller.session(shop_b.id, purpose="test.short", deadline=soon(0.2)):
+                pytest.fail("no slot was free")  # pragma: no cover
+        except SessionDeferredError as error:
+            deferred.append(error)
+            assert shop_b.id not in s.locks.held
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(first)
+        group.start_soon(second)
+    assert len(deferred) == 1
+    short = [r for r in s.log.records.values() if r.purpose == "test.short"]
+    assert [r.outcome for r in short] == [SessionOutcome.DEFERRED]
+    assert s.log.errors == {}
+
+
+@pytest.mark.ac("AC-8A.2.8")
+async def test_destroy__goes_through_the_provider_under_the_lease(tmp_path: Path) -> None:
+    env = environment()
+    s = setup(tmp_path, env)
+    async with s.controller.session(env.id, purpose="test.run", deadline=soon()):
+        pass
+    assert s.vault.open(env) is not None
+    await s.controller.destroy_profile(env.id, deadline=soon())
+    assert s.vault.open(env) is None
