@@ -29,6 +29,7 @@ from htco_application.access.management import (
     InvitedUser,
     InviteeAlreadyRegisteredError,
 )
+from htco_application.approvals import GatewayApprovals, MemoryApprovalService
 from htco_application.automation.deployed import WORKER_AUTOMATIONS
 from htco_application.automation.durable import (
     DurableAutomationEngine,
@@ -40,7 +41,10 @@ from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_tokens import VaultAccessTokenProvider
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WebhookSecret, WindowLimiter
-from htco_application.execution.gateway import UnavailableGateway
+from htco_application.execution.channels import EtsyApiChannel
+from htco_application.execution.gateway import Channel, UnavailableGateway
+from htco_application.execution.guards import Guards
+from htco_application.execution.service import ActionGatewayService, GatewayParts, Principals
 from htco_application.incidents import IncidentService
 from htco_application.jobs import JobError
 from htco_application.marketplace import MarketplacePort
@@ -48,6 +52,7 @@ from htco_application.mfa import Enrollment, Factor
 from htco_application.notifications import SecurityNotices
 from htco_application.order_history import OrderSync, adapter_pages
 from htco_application.order_intake import QueuedSyncRequests
+from htco_application.owner_writes import OwnerWriteServices, WriteSwitches
 from htco_application.passkeys import (
     PASSKEY,
     TOTP,
@@ -70,10 +75,13 @@ from htco_application.web_sessions import (
     TooManyAttemptsError,
     WeakPasswordError,
 )
+from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_application.workforce.registry import Registry
+from htco_domain.guards import BreakerPolicy
 from htco_integrations.etsy import EtsyAdapter, EtsyConfig, EtsyCredentials, app_key_fingerprint
 from htco_integrations.etsy_oauth import EtsyOAuthClient
 from htco_persistence.access import PostgresAccessStore
+from htco_persistence.actions import PostgresActionStore, PostgresOwnerWriteHistory
 from htco_persistence.audit import PostgresAuditLog
 from htco_persistence.automation import (
     PostgresAutomationCatalog,
@@ -89,6 +97,7 @@ from htco_persistence.etsy_connect import PostgresPendingAuthorizations, Postgre
 from htco_persistence.etsy_orders import PostgresOrderStore
 from htco_persistence.etsy_webhooks import PostgresWebhookInbox, PostgresWebhookShops
 from htco_persistence.fulfillment import PostgresIncidentReader, PostgresIncidentStore
+from htco_persistence.guards import PostgresBreakers, PostgresRateLimiter, PostgresSlots
 from htco_persistence.idempotency import PostgresIdempotencyStore
 from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.jobs import PostgresJobQueue
@@ -108,6 +117,7 @@ from htco_persistence.shop_integrations import (
 from htco_persistence.shops import PostgresShopReader, PostgresShopRemover
 from htco_persistence.status import PostgresChainReader
 from htco_persistence.web_sessions import PostgresSessionStore
+from htco_persistence.worker_gateway import PostgresShopFacts
 from htco_platform.crypto import EnvelopeSealer, Sealer
 from htco_platform.error_reporting import ErrorReporter, NoErrorReporter, SentryErrorReporter
 from htco_platform.http import new_async_http_client
@@ -224,6 +234,7 @@ def main(
         incident_center=wiring.incident_center,
         security_notices=wiring.security_notices,
         operations=wiring.operations,
+        owner_writes=wiring.owner_writes,
         resources=wiring.resources,
     )
     try:
@@ -430,6 +441,8 @@ class _Wiring:
     incident_center: IncidentCenter | None = None
     security_notices: SecurityNotices | None = None
     operations: PostgresOperationsHealth | None = None
+    # The Owner's write actions (slices 6.6, 6.8); off when the connect flow is off.
+    owner_writes: OwnerWriteServices | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -500,7 +513,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         if key_ring is None
         else PostgresTokenVault(database, EnvelopeSealer(key_ring), app_key_fingerprint=app_key)
     )
-    etsy, marketplace, checks, dashboard = _etsy_wiring(
+    etsy, marketplace, checks, dashboard, writer = _etsy_wiring(
         settings, database, http, token_vault, web_auth
     )
     resources: list[Resource] = [database, _HttpClient(http)]
@@ -543,6 +556,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
             offload=anyio.to_thread.run_sync,
         ),
         operations=PostgresOperationsHealth(database),
+        owner_writes=None if writer is None else owner_write_services(settings, database, writer),
         resources=resources,
     )
 
@@ -568,11 +582,16 @@ def _etsy_wiring(
     vault: PostgresTokenVault | None,
     web_auth: WebAuth | None,
 ) -> tuple[
-    EtsyConnect | None, MarketplacePort | None, CapabilityChecks | None, ShopDashboard | None
+    EtsyConnect | None,
+    MarketplacePort | None,
+    CapabilityChecks | None,
+    ShopDashboard | None,
+    EtsyAdapter | None,
 ]:
-    """The connect flow, the adapter, the capability probes and the dashboard's live shop data,
-    when every piece they need is configured. The adapter only reads: it refuses any other method
-    towards Etsy's shop API."""
+    """The connect flow, the adapter, the capability probes, the dashboard's live shop data and
+    the owner writes' adapter, when every piece they need is configured. The adapters refuse any
+    method but GET towards Etsy's shop API, except the owner writes' two calls, each allowed per
+    call."""
     if (
         vault is None
         or web_auth is None
@@ -581,7 +600,7 @@ def _etsy_wiring(
         or settings.etsy_shared_secret is None
         or settings.etsy_redirect_uri is None
     ):
-        return None, None, None, None
+        return None, None, None, None, None
     credentials = EtsyCredentials(
         keystring=settings.etsy_keystring.get_secret_value(),
         shared_secret=settings.etsy_shared_secret.get_secret_value(),
@@ -639,7 +658,74 @@ def _etsy_wiring(
         resync=QueuedSyncRequests(PostgresJobQueue(database), offload=anyio.to_thread.run_sync),
         resync_limiter=WindowLimiter(5, window=timedelta(minutes=1)),
     )
-    return etsy, adapter, checks, dashboard
+    # The gateway's own adapter for the Owner's writes: one attempt, a 429 raised at once (the
+    # gateway's guards own retries), and a write only through the adapter's per-call
+    # `allow_write` and its HTTP write guard, as in the worker.
+    writer = EtsyAdapter(
+        http,
+        credentials=credentials,
+        access_tokens=tokens,
+        config=EtsyConfig(
+            max_attempts=1,
+            max_retry_after_seconds=0,
+            daily_quota_floor=settings.etsy_daily_quota_floor,
+        ),
+    )
+    return etsy, adapter, checks, dashboard, writer
+
+
+def owner_write_services(
+    settings: ApiSettings, database: Database, etsy: EtsyAdapter
+) -> OwnerWriteServices:
+    """The Owner's write actions on the real Action Gateway (slices 6.6, 6.8). The writes are
+    wired here, in the API, and only for the Owner's own press after a step-up: that press is the
+    W3 authorization. Every write is inert until the owner names its flag
+    (`HTCO_ETSY_WRITE_ACTIONS`), and `HTCO_ETSY_WRITES_HALTED` stops all of them; the gateway
+    reads both again right before each send. The approvals are never asked for: a request that
+    is not the Owner's press waits for an approval no one can give here (Postgres approvals are
+    Phase 7), so it never runs."""
+    tools = read_registry(settings.registry_path).registry()
+    catalog = read_action_catalog(settings.registry_path, settings.action_schemas_path, tools)
+    automations = PostgresAutomationCatalog(database)
+    facts = PostgresShopFacts(database)
+    switches = WriteSwitches(
+        settings.etsy_write_action_set, halted=lambda: settings.etsy_writes_halted
+    )
+    channel = EtsyApiChannel(etsy, facts, writes=etsy)
+
+    def now() -> datetime:
+        return datetime.now(UTC)
+
+    def gateway_for(principals: Principals) -> ActionGatewayService:
+        return ActionGatewayService(
+            GatewayParts(
+                catalog=catalog,
+                registry=lambda: registry_from_rows(automations.current()),
+                store=PostgresActionStore(database),
+                principals=principals,
+                shops=facts,
+                approvals=GatewayApprovals(MemoryApprovalService(clock=now), clock=now),
+                adapters={Channel.API: channel},
+                capabilities=facts,
+                clock=now,
+                guards=Guards(
+                    breakers=PostgresBreakers(database, BreakerPolicy()),
+                    rates=PostgresRateLimiter(database),
+                    slots=PostgresSlots(database),
+                ),
+                scopes=facts,
+                write_flags=switches,
+            )
+        )
+
+    return OwnerWriteServices(
+        catalog=catalog,
+        gateway_for=gateway_for,
+        shops=facts,
+        history=PostgresOwnerWriteHistory(database),
+        switches=switches,
+        relay=PostgresRelayStore(database),
+    )
 
 
 async def _runs_on_the_worker(ctx: HandlerContext) -> HandlerOutcome:

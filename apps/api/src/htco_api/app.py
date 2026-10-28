@@ -25,6 +25,7 @@ from htco_api.identity import identity_router
 from htco_api.incidents import IncidentCenter, incidents_router
 from htco_api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from htco_api.operations import OperationsPorts, operations_router
+from htco_api.owner_writes import owner_writes_router
 from htco_api.passkeys import passkeys_router
 from htco_api.problems import PROBLEM_MEDIA_TYPE, UNEXPECTED_ERROR_RESPONSES, add_problem_handlers
 from htco_api.shop_data import shop_data_router
@@ -34,6 +35,7 @@ from htco_application.access.management import AccessStore, Inviter
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WindowLimiter
 from htco_application.notifications import SecurityNotices
+from htco_application.owner_writes import OwnerWriteServices
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
 from htco_application.shop_integrations import (
@@ -148,6 +150,9 @@ class AppOptions:
     security_notices: SecurityNotices | None = None
     # Queue, execution and sync health (slice 5.9); without it, those routes answer 503.
     operations: OperationsPorts | None = None
+    # The Owner's write actions console and press (slices 6.6, 6.8): without it, those routes
+    # answer 503. Every write stays off unless its flag is named.
+    owner_writes: OwnerWriteServices | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -200,6 +205,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.incident_center = options.incident_center
     app.state.security_notices = options.security_notices
     app.state.operations = options.operations
+    app.state.owner_writes = options.owner_writes
     app.state.clock = options.clock
     app.include_router(
         health_router(
@@ -224,6 +230,9 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.include_router(executions_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(incidents_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(operations_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
+    app.include_router(
+        owner_writes_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES
+    )
     if options.diagnostics:
         app.include_router(diagnostics_router(), responses=UNEXPECTED_ERROR_RESPONSES)
     add_problem_handlers(app)

@@ -18,6 +18,7 @@ from htco_application.execution.gateway import (
     Channel,
 )
 from htco_application.execution.service import Claim, Finish
+from htco_application.owner_writes import LastRun
 from htco_domain.actions import ACTION_FINAL_STATES, ActionState
 from htco_persistence.audit import append_audit
 from htco_persistence.database import Database
@@ -136,3 +137,35 @@ class PostgresActionStore:
                 append_audit(connection, step.audit)
             if step.event is not None:
                 add_outbox_in(connection, step.event, now=now)
+
+
+class PostgresOwnerWriteHistory:
+    """The write actions console's last runs (slice 6.8): the newest execution of each action on
+    one shop, whoever asked. States, codes and the contract output only (never an R1 output,
+    which is not stored)."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def last_runs(
+        self, organization_id: uuid.UUID, shop_id: uuid.UUID, actions: frozenset[str]
+    ) -> dict[str, LastRun]:
+        with self._database.connection() as connection:
+            rows = connection.execute(
+                """
+                select distinct on (action_name)
+                  action_name, id, state, outcome, error_code, verified, output, created_at,
+                  finished_at
+                from app.action_executions
+                where organization_id = %s and shop_id = %s and action_name = any(%s)
+                order by action_name, created_at desc, id desc
+                """,
+                [organization_id, shop_id, sorted(actions)],
+            ).fetchall()
+        return {
+            row[0]: LastRun(
+                execution_id=row[1], state=row[2], outcome=row[3], error_code=row[4],
+                verified=row[5], output=row[6], created_at=row[7], finished_at=row[8],
+            )
+            for row in rows
+        }  # fmt: skip
