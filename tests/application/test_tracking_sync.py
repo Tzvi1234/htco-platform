@@ -262,6 +262,23 @@ async def test_receipts_without_a_code_do_not_pin_the_schedule_batch() -> None:
     assert again.output["receipts"] == 1
 
 
+async def test_the_checkpoint_is_the_etsy_version_the_read_returned() -> None:
+    """Codex post-merge review (owner gate v4): `etsy.shipments.read` carries the receipt's
+    `updated_timestamp`, and the check records that version, not the stored order's."""
+    receipt = shipped(paid_receipt(RECEIPT), minutes=9)
+    sync = Sync(FakeMarketplace(order_receipts=(receipt,)))
+    sync.tracking.shipped[SHOP] = [RECEIPT]
+
+    await sync.handler(sync.context({"mode": "schedule"}))
+    older = replace(receipt, updated_at=receipt.updated_at - timedelta(hours=1))
+    sync.marketplace.order_receipts = (older,)  # a stale read finishing last
+    sync.tracking.changed_on_etsy(SHOP, RECEIPT)
+    await sync.handler(sync.context({"mode": "schedule"}))
+
+    expected = receipt.updated_at.replace(microsecond=0)
+    assert sync.tracking.observed[(SHOP, RECEIPT)] == expected  # monotonic
+
+
 async def test_a_shipment_without_a_carrier_name_is_recorded_as_other() -> None:
     """Codex review of #79: Etsy may omit the carrier; the row still records."""
     receipt = replace(

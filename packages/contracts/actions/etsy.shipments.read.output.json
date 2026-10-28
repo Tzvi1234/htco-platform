@@ -14,12 +14,18 @@
         "type": "object",
         "required": [
           "receipt_id",
+          "updated_timestamp",
           "shipments"
         ],
         "properties": {
           "receipt_id": {
             "type": "integer",
             "minimum": 1
+          },
+          "updated_timestamp": {
+            "description": "The receipt's Etsy version in this read (epoch seconds): the version Tracking Sync checkpoints.",
+            "type": "integer",
+            "minimum": 0
           },
           "shipments": {
             "type": "array",

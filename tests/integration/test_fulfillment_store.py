@@ -3,14 +3,16 @@ worker's role in its job's organization: one row per parcel, one open incident p
 opened concurrently, the machine and the evidence rule in the database, events once."""
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import timedelta
 
 import psycopg
 import pytest
 
+from htco_application.automation.durable import Completed, HandlerContext
+from htco_application.execution.gateway import ActionOutcome, ActionRequest, ActionResult
 from htco_application.incidents import (
     INCIDENT_OPENED,
     INCIDENT_RESOLVED,
@@ -18,9 +20,17 @@ from htco_application.incidents import (
     IncidentService,
     order_resource,
 )
+from htco_application.marketplace import OrderReceipt, OrderShipment
 from htco_application.order_ingest import IngestContext, IngestSource
+from htco_application.order_receipts import shipments_to_json
+from htco_application.shop_integrations import ShopIntegration
 from htco_application.sla_inspector import IncidentDetection
-from htco_application.tracking_sync import ObservedVia, TrackingRecorder, TrackingSource
+from htco_application.tracking_sync import (
+    ObservedVia,
+    TrackingRecorder,
+    TrackingSource,
+    TrackingSync,
+)
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.incidents import (
     Cause,
@@ -273,7 +283,7 @@ async def test_worker__a_checked_receipt_is_due_again_only_after_it_changes_on_e
             integration, [sent], context=WEBHOOK, now=NOW
         )
         before = store.untracked_shipped(shop, limit=10)
-        store.mark_checked(shop, 86, now=NOW)
+        store.mark_checked(shop, 86, etsy_updated_at=sent.updated_at, now=NOW)
         after = store.untracked_shipped(shop, limit=10)
         changed = replace(sent, updated_at=sent.updated_at + timedelta(hours=1))
         await PostgresOrderStore(worker_db).ingest_receipts(
@@ -282,6 +292,83 @@ async def test_worker__a_checked_receipt_is_due_again_only_after_it_changes_on_e
         again = store.untracked_shipped(shop, limit=10)
 
     assert (before, after, again) == ((86,), (), (86,))
+
+
+@dataclass
+class _ShipmentsReadMeanwhile:
+    """`etsy.shipments.read` answering with the version `seen`; before it answers, Etsy Order
+    Intake commits a newer version of the receipt (the barrier between read and checkpoint)."""
+
+    seen: OrderReceipt
+    meanwhile: Callable[[], Awaitable[None]]
+
+    async def submit(self, request: ActionRequest) -> ActionResult:  # noqa: ARG002 - the port
+        await self.meanwhile()
+        return ActionResult(
+            execution_id=uuid.uuid7(),
+            outcome=ActionOutcome.SUCCEEDED,
+            attempts=1,
+            output={"shipments": [shipments_to_json(self.seen)], "count": 1},
+        )
+
+
+@dataclass
+class _Connected:
+    integration: ShopIntegration
+
+    async def describe(self, shop_id: uuid.UUID) -> ShopIntegration | None:
+        return self.integration if shop_id == self.integration.shop_id else None
+
+
+async def test_worker__a_version_stored_during_the_read_stays_due(
+    database: Database, worker_db: Database
+) -> None:
+    """Codex post-merge review (owner gate v4): the schedule reads V1 (no code yet) while the
+    intake stores V2 with a new parcel. The checkpoint is V1, the version read, so V2 stays due;
+    and an older run that finishes last never moves the checkpoint back."""
+    tenant, integration = await connected(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    v1 = replace(order(87), status="completed", is_shipped=True, shipments=())
+    v2 = replace(
+        v1,
+        updated_at=v1.updated_at + timedelta(hours=1),
+        shipments=(OrderShipment("fake-post", "FAKE-DB-PARCEL-02", NOW),),
+    )
+    orders = PostgresOrderStore(worker_db)
+    store = PostgresTrackingStore(worker_db)
+    checkpoint = "select etsy_updated_at from app.tracking_checks where shop_id = %s"
+
+    async def intake_stores_v2() -> None:
+        await orders.ingest_receipts(integration, [v2], context=WEBHOOK, now=NOW)
+
+    with tenant_scope(org):
+        await orders.ingest_receipts(integration, [v1], context=WEBHOOK, now=NOW)
+        incidents = IncidentService(PostgresIncidentStore(worker_db), clock=lambda: NOW)
+        sync = TrackingSync(
+            TrackingRecorder(store, incidents, clock=lambda: NOW),
+            store,
+            _Connected(integration),
+            clock=lambda: NOW,
+        )
+        context = HandlerContext(
+            execution_id=uuid.uuid7(), automation_id="tracking-sync",
+            actor=ACTOR, organization_id=org, shop_id=shop,
+            correlation_id="corr-db-barrier", causation_id=None, attempt=1,
+            payload={"mode": "schedule"},
+            gateway=_ShipmentsReadMeanwhile(v1, intake_stores_v2),
+        )  # fmt: skip
+        outcome = await sync(context)
+        read_at = scalar(database, checkpoint, [shop])
+        due = store.untracked_shipped(shop, limit=10)
+        store.mark_checked(shop, 87, etsy_updated_at=v2.updated_at, now=NOW)
+        store.mark_checked(shop, 87, etsy_updated_at=v1.updated_at, now=NOW)  # the older run
+        after = store.untracked_shipped(shop, limit=10)
+
+    assert outcome == Completed({"receipts": 1, "recorded": 0, "via": "schedule"})
+    assert read_at == v1.updated_at
+    assert due == (87,)  # V2 was never read: still due
+    assert scalar(database, checkpoint, [shop]) == v2.updated_at
+    assert after == ()
 
 
 async def test_reader__one_orders_incidents_and_keyset_pages(database: Database) -> None:

@@ -101,18 +101,25 @@ class PostgresTrackingStore:
             ).fetchall()
         return tuple(int(r[0]) for r in rows)
 
-    def mark_checked(self, shop_id: uuid.UUID, receipt_id: int, *, now: datetime) -> None:
+    def mark_checked(
+        self, shop_id: uuid.UUID, receipt_id: int, *, etsy_updated_at: datetime, now: datetime
+    ) -> None:
+        # The version the read observed, never the stored order's (which a concurrent intake may
+        # have advanced); `greatest` keeps the checkpoint monotonic.
         with self._database.connection() as connection, connection.transaction():
             connection.execute(
                 """
                 insert into app.tracking_checks
                   (organization_id, shop_id, receipt_id, etsy_updated_at, checked_at)
-                select o.organization_id, o.shop_id, o.receipt_id, o.etsy_updated_at, %s
+                select o.organization_id, o.shop_id, o.receipt_id, %s, %s
                 from app.etsy_orders o where o.shop_id = %s and o.receipt_id = %s
                 on conflict (shop_id, receipt_id) do update
-                  set etsy_updated_at = excluded.etsy_updated_at, checked_at = excluded.checked_at
+                  set etsy_updated_at = greatest(
+                        app.tracking_checks.etsy_updated_at, excluded.etsy_updated_at
+                      ),
+                      checked_at = excluded.checked_at
                 """,
-                [now, shop_id, receipt_id],
+                [etsy_updated_at, now, shop_id, receipt_id],
             )
 
 

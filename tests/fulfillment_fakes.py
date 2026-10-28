@@ -56,8 +56,20 @@ class MemoryTrackingStore:
         due = (r for r in self.shipped.get(shop_id, []) if (shop_id, r) not in self.checked)
         return tuple(due)[:limit]
 
-    def mark_checked(self, shop_id: uuid.UUID, receipt_id: int, *, now: datetime) -> None:  # noqa: ARG002 - the port
-        self.checked.add((shop_id, receipt_id))
+    # The Etsy version each check observed (monotonic, like Postgres's `greatest`).
+    observed: dict[tuple[uuid.UUID, int], datetime] = field(default_factory=dict)
+
+    def mark_checked(
+        self,
+        shop_id: uuid.UUID,
+        receipt_id: int,
+        *,
+        etsy_updated_at: datetime,
+        now: datetime,  # noqa: ARG002 - the port
+    ) -> None:
+        key = (shop_id, receipt_id)
+        self.checked.add(key)
+        self.observed[key] = max(self.observed.get(key, etsy_updated_at), etsy_updated_at)
 
     def changed_on_etsy(self, shop_id: uuid.UUID, receipt_id: int) -> None:
         self.checked.discard((shop_id, receipt_id))

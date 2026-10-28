@@ -18,10 +18,14 @@ from htco_persistence.database import Database
 
 # The shop's synced data, table by table: the probe results and the stored order history (the
 # order's items, refunds and buyer row cascade from it; post-merge review of 2026-10-23), and the
-# AutoVA relay's items with their pasted codes (Sage's security review of #159). Legal retention
-# keeps nothing of it yet (DATA_MODEL §6).
+# AutoVA relay's items with their pasted codes (Sage's security review of #159). The product
+# sales counters go with the orders: their ledger (`product_sales_applications`) cascades from
+# the orders, and a counter kept without it would be counted twice on a reconnect's rebuild
+# (Codex post-merge review, owner gate v4). Legal retention keeps nothing of it yet
+# (DATA_MODEL §6).
 _PURGED_TABLES = (
     "app.shop_capabilities",
+    "app.product_sales_counters",
     "app.etsy_orders",
     "app.etsy_order_sync_state",
     "app.relay_items",

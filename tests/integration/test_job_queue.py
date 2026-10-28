@@ -603,6 +603,7 @@ async def test_purge__deletes_only_the_disconnected_shops_data_and_only_after_it
 
     assert purged == {
         "shop_capabilities": 2,
+        "product_sales_counters": 0,
         "etsy_orders": 0,
         "etsy_order_sync_state": 0,
         "relay_items": 0,
@@ -622,6 +623,7 @@ async def test_purge__deletes_only_the_disconnected_shops_data_and_only_after_it
     ) == {
         "deleted": {
             "shop_capabilities": 2,
+            "product_sales_counters": 0,
             "etsy_orders": 0,
             "etsy_order_sync_state": 0,
             "relay_items": 0,
@@ -664,6 +666,7 @@ async def test_purge__deletes_the_shops_stored_order_history_with_its_buyer_rows
 
     assert purged == {
         "shop_capabilities": 0,
+        "product_sales_counters": 0,
         "etsy_orders": 1,
         "etsy_order_sync_state": 1,
         "relay_items": 0,

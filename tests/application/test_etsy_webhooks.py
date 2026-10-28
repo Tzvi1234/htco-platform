@@ -293,7 +293,7 @@ def test_delivery_key__a_long_webhook_id_is_hashed_never_cut() -> None:
     long_a, long_b = "m" * 199 + "a", "m" * 199 + "b"
     assert delivery_key("msg_fake0001") == "msg_fake0001"
     assert delivery_key(long_a) != delivery_key(long_b)
-    assert len(delivery_key(long_a)) <= 71  # noqa: PLR2004 - "sha256:" and 64 hex
+    assert len(delivery_key(long_a)) <= 71
 
 
 async def test_ingress__listing_changes_at_different_times_each_get_a_job() -> None:

@@ -177,10 +177,10 @@ async def test_shipments_read__tracking_codes_and_nothing_of_the_buyer(
     raw = _one(output, "shipments")
     text = json.dumps(output)
 
-    assert set(raw) == {"receipt_id", "shipments"}
-    receipt_id, shipments = shipments_from_json(raw)
-    assert receipt_id == RECEIPT
-    assert {shipment.tracking_code for shipment in shipments} == {FAKE_TRACKING}
+    assert set(raw) == {"receipt_id", "updated_timestamp", "shipments"}
+    read = shipments_from_json(raw)
+    assert read.receipt_id == RECEIPT
+    assert {shipment.tracking_code for shipment in read.shipments} == {FAKE_TRACKING}
     for value in (FAKE_NAME, FAKE_LINE, FAKE_NOTE):
         assert value not in text
 

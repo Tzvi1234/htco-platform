@@ -88,12 +88,18 @@ async def test_a_second_parcel_announced_after_the_first_job_completed_is_record
         stored = run.world.inbox.queue.jobs[accepted.job_id]
         await processor.process(
             ClaimedJob(
-                id=stored.id, kind=stored.spec.kind, idempotency_key=stored.spec.idempotency_key,
-                payload=stored.spec.payload, organization_id=stored.spec.organization_id,
-                shop_id=stored.spec.shop_id, lock_key=None, attempts=1, retry=DEFAULT_RETRY,
+                id=stored.id,
+                kind=stored.spec.kind,
+                idempotency_key=stored.spec.idempotency_key,
+                payload=stored.spec.payload,
+                organization_id=stored.spec.organization_id,
+                shop_id=stored.spec.shop_id,
+                lock_key=None,
+                attempts=1,
+                retry=DEFAULT_RETRY,
                 lease_expires_at=NOW + timedelta(minutes=1),
                 correlation_id=stored.spec.correlation_id,
-            )  # fmt: skip
+            )
         )
         for request in engine.tracking:
             context = replace(
