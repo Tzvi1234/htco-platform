@@ -8,12 +8,13 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
 from structlog.testing import capture_logs
 
+import htco_worker.main as worker_main
 from htco_application.audit import AuditRecord
 from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
 from htco_application.kernel import TenantShop
@@ -23,10 +24,12 @@ from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_integrations import EtsyConnection, OAuthTokens
 from htco_domain.jobs import JobState
 from htco_integrations.etsy import EtsyConfig
+from htco_persistence.database import Database
 from htco_platform.settings import ConfigurationError, load_settings
 from htco_worker.health import health_answer
 from htco_worker.main import (
     EXIT_CONFIGURATION_ERROR,
+    WORKER_ROLE,
     DatabaseLoginError,
     check_database_login,
     main,
@@ -247,6 +250,122 @@ def test_main__wrong_database_login__exits_78(capsys: pytest.CaptureFixture[str]
 
     assert main(serve=serve) == EXIT_CONFIGURATION_ERROR
     assert "wrong database login" in capsys.readouterr().err
+
+
+def test_settings__own_login_url_with_a_password__is_refused_without_repeating_it(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    """The URL is a plain setting; a password in it would show in `repr(settings)` and logs."""
+    for url in (
+        "postgresql://htco_worker_login:fake-in-url@db.invalid/h",
+        "postgresql://htco_worker_login@db.invalid/h?password=fake-in-url",
+        "host=db.invalid user=htco_worker_login password=fake-in-url",
+    ):
+        environment.setenv("HTCO_WORKER_DATABASE_URL", url)
+        with pytest.raises(ConfigurationError, match="HTCO_WORKER_DATABASE_URL") as refused:
+            load_settings(WorkerSettings)
+        assert "fake-in-url" not in str(refused.value)
+
+
+class RecordedDatabase:
+    """Stands in for `Database` in `worker_database()`: what the worker's pool is built with."""
+
+    def __init__(self, conninfo: str, **options: object) -> None:
+        self.conninfo, self.options = conninfo, options
+
+
+def test_worker_database__own_login__its_url_password_and_the_worker_role(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    environment.setenv("HTCO_WORKER_DATABASE_URL", "postgresql://htco_worker_login@db.invalid/h")
+    environment.setenv("HTCO_WORKER_DATABASE_PASSWORD", "fake-worker-password")
+    environment.setattr(worker_main, "Database", RecordedDatabase)
+
+    pool = worker_main.worker_database(load_settings(WorkerSettings))
+
+    assert isinstance(pool, RecordedDatabase)
+    assert pool.conninfo == "postgresql://htco_worker_login@db.invalid/h"
+    assert pool.options["password"] == "fake-worker-password"
+    assert pool.options["role"] == WORKER_ROLE
+
+
+def test_worker_database__fallback__the_shared_url_and_the_worker_role(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    environment.setattr(worker_main, "Database", RecordedDatabase)
+
+    pool = worker_main.worker_database(load_settings(WorkerSettings))
+
+    assert isinstance(pool, RecordedDatabase)
+    assert pool.conninfo == "postgresql://htco@db.invalid/htco"
+    assert "password" not in pool.options
+    assert pool.options["role"] == WORKER_ROLE
+
+
+class LoginDatabase(Database):
+    """A pool that never connects; `session_roles` answers as the given login would."""
+
+    def __init__(self, roles: tuple[str, str, bool]) -> None:
+        super().__init__("postgresql://htco@db.invalid/htco", role=WORKER_ROLE)
+        self.roles = roles
+
+    @override
+    async def start(self) -> None:
+        return None
+
+    @override
+    async def stop(self) -> None:
+        return None
+
+    @override
+    def session_roles(self) -> tuple[str, str, bool]:
+        return self.roles
+
+
+@dataclass
+class Runs:
+    """Stands in for `Worker`: counts the job loops started."""
+
+    started: list[object] = field(default_factory=list)
+
+    def worker(self, *_args: object, **_options: object) -> "Runs":
+        return self
+
+    async def run(self, stop: object) -> None:
+        self.started.append(stop)
+
+    def is_alive(self, _now: datetime) -> bool:
+        return True
+
+
+def _serve_with(
+    environment: pytest.MonkeyPatch, roles: tuple[str, str, bool]
+) -> tuple[int, Runs]:
+    """The real `main()` and `_serve`, with the pool and the job loop replaced."""
+    environment.setenv("HTCO_WORKER_HEALTH_PORT", "0")
+    environment.setenv("HTCO_WORKER_DATABASE_URL", "postgresql://htco_worker_login@db.invalid/h")
+    environment.setenv("HTCO_WORKER_DATABASE_PASSWORD", "fake-worker-password")
+    runs = Runs()
+    environment.setattr(worker_main, "worker_database", lambda _settings: LoginDatabase(roles))
+    environment.setattr(worker_main, "Worker", runs.worker)
+    return main(), runs
+
+
+def test_serve__own_login_configured_but_the_api_login__exits_78_before_any_job(
+    environment: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, runs = _serve_with(environment, ("postgres", WORKER_ROLE, False))
+
+    assert code == EXIT_CONFIGURATION_ERROR
+    assert runs.started == []
+    assert "wrong database login" in capsys.readouterr().err
+
+
+def test_serve__the_worker_login__runs_the_jobs(environment: pytest.MonkeyPatch) -> None:
+    code, runs = _serve_with(environment, ("htco_worker_login", WORKER_ROLE, False))
+
+    assert code == 0
+    assert len(runs.started) == 1
 
 
 # --- handlers -----------------------------------------------------------------------------

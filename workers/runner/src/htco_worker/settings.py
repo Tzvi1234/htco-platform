@@ -1,10 +1,12 @@
 """Worker settings, read from `HTCO_*` environment variables and validated at startup."""
 
 import os
+import re
 import socket
 from datetime import time
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -34,6 +36,16 @@ SCHEDULES = (
     | {FULFILLMENT_SCHEDULE.kind: FULFILLMENT_SCHEDULE, REVIEW_SCHEDULE.kind: REVIEW_SCHEDULE}
     | {RELAY_RETENTION_SCHEDULE.kind: RELAY_RETENTION_SCHEDULE}
 )
+
+_CONNINFO_PASSWORD = re.compile(r"(?:^|\s)password\s*=")
+
+
+def _carries_a_password(conninfo: str) -> bool:
+    """A URL with `user:password@` or `?password=`, or a `password=` keyword conninfo."""
+    if "://" not in conninfo:
+        return _CONNINFO_PASSWORD.search(conninfo) is not None
+    parts = urlsplit(conninfo)
+    return parts.password is not None or "password" in parse_qs(parts.query)
 
 
 class WorkerSettings(BaseSettings):
@@ -107,6 +119,19 @@ class WorkerSettings(BaseSettings):
     def _blank_is_unset(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("worker_database_url")
+    @classmethod
+    def _url_without_a_password(cls, value: str | None) -> str | None:
+        """The URL is a plain setting, shown in logs and `repr`; its password lives apart, in
+        HTCO_WORKER_DATABASE_PASSWORD. A URL that carries one is refused, never echoed."""
+        if value is None:
+            return None
+        if _carries_a_password(value):
+            raise ValueError(
+                "must not carry a password: put it in HTCO_WORKER_DATABASE_PASSWORD instead"
+            )
         return value
 
     @property
