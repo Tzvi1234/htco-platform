@@ -7,21 +7,26 @@
 | **Size** | L |
 | **Depends on** | Phase 2 |
 | **Requirements** | FR-ADM-01, FR-IAM-01, FR-IAM-02, FR-IAM-05, FR-IAM-06 |
-| **Status** | In progress: 3.1, 3.2 and 3.3 (part 1) merged in htco-clients; 3.5 part 1 (BFF sign-in, sessions, CSRF) in htco-platform |
+| **Status** | Partial (audit 2026-10-28): 3.1, 3.2, 3.3 and 3.6 delivered; 3.4, 3.5, 3.7, 3.8 and 3.9 partial, with their open acceptance criteria named in Progress; the web app is deployed on `dash.ht-co.app` |
 
 ## Progress
 
-- [ ] 3.1 Clients repository tooling
+- [x] 3.1 Clients repository tooling (both parts; the logical-properties lint rules are tested in CI)
 - [x] 3.2 Token pipeline
-- [ ] 3.3 Web app skeleton
-- [ ] 3.4 Core components
-- [ ] 3.5 BFF authentication (platform)
-- [ ] 3.6 Generated API client and contract job
-- [ ] 3.7 Overview and shops screens
-- [ ] 3.8 Web deployment
-- [ ] 3.9 Administration screens
+- [x] 3.3 Web app skeleton (both parts: htco-clients#4 and the Playwright journeys; AC-3.3.1 to 3.3.3 pass in the web-shell feature docs)
+- [ ] 3.4 Core components (partial: AC-3.4.1 to 3.4.4 pass for the components that exist; open: the inventory as named, IconButton, SearchField, Select, Badge, StatusDot, MetricCard, Skeleton, RetryBanner, Dialog and Pagination, is not exported from `src/shared`, and PasswordField lives in `features/auth`. In practice the Design 1C kit (client ADR-0008) replaced the inventory; the slice text is rewritten to that kit or the missing parts are built)
+- [ ] 3.5 BFF authentication (platform) (partial: open AC-3.5.6 end to end, which waits for the owner's Resend SMTP; AC-3.5.8's owner-assisted, audited MFA reset, not built; the record of sign-ins from new devices and its notice, AC-3.5.12 below, not built; AC-3.5.1's browser-storage check runs only against the in-memory API)
+- [x] 3.6 Generated API client and contract job (open note: the pinned spec in htco-clients lags platform `packages/contracts/openapi.yaml`, and no job compares them across the repositories)
+- [ ] 3.7 Overview and shops screens (partial: delivered, but AC-3.7.1's approved screenshot per state, he/en × light/dark, and AC-3.7.2's "a Viewer sees no admin controls" have no test evidence yet)
+- [ ] 3.8 Web deployment (partial: deployed on `dash.ht-co.app`; open AC-3.8.1, the deploy check verifies the CSP but not the referrer policy, and AC-3.8.2, the deployed Playwright sign-in journey, which needs the owner's account)
+- [ ] 3.9 Administration screens (partial: open AC-3.9.1, "see each change in the audit view", because no audit-read API exists yet (in progress, see Phase 6's note of 2026-10-28); AC-3.9.2's no-permission state is not tested on every admin route)
 
-Slices 3.1 to 3.3 need no backend, so they started early (the plan lets design-system work overlap Phase 2). Slice 3.1 ships in two parts: workspace tooling and CI first; the logical-CSS lint rule with the web app (3.3), and Storybook with axe with the core components (3.4). Slice 3.3 ships in two parts: the shell, languages, themes and states first ([htco-clients#4](https://github.com/Tzvi1234/htco-clients/pull/4)); the Playwright journeys with axe and screenshots second. Slice 3.5 ships in three parts: sign-in, sessions and CSRF first; MFA enrollment and verification, step-up, recovery and the session list second; password reset third ([docs/features/auth-bff](../../features/auth-bff/overview.md)): done at the API (`POST /v1/auth/password/forgot` and `/password/reset`, with the web pages in htco-clients); email verification at sign-up is not needed because accounts are invite-only. Still open for AC-3.5.6 end to end: the owner connects Resend as Supabase Auth's custom SMTP and adds the reset page to the redirect URLs ([operations](../../features/auth-bff/operations.md#connecting-resend-for-auth-emails)). The token pipeline's `HighContrast` XAML dictionary moves to Phase 17, with the Windows app ([client ADR-0003](https://github.com/Tzvi1234/htco-clients/blob/main/docs/adr/0003-design-token-pipeline.md)).
+**Audit 2026-10-28.** The ticks above were corrected against main: 3.1, 3.3 and 3.6 were delivered but unticked. Two 3.5 items stay open in this slice, not moved:
+
+- **Owner-assisted MFA reset (AC-3.5.8).** Only the self-service path (a second factor or a passkey) exists. The API endpoint, owner-only after step-up, audited, with a security notice to the member and the Owners, is built in 3.5; its web step is AC-3.9.6 ([UI_COVERAGE](../UI_COVERAGE.md)).
+- **AC-3.5.12, the new-device sign-in notice.** A sign-in from a device or browser not seen for that user in the last 90 days writes one `auth.new_device_sign_in` audit record (no IP address in full, the device's family and the coarse location only) and sends the user a security notice, in-app and by email, with a link to revoke the session; the notice cannot be muted (AC-7.6.1). Settings › Security lists these sign-ins (AC-3.5.10).
+
+Slices 3.1 to 3.3 need no backend, so they started early (the plan lets design-system work overlap Phase 2). Slice 3.1 ships in two parts: workspace tooling and CI first; the logical-CSS lint rule with the web app (3.3), and Storybook with axe with the core components (3.4). Slice 3.3 ships in two parts: the shell, languages, themes and states first ([htco-clients#4](https://github.com/Tzvi1234/htco-clients/pull/4)); the Playwright journeys with axe and screenshots second. Slice 3.5 ships in three parts: sign-in, sessions and CSRF first; MFA enrollment and verification, step-up, recovery and the session list second; password reset third ([docs/features/auth-bff](../../features/auth-bff/overview.md)): done at the API (`POST /v1/auth/password/forgot` and `/password/reset`, with the web pages in htco-clients); email verification at sign-up is not needed because accounts are invite-only. Still open for AC-3.5.6 end to end: the owner connects Resend as Supabase Auth's custom SMTP and adds the reset page to the redirect URLs ([operations](../../features/auth-bff/operations.md#connecting-resend-for-auth-emails)). The token pipeline's `HighContrast` XAML dictionary moves to Phase 17, with the Windows app ([client ADR-0003](https://github.com/Tzvi1234/htco-clients/blob/main/docs/adr/0003-design-token-pipeline.md)). Phase 17 is the right one: that ADR's first log entry says "Phase 15" because it was written before PLAN 2.0 renumbered the phases, and its next entry (2026-10-14) moves the dictionary to Phase 17.
 
 ## Goal
 

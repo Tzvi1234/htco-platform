@@ -7,7 +7,7 @@
 | **Size** | M |
 | **Depends on** | Phase 1 |
 | **Requirements** | FR-ADM-01, FR-AUD-01, FR-IAM-01, FR-IAM-02, FR-IAM-03, FR-IAM-04 |
-| **Status** | All slices built (2.1 to 2.6); production database migrated 2026-10-14; exit gate open: DigitalOcean to Supabase connection, the owner's account |
+| **Status** | All slices built (2.1 to 2.6); production database migrated 2026-10-14; exit gate met (audit 2026-10-28: the DigitalOcean to Supabase connection was verified on 2026-10-14, and the owner signs in on the deployed web app); the security checklist items below are still to be confirmed against their tests |
 
 ## Progress
 
@@ -137,7 +137,7 @@ Show `GET /v1/me` for the owner; invite a Support user and grant one shop; show 
 ## Exit gate
 
 - [x] All AC-2.x pass; production database migrated through the owner-started workflow (2026-10-14).
-- [ ] Connection from DigitalOcean to Supabase verified over IPv4 with the planned pool sizes.
+- [x] Connection from DigitalOcean to Supabase verified over IPv4 with the planned pool sizes (2026-10-14: the deployed API reports `/readyz` database `ok` through the IPv4 connection pooler, [platform-skeleton operations](../../features/platform-skeleton/operations.md) Drills; ticked by the audit of 2026-10-28; the pool sizes are the planned defaults, load-tested in Phase 20).
 
 ## Rollback
 
