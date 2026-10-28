@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -90,6 +91,13 @@ def idempotency_store(request: Request) -> IdempotencyStore:
     return found
 
 
+def _target(request: Request) -> str:
+    """The path and its query (sorted), so the same key with another `?organization_id=` is a
+    different request (422), not a replay of the first organization's answer."""
+    query = sorted(request.query_params.multi_items())
+    return request.url.path if not query else f"{request.url.path}?{urlencode(query)}"
+
+
 async def run_idempotently(  # noqa: PLR0913 - the request, its caller, the store and the work
     request: Request,
     *,
@@ -117,7 +125,7 @@ async def run_idempotently(  # noqa: PLR0913 - the request, its caller, the stor
         key=key,
         method=request.method,
         path=request.url.path,
-        fingerprint=request_fingerprint(request.method, request.url.path, await request.body()),
+        fingerprint=request_fingerprint(request.method, _target(request), await request.body()),
     )
     begun = await store.begin(idempotent, now=now)
     if isinstance(begun, Replay):

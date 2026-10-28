@@ -550,6 +550,8 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
                     "the Idempotency-Key was used with another request (idempotency-key-reused)",
                     Problem,
                 ),
+                503: "The relay is not set up on this server (relay-unavailable), or replays are "
+                "not set up (not-ready)",
             }
         ),
         openapi_extra=IDEMPOTENCY_OPENAPI,

@@ -1168,10 +1168,21 @@ def _add_bulk_routes(router: APIRouter, *, clock: Callable[[], datetime]) -> Non
                 **_SHOP_ERRORS,
                 400: "The body is not valid JSON, or an invalid Idempotency-Key",
                 403: "The role may not re-sync orders (orders-action-forbidden)",
-                409: "The first request with this Idempotency-Key still runs "
-                "(idempotency-in-progress)",
+                409: (
+                    "The shop is not connected (shop-not-connected; `reason` says why, "
+                    "`needs_reauth` means reconnect it), the connection lacks the scope "
+                    "(etsy-scope-missing), or the first request with this Idempotency-Key still "
+                    "runs (idempotency-in-progress)",
+                    ShopNotConnectedProblem,
+                ),
+                422: (
+                    "Invalid shop ID or body (`errors` lists the fields), or the Idempotency-Key "
+                    "was used with another request (idempotency-key-reused)",
+                    Problem,
+                ),
                 429: "Re-synced moments ago (resync-rate-limited; see Retry-After)",
-                503: "Re-syncs are not set up (orders-bulk-unavailable)",
+                503: "Re-syncs are not set up (orders-bulk-unavailable), or replays are not set "
+                "up (not-ready)",
             }
         ),
         openapi_extra=IDEMPOTENCY_OPENAPI,
