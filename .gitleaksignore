@@ -8,4 +8,5 @@ d680e3a6d1390e135e2ea073768635e933150eed:tests/integration/test_task_store.py:ge
 # #220: a test correlation ID (`correlation_id="corr-owner"` / `"c"`) on the line of `press_key=key`,
 # not a secret. The ID is a module constant since, so later commits do not match.
 337d4bc5669f0f1f06b7d1feda882a0004bf1542:tests/application/test_owner_writes.py:generic-api-key:54
+# The same correlation ID in the holiday tests' press helper (#220).
 9c9de4722d5d0be9e91c804a208a67c9da014cc5:tests/application/test_owner_writes.py:generic-api-key:465
