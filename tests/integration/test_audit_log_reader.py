@@ -16,7 +16,14 @@ from htco_application.audit_log import AuditQuery
 from htco_domain.actors import ActorKind
 from htco_persistence.audit import PostgresAuditLogReader
 from htco_persistence.database import Database
-from tests.integration.test_shop_reader import DEMO, DEMO_OWNER, OTHER, SHOP_ONE, claims
+from tests.integration.test_shop_reader import (
+    DEMO,
+    DEMO_OWNER,
+    OTHER,
+    OTHER_SHOP,
+    SHOP_ONE,
+    claims,
+)
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -129,6 +136,41 @@ async def test_filters__shop_actor_action_and_time(database: Database, family: s
     assert [e.actor_id for e in by_actor.items] == ["etsy-order-intake"]
     assert [e.action for e in exact.items] == [f"{family}.changed"]
     assert [e.action for e in window.items] == [f"{family}.synced"]
+
+
+async def test_filters__an_unknown_shop_and_another_organizations_shop_find_nothing(
+    database: Database, family: str
+) -> None:
+    write(
+        database,
+        family,
+        [
+            {"verb": "connected", "entity_type": "shop", "entity_id": str(SHOP_ONE)},
+            {"verb": "connected", "entity_type": "shop", "entity_id": str(OTHER_SHOP),
+             "organization_id": OTHER},
+        ],
+    )  # fmt: skip
+    reader = PostgresAuditLogReader(database)
+
+    for shop in (uuid.uuid4(), OTHER_SHOP):
+        page = await reader.list_audit(
+            claims(DEMO_OWNER), AuditQuery(DEMO, shop_id=shop, action=f"{family}.*")
+        )
+        assert page.items == ()
+        assert page.next_before is None
+
+
+async def test_cursor__the_last_page_ends_when_the_rows_equal_the_limit(
+    database: Database, family: str
+) -> None:
+    write(database, family, [{} for _ in range(3)])
+
+    page = await PostgresAuditLogReader(database).list_audit(
+        claims(DEMO_OWNER), AuditQuery(DEMO, action=f"{family}.*", limit=3)
+    )
+
+    assert len(page.items) == 3
+    assert page.next_before is None
 
 
 async def test_cursor__pages_through_without_overlap(database: Database, family: str) -> None:

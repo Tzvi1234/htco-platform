@@ -50,7 +50,7 @@ class AuditEntryView(BaseModel):
     id: uuid.UUID
     occurred_at: datetime
     # user, employee, automation, advisor or system, and its ID (a user's UUID, an automation ID…)
-    actor_kind: str
+    actor_kind: ActorKind
     actor_id: str
     action: str
     entity_type: str

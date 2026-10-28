@@ -131,3 +131,40 @@ async def test_admin_view__a_permanent_failure_with_its_links_and_a_masked_addre
     assert found.recipient == f"{local[0]}***@{domain[0]}***.{domain.rsplit('.', 1)[1]}"
     assert address not in repr(page)
     assert stranger.items == ()
+
+
+@pytest.mark.ac("AC-6.4.3")
+async def test_admin_view__the_last_page_ends_when_the_rows_equal_the_limit(
+    database: Database, worker_db: Database
+) -> None:
+    tenant, integration = await connected(database)
+    org = tenant.organization_id
+    owner = scalar(
+        database,
+        "select user_id from app.memberships where organization_id = %s and role = 'owner'",
+        [org],
+    )
+    with tenant_scope(org):
+        for _ in range(3):
+            PostgresEmailDirectory(worker_db).record_email(
+                outbox_id=uuid.uuid4(), organization_id=org, user_id=owner,
+                kind=NotificationKind.INCIDENT_OPENED, status="failed", provider_id=None,
+                error="resend 422", now=NOW,
+                about=DeliveryLinks(integration.shop_id, uuid.uuid4(), 51),
+            )  # fmt: skip
+    reader = PostgresFailedEmailReader(database)
+    who = _claims(owner)
+
+    exact = await reader.failed_emails(who, org, status=FailedStatus.FAILED, before=None, limit=3)
+    first = await reader.failed_emails(who, org, status=FailedStatus.FAILED, before=None, limit=2)
+    second = await reader.failed_emails(
+        who, org, status=FailedStatus.FAILED, before=first.next_before, limit=2
+    )
+
+    assert len(exact.items) == 3
+    assert exact.next_before is None
+    assert len(first.items) == 2
+    assert first.next_before == first.items[-1].id
+    assert len(second.items) == 1
+    assert second.next_before is None
+    assert not {e.id for e in first.items} & {e.id for e in second.items}

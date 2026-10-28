@@ -210,13 +210,24 @@ async def test_email_failures__invalid__422(params: dict[str, str | int]) -> Non
     assert answer.status_code == 422
 
 
-@pytest.mark.parametrize("role", [Role.OPERATIONS, Role.SUPPORT, Role.VIEWER])
+@pytest.mark.parametrize("role", [Role.DEVELOPER, Role.OPERATIONS, Role.SUPPORT, Role.VIEWER])
 async def test_email_failures__other_roles__403(role: Role) -> None:
     emails = MemoryFailedEmails([failure(1)])
     async with client(role, emails=emails) as http:
         answer = await http.get("/v1/operations/email-failures")
 
     assert answer.status_code == 403
+    assert emails.asked == []
+
+
+async def test_email_failures__another_organization__404() -> None:
+    emails = MemoryFailedEmails([failure(1)])
+    async with client(emails=emails) as http:
+        answer = await http.get(
+            "/v1/operations/email-failures", params={"organization_id": str(uuid.uuid4())}
+        )
+
+    assert answer.status_code == 404
     assert emails.asked == []
 
 

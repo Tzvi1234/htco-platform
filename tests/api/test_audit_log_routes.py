@@ -99,6 +99,7 @@ async def test_audit_log__every_filter_reaches_the_reader() -> None:
     assert (query.organization_id, query.shop_id) == (ORG, SHOP)
     assert (query.actor_kind, query.actor_id) == (ActorKind.AUTOMATION, "tracking-sync")
     assert (query.action, query.since, query.until, query.limit) == ("shop.*", since, until, 20)
+    assert answer.json() == {"items": [], "next_cursor": None}
 
 
 async def test_audit_log__pages_with_the_cursor() -> None:

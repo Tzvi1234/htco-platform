@@ -222,6 +222,13 @@ class IntegrationView(BaseModel):
 
 
 class EtsyQuotaView(BaseModel):
+    """The shop card's quota figure: this API process's last-seen value, which can be stale.
+
+    Most Etsy calls run in the worker, so `remaining_today` and `below_floor` may be hours old or
+    from the previous Etsy day, and `below_floor` ignores the snapshot's age. Show `observed_at`
+    as "as of", never as a live count.
+    """
+
     # Etsy's daily request budget is the app's, shared by every shop: as this server last saw it
     # (`x-limit-per-day`, `x-remaining-today`); nulls before its first Etsy call.
     limit_per_day: int | None

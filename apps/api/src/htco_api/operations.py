@@ -381,7 +381,12 @@ def _add_email_failures_route(router: APIRouter, *, clock: Callable[[], datetime
         "/email-failures",
         summary="Emails refused for good or skipped (no full address)",
         responses=problem_responses(
-            {**_COMMON, 422: ("Invalid ID, status, limit or cursor", ValidationProblem)}
+            {
+                **_COMMON,
+                403: "Only the Owner and Admins see the failed emails (forbidden)",
+                404: "The named organization does not exist for the caller",
+                422: ("Invalid ID, status, limit or cursor", ValidationProblem),
+            }
         ),
     )
     async def list_email_failures(  # noqa: PLR0913, PLR0917 - filters and page

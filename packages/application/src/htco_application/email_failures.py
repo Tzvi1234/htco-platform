@@ -82,6 +82,8 @@ async def failed_emails(  # noqa: PLR0913 - the caller, the reader and the page
     if organization is None:
         raise OrganizationRequiredError("name the organization")
     principal = auth.principal_for(organization)
+    # No capability exists for the email queue yet: it borrows RETRY_SYNC at organization scope
+    # (Owner and Admin), the same people who work the jobs queue. Give it its own when one is added.
     decision = decide(principal, Capability.RETRY_SYNC, shop=None, now=now)
     if decision.outcome is not Outcome.ALLOW or decision.scope is not Scope.ORGANIZATION:
         raise EmailFailuresForbiddenError(decision.outcome)

@@ -13,9 +13,9 @@
 -- Safe on the live database: nullable columns, an index, one function.
 
 alter table app.email_deliveries
+  -- No foreign key on shop_id or incident_id: the email is already sent when its row is written,
+  -- and a shop or an incident removed meanwhile must not make the record fail.
   add column shop_id uuid,
-  -- No foreign key: the email is already sent when its row is written, and an incident removed
-  -- meanwhile (with its shop) must not make the record fail.
   add column incident_id uuid,
   add column receipt_id bigint constraint email_deliveries_receipt_id_check check (receipt_id > 0);
 
