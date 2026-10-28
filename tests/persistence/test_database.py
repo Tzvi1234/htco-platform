@@ -21,7 +21,7 @@ def test_database__a_password_apart__joins_the_login_without_url_encoding() -> N
     password = "fake p@ss/word:%?"  # noqa: S105 - an invented password
     database = Database("postgresql://htco_worker_login@db.invalid:5432/htco", password=password)
 
-    parts = conninfo_to_dict(database._conninfo)  # noqa: SLF001 - what the pool connects with
+    parts = conninfo_to_dict(database._conninfo)
     assert parts["user"] == "htco_worker_login"
     assert parts["password"] == password
     assert parts["host"] == "db.invalid"
@@ -31,4 +31,4 @@ def test_database__a_password_apart__joins_the_login_without_url_encoding() -> N
 
 def test_database__no_password_apart__keeps_the_url() -> None:
     url = "postgresql://htco@db.invalid/htco"
-    assert Database(url)._conninfo == url  # noqa: SLF001 - what the pool connects with
+    assert Database(url)._conninfo == url

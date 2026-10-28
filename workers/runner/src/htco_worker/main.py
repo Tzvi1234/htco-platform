@@ -216,8 +216,9 @@ def check_database_login(session: tuple[str, str, bool], *, own_login: bool) -> 
         _log.warning(
             "worker.shared_database_login",
             session_user=session_user,
-            detail="HTCO_WORKER_DATABASE_URL and HTCO_WORKER_DATABASE_PASSWORD are unset: the "
-            "worker logs in with the API's credential and only switches role",
+            detail="HTCO_WORKER_DATABASE_URL and HTCO_WORKER_DATABASE_PASSWORD are not both set "
+            "(a blank password counts as unset): the worker logs in with the API's credential "
+            "and only switches role",
         )
         return
     if session_user != WORKER_LOGIN or privileged:

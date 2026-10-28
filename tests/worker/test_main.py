@@ -285,7 +285,7 @@ def test_worker_database__own_login__its_url_password_and_the_worker_role(
 
     assert isinstance(pool, RecordedDatabase)
     assert pool.conninfo == "postgresql://htco_worker_login@db.invalid/h"
-    assert pool.options["password"] == "fake-worker-password"
+    assert pool.options["password"] == "fake-worker-password"  # noqa: S105 - an invented one
     assert pool.options["role"] == WORKER_ROLE
 
 
@@ -328,7 +328,7 @@ class Runs:
 
     started: list[object] = field(default_factory=list)
 
-    def worker(self, *_args: object, **_options: object) -> "Runs":
+    def worker(self, *_args: object, **_options: object) -> Runs:
         return self
 
     async def run(self, stop: object) -> None:
