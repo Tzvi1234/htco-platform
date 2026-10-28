@@ -33,6 +33,7 @@ from htco_api.webhooks import webhooks_router
 from htco_application.access.management import AccessStore, Inviter
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WindowLimiter
+from htco_application.marketplace import QuotaMonitor
 from htco_application.notifications import SecurityNotices
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
@@ -124,6 +125,8 @@ class AppOptions:
     etsy: EtsyConnect | None = None
     # Connection health for the shop card (slice 4.4); without it, that route answers 503.
     integrations: IntegrationReader | None = None
+    # Etsy's daily request budget on the shop card (AC-4.1.2); without it, `etsy_quota` is null.
+    etsy_quota: QuotaMonitor | None = None
     # Capability probes (slice 4.5); without them, re-checking answers 503.
     capability_checks: CapabilityChecks | None = None
     # Disconnect (slice 4.7) deletes tokens through the vault; without it, disconnect answers 503.
@@ -188,6 +191,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.web_auth = options.web_auth
     app.state.etsy = options.etsy
     app.state.integrations = options.integrations
+    app.state.etsy_quota = options.etsy_quota
     app.state.capability_checks = options.capability_checks
     app.state.token_vault = options.token_vault
     app.state.shop_remover = options.shop_remover

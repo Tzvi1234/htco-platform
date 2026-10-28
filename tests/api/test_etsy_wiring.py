@@ -83,6 +83,8 @@ def test_main__everything_configured__etsy_connect_on_and_no_secret_logged(
     captured = capsys.readouterr()
     assert _starting(captured.out)["etsy_connect"] == "on"
     assert server.apps[0].state.etsy is not None
+    # The shop card's daily quota comes from the same adapter (AC-4.1.2).
+    assert server.apps[0].state.etsy_quota.quota_status().floor == 500
     for secret in (VAULT_KEY, SESSION_KEY, SHARED_SECRET):
         assert secret not in captured.out + captured.err
 

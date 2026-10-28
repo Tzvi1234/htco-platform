@@ -3049,7 +3049,9 @@ paths:
       tags:
       - etsy
       summary: Marketplace connections of the organization's shops
-      description: Status, granted scopes and token health per shop, for the shop card; never a token.
+      description: 'Status, granted scopes and token health per shop, and Etsy''s remaining daily request
+
+        budget with its floor, for the shop card; never a token.'
       operationId: list_shop_integrations
       security:
       - HTTPBearer: []
@@ -7676,6 +7678,38 @@ components:
       required:
       - code
       title: EtsyCallback
+    EtsyQuotaView:
+      properties:
+        limit_per_day:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Limit Per Day
+        remaining_today:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Remaining Today
+        observed_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Observed At
+        floor:
+          type: integer
+          title: Floor
+        below_floor:
+          type: boolean
+          title: Below Floor
+      type: object
+      required:
+      - limit_per_day
+      - remaining_today
+      - observed_at
+      - floor
+      - below_floor
+      title: EtsyQuotaView
     EvidenceView:
       properties:
         kind:
@@ -8184,6 +8218,10 @@ components:
             $ref: '#/components/schemas/IntegrationView'
           type: array
           title: Items
+        etsy_quota:
+          anyOf:
+          - $ref: '#/components/schemas/EtsyQuotaView'
+          - type: 'null'
       type: object
       required:
       - items

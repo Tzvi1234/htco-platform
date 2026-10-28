@@ -43,7 +43,7 @@ from htco_application.etsy_webhooks import EtsyWebhookIngress, WebhookSecret, Wi
 from htco_application.execution.gateway import UnavailableGateway
 from htco_application.incidents import IncidentService
 from htco_application.jobs import JobError
-from htco_application.marketplace import MarketplacePort
+from htco_application.marketplace import MarketplacePort, QuotaMonitor
 from htco_application.mfa import Enrollment, Factor
 from htco_application.notifications import SecurityNotices
 from htco_application.order_history import OrderSync, adapter_pages
@@ -210,6 +210,7 @@ def main(
         web_auth=wiring.web_auth,
         etsy=wiring.etsy,
         integrations=wiring.integrations,
+        etsy_quota=wiring.etsy_quota,
         capability_checks=wiring.capability_checks,
         token_vault=wiring.token_vault,
         shop_remover=wiring.shop_remover,
@@ -417,6 +418,8 @@ class _Wiring:
     integrations: IntegrationReader | None = None
     # Etsy reads with refreshed tokens; no route calls it yet (Phase 5 ingests orders with it).
     marketplace: MarketplacePort | None = None
+    # The same adapter's daily request budget and floor, for the shop card (AC-4.1.2).
+    etsy_quota: QuotaMonitor | None = None
     # Read-only capability probes (slice 4.5), with the adapter; off when the connect flow is off.
     capability_checks: CapabilityChecks | None = None
     # The connected shop's live data for the dashboard: read-only adapter calls through a short
@@ -513,6 +516,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         token_vault=token_vault,
         etsy=etsy,
         marketplace=marketplace,
+        etsy_quota=marketplace,
         capability_checks=checks,
         dashboard=dashboard,
         integrations=PostgresIntegrationReader(database, app_key_fingerprint=app_key),
@@ -567,9 +571,7 @@ def _etsy_wiring(
     http: httpx.AsyncClient,
     vault: PostgresTokenVault | None,
     web_auth: WebAuth | None,
-) -> tuple[
-    EtsyConnect | None, MarketplacePort | None, CapabilityChecks | None, ShopDashboard | None
-]:
+) -> tuple[EtsyConnect | None, EtsyAdapter | None, CapabilityChecks | None, ShopDashboard | None]:
     """The connect flow, the adapter, the capability probes and the dashboard's live shop data,
     when every piece they need is configured. The adapter only reads: it refuses any other method
     towards Etsy's shop API."""
