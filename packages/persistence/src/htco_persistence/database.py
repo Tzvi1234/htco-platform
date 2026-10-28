@@ -29,6 +29,7 @@ from typing import Any, override
 import anyio
 import psycopg
 from psycopg import sql
+from psycopg.conninfo import make_conninfo
 from psycopg_pool import ConnectionPool
 
 _ROLE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
@@ -48,7 +49,7 @@ def tenant_scope(organization_id: uuid.UUID | None) -> Iterator[None]:
 
 
 class Database:
-    def __init__(
+    def __init__(  # noqa: PLR0913 - the pool's sizes, its role and the login's password
         self,
         conninfo: str,
         *,
@@ -56,7 +57,11 @@ class Database:
         max_size: int = 4,
         timeout: float = 5.0,
         role: str | None = None,
+        password: str | None = None,
     ) -> None:
+        # A password given apart from the URL (the worker's own login) never needs URL encoding.
+        if password is not None:
+            conninfo = make_conninfo(conninfo, password=password)
         self._conninfo = conninfo
         if role is not None and not _ROLE.match(role):
             raise ValueError("invalid database role name")
@@ -94,6 +99,18 @@ class Database:
                 )
                 connection.commit()
             yield connection
+
+    def session_roles(self) -> tuple[str, str, bool]:
+        """The login (`session_user`), the role in effect (`current_user`) and whether the login
+        is privileged (superuser or BYPASSRLS): the worker's startup check (audit 5.1)."""
+        with self.connection() as connection:
+            row = connection.execute(
+                "select session_user::text, current_user::text, r.rolsuper or r.rolbypassrls"
+                " from pg_catalog.pg_roles r where r.rolname = session_user"
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("the database login has no role row")
+        return str(row[0]), str(row[1]), bool(row[2])
 
     def dedicated_connection(self) -> psycopg.Connection[Any]:
         """A new connection outside the pool (autocommit), for a session-level lock held for

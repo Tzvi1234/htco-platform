@@ -48,6 +48,11 @@ class WorkerSettings(BaseSettings):
     sentry_dsn: SecretStr | None = None
     # The same database as the API; the worker's connections switch to the `htco_worker` role.
     database_url: SecretStr
+    # The worker's own login, `htco_worker_login` (architecture audit 5.1, ER-SEC-08): the URL
+    # without a password, and the password apart. Used only when both are set; until then the
+    # worker falls back to HTCO_DATABASE_URL (the API's login) and logs a WARNING at every start.
+    worker_database_url: str | None = None
+    worker_database_password: SecretStr | None = None
     # Defaults to the host name and process ID, unique per running process.
     worker_id: str = Field(
         default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}"[:200],
@@ -94,6 +99,8 @@ class WorkerSettings(BaseSettings):
         "token_vault_key",
         "token_vault_previous_keys",
         "resend_api_key",
+        "worker_database_url",
+        "worker_database_password",
         mode="before",
     )
     @classmethod
@@ -123,6 +130,13 @@ class WorkerSettings(BaseSettings):
             self.token_vault_key.get_secret_value(),
             None if previous is None else previous.get_secret_value(),
         )
+
+    @property
+    def own_login(self) -> tuple[str, str] | None:
+        """The worker's own login (URL, password) when both are configured, else None."""
+        if self.worker_database_url is None or self.worker_database_password is None:
+            return None
+        return self.worker_database_url, self.worker_database_password.get_secret_value()
 
     @field_validator("reconciliation_schedule")
     @classmethod
@@ -160,6 +174,8 @@ class WorkerSettings(BaseSettings):
         } & set(self.schedules)
         if etsy_schedules and ring is None:
             raise ValueError(f"{sorted(etsy_schedules)} need HTCO_TOKEN_VAULT_KEY")
+        if self.worker_database_password is not None and self.worker_database_url is None:
+            raise ValueError("HTCO_WORKER_DATABASE_PASSWORD needs HTCO_WORKER_DATABASE_URL")
         if self.email_provider == "resend" and self.resend_api_key is None:
             raise ValueError("HTCO_EMAIL_PROVIDER=resend needs HTCO_RESEND_API_KEY")
         etsy_app = self.etsy_keystring is not None and self.etsy_shared_secret is not None

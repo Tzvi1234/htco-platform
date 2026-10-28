@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 import pytest
+from structlog.testing import capture_logs
 
 from htco_application.audit import AuditRecord
 from htco_application.jobs import DEFAULT_RETRY, ClaimedJob
@@ -26,6 +27,8 @@ from htco_platform.settings import ConfigurationError, load_settings
 from htco_worker.health import health_answer
 from htco_worker.main import (
     EXIT_CONFIGURATION_ERROR,
+    DatabaseLoginError,
+    check_database_login,
     main,
     maintenance_handlers,
     outbox_handlers,
@@ -159,6 +162,91 @@ def test_main__valid_configuration__serves_with_the_settings() -> None:
     assert main(serve=serve) == 0
     [settings] = served
     assert settings.environment == "test"
+
+
+# --- the worker's own database login (architecture audit 5.1) --------------------------------
+
+
+@pytest.mark.usefixtures("environment")
+def test_settings__no_own_login__falls_back_to_the_shared_url() -> None:
+    assert load_settings(WorkerSettings).own_login is None
+
+
+def test_settings__own_login_url_without_its_password__still_falls_back(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    environment.setenv("HTCO_WORKER_DATABASE_URL", "postgresql://htco_worker_login@db.invalid/h")
+    environment.setenv("HTCO_WORKER_DATABASE_PASSWORD", " ")
+
+    assert load_settings(WorkerSettings).own_login is None
+
+
+def test_settings__own_login_url_and_password__are_used(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    environment.setenv("HTCO_WORKER_DATABASE_URL", "postgresql://htco_worker_login@db.invalid/h")
+    environment.setenv("HTCO_WORKER_DATABASE_PASSWORD", "fake-worker-password")
+
+    settings = load_settings(WorkerSettings)
+
+    assert settings.own_login == (
+        "postgresql://htco_worker_login@db.invalid/h",
+        "fake-worker-password",
+    )
+    assert "fake-worker-password" not in repr(settings)
+
+
+def test_settings__own_login_password_without_its_url__is_refused(
+    environment: pytest.MonkeyPatch,
+) -> None:
+    environment.setenv("HTCO_WORKER_DATABASE_PASSWORD", "fake-worker-password")
+
+    with pytest.raises(ConfigurationError, match="HTCO_WORKER_DATABASE_URL") as refused:
+        load_settings(WorkerSettings)
+
+    assert "fake-worker-password" not in str(refused.value)
+
+
+def test_database_login__own_login_as_the_worker__passes() -> None:
+    check_database_login(("htco_worker_login", "htco_worker", False), own_login=True)
+
+
+@pytest.mark.parametrize(
+    "session",
+    [
+        ("postgres", "htco_worker", False),  # the API's login behind the worker's settings
+        ("htco_worker_login", "htco_worker", True),  # a privileged login
+        ("htco_worker_login", "htco_worker_login", False),  # the switch did not happen
+    ],
+)
+def test_database_login__own_login_configured_but_wrong__is_refused(
+    session: tuple[str, str, bool],
+) -> None:
+    with pytest.raises(DatabaseLoginError):
+        check_database_login(session, own_login=True)
+
+
+def test_database_login__fallback__warns_and_runs() -> None:
+    with capture_logs() as logs:
+        check_database_login(("postgres", "htco_worker", False), own_login=False)
+
+    assert [(log["event"], log["log_level"]) for log in logs] == [
+        ("worker.shared_database_login", "warning")
+    ]
+
+
+def test_database_login__fallback_without_the_role_switch__is_refused() -> None:
+    with pytest.raises(DatabaseLoginError):
+        check_database_login(("postgres", "postgres", True), own_login=False)
+
+
+@pytest.mark.usefixtures("environment")
+def test_main__wrong_database_login__exits_78(capsys: pytest.CaptureFixture[str]) -> None:
+    async def serve(settings: WorkerSettings) -> None:  # noqa: ARG001 - the serve signature
+        raise DatabaseLoginError("the worker logged in as 'postgres'")
+
+    assert main(serve=serve) == EXIT_CONFIGURATION_ERROR
+    assert "wrong database login" in capsys.readouterr().err
 
 
 # --- handlers -----------------------------------------------------------------------------
