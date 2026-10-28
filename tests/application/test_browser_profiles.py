@@ -27,9 +27,12 @@ from htco_application.browser_environments import (
 )
 from htco_application.browser_profiles import (
     MAX_ARCHIVE_BYTES,
+    NO_ARCHIVE,
     MemoryProfileArchiveStore,
     MemoryProfileRecords,
+    ProfileFenceLostError,
     ProfileRecordError,
+    ProfileStaleError,
     ProfileTooLargeError,
     ProfileUnsafeError,
     ProfileVault,
@@ -605,3 +608,51 @@ def test_open_at__a_file_swapped_for_a_fifo_is_refused_without_hanging(tmp_path:
         assert isinstance(failure[0], ProfileUnsafeError)
     finally:
         os.close(parent)
+
+
+# --- The generation compare-and-set (8A.2a, ADR-0025 §1) ---------------------------------------
+
+
+@pytest.mark.ac("AC-8A.2.8")
+def test_generation__each_write_moves_it_up_by_one() -> None:
+    store = MemoryProfileArchiveStore()
+    profiles, env = vault(store), environment()
+    assert profiles.read(env) == (None, 0)
+    profiles.seal(env, b"one")
+    assert profiles.read(env) == (b"one", 1)
+    profiles.seal(env, b"two", expected=1)
+    assert profiles.read(env) == (b"two", 2)
+
+
+@pytest.mark.ac("AC-8A.2.8")
+def test_generation__a_write_over_a_generation_it_did_not_read_is_stale() -> None:
+    store = MemoryProfileArchiveStore()
+    profiles, env = vault(store), environment()
+    profiles.seal(env, b"one")
+    profiles.seal(env, b"newer", expected=1)  # another session wrote meanwhile
+    with pytest.raises(ProfileStaleError):
+        profiles.seal(env, b"stale", expected=1)
+    with pytest.raises(ProfileStaleError):
+        profiles.seal(env, b"stale", expected=NO_ARCHIVE)  # it found none, but one exists now
+    assert profiles.read(env) == (b"newer", 2)
+    assert issubclass(ProfileStaleError, ProfileFenceLostError)  # the controller's lock_lost
+
+
+@pytest.mark.ac("AC-8A.2.8")
+def test_checkout__never_replaces_an_archive_written_after_it_unpacked(tmp_path: Path) -> None:
+    """Even with the lease fence passing, a session's re-seal replaces only the generation it
+    unpacked: one written meanwhile (by a session that took the lock after this one lost it,
+    on another worker) is kept, and this session's write is refused."""
+    store = MemoryProfileArchiveStore()
+    profiles, env = vault(store), environment()
+    workspaces = ProfileWorkspaces(profiles, tmp_path)
+    workspaces.create(env)
+    newer = tar_of()
+    checkout = workspaces.checkout(env)
+    directory = checkout.__enter__()
+    (directory / "Cookies").write_bytes(b"stale")
+    profiles.seal(env, newer, expected=1)  # the newer session's write
+    with pytest.raises(ProfileStaleError):
+        checkout.__exit__(None, None, None)
+    assert profiles.read(env) == (newer, 2)
+    assert not any(tmp_path.iterdir())

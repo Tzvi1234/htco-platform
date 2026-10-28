@@ -661,10 +661,16 @@ async def test_session__a_lock_lost_between_the_check_and_the_write_never_writes
         drop = False
 
         @override
-        def put(self, archive: SealedArchive, *, fence: object | None = None) -> None:
+        def put(
+            self,
+            archive: SealedArchive,
+            *,
+            fence: object | None = None,
+            expected: int | None = None,
+        ) -> None:
             if self.drop:
                 locks.held.discard(env.id)  # the lock's connection drops mid-write
-            super().put(archive, fence=fence)
+            super().put(archive, fence=fence, expected=expected)
 
     store = DropsDuringTheWrite(fenced=locks.owns)
     vault = ProfileVault(EnvelopeSealer(KeyRing(("browser-1", os.urandom(32)))), store, now)
