@@ -93,6 +93,7 @@ from htco_persistence.idempotency import PostgresIdempotencyStore
 from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.jobs import PostgresJobQueue
 from htco_persistence.notifications import (
+    PostgresFailedEmailReader,
     PostgresNotificationInbox,
     PostgresSecurityNoticeStore,
 )
@@ -226,6 +227,7 @@ def main(
         security_notices=wiring.security_notices,
         operations=wiring.operations,
         audit_log=wiring.audit_log,
+        failed_emails=wiring.failed_emails,
         resources=wiring.resources,
     )
     try:
@@ -435,6 +437,7 @@ class _Wiring:
     security_notices: SecurityNotices | None = None
     operations: PostgresOperationsHealth | None = None
     audit_log: PostgresAuditLogReader | None = None
+    failed_emails: PostgresFailedEmailReader | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -550,6 +553,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         ),
         operations=PostgresOperationsHealth(database),
         audit_log=PostgresAuditLogReader(database),
+        failed_emails=PostgresFailedEmailReader(database),
         resources=resources,
     )
 

@@ -33,6 +33,7 @@ from htco_api.web_auth import WebAuth, web_auth_router
 from htco_api.webhooks import webhooks_router
 from htco_application.access.management import AccessStore, Inviter
 from htco_application.audit_log import AuditLogReader
+from htco_application.email_failures import FailedEmailReader
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WindowLimiter
 from htco_application.marketplace import QuotaMonitor
@@ -155,6 +156,8 @@ class AppOptions:
     operations: OperationsPorts | None = None
     # The audit view (AC-3.9.1); without it, `GET /v1/audit-log` answers 503.
     audit_log: AuditLogReader | None = None
+    # The failed-email admin view (AC-6.4.3); without it, that route answers 503.
+    failed_emails: FailedEmailReader | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -209,6 +212,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.security_notices = options.security_notices
     app.state.operations = options.operations
     app.state.audit_log = options.audit_log
+    app.state.failed_emails = options.failed_emails
     app.state.clock = options.clock
     app.include_router(
         health_router(

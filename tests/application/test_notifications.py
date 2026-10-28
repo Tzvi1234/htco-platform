@@ -19,6 +19,7 @@ from htco_application.messaging import PendingDelivery
 from htco_application.notifications import (
     EMAIL_DESTINATION,
     NOTIFICATION_REQUESTED,
+    DeliveryLinks,
     EmailDeliverer,
     EmailPermanentError,
     EmailTemporaryError,
@@ -29,6 +30,7 @@ from htco_application.notifications import (
     Recipient,
     RequestedNotifications,
     SecurityNotices,
+    delivery_links,
     device_family,
     notification_requested,
     render_email,
@@ -259,6 +261,35 @@ async def test_ac_6_4_3_a_permanent_failure_is_recorded_for_the_admin_and_not_re
     await _deliverer(FakeEmail(fail=EmailPermanentError("resend 422")), directory).deliver(pending)
 
     assert directory.records[pending.id] == ("failed", None, "resend 422")
+
+
+@pytest.mark.ac("AC-6.4.3")
+async def test_ac_6_4_3_the_record_names_the_shop_incident_and_order_for_the_admin_view() -> None:
+    directory = MemoryEmailDirectory({OWNER: "owner@example.test"})
+    message = _email_message()
+    payload = dict(message.payload)
+    payload["params"] = {"incident_id": str(INCIDENT), "receipt_id": "7", "cause": "sync_drift",
+                         "severity": "low"}  # fmt: skip
+    pending = delivery(OutboxMessage(ORG, EMAIL_DESTINATION, "email:y", payload, shop_id=SHOP))
+
+    await _deliverer(FakeEmail(fail=EmailPermanentError("resend 422")), directory).deliver(pending)
+
+    assert directory.links[pending.id] == DeliveryLinks(SHOP, INCIDENT, 7)
+
+
+@pytest.mark.parametrize(
+    ("params", "links"),
+    [
+        ({}, DeliveryLinks(SHOP)),
+        ({"incident_id": "not-a-uuid", "receipt_id": "x7"}, DeliveryLinks(SHOP)),
+        ({"receipt_id": "0"}, DeliveryLinks(SHOP)),
+        ({"receipt_id": "9" * 30}, DeliveryLinks(SHOP)),
+        ({"receipt_id": "٣"}, DeliveryLinks(SHOP)),  # a digit, but not an ASCII one
+        ({"incident_id": str(INCIDENT), "receipt_id": "51"}, DeliveryLinks(SHOP, INCIDENT, 51)),
+    ],
+)
+def test_delivery_links__only_valid_ids(params: dict[str, str], links: DeliveryLinks) -> None:
+    assert delivery_links(SHOP, params) == links
 
 
 async def test_a_member_who_left_is_skipped_and_recorded() -> None:

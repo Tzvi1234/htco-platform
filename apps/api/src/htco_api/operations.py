@@ -6,6 +6,9 @@ newest executions (each opens in `GET /v1/executions/{id}`), outbox delivery fai
 automation its executions, success rate, retries, dead letters and p50/p95 latency (7 days).
 `POST /v1/operations/dead-letters/{job_id}/retry`: a dead job goes back to the queue, audited;
 the engine's own jobs are retried through their execution instead (409 with its ID).
+`GET /v1/operations/email-failures`: emails the provider refused for good (or skipped), with
+their reason, time and the shop, incident and order they were about (AC-6.4.3); the recipient as
+a member ID and an address the database masked.
 
 IDs, kinds, states, counts, times and error codes only: no payload and no buyer data.
 """
@@ -17,11 +20,16 @@ from decimal import Decimal
 from typing import Annotated, Protocol
 
 import anyio
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel
 
 from htco_api.auth import CurrentAuth
-from htco_api.identity import ORGANIZATION_REQUIRED, problem_responses
+from htco_api.identity import (
+    ORGANIZATION_REQUIRED,
+    decode_cursor,
+    encode_cursor,
+    problem_responses,
+)
 from htco_api.policy_guard import FORBIDDEN
 from htco_api.problems import (
     NOT_FOUND,
@@ -32,6 +40,12 @@ from htco_api.problems import (
     request_id_of,
 )
 from htco_application.access.authentication import NoMembershipError
+from htco_application.email_failures import (
+    EmailFailuresForbiddenError,
+    FailedEmailReader,
+    FailedStatus,
+    failed_emails,
+)
 from htco_application.operations_health import (
     DeadJobNotFoundError,
     DeadJobs,
@@ -167,6 +181,37 @@ class OperationsHealthView(BaseModel):
 class RetriedJobView(BaseModel):
     job_id: uuid.UUID
     state: str
+
+
+class FailedEmailView(BaseModel):
+    id: uuid.UUID
+    # The notification kind (incident_opened, alert_ship_by, sign_in_new_device…).
+    kind: str
+    # `failed`: the provider refused it for good (never retried); `skipped`: the member had left.
+    status: FailedStatus
+    # A status code or a type name (`resend 422`, `no_member`), never the provider's message.
+    reason: str | None
+    created_at: datetime
+    recipient_user_id: uuid.UUID
+    # The member's address masked by the database (`o***@e***.test`); null once they are gone.
+    recipient: str | None
+    # What it was about; null when the notification named none.
+    shop_id: uuid.UUID | None
+    incident_id: uuid.UUID | None
+    receipt_id: int | None
+
+
+class FailedEmailList(BaseModel):
+    items: list[FailedEmailView]
+    # Pass it back as `cursor` for the next page; null on the last page.
+    next_cursor: str | None
+
+
+def _failed_emails(request: Request) -> FailedEmailReader:
+    found = getattr(request.app.state, "failed_emails", None)
+    if found is None:
+        raise ProblemError(OPERATIONS_UNAVAILABLE)
+    return found  # type: ignore[no-any-return]
 
 
 def _ports(request: Request) -> OperationsPorts:
@@ -325,4 +370,53 @@ def operations_router(*, clock: Callable[[], datetime]) -> APIRouter:
             raise ProblemError(RETRY_THROUGH_EXECUTION, extra=extra) from None
         return RetriedJobView(job_id=job_id, state="queued")
 
+    _add_email_failures_route(router, clock=clock)
     return router
+
+
+def _add_email_failures_route(router: APIRouter, *, clock: Callable[[], datetime]) -> None:
+    """The failed-email admin view (AC-6.4.3)."""
+
+    @router.get(
+        "/email-failures",
+        summary="Emails refused for good or skipped (no full address)",
+        responses=problem_responses(
+            {**_COMMON, 422: ("Invalid ID, status, limit or cursor", ValidationProblem)}
+        ),
+    )
+    async def list_email_failures(  # noqa: PLR0913, PLR0917 - filters and page
+        response: Response,
+        auth: CurrentAuth,
+        reader: Annotated[FailedEmailReader, Depends(_failed_emails)],
+        organization_id: uuid.UUID | None = None,
+        status: FailedStatus = FailedStatus.FAILED,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Query(max_length=256)] = None,
+    ) -> FailedEmailList:
+        """Newest first; the recipient as a member ID and a masked address; pass `next_cursor`
+        back as `cursor` for the next page."""
+        before = decode_cursor(cursor) if cursor is not None else None
+        try:
+            page = await failed_emails(
+                auth, reader, organization_id=organization_id, status=status, before=before,
+                limit=limit, now=clock(),
+            )  # fmt: skip
+        except OrganizationRequiredError:
+            raise ProblemError(ORGANIZATION_REQUIRED) from None
+        except EmailFailuresForbiddenError:
+            raise ProblemError(FORBIDDEN) from None
+        except NoMembershipError:
+            raise ProblemError(NOT_FOUND) from None
+        response.headers["Cache-Control"] = "no-store"
+        return FailedEmailList(
+            items=[
+                FailedEmailView(
+                    id=e.id, kind=e.kind, status=e.status, reason=e.reason,
+                    created_at=e.created_at, recipient_user_id=e.recipient_user_id,
+                    recipient=e.recipient, shop_id=e.shop_id, incident_id=e.incident_id,
+                    receipt_id=e.receipt_id,
+                )
+                for e in page.items
+            ],
+            next_cursor=None if page.next_before is None else encode_cursor(page.next_before),
+        )  # fmt: skip
