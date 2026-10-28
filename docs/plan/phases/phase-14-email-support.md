@@ -19,6 +19,10 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 14.4 Dana's drafts and approval-to-send
 - [ ] 14.5 Etsy assisted replies
 - [ ] 14.6 Support UI: inbox, ticket view, SLA
+- [ ] 14.6a Quarantine view
+- [ ] 14.6b Draft review and send
+- [ ] 14.6c Etsy replies and the delivery A switch
+- [ ] 14.6d Cases and review replies
 - [ ] 14.7 Dana activated
 
 ## Architecture upgrade (2026-10-23)
@@ -87,6 +91,10 @@ Dana follows the activation rule of [Phase 9](phase-09-router-advisor.md) slice 
 | 14.4 | Dana's drafts and approval-to-send. She grounds her drafts in structured tools first (order, listing, tracking), then in `knowledge.search` (slice 9.10: shop policies, FAQ, listings, products). Approved replies are not ingested in v1 (ADR-0024 §2; a later ADR) | Nothing is sent without approval; sends are idempotent and audited; Dana never promises refunds or compensation; every fact in a draft cites a tool result or a chunk ID; a buyer's own message is never ingested into the knowledge base |
 | 14.5 | Etsy assisted replies | Draft copy-to-clipboard and "mark as sent" with audit |
 | 14.6 | Support UI: inbox, ticket view, SLA | Masked PII by default; role-limited access |
+| 14.6a | Web: a quarantine view for Admin and Support: rejected and quarantined mail with its reason and time, a sandboxed text-only view, and release into the inbox by an Admin | Remote content stays off; every release is audited; no mail disappears without a recorded reason |
+| 14.6b | Web: Dana's draft on the ticket view, each fact with its cited tool result or knowledge chunk; edits before approval; approve-to-send and the send status | The approver sees the citations before approving; a sent reply shows who approved it and when |
+| 14.6c | Web: Etsy conversations: the ticket shows its shop's delivery (A or B); delivery B's "Reply in Etsy" opens the conversation and "mark as sent" records the send; delivery A shows each browser send and its verification; the Owner switches delivery A per shop with step-up, recording the risk decision | Delivery A is off by default and can be switched on only with its scope row (B-05) and the written confirmation; the kill switch stops it at once |
+| 14.6d | Web: Etsy cases and review replies: each case notification becomes a case task with the order's evidence (read through B-06 where scoped); a review of 3 stars or fewer gets Dana's drafted reply and a recovery task, posted by a person in Etsy (B-07 where scoped) and marked as posted | Nothing is posted without approval; every "posted" mark is audited |
 | 14.7 | Dana activated | Sheet defined, evaluation passed, autonomy approved, routing measured (including the data-class limit of her policy); her knowledge policy is set, and the 9.10 retrieval eval passes on her shop's knowledge (AC-9.10.11) |
 
 ## Test plan

@@ -14,9 +14,13 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 ## Progress
 
 - [ ] 21.1 Gal activated: marketing and growth
+- [ ] 21.1a Growth area
 - [ ] 21.2 Model A/B tests for routes and prompts
+- [ ] 21.2a Experiments in the Observatory
 - [ ] 21.3 Multi-shop operations
+- [ ] 21.3a Multi-shop comparison
 - [ ] 21.4 Shopify adapter
+- [ ] 21.4a Shopify on the web
 - [ ] 21.5 Worker split if measurements require it
 
 ## Architecture upgrade (2026-10-23)
@@ -59,9 +63,13 @@ Gal follows the activation rule of [Phase 9](phase-09-router-advisor.md) slice 9
 | Slice | Content | Key acceptance |
 |---|---|---|
 | 21.1 | Gal activated: performance analysis, campaign and experiment proposals | Sheet defined, evaluation passed, autonomy approved, routing measured; no buyer data in marketing lists; proposals go through approvals |
+| 21.1a | Web: a Growth area with Gal's performance analyses and his campaign and experiment proposals, each with its data sources, expected effect and budget; a proposal is decided on its approval card; a running experiment shows its results against its baseline | No buyer data appears in any analysis or list; nothing runs before its approval |
 | 21.2 | Model A/B tests for routes and prompts | Experiments compare on the same evaluation sets; automatic rollback on regression; adopted only through a verified optimization proposal |
+| 21.2a | Web: the Decision & Model Observatory (15.6) lists each experiment with its arms, evaluation set, guardrails, state and results, and an automatic rollback shows its reason | Results come from `routing_decisions` and recorded evaluation runs only |
 | 21.3 | Multi-shop operations | A second shop connects with no new services or employees; per-shop budgets and access enforced |
+| 21.3a | Web: multi-shop comparison, shops side by side (revenue, orders, average order value, profit, ship time, review average, fee share) | A user sees only the shops they are granted; each money figure is labelled `ESTIMATED` or `VERIFIED` |
 | 21.4 | Shopify adapter | Domain code unchanged; adapter contract tests pass; the order automations run unchanged on Shopify events |
+| 21.4a | Web: Shops › Connect offers Shopify beside Etsy; a Shopify shop's card shows its connection status, scopes and sync health, and its orders appear on the Orders screen with the marketplace named | The same screens serve both marketplaces; no Shopify-only screen |
 | 21.5 | Worker split if measurements require it | Decision recorded in an ADR with the measurements |
 
 ## Exit gate — Milestone M8

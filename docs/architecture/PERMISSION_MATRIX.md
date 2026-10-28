@@ -53,6 +53,11 @@ These rows come from [ADR-0020](../adr/0020-per-shop-browser-environment.md) to 
 | Switch a browser scope flag on (only when its scope row is recorded) | ✓ MFA RA | — | — | — | — | — | — |
 | Enrol, rotate or remove a TOTP account | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
 | View a TOTP code (`view_totp_code`, per shop) | ✓ MFA RA | S MFA RA | — | — | — | — | — |
+| Switch a kill switch off: global, an employee, an automation, a provider or Browser Use (emergency stop; 8.6, 9.8; replaces the kill-switch part of section 1's "Edit model policies, budgets, kill switches" when 8.6 moves it in) | ✓ MFA | ✓ MFA | — | — | — | — | — |
+| Switch a kill switch on again (8.6, 9.8) | ✓ MFA RA | — | — | — | — | — | — |
+| Edit a shop's SLA policy, audited (AC-6.5.4) | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| Set or replace a shop's Etsy sign-in details, write-only (AC-8A.4.5, AC-8A.9.7) | ✓ MFA RA | ✓ MFA RA | — | — | — | — | — |
+| Set or replace the owner's AutoVA sign-in details, write-only (AC-8A.4.5, AC-8A.9.7) | ✓ MFA RA | — | — | — | — | — | — |
 
 ## 2. Automations
 

@@ -7,7 +7,7 @@
 | **Size** | M |
 | **Depends on** | Phases 2 and 3; Etsy Seller App registered (Phase 0) |
 | **Requirements** | FR-ADM-02, FR-SHOP-01, FR-SHOP-02, FR-SHOP-03, FR-SHOP-04, FR-SHOP-05 |
-| **Status** | Complete except the restore rehearsal (4.7, with the owner) |
+| **Status** | Partial (audit 2026-10-28). Built and connected to LeatherPY in production. Daily backups and the restore rehearsal (AC-4.7.2) are **deferred by owner until first sale** (decision of 2026-10-28, [ASSUMPTIONS](../../product/ASSUMPTIONS.md) D-28): the project stays on the Supabase Free plan, which has no automatic backups, until the product is sold to a customer; the backup infrastructure is planned for Supabase Pro (daily backups or PITR) with a restore runbook, activated and tested then. Also open: the remaining daily quota on the shop card (AC-4.1.2), the probing and error screenshot states (AC-4.6.2) and the exit gate |
 
 ## Progress
 
@@ -16,8 +16,10 @@
 - [x] 4.3 OAuth connect flow ([connect flow](../../features/etsy-integration/connect-flow.md))
 - [x] 4.4 Token refresh (platform; the shop card warning and overview banner are shown by slice 4.6)
 - [x] 4.5 Capability probes (platform; the shop card shows them in `htco-clients`; [operations](../../features/etsy-integration/operations.md#capability-probes))
-- [x] 4.6 Shops UI (the shop card in `htco-clients`), and the shop's live data on the dashboard: Shops, Home, Orders, Products, Shipping and Customers read Etsy through read-only endpoints ([dashboard data](../../features/etsy-integration/dashboard-data.md))
+- [ ] 4.6 (reopened 2026-10-27 for its web step, AC-4.6.3) Shops UI (the shop card in `htco-clients`), and the shop's live data on the dashboard: Shops, Home, Orders, Products, Shipping and Customers read Etsy through read-only endpoints ([dashboard data](../../features/etsy-integration/dashboard-data.md))
 - [ ] 4.7 Disconnect and data protection baseline (disconnect done at the platform; the restore rehearsal waits for the owner, see [operations](../../features/etsy-integration/operations.md#rehearsal-record))
+
+**4.6 is partial (audit 2026-10-28).** The shop card and the live data are built, but AC-4.6.2's screenshots cover four states (ok, expiring, needs re-auth, disconnected), not probing and error, and the card does not show the quota of AC-4.1.2. 4.7's "daily backups confirmed" and its restore rehearsal are deferred by owner until first sale ([ASSUMPTIONS](../../product/ASSUMPTIONS.md) D-28): see the status line.
 
 ## Goal
 
@@ -97,8 +99,9 @@ Shop card: connection status, scopes, capabilities with plain-language explanati
 
 | ID | Acceptance criterion |
 |---|---|
-| AC-4.6.1 | "Capability blocked" states explain the allowed alternative (for example, "AutoVA writes tracking for you; HTCO reads it"). |
+| AC-4.6.1 | "Capability blocked" states explain the allowed alternative (for example, "Copy the tracking number into Etsy; HTCO reads it there"; AutoVA does not write tracking to Etsy, A-05). |
 | AC-4.6.2 | All states (connected, needs re-auth, disconnected, probing, error) have screenshot tests in he/en × light/dark. |
+| AC-4.6.3 | For the Owner and Admins, the shop card's token health shows the access and refresh tokens' expiry, the failed-refresh count and the key metadata of FR-ADM-02 (the vault key ID and the Etsy app key's fingerprint), never a token, secret or key value. |
 
 ### 4.7 — Disconnect and data protection baseline
 
@@ -108,6 +111,7 @@ Disconnect deletes the tokens (and revokes them at Etsy if Etsy offers a way, A-
 |---|---|
 | AC-4.7.1 | After disconnect, no Etsy call is made for that shop (verified by a test with a strict HTTP mock). |
 | AC-4.7.2 | Restore rehearsal record exists in `docs/features/etsy-integration/operations.md` before the real shop is connected in production. |
+| AC-4.7.3 | The disconnect confirmation says the shop's synced data is deleted 30 days later (records under legal retention excepted), and a disconnected shop card shows its purge date (`purge_after`) and that reconnecting before that date keeps the data. |
 
 ## Test plan
 
@@ -117,7 +121,7 @@ Adapter contract tests against fixtures; vault crypto tests; OAuth flow tests wi
 
 - [x] ASVS V10 (OAuth client): state, PKCE S256, exact redirect URI, minimal scopes (10.2.3). See [connect flow security](../../features/etsy-integration/connect-flow.md#security).
 - [x] Tokens encrypted at rest at the application level; key rotation tested.
-- [ ] Connect and disconnect require owner role, MFA and recent re-authentication; both audited.
+- [x] Connect and disconnect require owner role, MFA and recent re-authentication; both audited (the `CONNECT_SHOP` capability, `shop.connected` and `shop.disconnected` audit records; ticked by the audit of 2026-10-28).
 - [ ] Etsy trademark notice present in the web app's footer or about page.
 
 ## Documentation
