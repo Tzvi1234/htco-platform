@@ -13,8 +13,10 @@ from typing import Any
 import psycopg
 
 from htco_application.browser_profiles import (
+    NO_ARCHIVE,
     ProfileFenceLostError,
     ProfileRecordError,
+    ProfileStaleError,
     SealedArchive,
 )
 from htco_domain.browser import BrowserEnvironment, EnvironmentStatus
@@ -52,7 +54,8 @@ class PostgresBrowserProfiles:
         with self._database.connection() as connection:
             row = connection.execute(
                 """
-                select environment_id, organization_id, shop_id, key_id, archive, sealed_at
+                select environment_id, organization_id, shop_id, key_id, archive, sealed_at,
+                       generation
                 from app.browser_profile_archives where environment_id = %s
                 """,
                 [environment_id],
@@ -61,10 +64,12 @@ class PostgresBrowserProfiles:
             return None
         return SealedArchive(
             environment_id=row[0], organization_id=row[1], shop_id=row[2], key_id=row[3],
-            blob=bytes(row[4]), sealed_at=row[5],
+            blob=bytes(row[4]), sealed_at=row[5], generation=row[6],
         )  # fmt: skip
 
-    def put(self, archive: SealedArchive, *, fence: object | None = None) -> None:
+    def put(
+        self, archive: SealedArchive, *, fence: object | None = None, expected: int | None = None
+    ) -> None:
         """The archive and the environment's record of it, in one transaction.
 
         With a fence (the session's `PostgresLease`), the transaction runs on the lease's own
@@ -72,10 +77,14 @@ class PostgresBrowserProfiles:
         that this backend still holds it (#169). A session-level advisory lock is only released
         when its backend unlocks or exits, and an exiting backend never commits, so no other
         session can take the profile between that check and the commit: the check is part of
-        the write. A lost lease raises `ProfileFenceLostError` and writes nothing."""
+        the write. A lost lease raises `ProfileFenceLostError` and writes nothing.
+
+        With `expected`, the write is also a compare-and-set on the archive's generation
+        (ADR-0025 §1): it replaces only the generation the session read, and a newer one raises
+        `ProfileStaleError`. The table's trigger refuses any update that skips a generation."""
         if fence is None:
             with self._database.connection() as connection, connection.transaction():
-                _write(connection, archive)
+                _write(connection, archive, expected)
             return
         if (
             not isinstance(fence, PostgresLease)
@@ -88,7 +97,7 @@ class PostgresBrowserProfiles:
             with self._database.transaction_on(connection):
                 if not holds_lock(connection, lock_key(fence.environment_id)):
                     raise ProfileFenceLostError("the session's lease no longer holds the profile")
-                _write(connection, archive)
+                _write(connection, archive, expected)
         except psycopg.OperationalError, psycopg.InterfaceError:
             # The lock's connection is gone, and its lock with it: nothing was committed.
             raise ProfileFenceLostError("the profile lock's connection dropped") from None
@@ -112,8 +121,11 @@ class PostgresBrowserProfiles:
             )
 
 
-def _write(connection: psycopg.Connection[Any], archive: SealedArchive) -> None:
-    """The archive and its record on the environment's row, inside the caller's transaction."""
+def _write(
+    connection: psycopg.Connection[Any], archive: SealedArchive, expected: int | None
+) -> None:
+    """The archive and its record on the environment's row, inside the caller's transaction;
+    with `expected`, only over that generation (a stale write raises and rolls back)."""
     recorded = connection.execute(
         """
         update app.shop_browser_environments
@@ -130,21 +142,59 @@ def _write(connection: psycopg.Connection[Any], archive: SealedArchive) -> None:
     )
     if recorded.rowcount != 1:
         raise ProfileRecordError("no environment row to record the archive on")
-    connection.execute(
-        """
-        insert into app.browser_profile_archives
-          (environment_id, organization_id, shop_id, key_id, archive, sealed_at)
-        values (%s, %s, %s, %s, %s, %s)
-        on conflict (environment_id) do update
-          set key_id = excluded.key_id, archive = excluded.archive,
-              sealed_at = excluded.sealed_at
-        """,
-        [
-            archive.environment_id,
-            archive.organization_id,
-            archive.shop_id,
-            archive.key_id,
-            archive.blob,
-            archive.sealed_at,
-        ],
-    )
+    values = [
+        archive.environment_id,
+        archive.organization_id,
+        archive.shop_id,
+        archive.key_id,
+        archive.blob,
+        archive.sealed_at,
+    ]
+    if expected is None:  # unconditional: provisioning a new profile
+        connection.execute(
+            """
+            insert into app.browser_profile_archives
+              (environment_id, organization_id, shop_id, key_id, archive, sealed_at)
+            values (%s, %s, %s, %s, %s, %s)
+            on conflict (environment_id) do update
+              set key_id = excluded.key_id, archive = excluded.archive,
+                  sealed_at = excluded.sealed_at,
+                  generation = app.browser_profile_archives.generation + 1
+            """,
+            values,
+        )
+        return
+    if expected == NO_ARCHIVE:
+        written = connection.execute(
+            """
+            insert into app.browser_profile_archives
+              (environment_id, organization_id, shop_id, key_id, archive, sealed_at)
+            values (%s, %s, %s, %s, %s, %s)
+            on conflict (environment_id) do nothing
+            """,
+            values,
+        )
+    else:
+        written = connection.execute(
+            """
+            update app.browser_profile_archives
+            set key_id = %s, archive = %s, sealed_at = %s, generation = %s
+            where environment_id = %s and organization_id = %s and shop_id = %s
+              and generation = %s
+            """,
+            # The next generation as a literal (sage-arch on #186): the table's trigger allows
+            # only old + 1, so a stale write is refused by the database even without the
+            # predicate, which stays for the row count that raises `ProfileStaleError`.
+            [
+                archive.key_id,
+                archive.blob,
+                archive.sealed_at,
+                expected + 1,
+                archive.environment_id,
+                archive.organization_id,
+                archive.shop_id,
+                expected,
+            ],
+        )
+    if written.rowcount != 1:
+        raise ProfileStaleError("the archive changed since the session read it")
