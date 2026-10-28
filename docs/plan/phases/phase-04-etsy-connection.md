@@ -11,7 +11,7 @@
 
 ## Progress
 
-- [x] 4.1 Etsy adapter foundation (AC-4.1.2's shop card quota: `etsy_quota` on `GET /v1/shop-integrations`, audit gap closed in `fix/phase1-6-audit-gaps`; the web card in clients)
+- [ ] 4.1 Etsy adapter foundation (partial, audit 2026-10-28: AC-4.1.1 and 4.1.3 pass; open AC-4.1.2, the remaining daily quota is read inside the adapter but no API returns it and the shop card does not show it; in progress, see Phase 6's note of 2026-10-28; API side done in this PR: `etsy_quota` on `GET /v1/shop-integrations`)
 - [x] 4.2 Token vault
 - [x] 4.3 OAuth connect flow ([connect flow](../../features/etsy-integration/connect-flow.md))
 - [x] 4.4 Token refresh (platform; the shop card warning and overview banner are shown by slice 4.6)
