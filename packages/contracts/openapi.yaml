@@ -8725,6 +8725,13 @@ components:
       - created_at
       - read_at
       title: NotificationView
+    ObservedVia:
+      type: string
+      enum:
+      - webhook
+      - schedule
+      - relay
+      title: ObservedVia
     OperationsHealthView:
       properties:
         organization_id:
@@ -8856,6 +8863,12 @@ components:
             format: date-time
           - type: 'null'
           title: Last Synced At
+        tracking:
+          items:
+            $ref: '#/components/schemas/OrderTrackingView'
+          type: array
+          title: Tracking
+          default: []
       type: object
       required:
       - source
@@ -8957,6 +8970,34 @@ components:
       - source
       - observed_at
       title: OrderStatusChangeView
+    OrderTrackingView:
+      properties:
+        carrier:
+          type: string
+          title: Carrier
+        carrier_name:
+          type: string
+          title: Carrier Name
+        last4:
+          type: string
+          title: Last4
+        source:
+          $ref: '#/components/schemas/TrackingSource'
+        observed_via:
+          $ref: '#/components/schemas/ObservedVia'
+        first_observed_at:
+          type: string
+          format: date-time
+          title: First Observed At
+      type: object
+      required:
+      - carrier
+      - carrier_name
+      - last4
+      - source
+      - observed_via
+      - first_observed_at
+      title: OrderTrackingView
     OrderView:
       properties:
         order_id:
@@ -10381,6 +10422,15 @@ components:
       - carrier
       - code
       title: TrackingPaste
+    TrackingSource:
+      type: string
+      enum:
+      - etsy
+      - autova_manual
+      - autova_browser
+      - autova_email
+      title: TrackingSource
+      description: Where the tracking number came from.
     TransitionRequest:
       properties:
         to_state:

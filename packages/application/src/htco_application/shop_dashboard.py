@@ -54,6 +54,7 @@ from htco_application.order_history import (
     HistorySync,
     OrderStatusChange,
     OrderSync,
+    OrderTracking,
     SyncState,
     history_sync,
 )
@@ -459,6 +460,9 @@ class OrderDetail:
     timeline: tuple[OrderStatusChange, ...]
     buyer_details: bool
     sync: HistorySync | None = None
+    # Each parcel's tracking as first seen (AC-6.1.2), oldest first: the code's last four only,
+    # for every role that sees the order. Empty for an order read live.
+    tracking: tuple[OrderTracking, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -635,11 +639,14 @@ async def shop_order(
     sync = None if history is None else history_sync(sync_state, opened.etsy)
     if history is not None and sync_state is not None:
         timeline: tuple[OrderStatusChange, ...] = ()
+        tracking: tuple[OrderTracking, ...] = ()
         try:
             found = await history.store.load_order(
                 shop_id, opened.etsy, order_id, buyer_data=contact
             )
-            timeline = await history.store.timeline(shop_id, order_id) if found else ()
+            if found is not None:
+                timeline = await history.store.timeline(shop_id, order_id)
+                tracking = await history.store.tracking(shop_id, order_id)
         except Exception as error:
             _log.warning("order_history.read_failed: %s", type(error).__name__)
             found = None
@@ -651,6 +658,7 @@ async def shop_order(
                 timeline=tuple(sorted(timeline, key=lambda c: c.observed_at)),
                 buyer_details=contact,
                 sync=sync,
+                tracking=tuple(sorted(tracking, key=lambda t: t.first_observed_at)),
             )
     window = await opened.get("receipts", opened.receipts)
     live = next((r for r in window.value.receipts if r.receipt_id == order_id), None)
