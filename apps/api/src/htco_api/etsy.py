@@ -9,7 +9,8 @@ answer is Etsy's authorization URL; the browser goes there.
 must belong to this browser session; a rejected callback is audited.
 
 `GET /v1/shop-integrations`: Owner and Admin see each connection's status, scopes, token health
-and the latest capability probe results (slice 4.5).
+and the latest capability probe results (slice 4.5), and Etsy's remaining daily request budget
+with the floor below which routine calls are deferred (`etsy_quota`, AC-4.1.2).
 
 `POST /v1/shop-integrations/{shop_id}/capability-checks`: Owner and Admin re-check what HTCO may do
 with the shop. Read-only calls to Etsy; at most one re-check per shop every 30 seconds. The probes
@@ -63,6 +64,7 @@ from htco_application.etsy_connect import (
     complete_connection,
     start_connection,
 )
+from htco_application.marketplace import QuotaMonitor
 from htco_application.shop_capabilities import (
     CapabilityChecks,
     RecheckTooSoonError,
@@ -219,8 +221,43 @@ class IntegrationView(BaseModel):
     capabilities: list[CapabilityView] = Field(default_factory=list)
 
 
+class EtsyQuotaView(BaseModel):
+    """The shop card's quota figure: this API process's last-seen value, which can be stale.
+
+    Most Etsy calls run in the worker, so `remaining_today` and `below_floor` may be hours old or
+    from the previous Etsy day, and `below_floor` ignores the snapshot's age. Show `observed_at`
+    as "as of", never as a live count.
+    """
+
+    # Etsy's daily request budget is the app's, shared by every shop: as this server last saw it
+    # (`x-limit-per-day`, `x-remaining-today`); nulls before its first Etsy call.
+    limit_per_day: int | None
+    remaining_today: int | None
+    observed_at: datetime | None
+    # Below this many requests left today, routine calls wait for the next day (urgent ones run).
+    floor: int
+    below_floor: bool
+
+
 class IntegrationList(BaseModel):
     items: list[IntegrationView]
+    # For the shop card (AC-4.1.2); null when Etsy is not set up on this server.
+    etsy_quota: EtsyQuotaView | None = None
+
+
+def _quota_view(request: Request) -> EtsyQuotaView | None:
+    monitor: QuotaMonitor | None = getattr(request.app.state, "etsy_quota", None)
+    if monitor is None:
+        return None
+    status = monitor.quota_status()
+    snapshot = status.snapshot
+    return EtsyQuotaView(
+        limit_per_day=None if snapshot is None else snapshot.limit_per_day,
+        remaining_today=None if snapshot is None else snapshot.remaining_today,
+        observed_at=None if snapshot is None else snapshot.observed_at,
+        floor=status.floor,
+        below_floor=status.below_floor,
+    )
 
 
 class ConnectedShopView(BaseModel):
@@ -441,11 +478,13 @@ def etsy_router(*, clock: Callable[[], datetime]) -> APIRouter:
         ),
     )
     async def list_shop_integrations(
+        request: Request,
         auth: CurrentAuth,
         reader: Annotated[IntegrationReader, Depends(_reader)],
         organization_id: uuid.UUID | None = None,
     ) -> IntegrationList:
-        """Status, granted scopes and token health per shop, for the shop card; never a token."""
+        """Status, granted scopes and token health per shop, and Etsy's remaining daily request
+        budget with its floor, for the shop card; never a token."""
         now = clock()
         try:
             found = await list_integrations(auth, reader, now=now, organization_id=organization_id)
@@ -455,7 +494,9 @@ def etsy_router(*, clock: Callable[[], datetime]) -> APIRouter:
             raise ProblemError(NOT_FOUND) from None
         except ShopAccessDeniedError:
             raise ProblemError(FORBIDDEN) from None
-        return IntegrationList(items=[_view(summary, now) for summary in found])
+        return IntegrationList(
+            items=[_view(summary, now) for summary in found], etsy_quota=_quota_view(request)
+        )
 
     _add_connection_routes(router, clock=clock)
 

@@ -174,6 +174,7 @@ We use these as tools for judgment, not as goals in themselves.
 - **ER-UX-04 RTL is first-class.** Use logical properties (start/end). Wrap tracking numbers, SKUs, IDs and code in LTR isolation.
 - **ER-UX-05 Every screen designs its states:** loading, empty, error, stale, offline, no permission.
 - **ER-UX-06 Never claim success the backend did not confirm.**
+- **ER-UX-07 Every feature reaches the dashboard** (the owner's rule, 2026-10-27). A slice that produces something a user should see or operate (data, a status, a setting or an action) names its web step: a UI slice or a UI acceptance criterion in the same phase or a later named one, web first ([ADR-0016](../adr/0016-web-first.md)). A slice with nothing to show says so in one line: "No UI: <reason>". The line is required for slices added or changed from 2026-10-27; older tooling, CI and schema slices pass as "No UI" in UI_COVERAGE.md without it, so touching one does not block a PR. A plan change that adds a slice with neither does not pass review. [UI_COVERAGE.md](../plan/UI_COVERAGE.md) maps every feature to its web step.
 
 ## 14. Performance and cost (ER-PERF)
 
@@ -190,6 +191,7 @@ We use these as tools for judgment, not as goals in themselves.
 - [ ] Contracts affected are identified (API, events, database).
 - [ ] Security and privacy impact is noted (none / low / needs threat note).
 - [ ] Dependencies on the owner (accounts, keys, decisions) are resolved.
+- [ ] The slice names its web step, or says "No UI: <reason>" (ER-UX-07).
 
 ### Done (before merging)
 

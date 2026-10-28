@@ -5,7 +5,8 @@ sales of today, the last 7 and 30 days (in the caller's time zone, `utc_offset_m
 `GET /v1/shops/{shop_id}/orders`: the Orders screen, newest first, for a period (`period`: 30
 days by default, 90 days, 12 months or all time).
 `GET /v1/shops/{shop_id}/orders/{order_id}`: one order with its status timeline from the stored
-history (slice 5.6); an order not stored yet comes from the live 30-day read, with no timeline.
+history (slice 5.6) and when each parcel's tracking was first seen, from which source (AC-6.1.2,
+the code's last four only); an order not stored yet comes from the live 30-day read, with neither.
 `POST /v1/shops/{shop_id}/order-exports`: the filtered (or selected) orders as CSV, audited;
 buyer columns only for buyer-data roles (slice 5.7).
 `POST /v1/shops/{shop_id}/order-resyncs`: one queued Etsy Order Intake re-read per selected
@@ -89,6 +90,7 @@ from htco_application.shop_dashboard import (
     ShopDataUnavailableError,
 )
 from htco_application.shops import ShopAccessDeniedError, ShopNotFoundError
+from htco_application.tracking_sync import ObservedVia, TrackingSource
 from htco_domain.orders import OrderState as StoreOrderState
 
 SHOP_DATA_OFF = ProblemType(
@@ -313,6 +315,19 @@ class OrderStatusChangeView(BaseModel):
     observed_at: datetime
 
 
+class OrderTrackingView(BaseModel):
+    # Ours (`usps`, `ups`…) and as Etsy names it.
+    carrier: str
+    carrier_name: str
+    # The tracking code's last four characters; the full code is buyer data (`shipments`).
+    last4: str
+    # Where the tracking came from: Etsy's receipt, or the AutoVA relay.
+    source: TrackingSource
+    # Which trigger saw it first: webhook, schedule or relay.
+    observed_via: ObservedVia
+    first_observed_at: datetime
+
+
 class OrderDetailView(FreshnessView):
     shop_id: uuid.UUID
     order: OrderView
@@ -321,6 +336,9 @@ class OrderDetailView(FreshnessView):
     buyer_details: bool
     sync: SyncView | None = None
     last_synced_at: datetime | None = None
+    # Each parcel's tracking as HTCO first saw it (AC-6.1.2), oldest first, for every role that
+    # sees the order; empty for an order read live or without tracking.
+    tracking: list[OrderTrackingView] = []
 
 
 class ListingView(BaseModel):
@@ -717,6 +735,17 @@ def _detail(found: dashboards.OrderDetail) -> OrderDetailView:
         buyer_details=found.buyer_details,
         sync=_sync(found.sync),
         last_synced_at=_synced_at(found.sync),
+        tracking=[
+            OrderTrackingView(
+                carrier=t.carrier,
+                carrier_name=t.carrier_name,
+                last4=t.last4,
+                source=TrackingSource(t.source),
+                observed_via=ObservedVia(t.observed_via),
+                first_observed_at=t.first_observed_at,
+            )
+            for t in found.tracking
+        ],
     )
 
 

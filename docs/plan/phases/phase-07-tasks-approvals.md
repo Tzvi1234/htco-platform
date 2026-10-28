@@ -28,6 +28,8 @@
 - [ ] 7.15 Deterministic AutoVA quote parser
 - [ ] 7.16 "New product quotes" screen and notification
 - [ ] 7.17 The owner's choice of a quote, and the hand-off to AutoVA
+- [ ] 7.18 Write Actions console (added 2026-10-28, the owner's request)
+- [ ] 7.19 Web steps the plan missed (added 2026-10-28 by the dashboard audit)
 
 **Foundation already in code.** `htco_domain.tasks` (`BusinessTask`, `TaskState`), `htco_domain.activity` (`ActivityRecord`, `ActivityKind`, `ActivityOutcome`), `htco_domain.actors` (`ActorRef`) and policy engine v0 (`htco_application.access.policy`, tested in `tests/application/test_access_policy.py`). This phase adds their tables, APIs and screens, and extends the policy engine to employee and automation actors.
 
@@ -112,6 +114,7 @@ Approvals inbox with approval cards (action, impact, cost range, risk, evidence,
 | AC-7.5.1 | Screen reader reads the approval card's action, reason, impact and risk in order. |
 | AC-7.5.2 | Approve and reject buttons are disabled with an explanation when the approval is expired or the user lacks permission. |
 | AC-7.5.3 | The card shows server time to expiry, not client time. |
+| AC-7.5.4 | **Working a task.** A task's detail shows its resources, assignee, SLA and history. A person completes it by recording its evidence (a pasted value, a confirmation or a linked record) or cancels it with a reason, and only the steps its state allows are offered. A Human task's detail then shows whether its waiting execution resumed or was cancelled (AC-7.11.2). |
 
 ### 7.6 — Notification preferences
 
@@ -120,6 +123,7 @@ Per severity and per shop; applied to in-app and email notifications.
 | ID | Acceptance criterion |
 |---|---|
 | AC-7.6.1 | Muting a shop stops its non-critical notifications; critical security notifications cannot be muted. |
+| AC-7.6.2 | **Preferences on the web.** On a Notifications page in their own settings, each user chooses in-app and email delivery per kind, severity and shop, email at once or in the morning summary, and the language of their emails. Critical security notices are shown as always on and cannot be switched off, and a change applies from the next notification. |
 
 ### 7.7 — Activity record store
 
@@ -152,6 +156,7 @@ Builds the daily and weekly operations summary from recorded activity only: orde
 | AC-7.9.1 | Every number in a report links to the activity records or rows it was computed from; a section whose source is unavailable says so instead of showing zero. |
 | AC-7.9.2 | Running the daily report twice for the same day sends one report (idempotency key per organization, report type and period). |
 | AC-7.9.3 | The specification has all 18 sections defined; replay, failure and recovery tests pass. |
+| AC-7.9.4 | **Reports on the web.** Each daily and weekly report opens in the web app from its notification, with the same sections and links as its email, and earlier reports stay listed, newest first. Phase 10's daily operations report (10.7) extends this page rather than adding a second one. |
 
 ### 7.10 — Agent Task Scheduling & Recovery automation
 
@@ -187,6 +192,7 @@ The Owner re-consents to `shops_w`. Each tool runs through the gateway with appr
 |---|---|
 | AC-7.12.1 | Turning vacation mode on and off from HTCO changes the shop and is verified by re-reading it; both runs are audited. |
 | AC-7.12.2 | A write that Etsy refuses shows Etsy's error, records it, and leaves the tool owner-trigger only. |
+| AC-7.12.3 | **The three tools on the shop page.** The shop page shows the announcement, the sale message, vacation mode with its message, the sections and the holiday preferences as re-read from Etsy, and the Owner changes each there behind step-up. Each tool shows its state on that shop as in AC-6.8.4 (with `shops_w` in place of `transactions_w`), and each run ends showing the re-read result or Etsy's error. |
 
 ### 7.13 — Supplier and quote model
 
@@ -227,6 +233,7 @@ Owner prerequisites:
 | AC-7.14.1 | The same quote mail delivered twice (or forwarded twice) produces one inbox row and one parse job. |
 | AC-7.14.2 | Mail from any sender other than the confirmed AutoVA address is quarantined and creates no quote. |
 | AC-7.14.3 | Option (a): an unsigned or wrongly signed inbound webhook is rejected. Option (b): the token's scope is `gmail.readonly` only, and the query is limited to the AutoVA sender. |
+| AC-7.14.4 | **The quote mailbox on Admin › Health.** The Owner and Admins see the option in use, when the last accepted mail arrived, and the quarantined mails counted by reason, never their content. With option (b), the Owner connects and disconnects the read-only Gmail account from the same panel, with step-up. |
 
 ### 7.15 — Deterministic AutoVA quote parser
 
@@ -243,6 +250,7 @@ A mail that does not parse exactly opens a Human task "check this quote" with th
 | AC-7.15.1 | Each sample mail parses to the expected quote (golden-file tests); a changed layout fails parsing and opens one Human task, never a wrong quote. |
 | AC-7.15.2 | An architecture test proves the parser imports nothing from the model gateway or the agent runtime. |
 | AC-7.15.3 | A quote for a product that already has an active mapping is stored as an alternative and raises no "new product" alert. |
+| AC-7.15.4 | **"Check this quote" on the web.** The task shows the mail as inert text (no scripts, no remote images, no live links) beside the parser's error. The person completes it by entering the quote in a form validated by the same Pydantic model, which links the quote to the mail, or cancels it with a reason. |
 
 ### 7.16 — "New product quotes" screen and notification
 
@@ -253,6 +261,7 @@ A mail that does not parse exactly opens a Human task "check this quote" with th
 |---|---|
 | AC-7.16.1 | A parsed quote appears under the right product within one minute of the mail's arrival. |
 | AC-7.16.2 | Totals are computed in code (Decimal) and match a property test; a quote past its validity is greyed out and cannot be chosen. |
+| AC-7.16.3 | **States and mappings on the screen.** Each product's card shows its quote request's state, from `WAITING_FOR_QUOTES` to `MAPPED` or `CANCELLED`. A mapped product shows its active supplier mapping with the quote and the approval it came from, and a closed mapping stays listed with its reason (AC-7.13.1). |
 
 ### 7.17 — The owner's choice of a quote, and the hand-off to AutoVA
 
@@ -269,6 +278,40 @@ A mail that does not parse exactly opens a Human task "check this quote" with th
 | AC-7.17.2 | Approving twice confirms once (idempotency per quote). |
 | AC-7.17.3 | No action, task or recipe in this flow includes a payment step; a test walks every action of the flow and finds none. |
 | AC-7.17.4 | A quote request with no quote after N days (default 3) reminds the owner once, without any model call. |
+
+### 7.18 — Write Actions console
+
+Added on 2026-10-28 at the owner's request. Today each write tool reaches the web only on its own screen (AC-6.8.4 and AC-7.12.3 on the shop page). This slice adds one dashboard section, **Admin › Write actions**, that lists **every implemented write capability** in one place:
+
+- **Etsy API writes:** the tracking upload (`etsy.shipments.create`), vacation mode (`etsy.shop.update`), and later the shop, sections and holiday tools of 7.12 and the shop structure writes of 12.10;
+- **browser automations:** the browser rows of Phase 8A (for example B-12) once they exist, each with its scope row and flag;
+- **AutoVA steps:** `autova.quotes.approve_and_confirm` (7.17, recipe A-02 from 8A.10) and any later AutoVA action.
+
+The list is read from the action catalog (`registry/actions/`), so a write that is not in the catalog cannot appear, and one that is cannot hide. For each capability the console shows its policy (W1 to W3), its flag and kill-switch state, the scope it needs on each shop, and its last runs. From the console the Owner **runs** a capability on a chosen shop and resource with step-up and sees its **result**: the execution record, the re-read diff (before and after) and the audit entry.
+
+**Today every write needs the Owner's approval.** A run from the console is the Owner's own press (W3), and any agent's or automation's request for the same capability waits for his approval each time (AC-6.8.1). **Later**, a per-action autonomy policy (the policy engine of 7.2, versioned) lets the Owner allow named AI employees or automations to run some capabilities without an approval each time, within limits, from this same section; that switch is built when the first employee is activated (Phase 9) and is off for every capability until the Owner turns it on.
+
+**Registration rule (ER-UX-07).** Every newly implemented write capability registers here in the pull request that adds it: its catalog entry and its row in the console are part of that slice's web step under [ER-UX-07](../../engineering/ENGINEERING_RULES.md#13-user-experience-accessibility-and-language-er-ux). A write without a console row does not pass plan review.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-7.18.1 | The console lists every write action of the catalog (API, browser and AutoVA channels) with its policy, flag, kill switch and scope state per shop; a catalog test fails when a write action has no console entry, and the console shows nothing that is not in the catalog. |
+| AC-7.18.2 | The Owner runs a capability from the console only with a recent step-up, behind its flag and kill switch, through the Action Gateway; the result shows the execution record, the re-read diff and the audit entry as recorded, and Etsy's or the site's error as it was returned, never a success the re-read did not confirm (ER-UX-06). |
+| AC-7.18.3 | Until a per-action autonomy policy allows it, any non-Owner request for a write capability waits for the Owner's approval each time; the console shows, per capability, which actors may run it without approval (none by default) and every change to that list is a new policy version with step-up and an audit record. |
+| AC-7.18.4 | Only the Owner sees the run controls and the autonomy settings; Admins see the list and the runs read-only, and other roles do not see the section (negative tests). Tests and CI use fakes only; no console run reaches Etsy or AutoVA in tests. |
+
+### 7.19 — Web steps the plan missed
+
+Added on 2026-10-28 by the dashboard audit. Each item is a web step for something Phase 7 builds that had none; the tasks, approvals and notification preferences already have theirs (AC-7.5.1 to 7.5.4 and AC-7.6.2, [UI_COVERAGE](../UI_COVERAGE.md)), so they are not repeated here.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-7.19.1 | **Policy engine v1 on the web (7.2).** Admin › Team › Policy shows the active policy version and its history (who changed it, when, and the diff), each capability with its risk level, step-up rule and the decision per actor kind, and the latest decisions (`ALLOW`, `REQUIRE_APPROVAL`, `DENY`) with their reasons and `policy_version`, filterable by actor and capability. It is read-only except for the Owner's changes under AC-7.4.1 and AC-7.18.3, each with step-up. |
+| AC-7.19.2 | **Home's "What needs you" made real.** The Home panel lists the viewer's pending approvals and assigned tasks from the 7.3 and 7.1 APIs, most urgent first (expiry, then SLA), each opening its card in the inbox (7.5); with none it says so, and it never shows demo data. The cockpit of 15.3a later extends this panel instead of replacing it. |
+| AC-7.19.3 | **The relay screen and the task board (decision at 7.1's merge).** When 7.1 turns relay items into the `relay` task kind, the plan records one choice before the web work starts: `/commerce/tracking` moves onto the task board as a filtered view, or it stays as its own screen that reads the task store. Either way a relay item is reachable from the task board and from its order, and no relay item shows in two states. |
+| AC-7.19.4 | **AC-6.7.5 on the web.** An escalation that needs a non-allowlisted remediation shows on the task board as a task for a person, with the incident, the escalation step and the remediation it would have needed, and the incident's detail links to it. It waits for 7.1 (the owner's decision of 2026-10-28, [ASSUMPTIONS](../../product/ASSUMPTIONS.md) D-26). |
+
+**Future (not in Phase 7): Telegram alerts.** The Settings › Notifications demo shows Telegram as a channel, but 7.6 covers in-app and email only. Telegram (with WhatsApp) as an alert channel comes with the morning summary's channels in [Phase 15](phase-15-office-executive.md) (15.9a), through Hermes where D-10 allows, after the channel's consent is recorded. Until then the demo marks it "Soon".
 
 ## Test plan
 

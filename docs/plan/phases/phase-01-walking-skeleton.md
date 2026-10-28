@@ -17,7 +17,7 @@
 - [x] 1.4 Continuous integration
 - [x] 1.5 Container and deployment
 - [x] 1.6 Agent guardrails and repository rules
-- [ ] 1.7 Error monitoring, tracing and alerts
+- [ ] 1.7 Error monitoring, tracing and alerts (AC-1.7.3 owner-verified 2026-10-28: the owner checked that the deployment alerts reach him; still open: AC-1.7.1's check against the real Sentry project, proven so far with a capturing transport)
 
 Slice 1.4 was built right after 1.1 so that every later slice runs under CI; the `contract` job joined with slice 1.3 and the `image` job with slice 1.5. Slice 1.7 ships its account-free part first (tracing, trace IDs in logs, propagation, the error-reporting port with the Sentry adapter, the diagnostic endpoint); the Sentry project exists (`htco-api`, created 2026-10-14); its DSN secret and the DigitalOcean alerts follow with the deployment. Slice 1.6 shipped in two parts: the Claude Code hooks first, then the `main` ruleset on both repositories once GitHub Pro was active (2026-10-14; a direct push to `main` is rejected with GH013, AC-1.6.2). Slice 1.5 shipped in two parts: the image and its CI job first, then the app spec (`infra/digitalocean/app.yaml`), registry push and owner-started deploy (`deploy.yml`); the API is live at `https://htco-s4o93.ondigitalocean.app` since 2026-10-14, and the rollback drill passed the same day.
 
@@ -114,7 +114,7 @@ Error monitoring (Sentry or equivalent) with PII scrubbing; OpenTelemetry tracin
 |---|---|
 | AC-1.7.1 | An error raised by a diagnostic endpoint (enabled only outside production) appears in error monitoring with `request_id` and `trace_id`, and without request bodies, cookies or secret headers. |
 | AC-1.7.2 | A request's `trace_id` appears in all its log lines and is propagated to outgoing HTTP calls (checked against a recorded request). |
-| AC-1.7.3 | A failed deployment and a crash-looping container each send one alert to the owner (exercised once on the deployed app). |
+| AC-1.7.3 | A failed deployment and a crash-looping container each send one alert to the owner (exercised once on the deployed app). Owner-verified 2026-10-28: the owner checked that the alerts reach him. |
 
 ## Test plan
 

@@ -12,6 +12,7 @@ from fastapi.routing import APIRoute
 from opentelemetry.sdk.trace import TracerProvider
 
 from htco_api.access import access_router
+from htco_api.audit_log import audit_log_router
 from htco_api.automations import AutomationServices, automations_router
 from htco_api.browser_environments import (
     BrowserEnvironmentServices,
@@ -31,9 +32,12 @@ from htco_api.shop_data import shop_data_router
 from htco_api.web_auth import WebAuth, web_auth_router
 from htco_api.webhooks import webhooks_router
 from htco_application.access.management import AccessStore, Inviter
+from htco_application.audit_log import AuditLogReader
+from htco_application.email_failures import FailedEmailReader
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WindowLimiter
 from htco_application.idempotency import IdempotencyStore
+from htco_application.marketplace import QuotaMonitor
 from htco_application.notifications import SecurityNotices
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
@@ -125,6 +129,8 @@ class AppOptions:
     etsy: EtsyConnect | None = None
     # Connection health for the shop card (slice 4.4); without it, that route answers 503.
     integrations: IntegrationReader | None = None
+    # Etsy's daily request budget on the shop card (AC-4.1.2); without it, `etsy_quota` is null.
+    etsy_quota: QuotaMonitor | None = None
     # Capability probes (slice 4.5); without them, re-checking answers 503.
     capability_checks: CapabilityChecks | None = None
     # Disconnect (slice 4.7) deletes tokens through the vault; without it, disconnect answers 503.
@@ -152,6 +158,10 @@ class AppOptions:
     # `Idempotency-Key` replays for the invitation, re-sync, dead-letter retry and relay paste
     # routes (architecture audit 6.1); without it, those routes answer 503.
     idempotency: IdempotencyStore | None = None
+    # The audit view (AC-3.9.1); without it, `GET /v1/audit-log` answers 503.
+    audit_log: AuditLogReader | None = None
+    # The failed-email admin view (AC-6.4.3); without it, that route answers 503.
+    failed_emails: FailedEmailReader | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -192,6 +202,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.web_auth = options.web_auth
     app.state.etsy = options.etsy
     app.state.integrations = options.integrations
+    app.state.etsy_quota = options.etsy_quota
     app.state.capability_checks = options.capability_checks
     app.state.token_vault = options.token_vault
     app.state.shop_remover = options.shop_remover
@@ -205,6 +216,8 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.security_notices = options.security_notices
     app.state.operations = options.operations
     app.state.idempotency = options.idempotency
+    app.state.audit_log = options.audit_log
+    app.state.failed_emails = options.failed_emails
     app.state.clock = options.clock
     app.include_router(
         health_router(
@@ -229,6 +242,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.include_router(executions_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(incidents_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(operations_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
+    app.include_router(audit_log_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     if options.diagnostics:
         app.include_router(diagnostics_router(), responses=UNEXPECTED_ERROR_RESPONSES)
     add_problem_handlers(app)

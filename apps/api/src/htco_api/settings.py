@@ -84,10 +84,11 @@ class ApiSettings(BaseSettings):
     etsy_webhooks_enabled: bool = False
     etsy_webhook_secret: SecretStr | None = None
     etsy_webhook_rate_per_second: int = Field(default=50, ge=1, le=1000)
-    # Slice 5.4: the order history sync runs in this process only as a fallback. On (the default
-    # until Etsy Order Intake is activated, slice 5.11): a stale read starts it here as before.
-    # Off: a stale read or the manual sync enqueues `etsy.order_sync` for the worker and returns.
-    order_sync_in_api: bool = True
+    # Slice 5.4: the order history sync runs in this process only as a fallback. Off (the default
+    # since Etsy Order Intake was activated, slice 5.11, AC-5.5.5): a stale read or the manual
+    # sync enqueues `etsy.order_sync` for the worker and returns. On: the rollback, a stale read
+    # starts the sync here as before.
+    order_sync_in_api: bool = False
 
     @property
     def token_key_ring(self) -> KeyRing | None:

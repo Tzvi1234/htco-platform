@@ -7,7 +7,7 @@ from datetime import timedelta
 
 import pytest
 
-from htco_application.order_history import OrderStatusChange
+from htco_application.order_history import OrderStatusChange, OrderTracking
 from htco_application.order_ingest import IngestSource
 from htco_application.shop_dashboard import (
     DataSource,
@@ -131,6 +131,32 @@ async def test_order__from_the_store_with_its_timeline_in_causal_order() -> None
     assert setup.recording.offsets == []
 
 
+def parcel(last4: str, at_hours_ago: int, *, source: str = "etsy") -> OrderTracking:
+    return OrderTracking(
+        carrier="usps", carrier_name="USPS", last4=last4, source=source,
+        observed_via="webhook" if source == "etsy" else "relay",
+        first_observed_at=NOW - timedelta(hours=at_hours_ago),
+    )  # fmt: skip
+
+
+@pytest.mark.ac("AC-6.1.2")
+@pytest.mark.parametrize("role", [Role.OWNER, Role.VIEWER])
+async def test_order__each_parcels_tracking_first_seen_oldest_first(role: Role) -> None:
+    setup = await stored()
+    setup.store.parcels[(SHOP, 100_000)] = [
+        parcel("0002", 1, source="autova_manual"),
+        parcel("0001", 5),
+    ]
+
+    one = await shop_order(setup.dashboard, auth(role), SHOP, 100_000, now=NOW)
+
+    # Every role that sees the order sees when and from where; the code only as its last four.
+    assert [(t.last4, t.source, t.observed_via) for t in one.tracking] == [
+        ("0001", "etsy", "webhook"),
+        ("0002", "autova_manual", "relay"),
+    ]
+
+
 async def test_order__not_stored_yet__the_live_read_with_an_empty_timeline() -> None:
     setup = Setup([receipt(4242, created=NOW - timedelta(days=2))])
 
@@ -139,6 +165,7 @@ async def test_order__not_stored_yet__the_live_read_with_an_empty_timeline() -> 
     assert one.order.order_id == 4242
     assert one.freshness.source is DataSource.ETSY_LIVE
     assert one.timeline == ()
+    assert one.tracking == ()
 
 
 async def test_order__unknown__not_found() -> None:

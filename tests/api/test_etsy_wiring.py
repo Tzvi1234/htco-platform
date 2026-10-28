@@ -83,6 +83,8 @@ def test_main__everything_configured__etsy_connect_on_and_no_secret_logged(
     captured = capsys.readouterr()
     assert _starting(captured.out)["etsy_connect"] == "on"
     assert server.apps[0].state.etsy is not None
+    # The shop card's daily quota comes from the same adapter (AC-4.1.2).
+    assert server.apps[0].state.etsy_quota.quota_status().floor == 500
     for secret in (VAULT_KEY, SESSION_KEY, SHARED_SECRET):
         assert secret not in captured.out + captured.err
 
@@ -130,7 +132,8 @@ async def test_main__etsy_off__connect_still_asks_for_a_session_first(
 
 
 @pytest.mark.usefixtures("restore_logging")
-@pytest.mark.parametrize(("flag", "in_api"), [(None, True), ("true", True), ("false", False)])
+@pytest.mark.ac("AC-5.5.5")
+@pytest.mark.parametrize(("flag", "in_api"), [(None, False), ("true", True), ("false", False)])
 def test_main__order_sync_runs_in_the_api_only_as_the_fallback(
     environment: pytest.MonkeyPatch, flag: str | None, in_api: bool
 ) -> None:

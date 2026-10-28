@@ -21,6 +21,7 @@ from htco_api.auth import Authenticator
 from htco_api.web_auth import WebAuth
 from htco_application.access.authentication import AuthenticatedUser, Membership
 from htco_application.etsy_connect import EtsyConnect
+from htco_application.marketplace import QuotaSnapshot, QuotaStatus
 from htco_application.mfa import Enrollment, Factor
 from htco_application.shop_integrations import IntegrationSummary
 from htco_application.web_sessions import CredentialsRefusedError, IssuedTokens
@@ -564,7 +565,75 @@ async def test_integrations__admin_without_mfa_may_look(aal1: World) -> None:
     response = await aal1.integrations()
 
     assert response.status_code == 200
-    assert response.json() == {"items": []}
+    assert response.json() == {"items": [], "etsy_quota": None}
+
+
+class Quota:
+    def __init__(self, snapshot: QuotaSnapshot | None) -> None:
+        self.snapshot = snapshot
+
+    def quota_status(self) -> QuotaStatus:
+        return QuotaStatus(snapshot=self.snapshot, floor=500)
+
+
+def _quota_client(quota: Quota, role: Role = Role.OWNER) -> httpx.AsyncClient:
+    verifier = JwtVerifier(issuer=ISSUER, audience=AUDIENCE, jwks=FakeJwks(KEY))
+    app = create_app(
+        AppOptions(
+            authenticator=Authenticator(verifier, Memberships(role)),
+            integrations=Integrations(Connector(AuditLog())),
+            etsy_quota=quota,
+            clock=lambda: NOW,
+        )
+    )
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://api.test",
+        headers={"Authorization": f"Bearer {KEY.sign(claims(aal='aal2'))}"},
+    )
+
+
+@pytest.mark.ac("AC-4.1.2")
+@pytest.mark.parametrize(("remaining", "below"), [(420, True), (9_000, False)])
+async def test_integrations__the_shop_card_shows_the_remaining_daily_quota(
+    remaining: int, below: bool
+) -> None:
+    snapshot = QuotaSnapshot(
+        limit_per_second=10, remaining_this_second=9, limit_per_day=10_000,
+        remaining_today=remaining, observed_at=NOW,
+    )  # fmt: skip
+    async with _quota_client(Quota(snapshot)) as http:
+        response = await http.get("/v1/shop-integrations")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["etsy_quota"] == {
+        "limit_per_day": 10_000,
+        "remaining_today": remaining,
+        "observed_at": NOW.isoformat().replace("+00:00", "Z"),
+        "floor": 500,
+        "below_floor": below,
+    }
+
+
+async def test_integrations__no_etsy_call_yet__the_floor_and_no_budget() -> None:
+    async with _quota_client(Quota(None)) as http:
+        body = (await http.get("/v1/shop-integrations")).json()
+
+    assert body["etsy_quota"] == {
+        "limit_per_day": None,
+        "remaining_today": None,
+        "observed_at": None,
+        "floor": 500,
+        "below_floor": False,
+    }
+
+
+async def test_integrations__the_quota_is_for_the_owner_and_admins_only() -> None:
+    async with _quota_client(Quota(None), Role.OPERATIONS) as http:
+        response = await http.get("/v1/shop-integrations")
+
+    assert response.status_code == 403
+    assert "etsy_quota" not in response.text
 
 
 async def test_integrations__without_a_reader__503_not_ready() -> None:

@@ -117,6 +117,20 @@ class OrderStatusChange:
     observed_at: datetime
 
 
+@dataclass(frozen=True)
+class OrderTracking:
+    """One parcel's tracking as HTCO first saw it (`tracking_events`, AC-6.1.2): the carrier, the
+    code's last four characters only (the full code is buyer data), where it came from and which
+    trigger saw it."""
+
+    carrier: str  # ours (`htco_domain.fulfillment.Carrier`)
+    carrier_name: str  # as Etsy names it
+    last4: str
+    source: str  # `tracking_sync.TrackingSource`: etsy, autova_manual, autova_browser…
+    observed_via: str  # `tracking_sync.ObservedVia`: webhook, schedule, relay
+    first_observed_at: datetime
+
+
 # --- Ports -------------------------------------------------------------------------------------
 
 
@@ -174,6 +188,10 @@ class OrderStore(Protocol):
 
     async def timeline(self, shop_id: uuid.UUID, receipt_id: int) -> tuple[OrderStatusChange, ...]:
         """The order's recorded transitions, oldest first (causal order)."""
+        ...
+
+    async def tracking(self, shop_id: uuid.UUID, receipt_id: int) -> tuple[OrderTracking, ...]:
+        """The order's parcels as first seen (`tracking_events`), oldest first; no full code."""
         ...
 
     def lock(self, shop_id: uuid.UUID) -> AbstractAsyncContextManager[bool]:

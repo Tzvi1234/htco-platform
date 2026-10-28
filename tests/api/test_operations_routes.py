@@ -21,6 +21,7 @@ from htco_application.operations_health import (
 from htco_domain.identity import Role
 from htco_platform.jwt import JwtVerifier
 from tests.api.test_me_and_shops import KEY, Memberships
+from tests.application.test_email_failures import INCIDENT, MEMBER, MemoryFailedEmails, failure
 from tests.application.test_operations_health import (
     EXECUTION,
     JOB,
@@ -55,9 +56,9 @@ class Operations:
         return self.jobs.retry(organization_id, job_id, now=now, audit=audit)
 
 
-def client(
+def client(  # noqa: PLR0913 - the ports each test wires or leaves out
     role: Role = Role.OWNER, *, jobs: Jobs | None = None, reader: Reader | None = None,
-    wired: bool = True, replays: bool = True,
+    wired: bool = True, replays: bool = True, emails: MemoryFailedEmails | None = None,
 ) -> httpx.AsyncClient:  # fmt: skip
     verifier = JwtVerifier(issuer=ISSUER, audience=AUDIENCE, jwks=FakeJwks(KEY))
     app = create_app(
@@ -67,6 +68,7 @@ def client(
             ),
             operations=Operations(reader or Reader(), jobs or dead()) if wired else None,
             idempotency=MemoryIdempotencyStore() if replays else None,
+            failed_emails=(emails or MemoryFailedEmails()) if wired else None,
             clock=lambda: NOW,
         )
     )
@@ -224,6 +226,82 @@ async def test_retry__unknown__404() -> None:
         answer = await http.post(f"/v1/operations/dead-letters/{JOB}/retry")
 
     assert answer.status_code == 404
+
+
+@pytest.mark.ac("AC-6.4.3")
+@pytest.mark.parametrize("role", [Role.OWNER, Role.ADMIN])
+async def test_email_failures__the_admin_view_with_a_masked_recipient(role: Role) -> None:
+    emails = MemoryFailedEmails([failure(1), failure(2)])
+    async with client(role, emails=emails) as http:
+        answer = await http.get("/v1/operations/email-failures", params={"limit": 1})
+
+    assert answer.status_code == 200, answer.text
+    body = answer.json()
+    [item] = body["items"]
+    assert item == {
+        "id": str(failure(2).id),
+        "kind": "incident_opened",
+        "status": "failed",
+        "reason": "resend 422",
+        "created_at": failure(2).created_at.isoformat().replace("+00:00", "Z"),
+        "recipient_user_id": str(MEMBER),
+        "recipient": "o***@e***.test",
+        "shop_id": str(SHOP),
+        "incident_id": str(INCIDENT),
+        "receipt_id": 7,
+    }
+    assert body["next_cursor"] is not None
+    assert answer.headers["Cache-Control"] == "no-store"
+    async with client(role, emails=emails) as http:
+        rest = await http.get(
+            "/v1/operations/email-failures", params={"cursor": body["next_cursor"]}
+        )
+    assert [i["id"] for i in rest.json()["items"]] == [str(failure(1).id)]
+
+
+async def test_email_failures__skipped_on_request() -> None:
+    emails = MemoryFailedEmails()
+    async with client(emails=emails) as http:
+        answer = await http.get("/v1/operations/email-failures", params={"status": "skipped"})
+
+    assert answer.status_code == 200
+    assert emails.asked[0][1] == "skipped"
+
+
+@pytest.mark.parametrize("params", [{"status": "sent"}, {"limit": 0}, {"cursor": "nope"}])
+async def test_email_failures__invalid__422(params: dict[str, str | int]) -> None:
+    async with client() as http:
+        answer = await http.get("/v1/operations/email-failures", params=params)
+
+    assert answer.status_code == 422
+
+
+@pytest.mark.parametrize("role", [Role.DEVELOPER, Role.OPERATIONS, Role.SUPPORT, Role.VIEWER])
+async def test_email_failures__other_roles__403(role: Role) -> None:
+    emails = MemoryFailedEmails([failure(1)])
+    async with client(role, emails=emails) as http:
+        answer = await http.get("/v1/operations/email-failures")
+
+    assert answer.status_code == 403
+    assert emails.asked == []
+
+
+async def test_email_failures__another_organization__404() -> None:
+    emails = MemoryFailedEmails([failure(1)])
+    async with client(emails=emails) as http:
+        answer = await http.get(
+            "/v1/operations/email-failures", params={"organization_id": str(uuid.uuid4())}
+        )
+
+    assert answer.status_code == 404
+    assert emails.asked == []
+
+
+async def test_email_failures__not_wired__503() -> None:
+    async with client(wired=False) as http:
+        answer = await http.get("/v1/operations/email-failures")
+
+    assert answer.status_code == 503
 
 
 @pytest.mark.parametrize("role", [Role.OPERATIONS, Role.VIEWER])

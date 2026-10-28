@@ -8,7 +8,7 @@ from datetime import timedelta
 
 import pytest
 
-from htco_application.order_history import OrderStatusChange
+from htco_application.order_history import OrderStatusChange, OrderTracking
 from htco_application.order_ingest import IngestSource
 from htco_domain.identity import Role
 from htco_domain.orders import OrderState
@@ -74,6 +74,37 @@ async def test_one_order__with_its_timeline_and_sources(synced: Wired) -> None:
         ("paid", "ingested", "paid", "backfill"),
     ]
     assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.ac("AC-6.1.2")
+async def test_one_order__tracking_first_seen_with_source_and_last_four_only(synced: Wired) -> None:
+    shop, order_id = first_order(synced)
+    synced.store.parcels[(shop, order_id)] = [
+        OrderTracking(
+            carrier="usps", carrier_name="USPS", last4="7Q2C", source="autova_manual",
+            observed_via="relay", first_observed_at=NOW - timedelta(hours=3),
+        )
+    ]  # fmt: skip
+    synced.world.memberships.role = Role.VIEWER
+
+    body = (await synced.world.get(f"orders/{order_id}")).json()
+
+    assert body["tracking"] == [
+        {
+            "carrier": "usps",
+            "carrier_name": "USPS",
+            "last4": "7Q2C",
+            "source": "autova_manual",
+            "observed_via": "relay",
+            "first_observed_at": (NOW - timedelta(hours=3)).isoformat().replace("+00:00", "Z"),
+        }
+    ]
+
+
+async def test_one_order__no_tracking_yet__an_empty_list(synced: Wired) -> None:
+    body = (await synced.world.get(f"orders/{first_order(synced)[1]}")).json()
+
+    assert body["tracking"] == []
 
 
 @pytest.mark.ac("AC-5.6.1")

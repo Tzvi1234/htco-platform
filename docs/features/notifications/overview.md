@@ -23,4 +23,4 @@ People hear about what needs them once, in the office and by email: an incident 
 | AC-6.4.3 | Resend failures retry with backoff; permanent failures are visible in the admin view. |
 | AC-6.4.4 | A sign-in from a new device sends one email to that user; MFA changes and shop connections notify the owner. |
 
-AC-6.4.3's admin view is `app.email_deliveries` (owners and admins read it; failed and skipped rows) plus dead `email.send` outbox messages; the queue health view of 5.9 lists the latter once it lands.
+AC-6.4.3's admin view is `GET /v1/operations/email-failures` (Owner and Admins, like the rest of Admin > Health): the failed (or, with `status=skipped`, skipped) rows of `app.email_deliveries`, newest first, with their kind, reason, time and the shop, incident and order they were about (recorded since migration `20261028120000`). The recipient is a member ID and an address the database masks (`o***@e***.test`, `app.admin_member_email_masked`); the full address never reaches the API. Dead `email.send` outbox messages show in the queue health view of 5.9.
