@@ -74,7 +74,7 @@ from htco_application.workforce.registry import Registry
 from htco_integrations.etsy import EtsyAdapter, EtsyConfig, EtsyCredentials, app_key_fingerprint
 from htco_integrations.etsy_oauth import EtsyOAuthClient
 from htco_persistence.access import PostgresAccessStore
-from htco_persistence.audit import PostgresAuditLog
+from htco_persistence.audit import PostgresAuditLog, PostgresAuditLogReader
 from htco_persistence.automation import (
     PostgresAutomationCatalog,
     PostgresExecutionReader,
@@ -225,6 +225,7 @@ def main(
         incident_center=wiring.incident_center,
         security_notices=wiring.security_notices,
         operations=wiring.operations,
+        audit_log=wiring.audit_log,
         resources=wiring.resources,
     )
     try:
@@ -433,6 +434,7 @@ class _Wiring:
     incident_center: IncidentCenter | None = None
     security_notices: SecurityNotices | None = None
     operations: PostgresOperationsHealth | None = None
+    audit_log: PostgresAuditLogReader | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -547,6 +549,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
             offload=anyio.to_thread.run_sync,
         ),
         operations=PostgresOperationsHealth(database),
+        audit_log=PostgresAuditLogReader(database),
         resources=resources,
     )
 

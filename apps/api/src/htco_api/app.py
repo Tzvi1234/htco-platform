@@ -12,6 +12,7 @@ from fastapi.routing import APIRoute
 from opentelemetry.sdk.trace import TracerProvider
 
 from htco_api.access import access_router
+from htco_api.audit_log import audit_log_router
 from htco_api.automations import AutomationServices, automations_router
 from htco_api.browser_environments import (
     BrowserEnvironmentServices,
@@ -31,6 +32,7 @@ from htco_api.shop_data import shop_data_router
 from htco_api.web_auth import WebAuth, web_auth_router
 from htco_api.webhooks import webhooks_router
 from htco_application.access.management import AccessStore, Inviter
+from htco_application.audit_log import AuditLogReader
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WindowLimiter
 from htco_application.marketplace import QuotaMonitor
@@ -151,6 +153,8 @@ class AppOptions:
     security_notices: SecurityNotices | None = None
     # Queue, execution and sync health (slice 5.9); without it, those routes answer 503.
     operations: OperationsPorts | None = None
+    # The audit view (AC-3.9.1); without it, `GET /v1/audit-log` answers 503.
+    audit_log: AuditLogReader | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -204,6 +208,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.incident_center = options.incident_center
     app.state.security_notices = options.security_notices
     app.state.operations = options.operations
+    app.state.audit_log = options.audit_log
     app.state.clock = options.clock
     app.include_router(
         health_router(
@@ -228,6 +233,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.include_router(executions_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(incidents_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     app.include_router(operations_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
+    app.include_router(audit_log_router(clock=options.clock), responses=UNEXPECTED_ERROR_RESPONSES)
     if options.diagnostics:
         app.include_router(diagnostics_router(), responses=UNEXPECTED_ERROR_RESPONSES)
     add_problem_handlers(app)
