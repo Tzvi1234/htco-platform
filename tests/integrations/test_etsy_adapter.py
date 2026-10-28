@@ -626,6 +626,27 @@ async def test_quota_headers__headerless_failure__does_not_lift_deferral(
     assert snapshot.remaining_today == 100
 
 
+@pytest.mark.ac("AC-4.1.2")
+async def test_quota_status__the_last_budget_with_the_floor_for_the_shop_card(
+    make: Callable[..., Harness],
+) -> None:
+    script = Scripted(
+        httpx.Response(200, json=fixture("shop.json"), headers=quota_headers(today=100))
+    )
+    harness = make(script, daily_quota_floor=500)
+    assert harness.adapter.quota_status().snapshot is None  # nothing seen before the first call
+    assert harness.adapter.quota_status().below_floor is False
+
+    async with harness.client:
+        await harness.adapter.get_shop(SHOP_ID)
+
+    status = harness.adapter.quota_status()
+    assert status.floor == 500
+    assert status.snapshot is not None
+    assert status.snapshot.remaining_today == 100
+    assert status.below_floor is True
+
+
 async def test_throttle__allows_half_the_per_second_limit__then_waits(
     make: Callable[..., Harness],
 ) -> None:

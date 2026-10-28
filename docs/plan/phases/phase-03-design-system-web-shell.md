@@ -19,7 +19,7 @@
 - [x] 3.6 Generated API client and contract job (open note: the pinned spec in htco-clients lags platform `packages/contracts/openapi.yaml`, and no job compares them across the repositories)
 - [ ] 3.7 Overview and shops screens (partial: delivered, but AC-3.7.1's approved screenshot per state, he/en × light/dark, and AC-3.7.2's "a Viewer sees no admin controls" have no test evidence yet)
 - [ ] 3.8 Web deployment (partial: deployed on `dash.ht-co.app`; open AC-3.8.1, the deploy check verifies the CSP but not the referrer policy, and AC-3.8.2, the deployed Playwright sign-in journey, which needs the owner's account)
-- [ ] 3.9 Administration screens (partial: open AC-3.9.1, "see each change in the audit view", because no audit-read API exists yet (in progress, see Phase 6's note of 2026-10-28); AC-3.9.2's no-permission state is not tested on every admin route)
+- [ ] 3.9 Administration screens (partial: open AC-3.9.1's web part: the audit read API `GET /v1/audit-log` is built (pgTAP `33_audit_view`), the web audit view is still the clients' part; AC-3.9.2's no-permission state is not tested on every admin route)
 
 **Audit 2026-10-28.** The ticks above were corrected against main: 3.1, 3.3 and 3.6 were delivered but unticked. Two 3.5 items stay open in this slice, not moved:
 

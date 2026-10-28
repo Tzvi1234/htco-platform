@@ -8,6 +8,8 @@ from datetime import datetime
 
 from htco_application.kernel import OutboxMessage
 from htco_application.notifications import (
+    NO_LINKS,
+    DeliveryLinks,
     EmailMessage,
     EmailPermanentError,
     EmailReceipt,
@@ -77,6 +79,8 @@ class MemoryNotificationStore:
 class MemoryEmailDirectory:
     addresses: dict[uuid.UUID, str] = field(default_factory=dict)
     records: dict[uuid.UUID, tuple[str, str | None, str | None]] = field(default_factory=dict)
+    # What each delivery was about (AC-6.4.3).
+    links: dict[uuid.UUID, DeliveryLinks] = field(default_factory=dict)
 
     def address_of(self, organization_id: uuid.UUID, user_id: uuid.UUID) -> str | None:  # noqa: ARG002 - one organization
         return self.addresses.get(user_id)
@@ -92,8 +96,10 @@ class MemoryEmailDirectory:
         provider_id: str | None,
         error: str | None,
         now: datetime,  # noqa: ARG002
+        about: DeliveryLinks = NO_LINKS,
     ) -> None:
         self.records.setdefault(outbox_id, (status, provider_id, error))
+        self.links.setdefault(outbox_id, about)
 
 
 @dataclass
