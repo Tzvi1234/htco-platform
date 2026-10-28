@@ -67,6 +67,7 @@ Deterministic metric jobs over the records above, attributing cost to units of w
 |---|---|
 | AC-18.1.1 | Every metric states its formula, source tables and as-of time; cost figures reconcile with `model_usage` and the ledger for the same period. |
 | AC-18.1.2 | "Repeated reasoning that could be deterministic" is detected by a deterministic rule (the same employee, task type and inputs producing the same decision repeatedly), not by a model reading every session. |
+| AC-18.1.3 | **FinOps on the web.** The web app shows the metrics per unit of work, employee, department, workflow and shop, with trends. Each figure shows its formula, source tables and as-of time and links to the records it came from, and the views follow roles and shop access. |
 
 ### 18.2 — Optimization proposals store and lifecycle
 
@@ -76,6 +77,7 @@ Deterministic metric jobs over the records above, attributing cost to units of w
 |---|---|
 | AC-18.2.1 | Every transition follows `htco_domain.improvement`; a proposal without acceptance criteria and a rollback plan cannot reach `PROPOSED`; every transition writes an activity record. |
 | AC-18.2.2 | Only Maya or the owner can move a proposal to `APPROVED` or `REJECTED`; Omer cannot decide his own proposal (policy test). |
+| AC-18.2.3 | **Deciding a proposal on the web.** A proposal's detail in the Executive Office shows its problem, baseline, evidence links, expected benefit, risk, rollback plan, acceptance criteria and every transition from its activity records. The owner approves or rejects it there with a reason, and Maya's decisions appear in the same history. |
 
 ### 18.3 — Optimization Review Scheduling automation
 
@@ -103,6 +105,7 @@ After deployment, the proposal moves to `MEASURING`; the measurement compares th
 |---|---|
 | AC-18.5.1 | A proposal reaches `VERIFIED` only when its acceptance criteria are met and no quality guard regressed; otherwise it is rolled back or returned with evidence. |
 | AC-18.5.2 | Measurements record their periods and sample sizes; a measurement with too small a sample is reported as inconclusive, not as a success. |
+| AC-18.5.3 | **Measurements on the web.** A proposal in `MEASURING` shows its agreed metric before and after, with the periods, sample sizes and quality guards, and an inconclusive result is labelled inconclusive. Omer's recommendation is shown as a recommendation, and the owner records `VERIFIED` or `ROLLED_BACK` from the same view. |
 
 ### 18.6 — Scenario D end to end
 

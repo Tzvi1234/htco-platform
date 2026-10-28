@@ -17,9 +17,12 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 20.2 Recovery: objectives, drill, documented results
 - [ ] 20.3 Security review: ASVS L2 evidence, agentic controls, penetration-style test of tenant isolation
 - [ ] 20.4 Runbooks, SLOs, alert review
+- [ ] 20.4a Runbook links and SLOs on the web
 - [ ] 20.5 Release pipelines and SBOMs for platform and clients
 - [ ] 20.6 Privacy operations: retention jobs, export and deletion requests
+- [ ] 20.6a Privacy requests and retention on the web
 - [ ] 20.7 Office readiness review
+- [ ] 20.8 Prometheus `/metrics` for the queue, executions and sync (added 2026-10-28: AC-5.9.4, moved from 5.9)
 
 ## Architecture upgrade (2026-10-23)
 
@@ -45,9 +48,12 @@ Make HTCO OS dependable for the long run: a staging environment, verified recove
 | 20.2 | Recovery: objectives, drill, documented results | Restore within the agreed RTO; data loss within RPO; agent sessions and automation executions resume or are recovered by the nightly supervisor after the restore |
 | 20.3 | Security review: ASVS L2 evidence, agentic controls per active employee, penetration-style test of tenant isolation | No open high or critical findings |
 | 20.4 | Runbooks, SLOs, alert review | Every alert, monitor and automation links to a runbook entry |
+| 20.4a | Web: each monitor (10.7), automation (15.5) and alert in the Engineering Console (15.7) links to its runbook entry, and the console shows each SLO with its current value and error budget | Every alert, monitor and automation shown on the web has a working runbook link |
 | 20.5 | Release pipelines and SBOMs for platform and clients | Reproducible tagged releases with notes |
 | 20.6 | Privacy operations: retention jobs, export and deletion requests | Retention verified on real tables, including activity records, messages and agent memory |
+| 20.6a | Web: Admin › Privacy: record an export or deletion request, run it with step-up, and see its status and evidence of completion; each retention job shows its last run and how many rows it removed | Every request and run is audited, with no personal data in the audit; a deletion needs step-up |
 | 20.7 | Office readiness review | See the checks below |
+| 20.8 | Prometheus `/metrics` for the queue, executions and sync (AC-5.9.4, moved here from 5.9 by the audit of 2026-10-28) | See AC-20.8.1 and AC-20.8.2 below |
 
 ### Office readiness checks (slice 20.7)
 
@@ -58,6 +64,15 @@ Make HTCO OS dependable for the long run: a staging environment, verified recove
 | AC-20.7.3 | Office scenarios A to J ([TESTING_STRATEGY §10](../../engineering/TESTING_STRATEGY.md#10-office-acceptance-scenarios)) are green on staging. |
 | AC-20.7.4 | The kill switch of each employee and each automation, and the global one, is exercised on staging and stops new work within 60 seconds. |
 | AC-20.7.5 | Gal (Phase 21) is the only employee still `draft`; no `draft` employee or automation can be triggered in production (tested). |
+
+### Metrics export (slice 20.8)
+
+Slice 5.9 defined the series and the owner's decision of 2026-10-23 moved AC-5.9.4 to Phase 8A's monitoring slice, but 8A.8 lists only browser series. The export lands here, with the SLOs of 20.4 that read it, unless 8A.8 picks a monitoring host first, in which case it moves forward unchanged. No web step: the same figures are on Admin › Health (5.9) and in the Engineering Console (15.7); this slice only exports them.
+
+| ID | Acceptance criterion |
+|---|---|
+| AC-20.8.1 | The API and the worker expose `/metrics` (Prometheus text format) on a port or path that only the monitoring host can reach, with the series of 5.9: queue depth and age per queue, dead letters, worker heartbeat age, executions by automation and outcome with retries and latency, each shop's sync age, webhook events received and unprocessed by type, and each circuit breaker's state. |
+| AC-20.8.2 | No label holds an organization name, a buyer field or a free-text error: only IDs that are not personal, and shop IDs (AC-5.9.4); a test scrapes the endpoint with seeded data and checks every label. An unauthenticated request from outside the monitoring network is refused. |
 
 ## Exit gate — Milestone M7
 

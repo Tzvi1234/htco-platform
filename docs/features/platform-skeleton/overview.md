@@ -40,7 +40,7 @@ The frame every later feature is built inside: a uv workspace whose packages fol
 | AC-1.5.3 | A rollback to the previous deployment is performed once and documented in `operations.md`. | 1.5 (part 2) | Pass (2026-10-14, `https://htco-s4o93.ondigitalocean.app`; see Drills in operations.md) |
 | AC-1.5.4 | No secret value appears in the app spec in git; secrets are injected at deploy time. | 1.5 (part 2) | Pass (`tests/infra/test_app_spec.py`) |
 | AC-1.6.1 | An agent session that leaves a failing unit test is told by the hook and cannot finish silently. | 1.6 | Pass |
-| AC-1.6.2 | A direct push to `main` is rejected by GitHub. | 1.6 (part 2, needs GitHub Pro) | Open |
+| AC-1.6.2 | A direct push to `main` is rejected by GitHub. | 1.6 (part 2, needs GitHub Pro) | Pass (2026-10-14: the `main` ruleset rejects a direct push with GH013) |
 | AC-1.7.1 | An error raised by a diagnostic endpoint (enabled only outside production) appears in error monitoring with `request_id` and `trace_id`, and without request bodies, cookies or secret headers. | 1.7 | Pass in tests with a capturing transport; the real Sentry project is part 2 |
 | AC-1.7.2 | A request's `trace_id` appears in all its log lines and is propagated to outgoing HTTP calls (checked against a recorded request). | 1.7 | Pass |
 | AC-1.7.3 | A failed deployment and a crash-looping container each send one alert to the owner. | 1.7 (part 2, with the deployment) | Open |

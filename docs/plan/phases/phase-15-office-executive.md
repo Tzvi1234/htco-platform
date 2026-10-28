@@ -16,13 +16,17 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 15.1 Live-update spike and ADR
 - [ ] 15.2 Employee states from recorded activity
 - [ ] 15.3 Executive Office
+- [ ] 15.3a Home overview completed
 - [ ] 15.4 Employee Departments and Employee Profile
 - [ ] 15.5 Automation Center and AI Tools Center
 - [ ] 15.6 Decision & Model Observatory
 - [ ] 15.7 Engineering Console (read-only)
 - [ ] 15.8 Office Communication
+- [ ] 15.8a Per-employee email aliases
 - [ ] 15.9 Activity Feed & Audit, Notifications & Approvals
+- [ ] 15.9a Morning summary time and channel
 - [ ] 15.10 Maya and Lia activated; daily and weekly office reviews
+- [ ] 15.10a Office reviews on the web
 
 ## Architecture upgrade (2026-10-23)
 
@@ -83,13 +87,26 @@ Each follows the activation rule of [Phase 9](phase-09-router-advisor.md) slice 
 | 15.1 | Live-update spike and ADR | Reconnect and replay with a cursor; no state derived only from the stream |
 | 15.2 | Employee states from recorded activity; offline detection from heartbeats | Worker offline → office read-only, no employee shown as running; a `draft` employee is never shown as working |
 | 15.3 | Executive Office: manager overview, Noa's findings, Omer's proposals, approvals, business health | Every figure links to its records |
+| 15.3a | The home overview completed as the business's cockpit: key numbers (orders, revenue, profit, average order, late shipments, review average, out of stock), trends over time, important messages and decisions, and the office live (who is working on what right now, with their latest activity) | Every block shows real data with its as-of time, or says which phase brings it; no placeholder number |
 | 15.4 | Employee Departments and Employee Profile: name, role, goals, activity, tools, skills, permissions, automations, sessions, memory summaries, model policy, evaluations, costs | The profile shows the specification version in use and its evaluation result |
 | 15.5 | Automation Center (definitions, triggers, executions, failures, retries, metrics, authorized manual runs) and AI Tools Center (tools, versions, status, capabilities, access, usage) | Manual runs go through the engine's authorization and are audited |
 | 15.6 | Decision & Model Observatory: Decision Advisor status, routing policies, model usage, costs, routing history, benchmark and evaluation results | Data from `routing_decisions`, `model_usage` and `decision_records` only |
 | 15.7 | Engineering Console, read-only: incidents, dead letters, sessions, traces (masked), deployments and infrastructure health, by role | No write action until Phase 19; masked traces |
 | 15.8 | Office Communication: conversations, internal messages, task threads, handoff history, search, inline approvals; optional Hermes channel | Messages are business events; no hidden reasoning shown; approvals from chat follow the same server checks; Hermes can notify and deep-link but cannot decide |
+| 15.8a | Per-employee email aliases (FR-EML-04), switched on per employee by the Owner once the abuse tests pass: the address shows on the employee's profile, and mail to it arrives in Office Communication as a thread | No alias receives mail before its abuse tests pass; inbound mail follows the 14.1 pipeline |
 | 15.9 | Activity Feed & Audit; Notifications & Approvals; web push with consent (FR-NTF-02) | A push opens the exact item after sign-in; subscriptions are removed on logout |
+| 15.9a | Notification preferences (7.6) add the morning summary's time and channel (in-app, email, and WhatsApp or Telegram through Hermes where D-10 allows), and the summary opens in the web app with its sources | A channel is used only after its consent is recorded; the summary lists its sources |
 | 15.10 | Maya and Lia activated; daily and weekly office reviews | Sheets defined, evaluations passed, autonomy approved, routing measured; each review is built from recorded activity and lists its sources |
+| 15.10a | The daily and weekly office reviews listed in the Executive Office, each opening with its sources | Each review links to the records it was built from |
+
+### FUTURE — A per-agent email identity and mailbox (the owner's note of 2026-10-28)
+
+**Future, not scheduled in this phase's slices; it comes after 8A and 8B.** Each AI employee gets its own email address and mailbox (for example `<slug>@agents.ht-co.app`, FR-EML-04), so that it can open and manage accounts on outside services under its own identity and send mail, as some public AI agents already do. It builds on Phase 8A (a browser environment per agent for sign-ups), Phase 8B (the account's password and TOTP in the Agent Secrets Vault, 8B.8, injected and never seen by the model) and the email pipeline of Phase 14 (inbound mail as untrusted data, quarantine). Rules, to be turned into acceptance criteria when it is scheduled:
+
+- **Approval-gated.** Opening an account, and each first mail to a new recipient, is an approval for the Owner (W3) until a per-agent send policy allows otherwise; the Write Actions console (7.18) lists these as write capabilities.
+- **Per-agent send policies.** Each agent's policy names its allowed recipients or domains, its daily send limit and the account kinds it may open; anything outside it is refused before sending.
+- **Audited.** Every account opened, mail sent and mail received is recorded as an activity record and an audit entry, with no buyer data and no secret.
+- **Kill switch and abuse tests.** The agent's kill switch (8.6) stops its mail at once; no address receives or sends mail before its abuse tests pass.
 
 ## Test plan
 

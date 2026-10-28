@@ -18,6 +18,7 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 17.3 Auth, secure storage, session revocation
 - [ ] 17.4 Orders grid, incident center, approvals
 - [ ] 17.5 Engineering Console by role
+- [ ] 17.5a Web parity for the Engineering Console
 - [ ] 17.6 Signing, packaging, updates
 
 ## Goal
@@ -45,6 +46,7 @@ The web app will already cover these screens, including the office of [Phase 15]
 | 17.3 | Auth, secure storage, session revocation | No token in plain files or settings |
 | 17.4 | Orders grid, incident center, approvals | Keyboard-only path through the main journeys; Narrator labels |
 | 17.5 | Engineering Console by role | Masked traces; no free-form shell; every action goes through the API and is audited |
+| 17.5a | Web parity for 17.5: engineering requests, optimization proposals and pull requests appear in the Windows console only after the web shows them (19.1a, 18.2); until then 17.5 covers the read-only console of 15.7 | No Windows view or action exists without its web counterpart (ADR-0016) |
 | 17.6 | Signing, packaging, updates | Signed MSIX installs and updates on a clean machine |
 
 ## Exit gate

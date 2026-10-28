@@ -17,7 +17,9 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 - [ ] 16.2 Design system in Compose from generated tokens
 - [ ] 16.3 Sign-in per the auth ADR, secure storage, logout clears everything
 - [ ] 16.4 Approvals and push deep links; biometric step-up
+- [ ] 16.4a Web parity: requester on the approval card
 - [ ] 16.5 Incidents, overview and office summary
+- [ ] 16.5a Web parity: office summary after the web office
 - [ ] 16.6 Release pipeline to internal testing; baseline profiles
 
 ## Goal
@@ -42,7 +44,9 @@ The owner handles what needs them from the phone: approvals with push notificati
 | 16.2 | Design system in Compose from generated tokens | Component previews and screenshot tests match the web's states |
 | 16.3 | Sign-in per the auth ADR, secure storage, logout clears everything | No token outside encrypted storage; revocation honoured |
 | 16.4 | Approvals and push deep links; biometric step-up | TalkBack reads requester, reason, impact and risk; expired approvals disabled; the server rejects a decision whose device signature is missing or invalid |
+| 16.4a | Web parity for 16.4: the web approval card (7.5) shows the requester (a user, an employee or an automation) by name, before 16.4 ships it on Android | The web card reads requester, reason, impact and risk in that order (extends AC-7.5.1) |
 | 16.5 | Incidents, overview and office summary | Offline shows cached, labelled stale data only; no employee shown as running when the worker is offline |
+| 16.5a | Web parity for 16.5: the office summary is built only after the web shows the same states (15.2, 15.3); until then 16.5 ships incidents and the overview only | No Android screen shows a state or figure that the web does not show (ADR-0016) |
 | 16.6 | Release pipeline to internal testing; baseline profiles | Cold start under 1.5 s on a mid-range device |
 
 ## Security checklist
