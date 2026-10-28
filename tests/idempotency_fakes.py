@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+import httpx
+
 from htco_application.idempotency import (
     KEY_LIFETIME,
     Begin,
@@ -15,6 +17,13 @@ from htco_application.idempotency import (
     Started,
     StillRunning,
 )
+
+
+async def fresh_idempotency_key(request: httpx.Request) -> None:
+    """An httpx request hook: a new `Idempotency-Key` on every request that names none, for
+    tests of routes that require one (architecture audit 6.1) but are not about replays."""
+    if "Idempotency-Key" not in request.headers:
+        request.headers["Idempotency-Key"] = str(uuid.uuid4())
 
 
 @dataclass

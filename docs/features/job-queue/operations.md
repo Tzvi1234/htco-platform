@@ -14,7 +14,8 @@ The process logs `worker.starting` with its ID and enabled schedules, serves `GE
 | Setting / flag | Default | Effect |
 |---|---|---|
 | `HTCO_ENVIRONMENT` | required | `local`, `test`, `staging` or `production` |
-| `HTCO_DATABASE_URL` | required (secret) | The API's database; the worker runs as `htco_worker` on it |
+| `HTCO_DATABASE_URL` | required (secret) | The API's database; the worker runs as `htco_worker` on it. Only the fallback login once the worker has its own (below) |
+| `HTCO_WORKER_DATABASE_URL`, `HTCO_WORKER_DATABASE_PASSWORD` | unset (password: secret) | The worker's own login `htco_worker_login` (audit 5.1): used when both are set, checked at startup (exit 78 on the wrong login). Not both set (in production the URL is always set, and the password stays blank until the owner adds the secret): the API's login, with a `worker.shared_database_login` WARNING. The URL must not carry a password. See "The worker's own login" |
 | `HTCO_WORKER_SCHEDULES` | empty: **no schedule runs** | Comma-separated: `maintenance.capability_probes`, `maintenance.refresh_token_expiry`, `maintenance.purge_disconnected_shops`, `maintenance.prune_finished_jobs`. The feature flag for every scheduled job |
 | `HTCO_WORKER_ID` | host name and process ID | Shown in `jobs.worker_heartbeats` and as the lease holder |
 | `HTCO_WORKER_LEASE_SECONDS` | 60 | How long a claimed job is held without a heartbeat (beats every third of it) |
@@ -73,9 +74,39 @@ Log events: `job.started`, `job.succeeded`, `job.retry_scheduled`, `job.dead_let
 1. **Likely cause:** workers are killed (memory, restarts) or a handler blocks longer than the lease without awaiting.
 2. **Fix:** check `RESTART_COUNT` and memory; raise `HTCO_WORKER_LEASE_SECONDS` for long jobs.
 
-### A separate login for the worker
+### The worker's own login (architecture audit 5.1, ER-SEC-08)
 
-To give the worker its own credentials instead of switching roles on the API's login: `alter role htco_worker login password '<generated>'` (owner, SQL editor), store the password as a DigitalOcean secret, and point the worker's `HTCO_DATABASE_URL` at user `htco_worker`. The role's rights do not change.
+The migration `20261028210000_worker_login_role.sql` creates `htco_worker_login`: a LOGIN role, NOINHERIT, no superuser, no BYPASSRLS, no member of `postgres` or of a client role, whose only grant is the switch to `htco_worker` (so it reaches exactly what the worker role reaches, and a `reset role` lands on a role that reaches nothing). It has **no password** in the repository, so it cannot log in until the owner sets one. Until then the worker keeps the fallback: it logs in with the API's login (`HTCO_DATABASE_URL` and `PGPASSWORD`) and logs `worker.shared_database_login` at WARNING on every start.
+
+Owner steps, once, in this order. A deploy does not apply migrations, and the role exists only once they ran, so the `alter role` of step 3 fails before step 1:
+
+1. **Run the migrations**: Actions › **Migrate database** (`migrate.yml`) › Run workflow. It applies `20261028210000_worker_login_role.sql`, which creates the role. Check in Supabase that `select rolname from pg_roles where rolname = 'htco_worker_login'` returns one row.
+2. **Generate a password** locally, letters and digits only, for example `python -c "import secrets; print(secrets.token_hex(32))"`. Do not paste it anywhere but the two places below.
+3. **Set it in Supabase** (Dashboard › SQL Editor, as `postgres`):
+   ```sql
+   alter role htco_worker_login password '<generated>';
+   ```
+   The SQL Editor keeps a query history and can save snippets, and both would keep the password. Run the statement in a new, unsaved query; do **not** save it as a snippet; afterwards delete it from the editor's history (and close the tab without saving). If it was saved by mistake, delete the snippet and rotate the password (see **Rotation**).
+4. **Store it as a GitHub secret**: Settings › Secrets and variables › Actions › New repository secret, name `HTCO_WORKER_DATABASE_PASSWORD`. The deploy workflow maps it into the app spec; App Platform keeps it as an encrypted `SECRET` env of the `agent-worker` only.
+5. **Deploy** (Actions › Deploy API). The spec already wires both settings of the worker:
+   ```yaml
+   - key: HTCO_WORKER_DATABASE_URL
+     scope: RUN_TIME
+     value: postgresql://htco_worker_login.${SUPABASE_PROJECT_REF}@${SUPABASE_POOLER_HOST}:5432/postgres?sslmode=require
+   - key: HTCO_WORKER_DATABASE_PASSWORD
+     scope: RUN_TIME
+     type: SECRET
+     value: ${HTCO_WORKER_DATABASE_PASSWORD}
+   ```
+   The URL never holds the password; libpq takes it from the separate setting.
+6. **Verify**: the worker's runtime log shows `worker.database_login` with `session_user=htco_worker_login` and `current_user=htco_worker`, and no `worker.shared_database_login` warning. In Supabase, `select usename from pg_stat_activity where usename = 'htco_worker_login'` lists its connections.
+7. **Then** remove `PGPASSWORD` from the `agent-worker` envs in `infra/digitalocean/app.yaml` (a small PR), so the worker no longer holds the API's password at all.
+
+At startup, when both `HTCO_WORKER_DATABASE_URL` and `HTCO_WORKER_DATABASE_PASSWORD` are set, the worker checks `session_user = htco_worker_login`, `current_user = htco_worker` and that the login is neither superuser nor BYPASSRLS; otherwise it logs `worker.database_login_refused` and exits 78 (configuration error) before running any job. A password without the URL is refused at startup too, and so is a `HTCO_WORKER_DATABASE_URL` that carries a password itself (`user:password@`, `?password=` or `password=`): the URL is a plain setting, and the password belongs only in the secret.
+
+**Rotation:** `alter role htco_worker_login password '<new>'` (in an unsaved query, cleared from the history afterwards, as in step 3), update the GitHub secret, redeploy. Connections opened with the old password stay until they close; new ones fail until the deploy finishes, and the worker's jobs wait in the queue meanwhile.
+
+**Rollback:** before step 7, delete the GitHub secret and redeploy: the worker falls back to the API's login (with the warning). After step 7 the worker no longer has `PGPASSWORD`, so the fallback cannot log in: restore the `PGPASSWORD` env of the `agent-worker` in `infra/digitalocean/app.yaml` (revert the step-7 PR) in the same change, then delete the GitHub secret and redeploy.
 
 ## Rollback
 

@@ -286,6 +286,7 @@ WORKER_SECRETS = {
     "HTCO_TOKEN_VAULT_PREVIOUS_KEYS",
     "HTCO_ETSY_KEYSTRING",
     "HTCO_ETSY_SHARED_SECRET",
+    "HTCO_WORKER_DATABASE_PASSWORD",  # architecture audit 5.1: the worker's own login
 }
 
 
@@ -313,6 +314,24 @@ def test_worker__secrets_are_placeholders_and_the_database_url_has_no_password()
         assert PLACEHOLDER.match(envs[key]["value"]), key
     assert envs["HTCO_DATABASE_URL"]["value"] == _envs()["HTCO_DATABASE_URL"]["value"]
     assert envs["HTCO_ENVIRONMENT"]["value"] == "production"
+
+
+def test_worker__its_own_login_without_a_password_in_the_url() -> None:
+    """Architecture audit 5.1: the worker's login is `htco_worker_login`, its password apart
+    (a GitHub secret the deploy maps), never the API's login."""
+    envs = {env["key"]: env for env in _worker()["envs"]}
+    url = envs["HTCO_WORKER_DATABASE_URL"]["value"]
+    assert url.startswith("postgresql://htco_worker_login.${SUPABASE_PROJECT_REF}@")
+    assert ":" not in url.removeprefix("postgresql://").split("@", 1)[0]
+    assert envs["HTCO_WORKER_DATABASE_PASSWORD"]["value"] == "${HTCO_WORKER_DATABASE_PASSWORD}"
+    [deploy_step] = [
+        step
+        for job in DEPLOY["jobs"].values()
+        for step in job["steps"]
+        if str(step.get("uses", "")).startswith("digitalocean/app_action/deploy@")
+    ]
+    secret = deploy_step["env"]["HTCO_WORKER_DATABASE_PASSWORD"]
+    assert secret == "${{ secrets.HTCO_WORKER_DATABASE_PASSWORD }}"  # noqa: S105 - a placeholder
 
 
 def test_worker__runs_only_the_named_schedules() -> None:

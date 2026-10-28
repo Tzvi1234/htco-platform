@@ -546,7 +546,6 @@ dependencies = [
     { name = "anyio" },
     { name = "htco-application" },
     { name = "htco-domain" },
-    { name = "htco-persistence" },
     { name = "htco-platform" },
     { name = "playwright" },
 ]
@@ -556,7 +555,6 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.12,<5" },
     { name = "htco-application", editable = "packages/application" },
     { name = "htco-domain", editable = "packages/domain" },
-    { name = "htco-persistence", editable = "packages/persistence" },
     { name = "htco-platform", editable = "packages/platform" },
     { name = "playwright", specifier = "==1.64.0" },
 ]

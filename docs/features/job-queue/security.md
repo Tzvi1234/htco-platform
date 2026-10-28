@@ -43,6 +43,6 @@ flowchart LR
 | Requirement | How it is met | Evidence |
 |---|---|---|
 | v5.0.0-8.2.2 (data-level access) | The worker reaches one organization's rows per job through RLS | Worker-role integration tests and pgTAP |
-| v5.0.0-13.2.2 (least-privilege service accounts) | A dedicated worker role with grants per table and no login | Migration `20261023120000_job_queue.sql`, pgTAP |
+| v5.0.0-13.2.2 (least-privilege service accounts) | A dedicated worker role with grants per table, reached through its own login `htco_worker_login` with no rights of its own (architecture audit 5.1) | Migrations `20261023120000_job_queue.sql`, `20261028210000_worker_login_role.sql`, pgTAP, the worker's startup check |
 | v5.0.0-15.4.1 to 15.4.3 (safe concurrency) | Atomic claims (`SKIP LOCKED`), lease checks on every finish, one running job per lock enforced by a unique index | `test_claim__many_workers_at_once__*`, `test_lock_key__*` |
 | v5.0.0-16.2.5 (no sensitive data in logs) | Logs carry job IDs, kinds and exception types | `htco_worker.runner` |
