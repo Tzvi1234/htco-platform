@@ -1,10 +1,12 @@
 """Worker settings, read from `HTCO_*` environment variables and validated at startup."""
 
 import os
+import re
 import socket
 from datetime import time
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -35,6 +37,16 @@ SCHEDULES = (
     | {RELAY_RETENTION_SCHEDULE.kind: RELAY_RETENTION_SCHEDULE}
 )
 
+_CONNINFO_PASSWORD = re.compile(r"(?:^|\s)password\s*=")
+
+
+def _carries_a_password(conninfo: str) -> bool:
+    """A URL with `user:password@` or `?password=`, or a `password=` keyword conninfo."""
+    if "://" not in conninfo:
+        return _CONNINFO_PASSWORD.search(conninfo) is not None
+    parts = urlsplit(conninfo)
+    return parts.password is not None or "password" in parse_qs(parts.query)
+
 
 class WorkerSettings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -48,6 +60,11 @@ class WorkerSettings(BaseSettings):
     sentry_dsn: SecretStr | None = None
     # The same database as the API; the worker's connections switch to the `htco_worker` role.
     database_url: SecretStr
+    # The worker's own login, `htco_worker_login` (architecture audit 5.1, ER-SEC-08): the URL
+    # without a password, and the password apart. Used only when both are set; until then the
+    # worker falls back to HTCO_DATABASE_URL (the API's login) and logs a WARNING at every start.
+    worker_database_url: str | None = None
+    worker_database_password: SecretStr | None = None
     # Defaults to the host name and process ID, unique per running process.
     worker_id: str = Field(
         default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}"[:200],
@@ -94,12 +111,27 @@ class WorkerSettings(BaseSettings):
         "token_vault_key",
         "token_vault_previous_keys",
         "resend_api_key",
+        "worker_database_url",
+        "worker_database_password",
         mode="before",
     )
     @classmethod
     def _blank_is_unset(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("worker_database_url")
+    @classmethod
+    def _url_without_a_password(cls, value: str | None) -> str | None:
+        """The URL is a plain setting, shown in logs and `repr`; its password lives apart, in
+        HTCO_WORKER_DATABASE_PASSWORD. A URL that carries one is refused, never echoed."""
+        if value is None:
+            return None
+        if _carries_a_password(value):
+            raise ValueError(
+                "must not carry a password: put it in HTCO_WORKER_DATABASE_PASSWORD instead"
+            )
         return value
 
     @property
@@ -123,6 +155,13 @@ class WorkerSettings(BaseSettings):
             self.token_vault_key.get_secret_value(),
             None if previous is None else previous.get_secret_value(),
         )
+
+    @property
+    def own_login(self) -> tuple[str, str] | None:
+        """The worker's own login (URL, password) when both are configured, else None."""
+        if self.worker_database_url is None or self.worker_database_password is None:
+            return None
+        return self.worker_database_url, self.worker_database_password.get_secret_value()
 
     @field_validator("reconciliation_schedule")
     @classmethod
@@ -160,6 +199,8 @@ class WorkerSettings(BaseSettings):
         } & set(self.schedules)
         if etsy_schedules and ring is None:
             raise ValueError(f"{sorted(etsy_schedules)} need HTCO_TOKEN_VAULT_KEY")
+        if self.worker_database_password is not None and self.worker_database_url is None:
+            raise ValueError("HTCO_WORKER_DATABASE_PASSWORD needs HTCO_WORKER_DATABASE_URL")
         if self.email_provider == "resend" and self.resend_api_key is None:
             raise ValueError("HTCO_EMAIL_PROVIDER=resend needs HTCO_RESEND_API_KEY")
         etsy_app = self.etsy_keystring is not None and self.etsy_shared_secret is not None

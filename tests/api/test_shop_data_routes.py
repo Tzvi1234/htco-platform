@@ -54,6 +54,7 @@ from tests.etsy_fakes import (
     Pinning,
     Vault,
 )
+from tests.idempotency_fakes import MemoryIdempotencyStore
 from tests.log_capture import capture_logs
 from tests.session_fakes import Auth, Store
 from tests.shop_data_fakes import BUYER, NOW, REVIEW_TEXT, TRACKING, ShopData
@@ -126,6 +127,7 @@ async def _world(*, dashboard_on: bool = True) -> AsyncIterator[World]:
             etsy=connect,
             token_vault=vault,
             dashboard=dashboard if dashboard_on else None,
+            idempotency=MemoryIdempotencyStore(),
         )
     )
     transport = httpx.ASGITransport(app=app, client=("203.0.113.9", 50000))

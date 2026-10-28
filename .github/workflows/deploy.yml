@@ -13,7 +13,9 @@
 #              SUPABASE_DB_PASSWORD, HTCO_SENTRY_DSN, HTCO_SUPABASE_SECRET_KEY, HTCO_SESSION_KEY,
 #              HTCO_TOKEN_VAULT_KEY, HTCO_TOKEN_VAULT_PREVIOUS_KEYS (both optional: unset leaves the
 #              Etsy integration off), ETSY_KEYSTRING, ETSY_SHARED_SECRET (the Etsy app's
-#              credentials; unset leaves connecting a shop off)
+#              credentials; unset leaves connecting a shop off), HTCO_WORKER_DATABASE_PASSWORD
+#              (the worker's own login, architecture audit 5.1; unset keeps the worker on the
+#              API's login, with a warning)
 name: Deploy API
 
 on:
@@ -155,6 +157,7 @@ jobs:
           HTCO_ETSY_KEYSTRING: ${{ secrets.ETSY_KEYSTRING }}
           HTCO_ETSY_SHARED_SECRET: ${{ secrets.ETSY_SHARED_SECRET }}
           HTCO_ETSY_WEBHOOK_SECRET: ${{ secrets.ETSY_WEBHOOK_SECRET }}
+          HTCO_WORKER_DATABASE_PASSWORD: ${{ secrets.HTCO_WORKER_DATABASE_PASSWORD }}
           HTCO_SUPABASE_PUBLISHABLE_KEY: ${{ vars.HTCO_SUPABASE_PUBLISHABLE_KEY }}
           HTCO_WEB_ORIGINS: ${{ vars.HTCO_WEB_ORIGINS }}
         with:

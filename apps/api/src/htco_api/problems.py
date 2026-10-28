@@ -142,7 +142,7 @@ class ProblemError(Exception):
         kind: ProblemType,
         *,
         headers: Mapping[str, str] | None = None,
-        extra: Mapping[str, str] | None = None,
+        extra: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(kind.slug)
         self.kind = kind

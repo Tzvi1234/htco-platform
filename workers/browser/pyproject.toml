@@ -7,7 +7,8 @@ dependencies = [
   "anyio>=4.12,<5",
   "htco-application",
   "htco-domain",
-  "htco-persistence",
+  # No htco-persistence (architecture audit 1.1): the worker opens no database and no vault until
+  # a slice gives it a narrow port; import-linter enforces it.
   "htco-platform",
   # ADR-0020 (main confirmed 2026-10-25): pinned exactly; the wheel bundles its driver and runs
   # no install script. Chromium is fetched only by `playwright install chromium` in the image.
@@ -17,7 +18,6 @@ dependencies = [
 [tool.uv.sources]
 htco-application = { workspace = true }
 htco-domain = { workspace = true }
-htco-persistence = { workspace = true }
 htco-platform = { workspace = true }
 
 [build-system]

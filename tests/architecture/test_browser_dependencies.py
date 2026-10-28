@@ -22,16 +22,17 @@ _ROOT = "htco-browser-worker"
 _BROWSER_WORKER_CLOSURE = frozenset(
     {
         "annotated-types", "anyio", "certifi", "cffi", "cryptography", "greenlet", "h11",
-        "htco-application", "htco-browser-worker", "htco-domain", "htco-persistence",
+        "htco-application", "htco-browser-worker", "htco-domain",
         "htco-platform", "httpcore", "httpx", "idna", "opentelemetry-api",
         "opentelemetry-instrumentation", "opentelemetry-instrumentation-httpx",
         "opentelemetry-sdk", "opentelemetry-semantic-conventions", "opentelemetry-util-http",
-        "packaging", "playwright", "psycopg", "psycopg-binary", "psycopg-pool", "pycparser",
+        "packaging", "playwright", "pycparser",
         "pydantic", "pydantic-core", "pydantic-settings", "pyee", "pyjwt", "python-dotenv",
-        "sentry-sdk", "structlog", "typing-extensions", "typing-inspection", "tzdata",
+        "sentry-sdk", "structlog", "typing-extensions", "typing-inspection",
         "urllib3", "wrapt",
     }
 )  # fmt: skip
+# Architecture audit 1.1: no database driver; htco-persistence and psycopg left the closure.
 
 # Names (normalised) and name fragments that only an evasion or CAPTCHA-solving tool would have.
 _FORBIDDEN = frozenset(

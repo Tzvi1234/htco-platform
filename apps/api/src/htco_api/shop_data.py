@@ -34,10 +34,17 @@ from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, WithJsonSchema
 
 from htco_api.auth import CurrentAuth
 from htco_api.etsy import not_connected
+from htco_api.idempotency import (
+    IDEMPOTENCY_OPENAPI,
+    STAGED_KEY_REQUIRED,
+    idempotency_store,
+    run_idempotently,
+)
 from htco_api.identity import problem_responses
 from htco_api.policy_guard import FORBIDDEN
 from htco_api.problems import (
@@ -50,6 +57,7 @@ from htco_api.problems import (
     request_id_of,
 )
 from htco_application import shop_dashboard as dashboards
+from htco_application.idempotency import IdempotencyStore
 from htco_application.marketplace import (
     ListingState,
     MarketplaceMoney,
@@ -1183,39 +1191,69 @@ def _add_bulk_routes(router: APIRouter, *, clock: Callable[[], datetime]) -> Non
         "/order-resyncs",
         status_code=202,
         summary="Re-read the selected orders from Etsy (queued, audited)",
+        response_model=ResyncOrdersView,
         responses=problem_responses(
             {
                 **_SHOP_ERRORS,
-                400: "The body is not valid JSON",
+                400: "The body is not valid JSON, or an invalid Idempotency-Key",
                 403: "The role may not re-sync orders (orders-action-forbidden)",
+                409: (
+                    "The shop is not connected (shop-not-connected; `reason` says why, "
+                    "`needs_reauth` means reconnect it), the connection lacks the scope "
+                    "(etsy-scope-missing), or the first request with this Idempotency-Key still "
+                    "runs (idempotency-in-progress)",
+                    ShopNotConnectedProblem,
+                ),
+                422: (
+                    "Invalid shop ID or body, or the Idempotency-Key was used with another "
+                    "request (idempotency-key-reused); `errors` names the fields",
+                    ValidationProblem,
+                ),
                 429: "Re-synced moments ago (resync-rate-limited; see Retry-After)",
-                503: "Re-syncs are not set up (orders-bulk-unavailable)",
+                503: "Re-syncs are not set up (orders-bulk-unavailable), or replays are not set "
+                "up (not-ready)",
             }
         ),
+        openapi_extra=IDEMPOTENCY_OPENAPI,
     )
-    async def resync_shop_orders(
+    async def resync_shop_orders(  # noqa: PLR0913, PLR0917 - the route's inputs
         shop_id: uuid.UUID,
         body: ResyncOrdersRequest,
         request: Request,
         auth: CurrentAuth,
         dashboard: _Dashboard,
-    ) -> ResyncOrdersView:
+        idempotency: Annotated[IdempotencyStore, Depends(idempotency_store)],
+    ) -> JSONResponse:
         """One Etsy Order Intake re-read per receipt, queued for the worker (GET-only, through
         the engine and the Action Gateway). Owner and Admin, and Operations and Developer for
-        their granted shops. At most 50 receipts a request; audited with the receipt IDs."""
-        try:
-            queued = await resync_orders(
-                dashboard, auth, shop_id, tuple(body.order_ids), now=clock(),
-                correlation_id=request_id_of(request) or str(uuid.uuid7()),
-            )  # fmt: skip
-        except OrdersForbiddenError:
-            raise ProblemError(ORDERS_ACTION_FORBIDDEN) from None
-        except ResyncRateLimitedError as error:
-            raise ProblemError(
-                RESYNC_RATE_LIMITED, headers={"Retry-After": str(round(error.retry_after_seconds))}
-            ) from None
-        except ResyncUnavailableError:
-            raise ProblemError(BULK_UNAVAILABLE) from None
-        except _KNOWN as error:
-            raise _problem_of(error) from None
-        return ResyncOrdersView(queued=queued)
+        their granted shops. At most 50 receipts a request; audited with the receipt IDs. Once
+        per Idempotency-Key (audit 6.1)."""
+        now = clock()
+
+        async def work() -> tuple[int, dict[str, Any]]:
+            try:
+                queued = await resync_orders(
+                    dashboard, auth, shop_id, tuple(body.order_ids), now=now,
+                    correlation_id=request_id_of(request) or str(uuid.uuid7()),
+                )  # fmt: skip
+            except OrdersForbiddenError:
+                raise ProblemError(ORDERS_ACTION_FORBIDDEN) from None
+            except ResyncRateLimitedError as error:
+                raise ProblemError(
+                    RESYNC_RATE_LIMITED,
+                    headers={"Retry-After": str(round(error.retry_after_seconds))},
+                ) from None
+            except ResyncUnavailableError:
+                raise ProblemError(BULK_UNAVAILABLE) from None
+            except _KNOWN as error:
+                raise _problem_of(error) from None
+            return 202, ResyncOrdersView(queued=queued).model_dump(mode="json")
+
+        return await run_idempotently(
+            request,
+            user_id=auth.user_id,
+            store=idempotency,
+            now=now,
+            work=work,
+            required=STAGED_KEY_REQUIRED,
+        )

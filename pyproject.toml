@@ -220,12 +220,24 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+id = "browser-worker-opens-no-database-or-vault"
+name = "The browser worker opens no database and no sealed secret (architecture audit 1.1)"
+type = "forbidden"
+# A future browser-worker module must not open the database or decrypt vault rows without a
+# reviewed narrow port; indirect imports count too.
+source_modules = ["htco_browser_worker"]
+forbidden_modules = [
+  "htco_persistence", "psycopg", "psycopg_pool", "htco_platform.crypto",
+  "htco_application.secrets",
+]
+
+[[tool.importlinter.contracts]]
 id = "database-driver-only-in-persistence"
 name = "Only persistence imports the database driver (ADR-0011)"
 type = "forbidden"
 source_modules = [
   "htco_domain", "htco_application", "htco_platform", "htco_agent_runtime", "htco_integrations",
-  "htco_api", "htco_worker",
+  "htco_api", "htco_worker", "htco_browser_worker",
 ]
 forbidden_modules = ["psycopg", "psycopg_pool"]
 # Composition roots reach the driver through persistence adapters; only direct imports are banned.
@@ -244,7 +256,7 @@ name = "Only the API imports the web framework"
 type = "forbidden"
 source_modules = [
   "htco_domain", "htco_application", "htco_persistence", "htco_integrations",
-  "htco_agent_runtime", "htco_worker",
+  "htco_agent_runtime", "htco_worker", "htco_browser_worker",
 ]
 forbidden_modules = ["fastapi", "starlette", "uvicorn"]
 

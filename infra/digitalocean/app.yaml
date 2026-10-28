@@ -182,7 +182,8 @@ services:
         scope: RUN_TIME
         value: "false"
 # The agent-worker (slice 5.1, ADR-0007): the API's image running the job queue's worker. It
-# connects to the same database and switches to the `htco_worker` role. Its scheduled jobs run only
+# connects to the same database, as its own login `htco_worker_login` once the owner set its
+# password (else the API's login, with a warning), and switches to the `htco_worker` role. Its scheduled jobs run only
 # when named in HTCO_WORKER_SCHEDULES. A fixed-size instance, $5 per month, that cannot scale.
 workers:
   - name: agent-worker
@@ -231,6 +232,17 @@ workers:
         scope: RUN_TIME
         type: SECRET
         value: ${PGPASSWORD}
+      # The worker's own login (architecture audit 5.1): used once the owner has set the role's
+      # password in Supabase and the HTCO_WORKER_DATABASE_PASSWORD secret; until then (blank)
+      # the worker falls back to the login above and logs a WARNING at every start. The password
+      # stays apart from the URL. Steps: docs/features/job-queue/operations.md.
+      - key: HTCO_WORKER_DATABASE_URL
+        scope: RUN_TIME
+        value: postgresql://htco_worker_login.${SUPABASE_PROJECT_REF}@${SUPABASE_POOLER_HOST}:5432/postgres?sslmode=require
+      - key: HTCO_WORKER_DATABASE_PASSWORD
+        scope: RUN_TIME
+        type: SECRET
+        value: ${HTCO_WORKER_DATABASE_PASSWORD}
       # AC-6.7.4: a dead-lettered automation execution is reported to Sentry (blank means off).
       - key: HTCO_SENTRY_DSN
         scope: RUN_TIME

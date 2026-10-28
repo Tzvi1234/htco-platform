@@ -37,6 +37,7 @@ from htco_application.audit_log import AuditLogReader
 from htco_application.email_failures import FailedEmailReader
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WindowLimiter
+from htco_application.idempotency import IdempotencyStore
 from htco_application.marketplace import QuotaMonitor
 from htco_application.notifications import SecurityNotices
 from htco_application.owner_writes import OwnerWriteServices
@@ -156,6 +157,9 @@ class AppOptions:
     security_notices: SecurityNotices | None = None
     # Queue, execution and sync health (slice 5.9); without it, those routes answer 503.
     operations: OperationsPorts | None = None
+    # `Idempotency-Key` replays for the invitation, re-sync, dead-letter retry and relay paste
+    # routes (architecture audit 6.1); without it, those routes answer 503.
+    idempotency: IdempotencyStore | None = None
     # The audit view (AC-3.9.1); without it, `GET /v1/audit-log` answers 503.
     audit_log: AuditLogReader | None = None
     # The failed-email admin view (AC-6.4.3); without it, that route answers 503.
@@ -216,6 +220,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.incident_center = options.incident_center
     app.state.security_notices = options.security_notices
     app.state.operations = options.operations
+    app.state.idempotency = options.idempotency
     app.state.audit_log = options.audit_log
     app.state.failed_emails = options.failed_emails
     app.state.owner_writes = options.owner_writes

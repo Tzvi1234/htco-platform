@@ -183,8 +183,50 @@ EXIT_CONFIGURATION_ERROR = 78
 # sysexits.h EX_TEMPFAIL: stopped before the current job finished; its lease brings it back.
 EXIT_TEMPORARY_FAILURE = 75
 WORKER_ROLE = "htco_worker"
+# The worker's own login (architecture audit 5.1): no rights of its own, switches to WORKER_ROLE.
+WORKER_LOGIN = "htco_worker_login"
 
 _log = structlog.get_logger(__name__)
+
+
+class DatabaseLoginError(RuntimeError):
+    """The worker's database login is not the one its settings name (exit 78)."""
+
+
+def worker_database(settings: WorkerSettings) -> Database:
+    """The worker's pool: its own login when configured, else the API's login (a fallback until
+    the owner sets HTCO_WORKER_DATABASE_PASSWORD), both switched to the worker role."""
+    login = settings.own_login
+    if login is None:
+        return Database(
+            settings.database_url.get_secret_value(), min_size=1, max_size=4, role=WORKER_ROLE
+        )
+    url, password = login
+    return Database(url, min_size=1, max_size=4, role=WORKER_ROLE, password=password)
+
+
+def check_database_login(session: tuple[str, str, bool], *, own_login: bool) -> None:
+    """Refuse to run on the wrong login (audit 5.1, ER-SEC-08). With its own login configured,
+    the worker must log in as WORKER_LOGIN, unprivileged, and run as WORKER_ROLE; on the fallback
+    it says, at every start, that it still holds the API's credential."""
+    session_user, current_user, privileged = session
+    if current_user != WORKER_ROLE:
+        raise DatabaseLoginError(f"the worker runs as {current_user!r}, not {WORKER_ROLE!r}")
+    if not own_login:
+        _log.warning(
+            "worker.shared_database_login",
+            session_user=session_user,
+            detail="HTCO_WORKER_DATABASE_URL and HTCO_WORKER_DATABASE_PASSWORD are not both set "
+            "(a blank password counts as unset): the worker logs in with the API's credential "
+            "and only switches role",
+        )
+        return
+    if session_user != WORKER_LOGIN or privileged:
+        raise DatabaseLoginError(
+            f"the worker logged in as {session_user!r} (privileged: {privileged}), "
+            f"not as the unprivileged {WORKER_LOGIN!r}"
+        )
+    _log.info("worker.database_login", session_user=session_user, current_user=current_user)
 
 
 def _now() -> datetime:
@@ -678,9 +720,7 @@ def etsy_parts(settings: WorkerSettings, database: Database, http: httpx.AsyncCl
 
 
 async def _serve(settings: WorkerSettings) -> None:
-    database = Database(
-        settings.database_url.get_secret_value(), min_size=1, max_size=4, role=WORKER_ROLE
-    )
+    database = worker_database(settings)
     http = new_async_http_client(
         tracer_provider=new_tracer_provider(
             service_name="htco-worker", environment=settings.environment
@@ -763,6 +803,10 @@ async def _serve(settings: WorkerSettings) -> None:
     await database.start()
     stop = anyio.Event()
     try:
+        check_database_login(
+            await anyio.to_thread.run_sync(database.session_roles),
+            own_login=settings.own_login is not None,
+        )
         async with anyio.create_task_group() as group:
             group.start_soon(stop_on_signal, stop)
             if settings.worker_health_port:
@@ -809,5 +853,10 @@ def main(*, serve: Callable[[WorkerSettings], Awaitable[None]] = _serve) -> int:
         schedules=list(settings.schedules),
         run_id=str(uuid.uuid7()),
     )
-    anyio.run(serve, settings)
+    try:
+        anyio.run(serve, settings)
+    except DatabaseLoginError as error:
+        _log.error("worker.database_login_refused", detail=str(error))
+        sys.stderr.write(f"htco-worker: wrong database login\n{error}\n")
+        return EXIT_CONFIGURATION_ERROR
     return 0
