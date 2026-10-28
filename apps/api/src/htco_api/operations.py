@@ -14,13 +14,15 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Protocol
+from typing import Annotated, Any, Protocol
 
 import anyio
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from htco_api.auth import CurrentAuth
+from htco_api.idempotency import IDEMPOTENCY_OPENAPI, idempotency_store, run_idempotently
 from htco_api.identity import ORGANIZATION_REQUIRED, problem_responses
 from htco_api.policy_guard import FORBIDDEN
 from htco_api.problems import (
@@ -32,6 +34,7 @@ from htco_api.problems import (
     request_id_of,
 )
 from htco_application.access.authentication import NoMembershipError
+from htco_application.idempotency import IdempotencyStore
 from htco_application.operations_health import (
     DeadJobNotFoundError,
     DeadJobs,
@@ -283,46 +286,64 @@ def operations_router(*, clock: Callable[[], datetime]) -> APIRouter:
         "/dead-letters/{job_id}/retry",
         status_code=202,
         summary="Send a dead-lettered job back to the queue (audited)",
+        response_model=RetriedJobView,
         responses=problem_responses(
             {
                 **_COMMON,
+                400: "The caller belongs to several organizations and named none, or no or an "
+                "invalid Idempotency-Key",
                 404: "No such job in the organization",
                 409: (
                     "The job is not dead (job-not-dead), or it runs an execution: retry the "
-                    "execution (retry-through-execution, with `execution_id`)",
+                    "execution (retry-through-execution, with `execution_id`), or the first "
+                    "request with this Idempotency-Key still runs (idempotency-in-progress)",
                     RetryThroughExecutionProblem,
+                ),
+                422: (
+                    "Invalid ID, or the Idempotency-Key was used with another request "
+                    "(idempotency-key-reused)",
+                    ValidationProblem,
                 ),
             }
         ),
+        openapi_extra=IDEMPOTENCY_OPENAPI,
     )
-    async def retry_dead_letter(
+    async def retry_dead_letter(  # noqa: PLR0913, PLR0917 - the route's inputs
         job_id: uuid.UUID,
         request: Request,
         auth: CurrentAuth,
         ports: _Ports,
+        idempotency: Annotated[IdempotencyStore, Depends(idempotency_store)],
         organization_id: uuid.UUID | None = None,
-    ) -> RetriedJobView:
+    ) -> JSONResponse:
         """Attempts start from zero and the job is due now; the audit records its kind and last
-        error."""
-        try:
-            await anyio.to_thread.run_sync(
-                lambda: retry_dead_job(
-                    ports, auth, job_id, organization_id=organization_id,
-                    correlation_id=request_id_of(request) or str(uuid.uuid7()), now=clock(),
-                )
-            )  # fmt: skip
-        except OrganizationRequiredError:
-            raise ProblemError(ORGANIZATION_REQUIRED) from None
-        except OperationsForbiddenError:
-            raise ProblemError(FORBIDDEN) from None
-        except DeadJobNotFoundError, NoMembershipError:
-            raise ProblemError(NOT_FOUND) from None
-        except JobNotDeadError:
-            raise ProblemError(JOB_NOT_DEAD) from None
-        except RetryThroughExecutionError as error:
-            found = error.execution_id
-            extra = {} if found is None else {"execution_id": str(found)}
-            raise ProblemError(RETRY_THROUGH_EXECUTION, extra=extra) from None
-        return RetriedJobView(job_id=job_id, state="queued")
+        error. Once per Idempotency-Key (audit 6.1)."""
+        now = clock()
+
+        async def work() -> tuple[int, dict[str, Any]]:
+            try:
+                await anyio.to_thread.run_sync(
+                    lambda: retry_dead_job(
+                        ports, auth, job_id, organization_id=organization_id,
+                        correlation_id=request_id_of(request) or str(uuid.uuid7()), now=now,
+                    )
+                )  # fmt: skip
+            except OrganizationRequiredError:
+                raise ProblemError(ORGANIZATION_REQUIRED) from None
+            except OperationsForbiddenError:
+                raise ProblemError(FORBIDDEN) from None
+            except DeadJobNotFoundError, NoMembershipError:
+                raise ProblemError(NOT_FOUND) from None
+            except JobNotDeadError:
+                raise ProblemError(JOB_NOT_DEAD) from None
+            except RetryThroughExecutionError as error:
+                found = error.execution_id
+                extra = {} if found is None else {"execution_id": str(found)}
+                raise ProblemError(RETRY_THROUGH_EXECUTION, extra=extra) from None
+            return 202, RetriedJobView(job_id=job_id, state="queued").model_dump(mode="json")
+
+        return await run_idempotently(
+            request, user_id=auth.user_id, store=idempotency, now=now, work=work
+        )
 
     return router

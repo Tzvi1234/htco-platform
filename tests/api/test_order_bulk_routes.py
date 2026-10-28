@@ -5,6 +5,7 @@ rate-limited and audited (invented data)."""
 
 import csv
 import io
+import uuid
 from collections.abc import AsyncIterator
 from datetime import timedelta
 
@@ -35,10 +36,16 @@ class Bulk:
             dashboard, "resync_limiter", WindowLimiter(2, window=timedelta(minutes=1))
         )
 
-    async def post(self, action: str, body: dict[str, object]) -> httpx.Response:
+    async def post(
+        self, action: str, body: dict[str, object], *, key: str | None = ""
+    ) -> httpx.Response:
+        """`key=""` sends a fresh Idempotency-Key, `None` sends none (architecture audit 6.1)."""
         world = self.wired.world
+        headers = dict(CSRF)
+        if key is not None:
+            headers["Idempotency-Key"] = key or str(uuid.uuid4())
         return await world.http.post(f"/v1/shops/{world.shop_id}/{action}", json=body,
-                                     headers=CSRF)  # fmt: skip
+                                     headers=headers)  # fmt: skip
 
 
 @pytest.fixture
@@ -94,6 +101,25 @@ async def test_resync__queued_and_audited(bulk: Bulk) -> None:
     assert response.json() == {"queued": 2}
     [(_, receipts, _)] = bulk.queue.asked
     assert receipts == (9001, 9002)
+
+
+async def test_resync__same_idempotency_key__queued_once_and_replayed(bulk: Bulk) -> None:
+    """Architecture audit 6.1: a timed-out retry gets the first answer, not a second re-read
+    (or the rate limit's 429)."""
+    first = await bulk.post("order-resyncs", {"order_ids": [9001]}, key="resync-1")
+    again = await bulk.post("order-resyncs", {"order_ids": [9001]}, key="resync-1")
+
+    assert [first.status_code, again.status_code] == [202, 202]
+    assert again.json() == first.json() == {"queued": 1}
+    assert again.headers["idempotent-replayed"] == "true"
+    assert len(bulk.queue.asked) == 1
+
+
+async def test_resync__without_an_idempotency_key__400_and_nothing_queued(bulk: Bulk) -> None:
+    response = await bulk.post("order-resyncs", {"order_ids": [9001]}, key=None)
+
+    problem(response, "idempotency-key-required", 400)
+    assert bulk.queue.asked == []
 
 
 async def test_resync__over_the_rate__429_with_retry_after(bulk: Bulk) -> None:

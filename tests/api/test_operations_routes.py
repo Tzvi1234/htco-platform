@@ -31,6 +31,7 @@ from tests.application.test_operations_health import (
 )
 from tests.application.test_shop_dashboard import ORG, SHOP
 from tests.auth_tokens import AUDIENCE, ISSUER, FakeJwks, claims
+from tests.idempotency_fakes import MemoryIdempotencyStore, fresh_idempotency_key
 
 pytestmark = pytest.mark.anyio
 
@@ -64,6 +65,7 @@ def client(
                 verifier, Memberships(Membership(ORG, role, frozenset({SHOP})))
             ),
             operations=Operations(reader or Reader(), jobs or dead()) if wired else None,
+            idempotency=MemoryIdempotencyStore(),
             clock=lambda: NOW,
         )
     )
@@ -71,6 +73,7 @@ def client(
         transport=httpx.ASGITransport(app=app),
         base_url="http://api.test",
         headers={"Authorization": f"Bearer {KEY.sign(claims())}"},
+        event_hooks={"request": [fresh_idempotency_key]},
     )
 
 
@@ -133,6 +136,32 @@ async def test_retry__a_dead_job__202_and_audited() -> None:
     [audit] = jobs.audits
     assert audit.action == "job.dead_letter_retried"
     assert audit.correlation_id == answer.headers["X-Request-Id"]
+
+
+async def test_retry__same_idempotency_key__retried_once_and_replayed() -> None:
+    """Architecture audit 6.1: a timed-out client retry gets the first answer, not a second
+    retry (or a 409 job-not-dead once the job is queued again)."""
+    jobs = dead()
+    headers = {"Idempotency-Key": "retry-1"}
+    async with client(Role.ADMIN, jobs=jobs) as http:
+        first = await http.post(f"/v1/operations/dead-letters/{JOB}/retry", headers=headers)
+        again = await http.post(f"/v1/operations/dead-letters/{JOB}/retry", headers=headers)
+
+    assert [first.status_code, again.status_code] == [202, 202]
+    assert again.json() == first.json()
+    assert again.headers["Idempotent-Replayed"] == "true"
+    assert len(jobs.audits) == 1
+
+
+async def test_retry__without_an_idempotency_key__400_and_nothing_changed() -> None:
+    jobs = dead()
+    async with client(Role.ADMIN, jobs=jobs) as http:
+        http.event_hooks["request"] = []
+        answer = await http.post(f"/v1/operations/dead-letters/{JOB}/retry")
+
+    assert answer.status_code == 400
+    assert answer.json()["type"].endswith("/idempotency-key-required")
+    assert jobs.audits == []
 
 
 async def test_retry__an_execution_job__409_naming_the_execution() -> None:

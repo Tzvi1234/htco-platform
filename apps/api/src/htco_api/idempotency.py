@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from htco_api.problems import ProblemError, ProblemType
+from htco_api.problems import NOT_READY, ProblemError, ProblemType
 from htco_application.idempotency import (
     IdempotencyStore,
     IdempotentRequest,
@@ -58,6 +58,30 @@ IDEMPOTENCY_IN_PROGRESS = ProblemType(
 )
 
 type Work = Callable[[], Awaitable[tuple[int, dict[str, Any]]]]
+type Redact = Callable[[dict[str, Any]], dict[str, Any]]
+
+# The header as an OpenAPI parameter, for `openapi_extra` of a route that requires it.
+IDEMPOTENCY_OPENAPI: dict[str, Any] = {
+    "parameters": [
+        {
+            "name": IDEMPOTENCY_HEADER,
+            "in": "header",
+            "required": True,
+            "schema": {"type": "string", "minLength": 1, "maxLength": 255},
+            "description": "A key for this request; a retry with the same key and body "
+            "returns the first response (24 hours).",
+        }
+    ]
+}
+
+
+def idempotency_store(request: Request) -> IdempotencyStore:
+    """The store the composition root set up; without it, an idempotent route answers 503."""
+    store = getattr(request.app.state, "idempotency", None)
+    if store is None:
+        raise ProblemError(NOT_READY)
+    found: IdempotencyStore = store
+    return found
 
 
 async def run_idempotently(  # noqa: PLR0913 - the request, its caller, the store and the work
@@ -68,7 +92,10 @@ async def run_idempotently(  # noqa: PLR0913 - the request, its caller, the stor
     now: datetime,
     work: Work,
     required: bool = True,
+    redact: Redact | None = None,
 ) -> JSONResponse:
+    """`redact` maps the first response to what is kept for a replay, for a field shown once
+    (an invitation link is a bearer credential, never stored)."""
     raw = request.headers.get(IDEMPOTENCY_HEADER)
     if raw is None:
         if required:
@@ -101,7 +128,8 @@ async def run_idempotently(  # noqa: PLR0913 - the request, its caller, the stor
         await store.abandon(idempotent)
         raise
     if is_storable(status):
-        await store.complete(idempotent, status=status, body=body)
+        kept = body if redact is None else redact(dict(body))
+        await store.complete(idempotent, status=status, body=kept)
     else:
         await store.abandon(idempotent)
     return JSONResponse(body, status_code=status)

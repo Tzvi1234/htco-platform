@@ -33,6 +33,7 @@ from htco_api.webhooks import webhooks_router
 from htco_application.access.management import AccessStore, Inviter
 from htco_application.etsy_connect import EtsyConnect
 from htco_application.etsy_webhooks import EtsyWebhookIngress, WindowLimiter
+from htco_application.idempotency import IdempotencyStore
 from htco_application.notifications import SecurityNotices
 from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_dashboard import ShopDashboard
@@ -148,6 +149,9 @@ class AppOptions:
     security_notices: SecurityNotices | None = None
     # Queue, execution and sync health (slice 5.9); without it, those routes answer 503.
     operations: OperationsPorts | None = None
+    # `Idempotency-Key` replays for the invitation, re-sync, dead-letter retry and relay paste
+    # routes (architecture audit 6.1); without it, those routes answer 503.
+    idempotency: IdempotencyStore | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -200,6 +204,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.incident_center = options.incident_center
     app.state.security_notices = options.security_notices
     app.state.operations = options.operations
+    app.state.idempotency = options.idempotency
     app.state.clock = options.clock
     app.include_router(
         health_router(

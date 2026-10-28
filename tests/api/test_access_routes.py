@@ -29,6 +29,7 @@ from tests.access_fakes import (
     Store,
 )
 from tests.auth_tokens import AUDIENCE, ISSUER, FakeJwks, SigningKey, claims
+from tests.idempotency_fakes import MemoryIdempotencyStore, fresh_idempotency_key
 from tests.log_capture import LogCapture
 
 pytestmark = pytest.mark.anyio
@@ -57,7 +58,12 @@ class DatabaseMemberships:
 
 
 def client_for(
-    store: Store, user: uuid.UUID, *, aal: str = "aal2", inviter: InviterPort | None = None
+    store: Store,
+    user: uuid.UUID,
+    *,
+    aal: str = "aal2",
+    inviter: InviterPort | None = None,
+    idempotency: MemoryIdempotencyStore | None = None,
 ) -> httpx.AsyncClient:
     verifier = JwtVerifier(issuer=ISSUER, audience=AUDIENCE, jwks=FakeJwks(KEY))
     app = create_app(
@@ -65,6 +71,7 @@ def client_for(
             authenticator=Authenticator(verifier, DatabaseMemberships(store)),
             access=store,
             inviter=inviter if inviter is not None else Inviter(),
+            idempotency=idempotency if idempotency is not None else MemoryIdempotencyStore(),
             clock=lambda: NOW,
         )
     )
@@ -73,6 +80,7 @@ def client_for(
         transport=httpx.ASGITransport(app=app),
         base_url="http://api.test",
         headers={"Authorization": f"Bearer {token}"},
+        event_hooks={"request": [fresh_idempotency_key]},
     )
 
 
@@ -181,6 +189,40 @@ async def test_invite__existing_account_added__no_link(store: Store) -> None:
     assert response.json()["invite_link"] is None
     assert response.json()["user_id"] == str(NEWCOMER)
     assert response.headers["cache-control"] == "no-store"
+
+
+async def test_invite__same_idempotency_key__invites_once_and_never_stores_the_link(
+    store: Store,
+) -> None:
+    """Architecture audit 6.1: a timed-out retry does not send a second invitation; its replay
+    is the first answer without the link, which is shown once and never stored."""
+    inviter, idempotency = Inviter(), MemoryIdempotencyStore()
+    body = {"email": "new@example.test", "role": "viewer"}
+    headers = {"Idempotency-Key": "invite-1"}
+    async with client_for(store, OWNER, inviter=inviter, idempotency=idempotency) as client:
+        first = await client.post(f"{BASE}/invitations", json=body, headers=headers)
+        again = await client.post(f"{BASE}/invitations", json=body, headers=headers)
+
+    assert [first.status_code, again.status_code] == [201, 201]
+    assert first.json()["invite_link"] == INVITE_LINK
+    assert again.json() == first.json() | {"invite_link": None}
+    assert again.headers["idempotent-replayed"] == "true"
+    assert again.headers["cache-control"] == "no-store"
+    assert inviter.invited == ["new@example.test"]
+    assert [r.action for r in store.audit] == ["membership.created"]
+    assert INVITE_LINK not in repr(idempotency.rows)
+
+
+async def test_invite__without_an_idempotency_key__400_and_nobody_invited(store: Store) -> None:
+    inviter = Inviter()
+    async with client_for(store, OWNER, inviter=inviter) as client:
+        client.event_hooks["request"] = []
+        response = await client.post(
+            f"{BASE}/invitations", json={"email": "new@example.test", "role": "viewer"}
+        )
+    assert response.status_code == 400
+    assert response.json()["type"] == PROBLEMS + "idempotency-key-required"
+    assert inviter.invited == []
 
 
 async def test_change_role_remove_grant_and_revoke(owner: httpx.AsyncClient, store: Store) -> None:

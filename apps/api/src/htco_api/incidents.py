@@ -23,9 +23,11 @@ from typing import Annotated, Any, Literal
 import anyio
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from htco_api.auth import CurrentAuth
+from htco_api.idempotency import IDEMPOTENCY_OPENAPI, idempotency_store, run_idempotently
 from htco_api.identity import (
     ORGANIZATION_REQUIRED,
     decode_cursor,
@@ -35,6 +37,7 @@ from htco_api.identity import (
 from htco_api.policy_guard import FORBIDDEN, MFA_REQUIRED
 from htco_api.problems import NOT_FOUND, Problem, ProblemError, ProblemType, ValidationProblem
 from htco_application.access.authentication import NoMembershipError
+from htco_application.idempotency import IdempotencyStore
 from htco_application.incident_center import (
     IncidentDetail,
     IncidentFilter,
@@ -527,60 +530,75 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
     @router.post(
         "/relay-items/{item_id}/tracking",
         summary="Paste the tracking number from AutoVA for one relay item",
+        response_model=RelayPasteView,
         responses=problem_responses(
             {
                 **relay_problems,
+                400: "No or an invalid Idempotency-Key, or several organizations and none named",
                 403: "Not an Owner or Admin (forbidden), or no second factor (mfa-required)",
                 404: "No such relay item for the caller",
-                409: "Pasted already or closed (relay-item-moved), or the number is used for "
-                "another order (tracking-already-used)",
+                409: "Pasted already or closed (relay-item-moved), the number is used for "
+                "another order (tracking-already-used), or the first request with this "
+                "Idempotency-Key still runs (idempotency-in-progress)",
                 422: (
-                    "An unknown carrier or a number in the wrong format (tracking-invalid)",
+                    "An unknown carrier or a number in the wrong format (tracking-invalid), or "
+                    "the Idempotency-Key was used with another request (idempotency-key-reused)",
                     Problem,
                 ),
             }
         ),
+        openapi_extra=IDEMPOTENCY_OPENAPI,
     )
     async def paste_tracking(  # noqa: PLR0913, PLR0917 - the route's inputs
         item_id: uuid.UUID,
         body: TrackingPaste,
         request: Request,
-        response: Response,
         auth: CurrentAuth,
         center: Center,
+        idempotency: Annotated[IdempotencyStore, Depends(idempotency_store)],
         organization_id: uuid.UUID | None = None,
-    ) -> RelayPasteView:
+    ) -> JSONResponse:
         """An Owner or Admin with a second factor (6.10 PR B). Validated before anything else
         (AC-6.10.4); a number the Etsy receipt already carries closes the item on that evidence
-        (AC-6.10.2); otherwise the item is handed off for the copy into Etsy (AC-6.10.3). Replay
-        safe: a second paste is a 409. Audited, never with the number; no Etsy call."""
+        (AC-6.10.2); otherwise the item is handed off for the copy into Etsy (AC-6.10.3). Once
+        per Idempotency-Key (audit 6.1): a timed-out retry gets the first answer; a second paste
+        with a new key is a 409. Audited, never with the number; no Etsy call. Only the carrier
+        and the last four characters are kept for the replay, never the number."""
         store = _relay(center)
         correlation = getattr(request.state, "request_id", None)
-        try:
-            item = await _run(
-                lambda: submit_tracking(
-                    auth, store, organization_id=organization_id, item_id=item_id,
-                    carrier=body.carrier, code=body.code, now=clock(), correlation_id=correlation,
-                )
-            )  # fmt: skip
-        except OrganizationRequiredError:
-            raise ProblemError(ORGANIZATION_REQUIRED) from None
-        except RelayItemNotVisibleError, NoMembershipError:
-            raise ProblemError(NOT_FOUND) from None
-        except SecondFactorRequiredError:
-            raise ProblemError(MFA_REQUIRED) from None
-        except PermissionError:
-            raise ProblemError(FORBIDDEN) from None
-        except TrackingFormatError as error:
-            # The message is safe to show: it names the carrier, never the number.
-            invalid = ProblemType("tracking-invalid", "Invalid tracking", 422, str(error))
-            raise ProblemError(invalid) from None
-        except RelayItemMovedError:
-            raise ProblemError(RELAY_ITEM_MOVED) from None
-        except DuplicateTrackingError:
-            raise ProblemError(TRACKING_ALREADY_USED) from None
-        response.headers["Cache-Control"] = "no-store"
-        return _paste_view(item)
+        now = clock()
+
+        async def work() -> tuple[int, dict[str, Any]]:
+            try:
+                item = await _run(
+                    lambda: submit_tracking(
+                        auth, store, organization_id=organization_id, item_id=item_id,
+                        carrier=body.carrier, code=body.code, now=now, correlation_id=correlation,
+                    )
+                )  # fmt: skip
+            except OrganizationRequiredError:
+                raise ProblemError(ORGANIZATION_REQUIRED) from None
+            except RelayItemNotVisibleError, NoMembershipError:
+                raise ProblemError(NOT_FOUND) from None
+            except SecondFactorRequiredError:
+                raise ProblemError(MFA_REQUIRED) from None
+            except PermissionError:
+                raise ProblemError(FORBIDDEN) from None
+            except TrackingFormatError as error:
+                # The message is safe to show: it names the carrier, never the number.
+                invalid = ProblemType("tracking-invalid", "Invalid tracking", 422, str(error))
+                raise ProblemError(invalid) from None
+            except RelayItemMovedError:
+                raise ProblemError(RELAY_ITEM_MOVED) from None
+            except DuplicateTrackingError:
+                raise ProblemError(TRACKING_ALREADY_USED) from None
+            return 200, _paste_view(item).model_dump(mode="json")
+
+        answer = await run_idempotently(
+            request, user_id=auth.user_id, store=idempotency, now=now, work=work
+        )
+        answer.headers["Cache-Control"] = "no-store"
+        return answer
 
     @router.get(
         "/relay-items/{item_id}/code",

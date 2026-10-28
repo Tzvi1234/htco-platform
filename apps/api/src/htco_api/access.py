@@ -14,13 +14,15 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from htco_api.auth import CurrentAuth
+from htco_api.idempotency import IDEMPOTENCY_OPENAPI, idempotency_store, run_idempotently
 from htco_api.identity import FORBIDDEN, problem_responses
 from htco_api.problems import (
     NOT_FOUND,
@@ -48,6 +50,7 @@ from htco_application.access.management import (
     remove_member,
     revoke_shop,
 )
+from htco_application.idempotency import IdempotencyStore
 from htco_domain.identity import Role
 
 MFA_REQUIRED = ProblemType(
@@ -183,44 +186,75 @@ def access_router(*, clock: Callable[[], datetime]) -> APIRouter:
         "/invitations",
         status_code=status.HTTP_201_CREATED,
         summary="Invite a user by email",
+        response_model=InvitationView,
         responses=problem_responses(
             {
-                400: "The body is not valid JSON",
-                409: "Already a member, or the email already has an account",
-                422: ("Invalid email or role", ValidationProblem),
+                400: "The body is not valid JSON, or no or an invalid Idempotency-Key",
+                409: "Already a member, or the email already has an account, or the first "
+                "request with this Idempotency-Key still runs (idempotency-in-progress)",
+                422: (
+                    "Invalid email or role, or the Idempotency-Key was used with another "
+                    "request (idempotency-key-reused)",
+                    ValidationProblem,
+                ),
                 503: "Invitations cannot be sent right now",
             }
         ),
+        openapi_extra=IDEMPOTENCY_OPENAPI,
     )
     async def invite_organization_member(  # noqa: PLR0913, PLR0917 - FastAPI passes each dependency as a parameter
         organization_id: uuid.UUID,
         body: Invitation,
         request: Request,
-        response: Response,
         auth: CurrentAuth,
         store: StoreDep,
         inviter: Annotated[Inviter, Depends(_inviter)],
-    ) -> InvitationView:
+        idempotency: Annotated[IdempotencyStore, Depends(idempotency_store)],
+    ) -> JSONResponse:
         """Adds the membership and returns a one-time invitation link to send to the invitee
-        (`no-store`; never logged). Only the Owner may invite another Owner."""
-        try:
-            with _problems():
-                invited = await invite_member(
-                    auth,
-                    store,
-                    inviter,
-                    organization_id,
-                    email=body.email,
-                    role=body.role,
-                    now=clock(),
-                    correlation_id=_correlation(request),
-                )
-        except ValueError:
-            raise RequestValidationError(
-                [{"loc": ("body", "email"), "msg": "Invalid email address", "type": "value_error"}]
-            ) from None
-        response.headers["Cache-Control"] = "no-store"
-        return InvitationView(**_view(invited.member).model_dump(), invite_link=invited.invite_link)
+        (`no-store`; never logged). Only the Owner may invite another Owner. Once per
+        Idempotency-Key (audit 6.1): a retry does not invite again, and its replay carries
+        `invite_link: null`, since the link is shown once and never stored."""
+        now = clock()
+
+        async def work() -> tuple[int, dict[str, Any]]:
+            try:
+                with _problems():
+                    invited = await invite_member(
+                        auth,
+                        store,
+                        inviter,
+                        organization_id,
+                        email=body.email,
+                        role=body.role,
+                        now=now,
+                        correlation_id=_correlation(request),
+                    )
+            except ValueError:
+                raise RequestValidationError(
+                    [
+                        {
+                            "loc": ("body", "email"),
+                            "msg": "Invalid email address",
+                            "type": "value_error",
+                        }
+                    ]
+                ) from None
+            view = InvitationView(
+                **_view(invited.member).model_dump(), invite_link=invited.invite_link
+            )
+            return status.HTTP_201_CREATED, view.model_dump(mode="json")
+
+        answer = await run_idempotently(
+            request,
+            user_id=auth.user_id,
+            store=idempotency,
+            now=now,
+            work=work,
+            redact=lambda body: body | {"invite_link": None},
+        )
+        answer.headers["Cache-Control"] = "no-store"
+        return answer
 
     @router.patch(
         "/members/{membership_id}",

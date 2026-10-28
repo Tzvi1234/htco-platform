@@ -224,6 +224,7 @@ def main(
         incident_center=wiring.incident_center,
         security_notices=wiring.security_notices,
         operations=wiring.operations,
+        idempotency=wiring.idempotency,
         resources=wiring.resources,
     )
     try:
@@ -430,6 +431,7 @@ class _Wiring:
     incident_center: IncidentCenter | None = None
     security_notices: SecurityNotices | None = None
     operations: PostgresOperationsHealth | None = None
+    idempotency: PostgresIdempotencyStore | None = None
     resources: list[Resource] = field(default_factory=list)
 
 
@@ -543,6 +545,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
             offload=anyio.to_thread.run_sync,
         ),
         operations=PostgresOperationsHealth(database),
+        idempotency=PostgresIdempotencyStore(database),
         resources=resources,
     )
 

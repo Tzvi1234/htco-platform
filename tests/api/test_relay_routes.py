@@ -19,6 +19,7 @@ from tests.api.test_incident_routes import NOW, ORG, SHOP, Inbox, Reader
 from tests.api.test_me_and_shops import KEY, Memberships
 from tests.auth_tokens import AUDIENCE, ISSUER, FakeJwks, claims
 from tests.fulfillment_fakes import MemoryIncidentStore
+from tests.idempotency_fakes import MemoryIdempotencyStore, fresh_idempotency_key
 from tests.log_capture import capture_logs
 from tests.relay_fakes import MemoryRelayStore
 
@@ -41,6 +42,7 @@ def client(
     shops: frozenset[uuid.UUID] = frozenset({SHOP}),
     *,
     aal: str = "aal2",
+    idempotency: MemoryIdempotencyStore | None = None,
 ) -> httpx.AsyncClient:
     from htco_application.incidents import IncidentService  # noqa: PLC0415
 
@@ -55,6 +57,7 @@ def client(
                 Reader(incidents), IncidentService(incidents, clock=lambda: NOW), Inbox(),
                 relay=store,
             ),
+            idempotency=idempotency if idempotency is not None else MemoryIdempotencyStore(),
             clock=lambda: NOW,
         )
     )  # fmt: skip
@@ -62,6 +65,7 @@ def client(
         transport=httpx.ASGITransport(app=app),
         base_url="http://api.test",
         headers={"Authorization": f"Bearer {KEY.sign(claims(aal=aal))}"},
+        event_hooks={"request": [fresh_idempotency_key]},
     )
 
 
@@ -168,6 +172,39 @@ async def test_pr_b_paste__handed_off_with_its_last_four_and_the_code_only_from_
     assert copy.headers["Cache-Control"] == "no-store"
     assert [a.action for a in store.audits] == ["relay.tracking_pasted", "relay.code_revealed"]
     assert CODE not in str(logs.lines())
+
+
+async def test_pr_b_paste__same_idempotency_key__replayed_without_the_number() -> None:
+    """Architecture audit 6.1: a timed-out retry gets the first answer (not a 409
+    relay-item-moved), pasted once; the kept answer holds the last four, never the number."""
+    store, idempotency = MemoryRelayStore(), MemoryIdempotencyStore()
+    item = an_item(store)
+    paste = {"carrier": "usps", "code": CODE}
+    headers = {"Idempotency-Key": "paste-1"}
+    async with client(store, idempotency=idempotency) as http:
+        first = await http.post(f"/v1/relay-items/{item.id}/tracking", json=paste, headers=headers)
+        again = await http.post(f"/v1/relay-items/{item.id}/tracking", json=paste, headers=headers)
+
+    assert [first.status_code, again.status_code] == [200, 200]
+    assert again.json() == first.json()
+    assert again.headers["Idempotent-Replayed"] == "true"
+    assert again.headers["Cache-Control"] == "no-store"
+    assert [a.action for a in store.audits] == ["relay.tracking_pasted"]
+    assert CODE not in repr(idempotency.rows)
+
+
+async def test_pr_b_paste__without_an_idempotency_key__400_and_nothing_pasted() -> None:
+    store = MemoryRelayStore()
+    item = an_item(store)
+    async with client(store) as http:
+        http.event_hooks["request"] = []
+        answer = await http.post(
+            f"/v1/relay-items/{item.id}/tracking", json={"carrier": "usps", "code": CODE}
+        )
+
+    assert answer.status_code == 400
+    assert answer.json()["type"].endswith("/idempotency-key-required")
+    assert store.items[item.id].state is RelayState.AWAITING_TRACKING
 
 
 @pytest.mark.ac("AC-6.10.4")
