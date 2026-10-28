@@ -63,6 +63,8 @@ No scraping of etsy.com.
 
 **Out:** paying suppliers (AutoVA's job); optimization proposals from the cost data ([Phase 18](phase-18-optimization.md)).
 
+**Etsy fee entries (moved from 5.4, [ASSUMPTIONS](../../product/ASSUMPTIONS.md) D-27).** Slice 5.4's text asked for estimated Etsy fee entries per order, but the receipt carries no fees, so none were built. Finance Ledger Ingestion (13.6) records them from Etsy's payment and ledger entries instead (transaction, processing, listing and Ads fees, per order where the ledger links one), and they feed the order profit and fee share of the P&L views. Until then no fee figure is shown anywhere.
+
 ## Owner prerequisites
 
 - AutoVA answers (A-06): integration options and data available.

@@ -9,7 +9,7 @@
 | **Requirements** | FR-AUT-01, FR-AUT-02, FR-AUT-03, FR-AUT-04, FR-AUT-05, FR-FIN-01, FR-ORD-01, FR-ORD-02, FR-ORD-03, FR-ORD-04, FR-ORD-05, FR-ORD-08, FR-ORD-09, FR-SHOP-04, FR-TASK-03 |
 | **Decisions** | [ADR-0007](../../adr/0007-job-queue.md), [ADR-0013](../../adr/0013-automation-engine.md), [ADR-0018](https://github.com/Tzvi1234/htco-platform/pull/53) (order history, in PR #53), [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md), [ADR-0020](../../adr/0020-per-shop-browser-environment.md), [ADR-0021](../../adr/0021-authenticator-service.md), [ADR-0022](../../adr/0022-etsy-write-tools-and-browser-scope.md) |
 | **Design** | [execution-engine.md](../../architecture/execution-engine.md) |
-| **Status** | PARTIAL, activated (audit 2026-10-28): every slice is merged (the follow-up #97 included; Admin › Health in htco-clients #60, merged), the gateway-bypass test is merged (#106), and the three order automations are activated with the Etsy webhooks on (#157, #162). Left before COMPLETE: 5.8's drills in the deployed environment (the owner's restore rehearsal, and the kill-worker drill against the deployed worker), 5.9's open acceptance criteria (see the note under Progress), the KPI baseline, the evidence of the activation's owner steps 2b and 6, the demo run and the owner's approval |
+| **Status** | PARTIAL, activated (audit 2026-10-28): every slice is merged (the follow-up #97 included; Admin › Health in htco-clients #60, merged), the gateway-bypass test is merged (#106), and the three order automations are activated with the Etsy webhooks on (#157, #162). Left before COMPLETE: 5.8's kill-worker drill against the deployed worker (the restore rehearsal is deferred by owner until first sale, D-28), 5.9's open acceptance criteria (see the note under Progress), the KPI baseline, the evidence of the activation's owner steps 2b and 6, the demo run and the owner's approval |
 
 The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (owner's architecture upgrade, [ADR-0019](../../adr/0019-unified-execution-engine-and-action-gateway.md)). The file name stays the same so links keep working.
 
@@ -37,7 +37,7 @@ The phase was renamed on 2026-10-23 from "Automation engine and orders CRM" (own
 
 **Partial slices (audit 2026-10-28).** Two ticks above overstate what is done:
 
-- **5.8 is partial.** AC-5.8.1 needs both drills recorded with date, duration and outcome against the deployed environment. The kill-worker drill runs in CI on every pull request, but its run against the deployed worker is not recorded, and the restore drill is "not run yet" in the drill log (the owner's step).
+- **5.8 is partial.** AC-5.8.1 needs both drills recorded with date, duration and outcome against the deployed environment. The kill-worker drill runs in CI on every pull request, but its run against the deployed worker is not recorded. The restore drill is **deferred by owner until first sale** (the owner's decision of 2026-10-28, [ASSUMPTIONS](../../product/ASSUMPTIONS.md) D-28): it runs on Supabase Pro's backups when the product is first sold to a customer.
 - **5.9 is partial.** Built: the admin view, its API, the audited dead-letter retry, and the view parts of AC-5.9.1 (a stopped worker) and AC-5.9.3 (a stale shop); htco-clients #60 is merged (`f289cb6`). Open: AC-5.9.1's alert, AC-5.9.3's alert and AC-5.9.4's `/metrics`. Nothing in Phase 6 or 8A built or named them (8A.8's metrics are browser series only), so they now have explicit homes: the two alerts are AC-10.8.1 and AC-10.8.2 ([Phase 10](phase-10-supervision.md), slice 10.8), and `/metrics` is AC-20.8.1 ([Phase 20](phase-20-hardening-launch.md), slice 20.8). Until then the admin view shows both states, and Sentry receives dead letters (6.7).
 
 **Order of work** ([EXECUTION_ORDER](../EXECUTION_ORDER.md)):
@@ -514,7 +514,7 @@ The `SecretBroker` and `Authenticator` Protocols, `InjectionGrant`, `SecretRef`,
 
 ## Exit gate
 
-- [ ] All AC-5.x pass, including Scenario G and Scenario B part 1 against Postgres; drills recorded; KPIs baselined (orders per day, time to tracking). Done: the AC tests and both scenarios run against Postgres in CI, and the kill-worker drill runs on every pull request. Open: the owner's restore rehearsal, and the KPI baseline, which needs the automations active.
+- [ ] All AC-5.x pass, including Scenario G and Scenario B part 1 against Postgres; drills recorded; KPIs baselined (orders per day, time to tracking). Done: the AC tests and both scenarios run against Postgres in CI, and the kill-worker drill runs on every pull request. Open: the KPI baseline, now that the automations are active; the owner's restore rehearsal is deferred by owner until first sale (D-28).
 - [x] PRs #53, #55 and #58 merged only after 5.0 (#55 was replaced by #62).
 - [x] The three order automations are `ready` with fully defined specifications, and the owner approved their activation. The specifications are fully defined (#90); activated by #157 and #162 (ticked by the audit of 2026-10-28).
 
