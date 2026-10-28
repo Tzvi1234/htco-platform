@@ -282,3 +282,13 @@ The acceptance criteria are AC-8A.11.1 to AC-8A.11.21 in Phase 8A.
   - **Native WebAuthn and passkey prompts are out of scope** for a takeover (AC-8A.11.6).
 
   The later notes of quill and sage-arch are folded in too: one status vocabulary, the watchdog's extension on the claim, new pages covered, and the spike's WebSocket checks (AC-8A.11.12, 11.15, 11.16 and 11.18 to 11.21).
+- 2026-10-27: Codex's review of `c12502b` (local, posted by harbor) raised four P1s and a P2. Under the last-rewrite rule (main), each was answered on #166 with a rationale. None changes this decision: each tightens how a rule above is enforced. They became implementation criteria AC-8A.11.22 to 11.26 in Phase 8A, which extend this ADR's list:
+  - the write block covers every channel: service workers, sockets opened earlier, beacons, and anything it cannot see turned off;
+  - control is bound to the session's organization and shop;
+  - validation never echoes input;
+  - revocation takes effect at once;
+  - one immutable deadline per takeover episode. A retake after Return Control, in the same run, is a new episode with its own deadline, and a run has at most 3 episodes. An authorized request for a fourth (AC-8A.11.14 and 11.23, `aal2` and the step-up) is refused, and the run moves to `HANDED_TO_HUMAN` at the moment of the request. Any other request is refused with no effect on the run (main's decision). This settles the maximum duration in §2: "another step-up" never extends an episode.
+- 2026-10-27: The reviews of #178 (quill, sage-arch) tighten three rules without loosening any:
+  - **§6's per-session cleanup** also removes every service-worker registration, with its sync and push registrations, at seal and at restore, for every origin, the allowlisted ones included. Sessions before 8A.11 may already have stored one, and blocking new registrations would not remove it (AC-8A.11.22, AC-8A.11.11).
+  - **§1's relay rule holds as written:** the relay is reached only over the private network, the VPC, always with TLS and a per-session worker token, because the VPC is a path, not an identity. There is no public path, so §2 stands: no page reaches the relay. If the spike cannot prove the private dial-out, 8A.11 stops and this ADR is amended first (main's decision, AC-8A.2.29).
+  - **The write block is on for the whole session**, not only during a takeover (main's decision). During the run's own write step, only the single request the run itself sends passes, bound to its command (an ID or a one-time nonce) and to its body's hash, and only once. Anything else is refused, even on the same route. So an edit refused during a takeover that the site stores and replays later is refused too, during the write step as well (AC-8A.11.22).

@@ -59,7 +59,7 @@
 | D-19 order store naming | 13 | Keep `etsy_orders`; or rename now |
 | D-16 Etsy written confirmation | 26 (writes: 31) | Get it signed before write rows; verbal for B-02 and B-03 only; or no browser on Etsy |
 | D-17 one egress IP disclosed to Etsy | 26 | Ask in the confirmation; or do not ask |
-| D-18 egress option | 26 | Decided 2026-10-23: the same egress as the API for now (ASSUMPTIONS D-18) |
+| D-18 egress option | 26 | Decided 2026-10-26: (a) for the browser worker. It runs on a basic HTCO droplet, and the shared browser egress is that droplet's own IP. The API keeps its own egress (ASSUMPTIONS D-18) |
 | D-23 quote mailbox | 24a | Forwarding rule to `quotes@office.ht-co.app` (Resend inbound); or read-only Gmail OAuth filtered to AutoVA's sender |
 | A-08 AutoVA's terms for browser use | 26 (A-01, A-02) | The owner checks the terms; until then, the Human-task path of 6.10 and 7.17 |
 | D-21 order of the first writes | 23, 24 | Shipments in Phase 6 (6.8), then shop writes (7.12); or reversible shop writes moved into Phase 6 when A-04 blocks shipments |

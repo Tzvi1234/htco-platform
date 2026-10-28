@@ -39,3 +39,4 @@ Phase 1 deploys `/healthz` and `/readyz`; Phase 2 proves the database connection
 ## Validation log
 
 - 2026-10-14 — The owner chose Frankfurt and GHCR (decision D-02). Accounts: DigitalOcean team created, payment method pending; Supabase organization exists.
+- 2026-10-27 — The browser worker runs on a basic HTCO droplet (about $12 a month, 2 GB), not on App Platform: its egress rules need `NET_ADMIN`, which App Platform does not grant (D-18 (a), #168, ADR-0025 §5). The droplet's hardening, private paths and monitoring are AC-8A.2.29.
