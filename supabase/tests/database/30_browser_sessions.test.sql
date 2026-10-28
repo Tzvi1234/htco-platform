@@ -48,8 +48,8 @@ select ok(not has_table_privilege('htco_worker', 'app.browser_sessions', 'select
 select col_default_is('app', 'shop_browser_environments', 'error_count', '0',
   'the error counter starts at zero');
 select ok(has_column_privilege('htco_browser', 'app.shop_browser_environments', 'error_count', 'update')
-  and not has_column_privilege('htco_browser', 'app.shop_browser_environments', 'status', 'update'),
-  'the browser role counts errors but still cannot change a status');
+  and not has_column_privilege('htco_browser', 'app.shop_browser_environments', 'consent_user_id', 'update'),
+  'the browser role counts errors and never writes the consent record');
 
 -- Shape: a purpose code, a failure code only on failure, final once ended.
 select throws_ok(

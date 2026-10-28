@@ -209,6 +209,16 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.3.6 | Every session records the egress ID it used. Two sessions of one shop with different egress IDs and no audited owner change in between raise a consistency finding. |
 | AC-8A.3.7 | Allocating, changing or releasing a shop's egress is Owner-only (`aal2`, step-up) and audited. Agents and automations have no tool for it (negative tests). A dependency and configuration test finds no third-party proxy-service client or commercial VPN client in the browser worker. A dedicated egress is HTCO's own gateway on HTCO's own droplet. |
 
+**As built (slice 8A.3, first part):** migration `20261026140000_browser_health.sql`, pgTAP `31_browser_health`.
+
+- **Preflight in the controller.** `htco_application.browser_health.Preflight` checks the egress IP against the configured one, the free disk space, and DNS and TLS to each target host. The controller runs it after the profile lock and before anything is unpacked, within the session's deadline, and records the report through `EnvironmentHealth`. A failed preflight ends the session `FAILED (preflight_failed)`, and one past the deadline ends it `FAILED (timeout)`. No engine starts in either case.
+- **Health status.** `EnvironmentHealth` stores every report in the history, then applies `htco_domain.browser.next_health_status`: two failures in a row move `READY` to `DEGRADED`, and two passes move it back.
+- **Session validation.** `SessionValidation.signed_out` moves `READY` or `PROVISIONING` to `LOGIN_REQUIRED` and opens one task through the `SignInTasks` port. A `DEGRADED` environment keeps its status and still gets the task. A suspended or failed one is left to a person. The task store adapter lands with the Phase 7 task store.
+- **The browser login.** `htco_browser_login` can log in and is a member of `htco_browser` only (`set` yes, `inherit` no). Its password is never in a migration; it is set out of band. Before it switches role it reaches no table.
+- **The browser role's new rights.** In its organization only: the status and `last_health_*` columns, select and insert on the history (system rows only, health or its own edges), and the `events.publish` outbox message with its `outbox.deliver` job. A trigger lets it take only `ready` ↔ `degraded` and `ready`/`provisioning` → `login_required`. Every other edge stays with the API and people.
+- **`htco_persistence.browser_environments.PostgresBrowserEnvironmentStore`.** The registry's store on the browser role: it never reads or writes the consent record and never creates an environment.
+- **Still to come in 8A.3:** the in-session JavaScript and resource probe page, the daily network diagnostics, the egress checks through `NetworkProvider` (ADR-0025 §4), and the probe adapters.
+
 ### 8A.4 — Security challenge handler and human handoff
 
 - **Detectors:** CAPTCHA widgets, passkey and WebAuthn prompts, "verify it's you" pages, block or "unusual activity" pages, and permission errors. Each has recorded fixtures.
