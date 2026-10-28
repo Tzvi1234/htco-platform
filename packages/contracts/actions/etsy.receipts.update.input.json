@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.receipts.update.input.json",
+  "title": "etsy.receipts.update input",
+  "description": "Mark one receipt shipped (where the tracking upload is blocked, A-04): the only field sent for now.",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "was_shipped"
+  ],
+  "properties": {
+    "receipt_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "was_shipped": {
+      "type": "boolean",
+      "enum": [
+        true
+      ]
+    }
+  },
+  "additionalProperties": false
+}

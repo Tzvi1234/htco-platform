@@ -125,7 +125,7 @@ Added 2026-10-23 for the owner's "API first" instruction ([ADR-0022](../adr/0022
 | 16 | `getShopByOwnerUserId` | GET | API key | Multi-shop: the owner's other shops | `etsy.shop.read` | Gal, Maya | 21 | R0 |
 | 17 | `updateShop` | PUT | shops_r, shops_w | Shop settings: announcement, vacation switch (vacation mode built in 6.8, the owner's decision of 2026-10-23) | `etsy.shop.update` | the Owner's press; agents and automations by the Owner's approval | 6 | W3 |
 | 18 | `getHolidayPreferences` | GET | shops_r | SLA calendar: the shop's holidays | `etsy.policies.read` | Daniel, Eitan | 6 | R0 |
-| 19 | `updateHolidayPreferences` | PUT | shops_w | Holiday calendar | `etsy.holiday_preferences.update` | automations only | 6 | W1 |
+| 19 | `updateHolidayPreferences` | PUT | shops_w | Holiday calendar (the write actions console, 6.9) | `etsy.holiday_preferences.update` | the Owner's press; agents and automations by the Owner's approval | 6 | W3 |
 | 20 | `createShopReadinessStateDefinition` | POST | shops_w | Processing profiles | `etsy.processing_profiles.manage` | automations only | 12 | W1 |
 | 21 | `deleteShopReadinessStateDefinition` | DELETE | shops_w | Processing profiles | `etsy.processing_profiles.manage` | automations only | 12 | W1 |
 | 22 | `getShopReadinessStateDefinition` | GET | shops_r | Processing profile detail | `etsy.policies.read` | Daniel, Eitan | 11 | R0 |
@@ -135,7 +135,7 @@ Added 2026-10-23 for the owner's "API first" instruction ([ADR-0022](../adr/0022
 | 26 | `createReceiptShipment` | POST | transactions_w | Guarded shipment write (slice 6.6) | `etsy.shipments.create` | the Owner's press; agents and automations by the Owner's approval | 6 | W3 |
 | 27 | `getShopReceipt` | GET | transactions_r | Receipt ingest by webhook | `etsy.receipts.read` | Dana, Eitan, Noa, Roni | 5 | R1 |
 | 28 | `getShopReceipts` | GET | transactions_r | Orders, Statistics, Home; the order history store (#57) | `etsy.receipts.read` | Dana, Eitan, Noa, Roni | 4 (done) | R1 |
-| 29 | `updateShopReceipt` | PUT | transactions_w | Mark shipped where tracking upload is blocked | `etsy.receipts.update` | automations only | 6 | W2 |
+| 29 | `updateShopReceipt` | PUT | transactions_w | Mark shipped where tracking upload is blocked (the write actions console, 6.8) | `etsy.receipts.update` | the Owner's press; agents and automations by the Owner's approval | 6 | W3 |
 | 30 | `getShopReceiptTransaction` | GET | transactions_r | Transaction detail | `etsy.receipts.read` | Dana, Eitan, Noa, Roni | 5 | R1 |
 | 31 | `getShopReceiptTransactionsByListing` | GET | transactions_r | Sales per listing, reconciliation | `etsy.receipts.read` | Dana, Eitan, Noa, Roni | 10 | R1 |
 | 32 | `getShopReceiptTransactionsByReceipt` | GET | transactions_r | Receipt ingest | `etsy.receipts.read` | Dana, Eitan, Noa, Roni | 5 | R1 |

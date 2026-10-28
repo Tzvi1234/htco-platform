@@ -84,7 +84,9 @@ async def test_the_console__the_owners_writes_off_by_default() -> None:
     assert answer.status_code == 200
     assert answer.headers["Cache-Control"] == "no-store"
     rows = answer.json()["items"]
-    assert [r["key"] for r in rows] == ["tracking_upload", "vacation_mode"]
+    assert [r["key"] for r in rows] == [
+        "tracking_upload", "vacation_mode", "mark_shipped", "holiday_preference",
+    ]  # fmt: skip
     assert all(not r["enabled"] and r["reconsent_required"] for r in rows)
     assert rows[0]["reconnect_url"] == "/v1/shops/etsy/connect"
 
@@ -137,6 +139,7 @@ async def test_the_press__uploads_once_and_replays_the_same_key() -> None:
     )  # fmt: skip
     assert body["write"]["last_run"]["execution_id"] == body["execution_id"]
     assert again.json()["execution_id"] == body["execution_id"]
+    assert again.headers["Idempotent-Replayed"] == "true"  # the stored first response
     assert len(world.etsy.writes()) == 1
     assert [a.action for a in world.audits()] == ["action.succeeded"]
     assert CODE not in first.text
@@ -188,8 +191,28 @@ async def test_the_press__needs_an_idempotency_key() -> None:
     world = World()
     async with client(world) as http:
         answer = await http.post(f"{BASE}/tracking-upload", json=PASTE)
-    assert answer.status_code == 422
-    assert world.etsy.calls == []
+        first = await http.post(f"{BASE}/tracking-upload", json=PASTE, headers=press_headers())
+        other = await http.post(
+            f"{BASE}/tracking-upload", json={**PASTE, "receipt_id": RECEIPT + 1},
+            headers=press_headers(),
+        )  # fmt: skip
+    assert answer.status_code == 400
+    assert answer.json()["type"] == PROBLEMS + "idempotency-key-required"
+    assert first.status_code == 200
+    assert other.status_code == 422
+    assert other.json()["type"] == PROBLEMS + "idempotency-key-reused"
+    assert len(world.etsy.writes()) == 1
+
+
+async def test_a_refused_press__is_not_stored_so_the_same_key_works_after_the_step_up() -> None:
+    world = World()
+    async with client(world, stepped_up=timedelta(minutes=30)) as http:
+        stale = await http.post(f"{BASE}/tracking-upload", json=PASTE, headers=press_headers())
+    async with client(world) as http:
+        done = await http.post(f"{BASE}/tracking-upload", json=PASTE, headers=press_headers())
+    assert stale.json()["type"] == PROBLEMS + "step-up-required"
+    assert done.status_code == 200, done.text
+    assert len(world.etsy.writes()) == 1
 
 
 async def test_vacation_mode__set_and_previewed() -> None:
@@ -249,3 +272,46 @@ async def test_a_relay_item__previewed_then_uploaded_and_closed() -> None:
     assert CODE not in preview.text
     assert again.status_code == 409
     assert len(world.etsy.writes()) == 1
+
+
+async def test_mark_shipped__previewed_and_pressed() -> None:
+    world = World()
+    async with client(world) as http:
+        preview = await http.post(f"{BASE}/mark-shipped/preview", json={"receipt_id": RECEIPT})
+        done = await http.post(
+            f"{BASE}/mark-shipped", json={"receipt_id": RECEIPT}, headers=press_headers()
+        )
+    assert preview.json()["target"] == {"receipt_id": RECEIPT, "was_shipped": True}
+    assert done.status_code == 200, done.text
+    assert (done.json()["outcome"], done.json()["sent"]) == ("succeeded", True)
+    assert world.etsy.receipts[RECEIPT].is_shipped
+
+
+async def test_holiday_preference__listed_previewed_with_before_and_pressed() -> None:
+    world = World()
+    change = {"holiday_id": 7, "is_working": False}
+    async with client(world) as http:
+        listed = await http.get(f"{BASE}/holiday-preferences")
+        preview = await http.post(f"{BASE}/holiday-preference/preview", json=change)
+        done = await http.post(f"{BASE}/holiday-preference", json=change, headers=press_headers())
+        after = await http.get(f"{BASE}/holiday-preferences")
+    assert listed.status_code == 200, listed.text
+    assert [h["holiday_id"] for h in listed.json()["items"]] == [7, 9]
+    assert preview.json()["target"]["before"]["is_working"] is True
+    assert done.status_code == 200, done.text
+    assert done.json()["verified"] is True
+    assert next(h for h in after.json()["items"] if h["holiday_id"] == 7)["is_working"] is False
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [("mark-shipped", {"receipt_id": RECEIPT}),
+     ("holiday-preference", {"holiday_id": 7, "is_working": False})],
+)  # fmt: skip
+async def test_the_new_writes__flag_off_by_default_403(path: str, body: dict[str, Any]) -> None:
+    world = World(flags=frozenset())
+    async with client(world) as http:
+        answer = await http.post(f"{BASE}/{path}", json=body, headers=press_headers())
+    assert answer.status_code == 403
+    assert answer.json()["type"] == PROBLEMS + "write-flag-off"
+    assert world.etsy.writes() == []

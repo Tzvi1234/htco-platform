@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.policies.read.output.json",
+  "title": "etsy.policies.read output",
+  "type": "object",
+  "required": [
+    "holiday_preferences",
+    "count"
+  ],
+  "properties": {
+    "holiday_preferences": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "required": [
+          "holiday_id",
+          "country_iso",
+          "is_working",
+          "name"
+        ],
+        "properties": {
+          "holiday_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "country_iso": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 2
+          },
+          "is_working": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

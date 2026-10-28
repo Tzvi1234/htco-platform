@@ -14,7 +14,7 @@ from htco_application.audit import AuditRecord
 from htco_application.execution.channels import EtsyApiChannel
 from htco_application.execution.gateway import Channel
 from htco_application.execution.service import ActionGatewayService, GatewayParts, Principals
-from htco_application.owner_writes import LastRun, OwnerWriteServices, WriteSwitches
+from htco_application.owner_writes import OWNER_WRITES, LastRun, OwnerWriteServices, WriteSwitches
 from htco_domain.identity import AssuranceLevel, Role
 from tests.application.test_etsy_owner_writes import (
     ETSY_SHOP,
@@ -30,10 +30,15 @@ from tests.application.test_etsy_owner_writes import (
     office,
 )
 from tests.execution_fakes import Approvals, Capabilities, MemoryActionStore, Shops, real_catalog
+from tests.idempotency_fakes import MemoryIdempotencyStore
 from tests.order_intake_fakes import paid_receipt
 from tests.relay_fakes import MemoryRelayStore
 
 __all__ = ["ETSY_SHOP", "NOW", "ORG", "OWNER", "RECEIPT", "SHOP", "WRITES", "World", "caller"]
+
+
+# Every owner-triggerable write's flag on (each test turns off what it refuses).
+ALL_WRITES = frozenset(w.action for w in OWNER_WRITES)
 
 
 @dataclass
@@ -102,7 +107,7 @@ class World:
     def __init__(
         self,
         *,
-        flags: frozenset[str] = WRITES,
+        flags: frozenset[str] = ALL_WRITES,
         halted: bool = False,
         scopes: frozenset[str] = GRANTED,
     ) -> None:
@@ -115,7 +120,7 @@ class World:
         self.switches = WriteSwitches(flags, halted=self._halted)
         registry = office()
         catalog = real_catalog(registry)
-        channel = EtsyApiChannel(self.etsy, EtsyShops(), writes=self.etsy)
+        channel = EtsyApiChannel(self.etsy, EtsyShops(), writes=self.etsy, holidays=self.etsy)
 
         def gateway_for(principals: Principals) -> ActionGatewayService:
             return ActionGatewayService(
@@ -141,6 +146,7 @@ class World:
             history=History(self.store),
             switches=self.switches,
             relay=self.relay,
+            idempotency=MemoryIdempotencyStore(),
         )
 
     def _halted(self) -> bool:

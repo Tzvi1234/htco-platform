@@ -7,6 +7,7 @@ relay item closes on its verified upload (6.10). No test reaches Etsy (AC-6.8.3)
 """
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import timedelta
 
@@ -16,17 +17,22 @@ from htco_application.access.authentication import NoMembershipError
 from htco_application.execution.gateway import ActionOutcome
 from htco_application.marketplace import OrderShipment
 from htco_application.owner_writes import (
+    HOLIDAY_PREFERENCE,
+    MARK_SHIPPED,
     OWNER_WRITES,
     TRACKING_UPLOAD,
     VACATION_MODE,
     OwnerOnlyError,
+    OwnerWrite,
     OwnerWriteRun,
     SecondFactorRequiredError,
     ShopNotVisibleError,
     StepUpRequiredError,
     WriteRefusedError,
     etsy_carrier_name,
+    holiday_preferences,
     owner_write_console,
+    preview_holiday_preference,
     preview_owner_write,
     relay_upload_preview,
     run_owner_write,
@@ -75,7 +81,7 @@ def test_the_console__lists_every_registered_write_off_by_default() -> None:
     rows = owner_write_console(caller(), world.services, organization_id=None, shop_id=SHOP)
 
     assert [r.write.key for r in rows] == [w.key for w in OWNER_WRITES]
-    tracking, vacation = rows
+    tracking, vacation, *_ = rows
     assert (tracking.capability, tracking.scope) == ("confirm_shipment_write", "transactions_w")
     assert (vacation.capability, vacation.scope) == ("update_shop_settings", "shops_w")
     assert not any(r.flag_on or r.enabled for r in rows)
@@ -86,7 +92,7 @@ async def test_the_console__shows_the_last_run_and_its_result() -> None:
     world = World()
     run = await press(world)
 
-    tracking, vacation = owner_write_console(
+    tracking, vacation, *_ = owner_write_console(
         caller(), world.services, organization_id=None, shop_id=SHOP
     )
 
@@ -447,3 +453,106 @@ def test_etsy_carrier_names__match_the_actions_input_schema() -> None:
     import re  # noqa: PLC0415
 
     assert all(re.fullmatch(r"[a-z0-9-]{2,64}", etsy_carrier_name(c)) for c in Carrier)
+
+
+# --- Marking a receipt shipped (6.8) and the holiday calendar (6.9) --------------------------
+
+
+async def run_write(world: World, write: OwnerWrite, values: Mapping[str, object],
+                    key: str = "k") -> OwnerWriteRun:  # fmt: skip
+    return await run_owner_write(
+        caller(), world.services, write, organization_id=None, shop_id=SHOP, values=values,
+        press_key=key, correlation_id="c", now=NOW,
+    )  # fmt: skip
+
+
+def test_the_console__lists_the_two_new_writes_with_their_scopes() -> None:
+    rows = owner_write_console(caller(), World().services, organization_id=None, shop_id=SHOP)
+
+    found = {r.write.key: (r.capability, r.scope) for r in rows}
+    assert found["mark_shipped"] == ("confirm_shipment_write", "transactions_w")
+    assert found["holiday_preference"] == ("update_shop_settings", "shops_w")
+
+
+async def test_mark_shipped__sends_once_and_verifies() -> None:
+    world = World()
+
+    run = await run_write(world, MARK_SHIPPED, {"receipt_id": RECEIPT})
+    again = await run_write(world, MARK_SHIPPED, {"receipt_id": RECEIPT}, key="k2")
+
+    assert run.result.outcome is ActionOutcome.SUCCEEDED
+    assert run.result.verified
+    assert run.result.output == {"receipt_id": RECEIPT, "sent": True, "already_shipped": False}
+    assert again.result.output == {"receipt_id": RECEIPT, "sent": False, "already_shipped": True}
+    assert [n for n, _ in world.etsy.writes()] == ["update_receipt_status"]
+
+
+async def test_mark_shipped__leaves_the_orders_relay_item_for_its_tracking() -> None:
+    world = World()
+    item = a_handed_off_item(world)
+
+    await run_write(world, MARK_SHIPPED, {"receipt_id": RECEIPT})
+
+    assert world.relay.items[item.id].state is RelayState.HANDED_OFF
+
+
+@pytest.mark.parametrize("write", [MARK_SHIPPED, HOLIDAY_PREFERENCE], ids=lambda w: w.key)
+async def test_the_new_writes__off_by_default_and_refused_without_a_call(write: OwnerWrite) -> None:
+    world = World(flags=frozenset())
+    values = (
+        {"receipt_id": RECEIPT} if write is MARK_SHIPPED else {"holiday_id": 7, "is_working": False}
+    )
+
+    with pytest.raises(WriteRefusedError) as raised:
+        await run_write(world, write, values)
+
+    assert raised.value.code == "flag_off"
+    assert world.etsy.writes() == []
+
+
+async def test_a_holiday_preference__before_read_then_changed_and_verified() -> None:
+    world = World()
+    values = {"holiday_id": 7, "is_working": False}
+
+    preview = await preview_holiday_preference(
+        caller(), world.services, organization_id=None, shop_id=SHOP, values=values,
+        correlation_id="c", now=NOW,
+    )  # fmt: skip
+    run = await run_write(world, HOLIDAY_PREFERENCE, values)
+    after = await holiday_preferences(
+        caller(), world.services, organization_id=None, shop_id=SHOP, correlation_id="c"
+    )
+
+    assert preview.summary["before"] == {"is_working": True, "name": "Thanksgiving",
+                                         "country_iso": "US"}  # fmt: skip
+    assert preview.can_run
+    assert run.result.verified
+    assert run.result.output == {"holiday_id": 7, "is_working": False, "sent": True}
+    assert next(h for h in after if h.holiday_id == 7).is_working is False
+    assert [n for n, _ in world.etsy.writes()] == ["update_holiday_preference"]
+
+
+async def test_a_holiday_already_in_that_state__sends_nothing() -> None:
+    world = World()
+
+    run = await run_write(world, HOLIDAY_PREFERENCE, {"holiday_id": 9, "is_working": False})
+
+    assert run.result.output == {"holiday_id": 9, "is_working": False, "sent": False}
+    assert world.etsy.writes() == []
+
+
+async def test_an_unknown_holiday__fails_without_a_send() -> None:
+    world = World()
+
+    run = await run_write(world, HOLIDAY_PREFERENCE, {"holiday_id": 99, "is_working": False})
+
+    assert run.result.outcome is ActionOutcome.FAILED
+    assert world.etsy.writes() == []
+
+
+async def test_the_holiday_list__is_the_owners_only() -> None:
+    with pytest.raises(OwnerOnlyError):
+        await holiday_preferences(
+            caller(Role.ADMIN), World().services, organization_id=None, shop_id=SHOP,
+            correlation_id="c",
+        )  # fmt: skip

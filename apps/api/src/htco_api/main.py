@@ -691,7 +691,7 @@ def owner_write_services(
     switches = WriteSwitches(
         settings.etsy_write_action_set, halted=lambda: settings.etsy_writes_halted
     )
-    channel = EtsyApiChannel(etsy, facts, writes=etsy)
+    channel = EtsyApiChannel(etsy, facts, writes=etsy, holidays=etsy)
 
     def now() -> datetime:
         return datetime.now(UTC)
@@ -725,6 +725,7 @@ def owner_write_services(
         history=PostgresOwnerWriteHistory(database),
         switches=switches,
         relay=PostgresRelayStore(database),
+        idempotency=PostgresIdempotencyStore(database),
     )
 
 

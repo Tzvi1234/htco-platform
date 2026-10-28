@@ -77,6 +77,64 @@ async def test_update_shop_vacation__off_sends_no_message(make: Any) -> None:
     assert form(etsy.requests[0]) == {"is_vacation": ["false"]}
 
 
+async def test_update_receipt_status__one_put_with_only_the_fields_asked(make: Any) -> None:
+    etsy = Scripted(ok({"receipt_id": RECEIPT}))
+    harness: Harness = make(etsy)
+
+    await harness.adapter.update_receipt_status(SHOP_ID, RECEIPT, was_shipped=True, was_paid=None)
+
+    [request] = etsy.requests
+    assert (request.method, str(request.url)) == (
+        "PUT", f"{ETSY_BASE_URL}/shops/{SHOP_ID}/receipts/{RECEIPT}",
+    )  # fmt: skip
+    assert form(request) == {"was_shipped": ["true"]}
+
+
+async def test_update_receipt_status__nothing_to_change_refused_before_any_request(
+    make: Any,
+) -> None:
+    etsy = Scripted(ok({}))
+    harness: Harness = make(etsy)
+
+    with pytest.raises(ValueError, match="Etsy"):
+        await harness.adapter.update_receipt_status(
+            SHOP_ID, RECEIPT, was_shipped=None, was_paid=None
+        )
+
+    assert etsy.requests == []
+
+
+async def test_update_holiday_preference__one_put_for_the_holiday(make: Any) -> None:
+    etsy = Scripted(ok({"holiday_id": 7, "is_working": False}))
+    harness: Harness = make(etsy)
+
+    await harness.adapter.update_holiday_preference(SHOP_ID, 7, is_working=False)
+
+    [request] = etsy.requests
+    assert (request.method, str(request.url)) == (
+        "PUT", f"{ETSY_BASE_URL}/shops/{SHOP_ID}/holiday-preferences/7",
+    )  # fmt: skip
+    assert form(request) == {"is_working": ["false"]}
+
+
+@pytest.mark.parametrize("wrapped", [False, True], ids=["array", "results-page"])
+async def test_list_holiday_preferences__a_get_parsed(make: Any, wrapped: bool) -> None:
+    rows = [
+        {"shop_id": SHOP_ID, "country_iso": "US", "holiday_id": 7, "holiday_name": "Thanksgiving",
+         "is_working": True},
+    ]  # fmt: skip
+    etsy = Scripted(ok({"count": 1, "results": rows} if wrapped else rows))
+    harness: Harness = make(etsy)
+
+    [holiday] = await harness.adapter.list_holiday_preferences(SHOP_ID)
+
+    assert etsy.requests[0].method == "GET"
+    assert str(etsy.requests[0].url) == f"{ETSY_BASE_URL}/shops/{SHOP_ID}/holiday-preferences"
+    assert (holiday.holiday_id, holiday.country_iso, holiday.is_working, holiday.name) == (
+        7, "US", True, "Thanksgiving",
+    )  # fmt: skip
+
+
 @pytest.mark.parametrize(
     "answer",
     [httpx.Response(503, json=error_body(503)), httpx.ConnectError("refused")],

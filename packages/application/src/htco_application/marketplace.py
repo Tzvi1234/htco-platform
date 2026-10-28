@@ -46,6 +46,17 @@ class MarketplaceMoney:
 
 
 @dataclass(frozen=True)
+class HolidayPreference:
+    """One holiday of the shop's country and whether the shop works on it (6.9): the business-day
+    calendar's holidays, and what `etsy.holiday_preferences.update` changes."""
+
+    holiday_id: int
+    country_iso: str
+    is_working: bool
+    name: str
+
+
+@dataclass(frozen=True)
 class MarketplaceShop:
     shop_id: int
     name: str

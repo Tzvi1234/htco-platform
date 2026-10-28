@@ -2,6 +2,9 @@
 
 - `GET /v1/shops/{shop_id}/owner-writes`: every owner-triggerable write of the shop with its flag,
   the kill switch, the scope the shop's Etsy grant must hold and the last run with its result.
+- The writes: `tracking-upload` (6.6), `vacation-mode` (7.12, pulled forward), `mark-shipped`
+  (6.8, `etsy.receipts.update`) and `holiday-preference` (6.9), each with its `/preview`;
+  `GET .../owner-writes/holiday-preferences` reads the shop's holidays through the gateway.
 - `POST /v1/shops/{shop_id}/owner-writes/{tracking-upload,vacation-mode}/preview`: the confirm
   sheet: what will be written to which shop and order, and what would refuse it now, with the
   reconnect link when the grant lacks the scope (AC-6.8.2). Nothing is sent anywhere.
@@ -18,25 +21,29 @@ carry identifiers, states and codes only; a tracking code only as its last four 
 """
 
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
 import anyio
-from fastapi import APIRouter, Depends, Header, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from htco_api.auth import CurrentAuth
-from htco_api.idempotency import IDEMPOTENCY_KEY_REUSED
+from htco_api.idempotency import IDEMPOTENCY_HEADER, IDEMPOTENCY_KEY_REUSED, run_idempotently
 from htco_api.identity import ORGANIZATION_REQUIRED, problem_responses
 from htco_api.incidents import RELAY_ITEM_MOVED, RELAY_UNAVAILABLE, RelayItemView
 from htco_api.policy_guard import FORBIDDEN, MFA_REQUIRED, STEP_UP_REQUIRED
 from htco_api.problems import NOT_FOUND, Problem, ProblemError, ProblemType, ValidationProblem
 from htco_application.access.authentication import AuthContext, NoMembershipError
 from htco_application.owner_writes import (
+    HOLIDAY_PREFERENCE,
+    MARK_SHIPPED,
     RECONNECT_PATH,
     TRACKING_UPLOAD,
     VACATION_MODE,
+    HolidaysUnavailableError,
     InvalidWriteInputError,
     OwnerOnlyError,
     OwnerWrite,
@@ -50,7 +57,9 @@ from htco_application.owner_writes import (
     ShopNotVisibleError,
     StepUpRequiredError,
     WriteRefusedError,
+    holiday_preferences,
     owner_write_console,
+    preview_holiday_preference,
     preview_owner_write,
     relay_upload_preview,
     run_owner_write,
@@ -77,7 +86,33 @@ SCOPE_MISSING = ProblemType(
     "The shop's Etsy connection does not allow this write. Reconnect the shop to grant it.",
 )  # fmt: skip
 
+HOLIDAYS_UNAVAILABLE = ProblemType(
+    "holidays-unavailable", "Holidays not available", 503,
+    "The shop's holiday preferences could not be read from Etsy now. Try again later.",
+)  # fmt: skip
+
 _REFUSALS = {"flag_off": WRITE_FLAG_OFF, "writes_halted": WRITES_HALTED}
+
+
+class MarkShipped(BaseModel):
+    receipt_id: int = Field(ge=1)
+
+
+class HolidayPreferenceChange(BaseModel):
+    holiday_id: int = Field(ge=1)
+    is_working: bool
+
+
+class HolidayView(BaseModel):
+    holiday_id: int
+    country_iso: str
+    name: str
+    is_working: bool
+
+
+class HolidayListView(BaseModel):
+    shop_id: uuid.UUID
+    items: list[HolidayView]
 
 
 class LastRunView(BaseModel):
@@ -93,7 +128,7 @@ class LastRunView(BaseModel):
 
 
 class OwnerWriteStateView(BaseModel):
-    key: Literal["tracking_upload", "vacation_mode"]
+    key: Literal["tracking_upload", "vacation_mode", "mark_shipped", "holiday_preference"]
     action: str
     version: int
     capability: str
@@ -240,6 +275,8 @@ def _problem(error: Exception) -> ProblemError:  # noqa: PLR0911 - one answer pe
         return ProblemError(RELAY_ITEM_MOVED)
     if isinstance(error, RelayUnavailableError):
         return ProblemError(RELAY_UNAVAILABLE)
+    if isinstance(error, HolidaysUnavailableError):
+        return ProblemError(HOLIDAYS_UNAVAILABLE)
     raise error
 
 
@@ -247,7 +284,7 @@ _KNOWN = (
     OrganizationRequiredError, NoMembershipError, ShopNotVisibleError, RelayItemNotVisibleError,
     SecondFactorRequiredError, StepUpRequiredError, OwnerOnlyError, WriteRefusedError,
     PressKeyReusedError, TrackingFormatError, InvalidWriteInputError, RelayItemMovedError,
-    RelayUnavailableError,
+    RelayUnavailableError, HolidaysUnavailableError,
 )  # fmt: skip
 _COMMON: dict[int, str | tuple[str, type[Problem]]] = {
     400: "The caller belongs to several organizations and named none",
@@ -264,16 +301,30 @@ _PRESS = {
     403: "Not the Owner (forbidden), no second factor (mfa-required), no recent step-up "
     "(step-up-required), the write switched off (write-flag-off), the kill switch on "
     "(writes-halted), or the grant lacks the scope (scope-missing, with `reconnect_url`)",
+    400: "No Idempotency-Key, or an invalid one (idempotency-key-required, "
+    "idempotency-key-invalid), or several organizations and none named",
+    409: "The first press with this Idempotency-Key still runs (idempotency-in-progress)",
     422: (
         "An invalid ID or input (write-input-invalid), or the Idempotency-Key was used for "
         "another request (idempotency-key-reused)",
         ValidationProblem,
     ),
 }
-PressKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=255)]
+_KEY_HEADER: dict[str, Any] = {
+    "parameters": [
+        {
+            "name": IDEMPOTENCY_HEADER,
+            "in": "header",
+            "required": True,
+            "schema": {"type": "string", "minLength": 1, "maxLength": 255},
+            "description": "A key for this press; a retry with the same key and body returns the "
+            "first response (24 hours) and presses nothing.",
+        }
+    ]
+}
 
 
-def owner_writes_router(*, clock: Callable[[], datetime]) -> APIRouter:
+def owner_writes_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PLR0915
     router = APIRouter(prefix="/v1", tags=["owner-writes"])
     Services = Annotated[OwnerWriteServices, Depends(_services)]  # noqa: N806 - a type alias
 
@@ -295,20 +346,41 @@ def owner_writes_router(*, clock: Callable[[], datetime]) -> APIRouter:
             raise _problem(error) from None
         return _preview_view(preview)
 
+    async def _idempotent(
+        request: Request, auth: AuthContext, services: OwnerWriteServices,
+        press: Callable[[str, datetime], Awaitable[OwnerWriteRun]],
+    ) -> JSONResponse:  # fmt: skip
+        """One press per Idempotency-Key (the API's replay, AC-5.2.3): a retry with the same key
+        and body answers the stored first response and presses nothing; a refusal is not
+        stored, so the Owner steps up and presses again with the same key."""
+        if services.idempotency is None:
+            raise ProblemError(OWNER_WRITES_UNAVAILABLE)
+        now = clock()
+
+        async def work() -> tuple[int, dict[str, Any]]:
+            try:
+                run = await press(request.headers.get(IDEMPOTENCY_HEADER, ""), now)
+            except _KNOWN as error:
+                raise _problem(error) from None
+            return 200, _run_view(run).model_dump(mode="json")
+
+        answer = await run_idempotently(
+            request, user_id=auth.user_id, store=services.idempotency, now=now, work=work
+        )
+        answer.headers["Cache-Control"] = "no-store"
+        return answer
+
     async def _press(  # noqa: PLR0913, PLR0917 - the caller, the write and the press
         request: Request, auth: AuthContext, services: OwnerWriteServices, write: OwnerWrite,
         organization_id: uuid.UUID | None, shop_id: uuid.UUID, values: dict[str, Any],
-        press_key: str,
-    ) -> OwnerWriteRunView:  # fmt: skip
-        try:
-            run = await run_owner_write(
+    ) -> JSONResponse:  # fmt: skip
+        def press(key: str, now: datetime) -> Awaitable[OwnerWriteRun]:
+            return run_owner_write(
                 auth, services, write, organization_id=organization_id, shop_id=shop_id,
-                values=values, press_key=press_key, correlation_id=_correlation(request),
-                now=clock(),
+                values=values, press_key=key, correlation_id=_correlation(request), now=now,
             )  # fmt: skip
-        except _KNOWN as error:
-            raise _problem(error) from None
-        return _run_view(run)
+
+        return await _idempotent(request, auth, services, press)
 
     @router.get(
         "/shops/{shop_id}/owner-writes",
@@ -360,27 +432,25 @@ def owner_writes_router(*, clock: Callable[[], datetime]) -> APIRouter:
     @router.post(
         "/shops/{shop_id}/owner-writes/tracking-upload",
         summary="Upload a tracking number to one Etsy order (the Owner's press)",
+        response_model=OwnerWriteRunView,
+        openapi_extra=_KEY_HEADER,
         responses=problem_responses(_PRESS),
     )
     async def run_tracking_upload(  # noqa: PLR0913, PLR0917 - the route's inputs
         shop_id: uuid.UUID,
         body: TrackingUpload,
         request: Request,
-        response: Response,
         auth: CurrentAuth,
         services: Services,
-        idempotency_key: PressKey,
         organization_id: uuid.UUID | None = None,
-    ) -> OwnerWriteRunView:
+    ) -> JSONResponse:
         """`etsy.shipments.create` through the Action Gateway: re-reads the receipt and sends
         nothing when the code is there (`already_present`), else sends once and re-reads. The
         same Idempotency-Key answers the first result again; a refused press needs a new key."""
-        run = await _press(
+        return await _press(
             request, auth, services, TRACKING_UPLOAD, organization_id, shop_id,
-            body.model_dump(), idempotency_key,
+            body.model_dump(),
         )  # fmt: skip
-        response.headers["Cache-Control"] = "no-store"
-        return run
 
     @router.post(
         "/shops/{shop_id}/owner-writes/vacation-mode/preview",
@@ -404,26 +474,155 @@ def owner_writes_router(*, clock: Callable[[], datetime]) -> APIRouter:
     @router.post(
         "/shops/{shop_id}/owner-writes/vacation-mode",
         summary="Set or clear the shop's vacation mode (the Owner's press)",
+        response_model=OwnerWriteRunView,
+        openapi_extra=_KEY_HEADER,
         responses=problem_responses(_PRESS),
     )
     async def run_vacation_mode(  # noqa: PLR0913, PLR0917 - the route's inputs
         shop_id: uuid.UUID,
         body: VacationMode,
         request: Request,
+        auth: CurrentAuth,
+        services: Services,
+        organization_id: uuid.UUID | None = None,
+    ) -> JSONResponse:
+        """`etsy.shop.update` through the Action Gateway: re-reads the shop and sends nothing when
+        it is already in that state (`sent` false), else sends once and re-reads."""
+        return await _press(
+            request, auth, services, VACATION_MODE, organization_id, shop_id,
+            body.model_dump(),
+        )  # fmt: skip
+
+    @router.post(
+        "/shops/{shop_id}/owner-writes/mark-shipped/preview",
+        summary="What marking an Etsy order shipped would write, and what would refuse it now",
+        responses=problem_responses(_PREVIEW),
+    )
+    async def preview_mark_shipped(  # noqa: PLR0913, PLR0917 - the route's inputs
+        shop_id: uuid.UUID,
+        body: MarkShipped,
         response: Response,
         auth: CurrentAuth,
         services: Services,
-        idempotency_key: PressKey,
         organization_id: uuid.UUID | None = None,
-    ) -> OwnerWriteRunView:
-        """`etsy.shop.update` through the Action Gateway: re-reads the shop and sends nothing when
-        it is already in that state (`sent` false), else sends once and re-reads."""
-        run = await _press(
-            request, auth, services, VACATION_MODE, organization_id, shop_id,
-            body.model_dump(), idempotency_key,
-        )  # fmt: skip
+    ) -> OwnerWritePreviewView:
+        preview = await _preview(
+            auth, services, MARK_SHIPPED, organization_id, shop_id, body.model_dump()
+        )
         response.headers["Cache-Control"] = "no-store"
-        return run
+        return preview
+
+    @router.post(
+        "/shops/{shop_id}/owner-writes/mark-shipped",
+        summary="Mark one Etsy order shipped without tracking (the Owner's press)",
+        response_model=OwnerWriteRunView,
+        openapi_extra=_KEY_HEADER,
+        responses=problem_responses(_PRESS),
+    )
+    async def run_mark_shipped(  # noqa: PLR0913, PLR0917 - the route's inputs
+        shop_id: uuid.UUID,
+        body: MarkShipped,
+        request: Request,
+        auth: CurrentAuth,
+        services: Services,
+        organization_id: uuid.UUID | None = None,
+    ) -> JSONResponse:
+        """`etsy.receipts.update` (was_shipped) through the Action Gateway, where the tracking
+        upload is blocked for the key (A-04): re-reads the receipt and sends nothing when it is
+        shipped already (`sent` false), else sends once and re-reads."""
+        return await _press(
+            request, auth, services, MARK_SHIPPED, organization_id, shop_id,
+            body.model_dump(),
+        )  # fmt: skip
+
+    @router.get(
+        "/shops/{shop_id}/owner-writes/holiday-preferences",
+        summary="The shop's holidays and whether it works on each, read from Etsy now",
+        responses=problem_responses(
+            {
+                **_COMMON,
+                403: "Not the Owner (forbidden)",
+                422: ("Invalid ID", ValidationProblem),
+                503: "The write actions are not set up (owner-writes-unavailable), or Etsy could "
+                "not be read now (holidays-unavailable)",
+            }
+        ),
+    )
+    async def list_holiday_preferences(  # noqa: PLR0913, PLR0917 - the route's inputs
+        shop_id: uuid.UUID,
+        request: Request,
+        response: Response,
+        auth: CurrentAuth,
+        services: Services,
+        organization_id: uuid.UUID | None = None,
+    ) -> HolidayListView:
+        """Through the Action Gateway (`etsy.policies.read`, R0): the list the Owner picks a
+        holiday from, and the console's before and after of a holiday preference."""
+        try:
+            found = await holiday_preferences(
+                auth, services, organization_id=organization_id, shop_id=shop_id,
+                correlation_id=_correlation(request),
+            )  # fmt: skip
+        except _KNOWN as error:
+            raise _problem(error) from None
+        response.headers["Cache-Control"] = "no-store"
+        return HolidayListView(
+            shop_id=shop_id,
+            items=[
+                HolidayView(holiday_id=h.holiday_id, country_iso=h.country_iso, name=h.name,
+                            is_working=h.is_working)
+                for h in found
+            ],
+        )  # fmt: skip
+
+    @router.post(
+        "/shops/{shop_id}/owner-writes/holiday-preference/preview",
+        summary="What changing one holiday preference would write, with its state on Etsy now",
+        responses=problem_responses(_PREVIEW),
+    )
+    async def preview_holiday_change(  # noqa: PLR0913, PLR0917 - the route's inputs
+        shop_id: uuid.UUID,
+        body: HolidayPreferenceChange,
+        request: Request,
+        response: Response,
+        auth: CurrentAuth,
+        services: Services,
+        organization_id: uuid.UUID | None = None,
+    ) -> OwnerWritePreviewView:
+        """`target.before` is the holiday's state read from Etsy now (null when the read failed,
+        with `before_error`, or when the shop has no such holiday)."""
+        try:
+            preview = await preview_holiday_preference(
+                auth, services, organization_id=organization_id, shop_id=shop_id,
+                values=body.model_dump(), correlation_id=_correlation(request), now=clock(),
+            )  # fmt: skip
+        except _KNOWN as error:
+            raise _problem(error) from None
+        response.headers["Cache-Control"] = "no-store"
+        return _preview_view(preview)
+
+    @router.post(
+        "/shops/{shop_id}/owner-writes/holiday-preference",
+        summary="Set whether the shop works on one holiday (the Owner's press)",
+        response_model=OwnerWriteRunView,
+        openapi_extra=_KEY_HEADER,
+        responses=problem_responses(_PRESS),
+    )
+    async def run_holiday_change(  # noqa: PLR0913, PLR0917 - the route's inputs
+        shop_id: uuid.UUID,
+        body: HolidayPreferenceChange,
+        request: Request,
+        auth: CurrentAuth,
+        services: Services,
+        organization_id: uuid.UUID | None = None,
+    ) -> JSONResponse:
+        """`etsy.holiday_preferences.update` through the Action Gateway: re-reads the shop's
+        holidays and sends nothing when the holiday is in that state already (`sent` false),
+        else sends once and re-reads."""
+        return await _press(
+            request, auth, services, HOLIDAY_PREFERENCE, organization_id, shop_id,
+            body.model_dump(),
+        )  # fmt: skip
 
     @router.get(
         "/relay-items/{item_id}/upload-preview",
@@ -461,6 +660,8 @@ def owner_writes_router(*, clock: Callable[[], datetime]) -> APIRouter:
     @router.post(
         "/relay-items/{item_id}/upload",
         summary="Upload a relay item's pasted tracking to its Etsy order (the Owner's press)",
+        response_model=OwnerWriteRunView,
+        openapi_extra=_KEY_HEADER,
         responses=problem_responses(
             {
                 **_PRESS,
@@ -471,26 +672,23 @@ def owner_writes_router(*, clock: Callable[[], datetime]) -> APIRouter:
             }
         ),
     )
-    async def upload_relay_item(  # noqa: PLR0913, PLR0917 - the route's inputs
+    async def upload_relay_item(
         item_id: uuid.UUID,
         request: Request,
-        response: Response,
         auth: CurrentAuth,
         services: Services,
-        idempotency_key: PressKey,
         organization_id: uuid.UUID | None = None,
-    ) -> OwnerWriteRunView:
+    ) -> JSONResponse:
         """A verified result closes the item (`uploaded`, or `tracking_on_etsy` when the receipt
         had the code already); a refused or failed upload leaves it with the person who copies
         it by hand (AC-6.10.3)."""
-        try:
-            run = await upload_relay_tracking(
+
+        def press(key: str, now: datetime) -> Awaitable[OwnerWriteRun]:
+            return upload_relay_tracking(
                 auth, services, organization_id=organization_id, item_id=item_id,
-                press_key=idempotency_key, correlation_id=_correlation(request), now=clock(),
+                press_key=key, correlation_id=_correlation(request), now=now,
             )  # fmt: skip
-        except _KNOWN as error:
-            raise _problem(error) from None
-        response.headers["Cache-Control"] = "no-store"
-        return _run_view(run)
+
+        return await _idempotent(request, auth, services, press)
 
     return router

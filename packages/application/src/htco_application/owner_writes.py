@@ -24,7 +24,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -40,7 +40,9 @@ from htco_application.execution.gateway import (
     ActionResult,
 )
 from htco_application.execution.service import Principals
+from htco_application.idempotency import IdempotencyStore
 from htco_application.jobs import JsonValue
+from htco_application.marketplace import HolidayPreference
 from htco_application.relay import RelayItem, RelayItemMovedError, RelayItemNotVisibleError
 from htco_application.relay import RelayStore as RelayItems
 from htco_application.shops import OrganizationRequiredError
@@ -127,9 +129,44 @@ def _prepare_vacation(values: Mapping[str, Any]) -> Prepared:
     return Prepared(input=sent, summary=dict(sent))
 
 
+def _positive(values: Mapping[str, Any], name: str) -> int:
+    value = values.get(name)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise InvalidWriteInputError(f"{name} must be a positive Etsy ID")
+    return value
+
+
+def _prepare_mark_shipped(values: Mapping[str, Any]) -> Prepared:
+    receipt = _positive(values, "receipt_id")
+    sent: dict[str, JsonValue] = {"receipt_id": receipt, "was_shipped": True}
+    return Prepared(input=sent, summary=dict(sent), receipt_id=receipt)
+
+
+def _prepare_holiday(values: Mapping[str, Any]) -> Prepared:
+    holiday = _positive(values, "holiday_id")
+    working = values.get("is_working")
+    if not isinstance(working, bool):
+        raise InvalidWriteInputError("is_working must be true or false")
+    sent: dict[str, JsonValue] = {"holiday_id": holiday, "is_working": working}
+    return Prepared(input=sent, summary=dict(sent))
+
+
 TRACKING_UPLOAD = OwnerWrite("tracking_upload", "etsy.shipments.create", 1, _prepare_tracking)
 VACATION_MODE = OwnerWrite("vacation_mode", "etsy.shop.update", 1, _prepare_vacation)
-OWNER_WRITES: tuple[OwnerWrite, ...] = (TRACKING_UPLOAD, VACATION_MODE)
+# Where the tracking upload is blocked for the key (A-04): the receipt marked shipped (6.8).
+MARK_SHIPPED = OwnerWrite("mark_shipped", "etsy.receipts.update", 1, _prepare_mark_shipped)
+# The holiday calendar (6.9): whether the shop works on one holiday.
+HOLIDAY_PREFERENCE = OwnerWrite(
+    "holiday_preference", "etsy.holiday_preferences.update", 1, _prepare_holiday
+)
+OWNER_WRITES: tuple[OwnerWrite, ...] = (
+    TRACKING_UPLOAD,
+    VACATION_MODE,
+    MARK_SHIPPED,
+    HOLIDAY_PREFERENCE,
+)
+# The read behind the holiday preference's before and after (R0, through the gateway).
+HOLIDAYS_READ = ActionRef("etsy.policies.read", 1)
 
 
 @dataclass(frozen=True)
@@ -190,6 +227,8 @@ class OwnerWriteServices:
     history: OwnerWriteHistory
     switches: WriteSwitches
     relay: RelayItems | None = None  # the AutoVA relay (6.10): uploads from a relay item
+    # The API's `Idempotency-Key` replay of a press (slice 5.2); without it a press answers 503.
+    idempotency: IdempotencyStore | None = None
     writes: tuple[OwnerWrite, ...] = OWNER_WRITES
 
     def write(self, key: str) -> OwnerWrite:
@@ -422,6 +461,84 @@ def preview_owner_write(  # noqa: PLR0913 - the caller, the write and its reques
     return OwnerWritePreview(state, shop_id, prepared.summary, _blocked(state, refusal))
 
 
+class HolidaysUnavailableError(Exception):
+    """Etsy's holiday preferences could not be read now: `code` is the gateway's error code."""
+
+    def __init__(self, code: str | None) -> None:
+        super().__init__(code or "unavailable")
+        self.code = code
+
+
+async def holiday_preferences(
+    auth: AuthContext,
+    services: OwnerWriteServices,
+    *,
+    organization_id: uuid.UUID | None,
+    shop_id: uuid.UUID,
+    correlation_id: str,
+) -> tuple[HolidayPreference, ...]:
+    """The shop's holidays and whether it works on each, read from Etsy through the gateway
+    (`etsy.policies.read`, R0) for the Owner: the console's list to pick from, and the before of
+    a holiday preference (its after is the press's re-read). Raises the console's errors and
+    `HolidaysUnavailableError`."""
+    organization = _organization(auth, organization_id)
+    _owner(auth, services, organization, shop_id)
+    request = ActionRequest(
+        action=HOLIDAYS_READ,
+        actor=ActorRef(ActorKind.USER, str(auth.user_id)),
+        organization_id=organization,
+        idempotency_key=f"owner:holidays:{uuid.uuid7()}",  # a read: each one fresh
+        correlation_id=correlation_id,
+        shop_id=shop_id,
+    )
+    result = await services.gateway_for(_CallerPrincipals(auth)).submit(request)
+    found = None if result.output is None else result.output.get("holiday_preferences")
+    if result.outcome is not ActionOutcome.SUCCEEDED or not isinstance(found, list):
+        raise HolidaysUnavailableError(result.error_code)
+    return tuple(
+        HolidayPreference(
+            holiday_id=int(str(h["holiday_id"])), country_iso=str(h["country_iso"]),
+            is_working=h["is_working"] is True, name=str(h["name"]),
+        )
+        for h in found
+        if isinstance(h, dict)
+    )  # fmt: skip
+
+
+async def preview_holiday_preference(  # noqa: PLR0913 - the caller and the request
+    auth: AuthContext,
+    services: OwnerWriteServices,
+    *,
+    organization_id: uuid.UUID | None,
+    shop_id: uuid.UUID,
+    values: Mapping[str, Any],
+    correlation_id: str,
+    now: datetime,
+) -> OwnerWritePreview:
+    """The holiday preference's confirm sheet with its before, read from Etsy now: `before` is
+    null when the read failed (`before_error` says why) or the shop has no such holiday."""
+    preview = preview_owner_write(
+        auth, services, HOLIDAY_PREFERENCE, organization_id=organization_id, shop_id=shop_id,
+        values=values, now=now,
+    )  # fmt: skip
+    summary = dict(preview.summary)
+    try:
+        found = await holiday_preferences(
+            auth, services, organization_id=organization_id, shop_id=shop_id,
+            correlation_id=correlation_id,
+        )  # fmt: skip
+    except HolidaysUnavailableError as error:
+        summary |= {"before": None, "before_error": error.code}
+    else:
+        holiday = next((h for h in found if h.holiday_id == summary["holiday_id"]), None)
+        summary["before"] = (
+            None if holiday is None
+            else {"is_working": holiday.is_working, "name": holiday.name,
+                  "country_iso": holiday.country_iso}
+        )  # fmt: skip
+    return replace(preview, summary=summary)
+
+
 def relay_upload_preview(
     auth: AuthContext,
     services: OwnerWriteServices,
@@ -545,7 +662,9 @@ async def run_owner_write(  # noqa: PLR0913 - the caller, the write and its requ
         auth, services, write, organization_id=organization, shop_id=shop_id,
         prepared=prepared, press_key=press_key, correlation_id=correlation_id,
     )  # fmt: skip
-    if _succeeded(result) and prepared.receipt_id is not None and services.relay is not None:
+    uploaded = write == TRACKING_UPLOAD and prepared.receipt_id is not None
+    if _succeeded(result) and uploaded and services.relay is not None:
+        assert prepared.receipt_id is not None  # noqa: S101 - `uploaded` checked it
         services.relay.close_order(
             shop_id, prepared.receipt_id, reason=_closed_reason(result), now=now
         )

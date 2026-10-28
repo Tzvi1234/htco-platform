@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.policies.read.input.json",
+  "title": "etsy.policies.read input",
+  "description": "The shop's holiday preferences for now; return policies and processing profiles join later.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

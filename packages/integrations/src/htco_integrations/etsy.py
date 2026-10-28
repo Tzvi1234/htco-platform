@@ -12,18 +12,19 @@ floor, routine calls are deferred with a warning and a metric; urgent calls stil
 older than `quota_snapshot_ttl` no longer defers, so one routine call can refresh it after Etsy's
 window has moved on.
 
-Read only, but for two writes (the owner's rule: connected shops are live, with real buyers).
+Read only, but for four writes (the owner's rule: connected shops are live, with real buyers).
 Every call goes through one choke point, `_request`, which refuses any method but GET before a
-token is fetched unless the caller sets the `allow_write` flag for that call. Only the two W3
+token is fetched unless the caller sets the `allow_write` flag for that call. Only the four W3
 writes set it: `create_receipt_shipment` and `update_shop_vacation` (slices 6.6 and 6.8, the
-owner's decision of 2026-10-26: built with every write flag off, never sent by a test, a script
-or an agent). Only the Action Gateway's API channel calls them
-(`tests/architecture/test_gateway_bypass.py`), on the Owner's own press after a step-up or on a
-request the Owner approved, once the granted scope and the write flag are checked. As a second,
-independent guard the adapter installs a request hook on its HTTP client that stops any non-GET
-request to any Etsy host (`etsy.com` and every `*.etsy.com`: the shop API on openapi.etsy.com and
-api.etsy.com, the website) and to the configured base URL, before it leaves the process, even if
-some code used the client directly. The one exception is the OAuth token exchange, a POST to
+owner's decision of 2026-10-26), `update_receipt_status` (6.8) and `update_holiday_preference`
+(6.9), all built with every write flag off, never sent by a test, a script or an agent. Only
+the Action Gateway's API channel calls them (`tests/architecture/test_gateway_bypass.py`), on
+the Owner's own press after a step-up or on a request the Owner approved, once the granted
+scope and the write flag are checked. As a second, independent guard the adapter installs a
+request hook on its HTTP client that stops any non-GET request to any Etsy host (`etsy.com`
+and every `*.etsy.com`: the shop API on openapi.etsy.com and api.etsy.com, the website) and to
+the configured base URL, before it leaves the process, even if some code used the client
+directly. The one exception is the OAuth token exchange, a POST to
 exactly `api.etsy.com/v3/public/oauth/token`, which changes no shop. Etsy's `tokenScopes` is a
 POST, so it is not used: the capability probes read the stored scopes.
 
@@ -55,6 +56,7 @@ from opentelemetry import metrics
 from htco_application.marketplace import (
     AccessTokenProvider,
     CredentialsRejectionSink,
+    HolidayPreference,
     InventorySnapshot,
     Listing,
     ListingDetails,
@@ -518,6 +520,49 @@ class EtsyAdapter:
             "PUT", "update_shop_vacation", shop_id, f"/shops/{shop_id}", {}, urgent=True,
             allow_write=True, form=fields,
         )  # fmt: skip
+
+    async def update_receipt_status(
+        self, shop_id: int, receipt_id: int, *, was_shipped: bool | None, was_paid: bool | None
+    ) -> None:
+        """Mark a receipt shipped or paid (`updateShopReceipt`, a PUT): only the fields asked
+        for. Sent once, never retried."""
+        if receipt_id < 1:
+            raise ValueError("receipt_id must be a positive Etsy receipt ID")
+        fields = {
+            name: "true" if value else "false"
+            for name, value in (("was_shipped", was_shipped), ("was_paid", was_paid))
+            if value is not None
+        }
+        if not fields:
+            raise ValueError("an Etsy receipt update needs was_shipped or was_paid")
+        await self._request(
+            "PUT", "update_receipt_status", shop_id, f"/shops/{shop_id}/receipts/{receipt_id}",
+            {}, urgent=True, allow_write=True, form=fields,
+        )  # fmt: skip
+
+    async def update_holiday_preference(
+        self, shop_id: int, holiday_id: int, *, is_working: bool
+    ) -> None:
+        """Whether the shop works on one holiday (`updateHolidayPreferences`, a PUT): the shop's
+        processing days around it. Sent once, never retried."""
+        if holiday_id < 1:
+            raise ValueError("holiday_id must be a positive Etsy holiday ID")
+        await self._request(
+            "PUT", "update_holiday_preference", shop_id,
+            f"/shops/{shop_id}/holiday-preferences/{holiday_id}", {}, urgent=True,
+            allow_write=True, form={"is_working": "true" if is_working else "false"},
+        )  # fmt: skip
+
+    async def list_holiday_preferences(
+        self, shop_id: int, *, tokens: AccessTokenProvider | None = None
+    ) -> tuple[HolidayPreference, ...]:
+        """The shop's holiday preferences (`getHolidayPreferences`, a GET): each holiday of the
+        shop's country and whether the shop works on it."""
+        body = await self._request(
+            "GET", "list_holiday_preferences", shop_id,
+            f"/shops/{shop_id}/holiday-preferences", {}, urgent=True, tokens=tokens,
+        )  # fmt: skip
+        return _parse("list_holiday_preferences", _holiday_preferences, body)
 
     async def list_reviews(  # noqa: PLR0913 - the port's filters
         self,
@@ -1019,6 +1064,22 @@ def _page[ItemT](body: object, item: Callable[[Any], ItemT], offset: int) -> Pag
         items=tuple(item(entry) for entry in results),
         total_count=_int(data, "count"),
         offset=offset,
+    )
+
+
+def _holiday_preferences(body: object) -> tuple[HolidayPreference, ...]:
+    """A JSON array, or a `results` page as Etsy's other lists (both accepted)."""
+    entries = body if isinstance(body, list) else _object(body)["results"]
+    if not isinstance(entries, list):
+        raise TypeError("holiday preferences must be a list")
+    return tuple(
+        HolidayPreference(
+            holiday_id=_int(data, "holiday_id"),
+            country_iso=_str(data, "country_iso"),
+            is_working=_bool(data, "is_working"),
+            name=_str(data, "holiday_name"),
+        )
+        for data in (_object(entry) for entry in entries)
     )
 
 

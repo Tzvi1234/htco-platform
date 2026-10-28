@@ -26,6 +26,7 @@ from htco_application.execution.contracts import ChannelBinding, ChannelOutcome
 from htco_application.execution.gateway import ActionRequest, Channel
 from htco_application.jobs import JsonValue
 from htco_application.marketplace import (
+    HolidayPreference,
     MarketplaceMoney,
     MarketplaceNotFoundError,
     MarketplacePermissionError,
@@ -96,6 +97,14 @@ class EtsyReads(Protocol):
     ) -> Page[ShopReview]: ...
 
 
+class EtsyHolidays(Protocol):
+    """The shop's holiday preferences (6.9): `etsy.policies.read`, and the re-reads of
+    `etsy.holiday_preferences.update`. Wired where the holiday calendar is used (the API's owner
+    writes); elsewhere its recipe is refused, never sent."""
+
+    async def list_holiday_preferences(self, shop_id: int) -> tuple[HolidayPreference, ...]: ...
+
+
 class EtsyShopIds(Protocol):
     def etsy_shop_id(self, shop_id: uuid.UUID) -> int | None: ...
 
@@ -152,8 +161,32 @@ class EtsyWrites(Protocol):
         self, shop_id: int, *, is_vacation: bool, vacation_message: str | None
     ) -> None: ...
 
+    async def update_receipt_status(
+        self, shop_id: int, receipt_id: int, *, was_shipped: bool | None, was_paid: bool | None
+    ) -> None: ...
 
-_WRITE_RECIPES = frozenset({"create_receipt_shipment", "update_shop_vacation"})
+    async def update_holiday_preference(
+        self, shop_id: int, holiday_id: int, *, is_working: bool
+    ) -> None: ...
+
+
+_WRITE_RECIPES = frozenset(
+    {
+        "create_receipt_shipment",
+        "update_shop_vacation",
+        "update_receipt_status",
+        "update_holiday_preference",
+    }
+)
+# The writes this channel verifies by a re-read of Etsy (`verify`).
+_REREAD_ACTIONS = frozenset(
+    {
+        "etsy.shipments.create",
+        "etsy.shop.update",
+        "etsy.receipts.update",
+        "etsy.holiday_preferences.update",
+    }
+)
 type _Recipe = Callable[[int, ActionRequest], Awaitable[ChannelOutcome]]
 
 
@@ -165,9 +198,15 @@ class EtsyApiChannel:
     channel = Channel.API
 
     def __init__(
-        self, etsy: EtsyReads, shops: EtsyShopIds, *, writes: EtsyWrites | None = None
+        self,
+        etsy: EtsyReads,
+        shops: EtsyShopIds,
+        *,
+        writes: EtsyWrites | None = None,
+        holidays: EtsyHolidays | None = None,
     ) -> None:
         self._etsy = etsy
+        self._holidays = holidays
         self._shops = shops
         # The recipes this channel runs (AUD-06, #147): the gateway refuses at startup a binding
         # whose recipe is not here, unless it is disabled.
@@ -177,6 +216,7 @@ class EtsyApiChannel:
             "list_reviews": self._list_reviews,
             "list_order_history": self._list_order_history,
             "list_shipments": self._list_shipments,
+            "list_holiday_preferences": self._list_holiday_preferences,
         }
 
         self._writes = writes
@@ -212,6 +252,24 @@ class EtsyApiChannel:
         return ChannelOutcome(
             output={"shop_id": shop.shop_id, "name": shop.name, "currency": shop.currency_code}
         )
+
+    async def _list_holiday_preferences(
+        self,
+        etsy_shop: int,
+        request: ActionRequest,  # noqa: ARG002
+    ) -> ChannelOutcome:
+        """`etsy.policies.read`: the shop's holidays and whether it works on each (6.9)."""
+        found = await self._holiday_list(etsy_shop)
+        return ChannelOutcome(
+            output={
+                "holiday_preferences": [
+                    {"holiday_id": h.holiday_id, "country_iso": h.country_iso,
+                     "is_working": h.is_working, "name": h.name}
+                    for h in found
+                ],
+                "count": len(found),
+            }
+        )  # fmt: skip
 
     async def _list_reviews(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:
         return ChannelOutcome(output=await self._reviews(etsy_shop, request.input))
@@ -314,6 +372,30 @@ class EtsyApiChannel:
             return ChannelOutcome(
                 output={"receipt_id": receipt_id, "sent": not present, "already_present": present}
             )
+        if recipe == "update_receipt_status":
+            receipt_id = int(str(values["receipt_id"]))
+            # Re-read first: a receipt Etsy shows shipped is never marked again.
+            shipped = (await self._etsy.get_order_receipt(etsy_shop, receipt_id)).is_shipped
+            if not shipped:
+                await writes.update_receipt_status(
+                    etsy_shop, receipt_id, was_shipped=True, was_paid=None
+                )
+            return ChannelOutcome(
+                output={"receipt_id": receipt_id, "sent": not shipped, "already_shipped": shipped}
+            )
+        if recipe == "update_holiday_preference":
+            holiday_id = int(str(values["holiday_id"]))
+            working = values["is_working"] is True
+            # Re-read first: a holiday already in that state is never sent again.
+            current = await self._holiday(etsy_shop, holiday_id)
+            if current is None:
+                raise MarketplaceNotFoundError("the shop has no such holiday", status=404)
+            same = current.is_working is working
+            if not same:
+                await writes.update_holiday_preference(etsy_shop, holiday_id, is_working=working)
+            return ChannelOutcome(
+                output={"holiday_id": holiday_id, "is_working": working, "sent": not same}
+            )
         wanted = values["is_vacation"] is True
         already = (await self._etsy.get_shop(etsy_shop, urgent=True)).is_vacation is wanted
         if not already:
@@ -338,18 +420,34 @@ class EtsyApiChannel:
         return {"reviews": [_review(r) for r in page.items], "count": page.total_count}
 
     async def verify(self, request: ActionRequest, outcome: ChannelOutcome) -> bool:  # noqa: ARG002
-        """Re-read Etsy after a write: the tracking code is on the receipt, or the shop is in the
-        vacation state asked for. Reads verify nothing."""
-        if request.action.name not in {"etsy.shipments.create", "etsy.shop.update"}:
+        """Re-read Etsy after a write: the tracking code is on the receipt, the receipt is shipped,
+        the holiday is in the state asked for, or the shop is in the vacation state asked for.
+        Reads verify nothing."""
+        name = request.action.name
+        if name not in _REREAD_ACTIONS:
             return False
         etsy_shop = self._etsy_shop(request)
         values = request.input
-        if request.action.name == "etsy.shipments.create":
+        if name in {"etsy.shipments.create", "etsy.receipts.update"}:
             receipt_id = int(str(values["receipt_id"]))
             receipt = await self._etsy.get_order_receipt(etsy_shop, receipt_id)
+            if name == "etsy.receipts.update":
+                return receipt.is_shipped
             return _has_tracking(receipt, str(values["tracking_code"]))
+        if name == "etsy.holiday_preferences.update":
+            holiday = await self._holiday(etsy_shop, int(str(values["holiday_id"])))
+            return holiday is not None and holiday.is_working is (values["is_working"] is True)
         shop = await self._etsy.get_shop(etsy_shop, urgent=True)
         return shop.is_vacation is (values["is_vacation"] is True)
+
+    async def _holiday_list(self, etsy_shop: int) -> tuple[HolidayPreference, ...]:
+        if self._holidays is None:
+            raise MarketplaceWriteRefusedError("the holiday calendar is not deployed here")
+        return await self._holidays.list_holiday_preferences(etsy_shop)
+
+    async def _holiday(self, etsy_shop: int, holiday_id: int) -> HolidayPreference | None:
+        found = await self._holiday_list(etsy_shop)
+        return next((h for h in found if h.holiday_id == holiday_id), None)
 
 
 def _has_tracking(receipt: OrderReceipt, code: str) -> bool:
