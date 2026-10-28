@@ -27,10 +27,13 @@ pytestmark = pytest.mark.anyio
 SHOP = ORG  # any identifier: the audit names it
 
 
-async def reconsent(world: World, scope: str = "transactions_w") -> str:
+async def reconsent(
+    world: World, scope: str = "transactions_w", held: frozenset[str] = frozenset()
+) -> str:
     return await start_write_reconsent(
         world.etsy, organization_id=ORG, shop_id=SHOP, user_id=OWNER, session_id=SESSION,
         write_scope=scope, reason="tracking_upload", now=NOW, correlation_id="req-1",
+        held_scopes=held,
     )  # fmt: skip
 
 
@@ -70,7 +73,7 @@ async def test_the_reconsent__is_bound_to_the_owners_session_and_audited() -> No
     assert (pending.organization_id, pending.user_id, pending.session_id) == (ORG, OWNER, SESSION)
     [record] = world.audit.records
     assert record.action == "shop.write_reconsent_started"
-    assert record.after == {"scope": "transactions_w", "write": "tracking_upload"}
+    assert record.after == {"scope": "transactions_w", "write": "tracking_upload", "kept": []}
     assert state not in repr(record)
     # Another session cannot finish it (the connect flow's own check, AC-4.3.1).
     with pytest.raises(StateRejectedError):
@@ -97,3 +100,22 @@ async def test_only_an_owner_writes_scope__may_be_asked_for(scope: str) -> None:
 
     assert world.pending.rows == {}
     assert world.audit.records == []
+
+
+@pytest.mark.ac("AC-6.8.2")
+async def test_a_reconsent__keeps_the_write_scope_the_shop_holds() -> None:
+    """Etsy's new grant replaces the old one: holding transactions_w, a re-consent for shops_w
+    asks for both, and the stored grant holds both. Never another scope than the writes'."""
+    world = World()
+    held = ETSY_CONNECT_SCOPES | {"transactions_w", "email_r"}
+
+    url = await reconsent(world, "shops_w", held)
+    [state] = parse_qs(urlsplit(url).query)["state"]
+    connected = await world.complete(state, auth=owner())
+
+    both = ETSY_CONNECT_SCOPES | {"transactions_w", "shops_w"}
+    assert asked(url) == both  # email_r is no owner write's: never asked for here
+    assert connected.integration.scopes == both
+    [record] = [r for r in world.audit.records if r.action == "shop.write_reconsent_started"]
+    assert record.after == {"scope": "shops_w", "write": "tracking_upload",
+                            "kept": ["transactions_w"]}  # fmt: skip

@@ -792,13 +792,14 @@ def reconsent_scope(
     organization_id: uuid.UUID | None,
     shop_id: uuid.UUID,
     key: str,
-) -> tuple[uuid.UUID, str]:
-    """The organization and the one write scope to re-consent to for write `key` on the shop
-    (AC-6.8.2), for the Owner only. Raises the console's errors, `LookupError` for an unknown
+) -> tuple[uuid.UUID, str, frozenset[str]]:
+    """The organization, the one write scope to re-consent to for write `key` on the shop
+    (AC-6.8.2) and the scopes the shop's grant holds now (kept by the re-consent), for the
+    Owner only. Raises the console's errors, `LookupError` for an unknown
     write or one that needs no scope."""
     organization = _organization(auth, organization_id)
     _owner(auth, services, organization, shop_id)
     scope = _scope_of(_definition(services, services.write(key)))
     if scope is None:
         raise LookupError(key)
-    return organization, scope
+    return organization, scope, services.shops.scopes_of(shop_id)

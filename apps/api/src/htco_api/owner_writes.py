@@ -657,8 +657,9 @@ def owner_writes_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa:
         services: Services,
         organization_id: uuid.UUID | None = None,
     ) -> AuthorizationView:
-        """AC-6.8.2: Etsy's authorization URL asking for the read scopes plus exactly the one
-        write scope this write needs (`transactions_w` or `shops_w`). The Owner with a second
+        """AC-6.8.2: Etsy's authorization URL asking for the read scopes plus the write scope
+        this write needs (`transactions_w` or `shops_w`), keeping the write scopes the shop
+        holds: a re-consent never drops one. The Owner with a second
         factor and a recent step-up, from the web app; the state and PKCE verifier are bound to
         this session, as in the connect flow, whose callback stores the scopes Etsy granted, so
         the console shows the scope as held. Audited (`shop.write_reconsent_started`). The
@@ -666,7 +667,7 @@ def owner_writes_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa:
         etsy = etsy_connect_of(request)
         session = web_session_of(request)
         try:
-            organization, scope = await anyio.to_thread.run_sync(
+            organization, scope, held = await anyio.to_thread.run_sync(
                 lambda: reconsent_scope(
                     auth, services, organization_id=organization_id, shop_id=shop_id, key=key
                 )
@@ -677,7 +678,7 @@ def owner_writes_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa:
             raise ProblemError(NOT_FOUND) from None
         url = await start_write_reconsent(
             etsy, organization_id=organization, shop_id=shop_id, user_id=auth.user_id,
-            session_id=session, write_scope=scope, reason=key, now=clock(),
+            session_id=session, write_scope=scope, reason=key, now=clock(), held_scopes=held,
             correlation_id=_correlation(request),
         )  # fmt: skip
         response.headers["Cache-Control"] = "no-store"

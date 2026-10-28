@@ -77,7 +77,7 @@ async def test_reconnect__asks_for_the_read_scopes_plus_exactly_the_writes_scope
         assert answer.headers["Cache-Control"] == "no-store"
         assert scopes_of(answer.json()["authorization_url"]) == ETSY_CONNECT_SCOPES | {scope}
         [record] = [r for r in world.audit.records if r.action == "shop.write_reconsent_started"]
-        assert record.after == {"scope": scope, "write": key}
+        assert record.after == {"scope": scope, "write": key, "kept": []}
 
 
 @pytest.mark.ac("AC-6.8.2")
@@ -149,3 +149,34 @@ async def test_reconnect__another_organizations_shop_404() -> None:
         )
 
         assert answer.status_code == 404
+
+
+async def _granted(world: World, key: str) -> httpx.Response:
+    started = await reconnect(world, key)
+    state = httpx.URL(started.json()["authorization_url"]).params["state"]
+    return await world.send(
+        world.http.post(
+            "/v1/integrations/etsy/callback", json={"code": GOOD_CODE, "state": state},
+            headers=CSRF,
+        )
+    )  # fmt: skip
+
+
+@pytest.mark.ac("AC-6.8.2")
+async def test_reconnect__never_drops_a_write_scope_the_shop_holds() -> None:
+    async for world in _reconsent_world():
+        assert (await _granted(world, "tracking_upload")).status_code == 200
+
+        second = await reconnect(world, "vacation_mode")
+        done = await _granted(world, "vacation_mode")
+        rows = {
+            row["key"]: row
+            for row in (await world.http.get(f"/v1/shops/{world.shop_id}/owner-writes")).json()[
+                "items"
+            ]
+        }
+
+        both = ETSY_CONNECT_SCOPES | {"transactions_w", "shops_w"}
+        assert scopes_of(second.json()["authorization_url"]) == both
+        assert set(done.json()["integration"]["scopes"]) == both
+        assert all(row["scope_granted"] for row in rows.values())

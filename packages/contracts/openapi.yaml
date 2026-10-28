@@ -9051,9 +9051,11 @@ paths:
       tags:
       - owner-writes
       summary: Reconnect the shop to grant one write's Etsy scope (the re-consent)
-      description: 'AC-6.8.2: Etsy''s authorization URL asking for the read scopes plus exactly the one
+      description: 'AC-6.8.2: Etsy''s authorization URL asking for the read scopes plus the write scope
 
-        write scope this write needs (`transactions_w` or `shops_w`). The Owner with a second
+        this write needs (`transactions_w` or `shops_w`), keeping the write scopes the shop
+
+        holds: a re-consent never drops one. The Owner with a second
 
         factor and a recent step-up, from the web app; the state and PKCE verifier are bound to
 

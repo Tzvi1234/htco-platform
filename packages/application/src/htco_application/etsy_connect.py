@@ -259,12 +259,12 @@ async def start_connection(  # noqa: PLR0913 - each keyword is one part of the b
     session_id: uuid.UUID,
     now: datetime,
     random_token: Callable[[int], str] = secrets.token_urlsafe,
-    write_scope: str | None = None,
+    write_scopes: frozenset[str] = frozenset(),
 ) -> str:
     """Keep a new state and verifier for this session; return Etsy's authorization URL. The
-    normal connect asks for the read scopes only; `write_scope` (the re-consent of AC-6.8.2,
-    `start_write_reconsent`) adds exactly one write scope to them."""
-    scopes = etsy.scopes if write_scope is None else etsy.scopes | {write_scope}
+    normal connect asks for the read scopes only; `write_scopes` (the re-consent of AC-6.8.2,
+    `start_write_reconsent`) adds owner-write scopes to them."""
+    scopes = etsy.scopes | write_scopes
     state = random_token(_STATE_BYTES)
     verifier = random_token(_VERIFIER_BYTES)
     await etsy.pending.save(
@@ -307,17 +307,21 @@ async def start_write_reconsent(  # noqa: PLR0913 - the binding and what it asks
     reason: str,
     now: datetime,
     correlation_id: str | None,
+    held_scopes: frozenset[str] = frozenset(),
     random_token: Callable[[int], str] = secrets.token_urlsafe,
 ) -> str:
     """The connect flow again, asking for the read scopes plus exactly the one write scope an
-    owner write needs (AC-6.8.2). The caller has checked the Owner and the step-up; the state and
+    owner write needs (AC-6.8.2), and the write scopes the shop's grant already holds
+    (`held_scopes`): a re-consent never drops a scope, since Etsy's new grant replaces the old
+    one. The caller has checked the Owner and the step-up; the state and
     verifier are bound to this session like any connect, and the callback stores the scopes Etsy
     granted. Audited (`shop.write_reconsent_started`, the scope and the write, no token)."""
     if write_scope not in WRITE_SCOPES:
         raise UnknownWriteScopeError(write_scope)
+    kept = held_scopes & WRITE_SCOPES  # never more than the owner writes' own scopes
     url = await start_connection(
         etsy, organization_id=organization_id, user_id=user_id, session_id=session_id, now=now,
-        random_token=random_token, write_scope=write_scope,
+        random_token=random_token, write_scopes=frozenset({write_scope}) | kept,
     )  # fmt: skip
     await etsy.audit.append(
         AuditRecord.new(
@@ -326,7 +330,7 @@ async def start_write_reconsent(  # noqa: PLR0913 - the binding and what it asks
             action="shop.write_reconsent_started",
             entity_type="shop",
             entity_id=str(shop_id),
-            after={"scope": write_scope, "write": reason},
+            after={"scope": write_scope, "write": reason, "kept": sorted(kept - {write_scope})},
             correlation_id=correlation_id,
         )
     )
