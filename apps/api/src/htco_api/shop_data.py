@@ -1205,9 +1205,9 @@ def _add_bulk_routes(router: APIRouter, *, clock: Callable[[], datetime]) -> Non
                     ShopNotConnectedProblem,
                 ),
                 422: (
-                    "Invalid shop ID or body (`errors` lists the fields), or the Idempotency-Key "
-                    "was used with another request (idempotency-key-reused)",
-                    Problem,
+                    "Invalid shop ID or body, or the Idempotency-Key was used with another "
+                    "request (idempotency-key-reused); `errors` names the fields",
+                    ValidationProblem,
                 ),
                 429: "Re-synced moments ago (resync-rate-limited; see Retry-After)",
                 503: "Re-syncs are not set up (orders-bulk-unavailable), or replays are not set "

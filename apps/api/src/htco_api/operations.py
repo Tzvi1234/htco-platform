@@ -350,9 +350,9 @@ def operations_router(*, clock: Callable[[], datetime]) -> APIRouter:
                     RetryThroughExecutionProblem,
                 ),
                 422: (
-                    "Invalid ID (`errors` lists the fields), or the Idempotency-Key was used "
-                    "with another request (idempotency-key-reused)",
-                    Problem,
+                    "Invalid ID, or the Idempotency-Key was used with another request "
+                    "(idempotency-key-reused); `errors` names the fields",
+                    ValidationProblem,
                 ),
                 503: "Not available on this server (operations-unavailable), or replays are not "
                 "set up (not-ready)",

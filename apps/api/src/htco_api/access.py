@@ -32,7 +32,6 @@ from htco_api.identity import FORBIDDEN, problem_responses
 from htco_api.problems import (
     NOT_FOUND,
     NOT_READY,
-    Problem,
     ProblemError,
     ProblemType,
     ValidationProblem,
@@ -199,9 +198,9 @@ def access_router(*, clock: Callable[[], datetime]) -> APIRouter:
                 409: "Already a member, or the email already has an account, or the first "
                 "request with this Idempotency-Key still runs (idempotency-in-progress)",
                 422: (
-                    "Invalid email or role (`errors` lists the fields), or the Idempotency-Key "
-                    "was used with another request (idempotency-key-reused)",
-                    Problem,
+                    "Invalid email or role, or the Idempotency-Key was used with another "
+                    "request (idempotency-key-reused); `errors` names the fields",
+                    ValidationProblem,
                 ),
                 503: "Invitations cannot be sent right now, or replays are not set up (not-ready)",
             }

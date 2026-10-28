@@ -51,6 +51,17 @@ IDEMPOTENCY_KEY_REUSED = ProblemType(
     422,
     "This Idempotency-Key was used with a different request. Use a new key.",
 )
+# The 422 names the field at fault, so its body is a `ValidationProblem` like every other 422 of
+# the routes that opt in (their contract declares that schema, and dropping `errors` from it would
+# break clients).
+_KEY_REUSED_ERRORS = {
+    "errors": [
+        {
+            "location": ["header", "Idempotency-Key"],
+            "message": "Used with a different request; use a new key",
+        }
+    ]
+}
 IDEMPOTENCY_IN_PROGRESS = ProblemType(
     "idempotency-in-progress",
     "Request still running",
@@ -133,7 +144,7 @@ async def run_idempotently(  # noqa: PLR0913 - the request, its caller, the stor
             dict(begun.body), status_code=begun.status, headers={REPLAYED_HEADER: "true"}
         )
     if isinstance(begun, KeyReused):
-        raise ProblemError(IDEMPOTENCY_KEY_REUSED)
+        raise ProblemError(IDEMPOTENCY_KEY_REUSED, extra=_KEY_REUSED_ERRORS)
     if isinstance(begun, StillRunning):
         raise ProblemError(IDEMPOTENCY_IN_PROGRESS)
     try:

@@ -232,7 +232,8 @@ async def test_invite__same_key_with_another_body__422_and_nobody_invited(store:
 
     assert [first.status_code, other.status_code] == [201, 422]
     assert other.json()["type"] == PROBLEMS + "idempotency-key-reused"
-    assert "errors" not in other.json()
+    # A ValidationProblem like the route's other 422s: the header is the field at fault.
+    assert [e["location"] for e in other.json()["errors"]] == [["header", "Idempotency-Key"]]
     assert inviter.invited == ["new@example.test"]
     assert [r.action for r in store.audit] == ["membership.created"]
 
