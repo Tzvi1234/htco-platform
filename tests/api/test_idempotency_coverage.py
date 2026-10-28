@@ -18,6 +18,8 @@ _SESSION = (
     "that the sign-in service accepts once; its answers carry secrets, never stored for replay"
 )
 
+_PREVIEW = "a read-only confirm sheet: validates the input and reads; it writes nothing"
+
 # operationId -> why a client retry without the header does no harm.
 EXEMPT: dict[str, str] = {
     "change_member_role": "PATCH sets the role: repeating it changes nothing",
@@ -50,6 +52,14 @@ EXEMPT: dict[str, str] = {
     "receive_etsy_webhook": "Etsy's webhook ID deduplicates in the inbox; Etsy sends no key",
     "move_incident": "a state transition: a repeat is refused (409)",
     "read_notifications": "marking read again changes nothing",
+    # The owner writes' confirm sheets (#220): POST only to carry the input (a tracking code
+    # never rides in a URL); they validate and read, and write nothing.
+    "preview_tracking_upload": _PREVIEW,
+    "preview_vacation_mode": _PREVIEW,
+    "preview_mark_shipped": _PREVIEW,
+    "preview_holiday_change": _PREVIEW,
+    "reconnect_for_write": "starts the OAuth re-consent with a fresh state each time (as "
+    "connect_etsy_shop); creates nothing until the callback",
 }
 
 

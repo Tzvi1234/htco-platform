@@ -2,7 +2,8 @@
 # policy (equal to the tool's description), verification, channel bindings in order of preference,
 # limits keys and the JSON Schemas in packages/contracts/actions/. Reviewed data like the tools.
 # Writes stay off until their write flag is named (HTCO_ETSY_WRITE_ACTIONS), checked again when the
-# write runs; the first two, the tracking upload and vacation mode (slices 6.6, 6.8, 7.12), are W3.
+# write runs. All four are W3: the tracking upload and vacation mode (slices 6.6, 6.8, 7.12),
+# marking a receipt shipped (6.8) and a holiday preference (6.9).
 
 [[actions]]
 tool = "etsy.shop.read"
@@ -136,6 +137,61 @@ actor_kinds = ["user", "employee", "automation"]
 channel = "api"
 recipe = "update_shop_vacation"
 requires_scope = "shops_w"
+breaker_key = "etsy:api"
+
+# Mark a receipt shipped (6.8), where the tracking upload is blocked for the key (A-04): W3 like the
+# upload. The channel re-reads the receipt and sends nothing when it is shipped already.
+[[actions]]
+tool = "etsy.receipts.update"
+approval_policy = "W3"
+verify = "reread"
+timeout_seconds = 60
+input_schema = "etsy.receipts.update.input.json"
+output_schema = "etsy.receipts.update.output.json"
+rate_limit_key = "etsy:app"
+concurrency_key = "shop:{shop_id}:writes"
+user_capability = "confirm_shipment_write"
+# Never an advisor or the platform; only the Owner's own press runs without an approval.
+actor_kinds = ["user", "employee", "automation"]
+[[actions.bindings]]
+channel = "api"
+recipe = "update_receipt_status"
+requires_scope = "transactions_w"
+breaker_key = "etsy:api"
+
+# The holiday calendar (6.9): whether the shop works on one holiday. W3 while it is owner-trigger
+# first (the owner's policy for every Etsy write of 2026-10-26); the channel re-reads first.
+[[actions]]
+tool = "etsy.holiday_preferences.update"
+approval_policy = "W3"
+verify = "reread"
+timeout_seconds = 60
+input_schema = "etsy.holiday_preferences.update.input.json"
+output_schema = "etsy.holiday_preferences.update.output.json"
+rate_limit_key = "etsy:app"
+concurrency_key = "shop:{shop_id}:writes"
+user_capability = "update_shop_settings"
+# Never an advisor or the platform; only the Owner's own press runs without an approval.
+actor_kinds = ["user", "employee", "automation"]
+[[actions.bindings]]
+channel = "api"
+recipe = "update_holiday_preference"
+requires_scope = "shops_w"
+breaker_key = "etsy:api"
+
+# The holiday calendar's read (6.9): the console's before and after of a holiday preference.
+[[actions]]
+tool = "etsy.policies.read"
+approval_policy = "R0"
+verify = "schema"
+timeout_seconds = 30
+input_schema = "etsy.policies.read.input.json"
+output_schema = "etsy.policies.read.output.json"
+rate_limit_key = "etsy:app"
+user_capability = "view_overview"
+[[actions.bindings]]
+channel = "api"
+recipe = "list_holiday_preferences"
 breaker_key = "etsy:api"
 
 # The app-wide Etsy budget (slice 5.15): one key's calls per second and per UTC day, shared by

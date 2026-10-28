@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.receipts.update.output.json",
+  "title": "etsy.receipts.update output",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "sent",
+    "already_shipped"
+  ],
+  "properties": {
+    "receipt_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sent": {
+      "type": "boolean"
+    },
+    "already_shipped": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

@@ -99,6 +99,11 @@ CALL_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ("execution/channels.py", "EtsyApiChannel._write", "update_shop_vacation"),
         ("execution/channels.py", "EtsyApiChannel.verify", "get_order_receipt"),
         ("execution/channels.py", "EtsyApiChannel.verify", "get_shop"),
+        # Marking a receipt shipped (6.8) and a holiday preference (6.9), with their re-reads.
+        ("execution/channels.py", "EtsyApiChannel._write", "update_receipt_status"),
+        ("execution/channels.py", "EtsyApiChannel._write", "update_holiday_preference"),
+        # The holiday calendar's read (6.9): `etsy.policies.read` and the holiday's re-reads.
+        ("execution/channels.py", "EtsyApiChannel._holiday_list", "list_holiday_preferences"),
         ("order_history.py", "AdapterReceiptPages.page", "list_order_receipts"),
         ("shop_capabilities.py", "_probe", "check_receipt_addresses"),
         ("shop_capabilities.py", "_probe", "get_shop"),

@@ -290,7 +290,7 @@ risk = "medium"
 data_scope = "internal"
 audit_required = true
 readiness = "draft"
-description = "Update the shop's holiday preferences per country (updateHolidayPreferences). Endpoints: updateHolidayPreferences. Approval policy W1."
+description = "Update the shop's holiday preferences per country (updateHolidayPreferences). Endpoints: updateHolidayPreferences. Approval policy W3."
 
 [[tools]]
 name = "etsy.sections.manage"
@@ -470,7 +470,7 @@ risk = "high"
 data_scope = "confidential"
 audit_required = true
 readiness = "draft"
-description = "Mark a receipt as paid or shipped (updateShopReceipt was_paid, was_shipped). Endpoints: updateShopReceipt. Approval policy W2."
+description = "Mark a receipt as paid or shipped (updateShopReceipt was_paid, was_shipped). Endpoints: updateShopReceipt. Approval policy W3."
 
 [[tools]]
 name = "etsy.shipments.create"

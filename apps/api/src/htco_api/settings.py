@@ -3,6 +3,7 @@
 import base64
 import binascii
 from enum import StrEnum
+from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlsplit
 
@@ -10,7 +11,10 @@ from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_valida
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from htco_application.etsy_webhooks import WebhookSecret
+from htco_application.owner_writes import OWNER_WRITES
 from htco_platform.crypto import KeyRing
+
+OWNER_WRITE_ACTIONS = frozenset(write.action for write in OWNER_WRITES)
 
 
 class Environment(StrEnum):
@@ -89,6 +93,33 @@ class ApiSettings(BaseSettings):
     # sync enqueues `etsy.order_sync` for the worker and returns. On: the rollback, a stale read
     # starts the sync here as before.
     order_sync_in_api: bool = False
+    # The owner-triggered Etsy writes (slices 6.6, 6.8, ADR-0022): every write is off unless its
+    # action is named here, comma-separated (`etsy.shipments.create,etsy.shop.update`); only the
+    # owner names them. `HTCO_ETSY_WRITES_HALTED` is the kill switch over all of them. Both are
+    # read again by the gateway right before each send. The action contracts come from the
+    # reviewed registry, as in the worker.
+    etsy_write_actions: str = ""
+    etsy_writes_halted: bool = False
+    registry_path: Path = Path("registry")
+    action_schemas_path: Path = Path("packages/contracts/actions")
+
+    @property
+    def etsy_write_action_set(self) -> frozenset[str]:
+        return frozenset(
+            name.strip() for name in self.etsy_write_actions.split(",") if name.strip()
+        )
+
+    @field_validator("etsy_write_actions")
+    @classmethod
+    def _write_actions_are_known(cls, value: str) -> str:
+        names = {name.strip() for name in value.split(",") if name.strip()}
+        unknown = sorted(names - OWNER_WRITE_ACTIONS)
+        if unknown:
+            raise ValueError(
+                "HTCO_ETSY_WRITE_ACTIONS names an action that is not an owner write: "
+                + ", ".join(unknown)
+            )
+        return value
 
     @property
     def token_key_ring(self) -> KeyRing | None:

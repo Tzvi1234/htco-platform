@@ -364,6 +364,11 @@ def _session(request: Request) -> uuid.UUID:
     return session
 
 
+# For the owner writes' re-consent (AC-6.8.2), which starts this connect flow.
+etsy_connect_of = _etsy
+web_session_of = _session
+
+
 def _reader(request: Request) -> IntegrationReader:
     reader = getattr(request.app.state, "integrations", None)
     if reader is None:

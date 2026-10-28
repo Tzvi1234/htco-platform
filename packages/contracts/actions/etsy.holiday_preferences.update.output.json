@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.holiday_preferences.update.output.json",
+  "title": "etsy.holiday_preferences.update output",
+  "type": "object",
+  "required": [
+    "holiday_id",
+    "is_working",
+    "sent"
+  ],
+  "properties": {
+    "holiday_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "is_working": {
+      "type": "boolean"
+    },
+    "sent": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

@@ -228,7 +228,9 @@ def test_source__only_the_two_owner_triggered_writes_allow_a_write() -> None:
     ]
     assert offenders == []
     source = adapter.read_text("utf-8")
-    assert len(WRITE_ALLOWED.findall(source)) == 2  # create_receipt_shipment, update_shop_vacation
+    # create_receipt_shipment, update_shop_vacation, update_receipt_status,
+    # update_holiday_preference: the four owner-triggered W3 writes.
+    assert len(WRITE_ALLOWED.findall(source)) == 4
     assert re.findall(r"self\._client\.(\w+)\(", source) == ["request"]
 
 

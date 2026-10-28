@@ -33,6 +33,7 @@ from htco_application.execution.gateway import (
 )
 from htco_application.execution.service import ActionGatewayService, GatewayParts
 from htco_application.marketplace import (
+    HolidayPreference,
     MarketplacePermissionError,
     MarketplaceShop,
     OrderReceipt,
@@ -88,6 +89,10 @@ class FakeEtsy:
     refuse: Exception | None = None
     # Etsy answers 200 to the POST but the shipment never appears on a re-read.
     loses_the_shipment: bool = False
+    holidays: tuple[HolidayPreference, ...] = (
+        HolidayPreference(holiday_id=7, country_iso="US", is_working=True, name="Thanksgiving"),
+        HolidayPreference(holiday_id=9, country_iso="US", is_working=False, name="Christmas"),
+    )
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
     async def get_order_receipt(self, shop_id: int, receipt_id: int) -> OrderReceipt:
@@ -140,6 +145,36 @@ class FakeEtsy:
         if self.refuse is not None:
             raise self.refuse
         self.on_vacation = is_vacation
+
+    async def update_receipt_status(
+        self, shop_id: int, receipt_id: int, *, was_shipped: bool | None, was_paid: bool | None
+    ) -> None:
+        self.calls.append(
+            ("update_receipt_status", {"shop_id": shop_id, "receipt_id": receipt_id,
+                                       "was_shipped": was_shipped, "was_paid": was_paid})
+        )  # fmt: skip
+        if self.refuse is not None:
+            raise self.refuse
+        if was_shipped:
+            self.receipts[receipt_id] = replace(self.receipts[receipt_id], is_shipped=True)
+
+    async def update_holiday_preference(
+        self, shop_id: int, holiday_id: int, *, is_working: bool
+    ) -> None:
+        self.calls.append(
+            ("update_holiday_preference",
+             {"shop_id": shop_id, "holiday_id": holiday_id, "is_working": is_working})
+        )  # fmt: skip
+        if self.refuse is not None:
+            raise self.refuse
+        self.holidays = tuple(
+            replace(h, is_working=is_working) if h.holiday_id == holiday_id else h
+            for h in self.holidays
+        )
+
+    async def list_holiday_preferences(self, shop_id: int) -> tuple[HolidayPreference, ...]:
+        self.calls.append(("list_holiday_preferences", {"shop_id": shop_id}))
+        return self.holidays
 
     # The rest of the read port: these writes never use them.
     async def list_receipts(  # noqa: PLR0913 - the port's signature
