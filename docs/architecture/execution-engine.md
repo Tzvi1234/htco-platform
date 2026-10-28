@@ -667,3 +667,41 @@ These are unchanged from ADR-0013 and PR #58 (`ExecutionState`), and from PR #53
 | Monitoring | Prometheus and Grafana OSS (self-hosted on the browser worker's host or Grafana Cloud free tier) | 8A |
 
 Separation: API workers never hold browser profiles; browser workers never hold Etsy OAuth tokens; only the Secret Broker opens sealed credentials, and only for a grant.
+
+### The cross-process path of a browser action (AUD-04, #143)
+
+A browser action crosses two processes and never waits inline ([ADR-0025](../adr/0025-browser-and-network-providers.md) §3, settled in the [ADR-0019](../adr/0019-unified-execution-engine-and-action-gateway.md) validation log of 2026-10-27):
+
+```text
+agent-worker                              Postgres                                browser-worker
+─────────────                             ────────                                ──────────────
+submit: validate, authorize, approve,
+claim, route (breaker + rate at
+dispatch) ── one transaction ──────────►  action DISPATCHED + binding on claim
+                                          job browser.run   (locator only)
+                                          job browser.resume (deadline + grace)
+                                          outbox actions.dispatched.v1
+lease and slot released; the automation
+waits (or the employee's graph pauses)
+                                          browser.run claimed ◄─────────────────  claims browser.* jobs only
+                                          private.start_browser_run ◄───────────  re-checks claim, deadline,
+                                          (started row, run token)                 READY, flag, scope, switches,
+                                                                                  the browser:{shop} breaker,
+                                                                                  approval; then runs the recipe
+                                          private.finish_browser_run ◄──────────  outcome, once per attempt
+                                          (a read that needs no approval:
+                                          private.record_unapproved_read,
+                                          with its leased job)
+                                          outbox browser.run_finished.v1
+outbox dispatcher enqueues browser.resume
+browser.resume: resubmit the same key ─►  DISPATCHED + outcome? apply once:
+                                          SUCCEEDED / FAILED / HANDED_TO_HUMAN
+                                          (or ignore and record: duplicate,
+                                          cancelled, hash_mismatch)
+```
+
+- **What each side holds.** The agent-worker holds the gateway, the approvals and the authority. The browser worker holds the profile and the page, and its role can only start and finish runs it has leased.
+- **The slot.** One browser profile runs one session at a time through the job's concurrency key (`browser:{environment_id}`). Separately, each browser worker runs at most `ProviderCapabilities.parallel_profiles` sessions at once, so a claimed `browser.run` may wait for a worker slot until its deadline. The gateway's own slot is released at dispatch.
+- **The breaker, twice.** The `browser:{shop}` breaker is checked at dispatch and again by the browser worker at execution time, next to the kill switches, so a backlog dispatched before the breaker opened is stopped (AC-8A.2.30). Only a run that started on the site counts on it (a session's `timeout` or `error`, or `interrupted`); the watchdog's `timeout` for a never-started attempt, `deferred`, `lock_lost`, a capability refusal, `challenge` and `refused` do not.
+- **Never waiting for ever.** The watchdog resolves every attempt by time: the outcome, `timeout` if the run never started, or `interrupted` with a person's check if it started. It respects a live takeover: while a person holds the session ([ADR-0026](../adr/0026-browser-live-view-and-human-takeover.md), AC-8A.11.9 and AC-8A.11.15), it does not mark the run.
+- **No blocking database call on an event loop,** on either side (AUD-05).
