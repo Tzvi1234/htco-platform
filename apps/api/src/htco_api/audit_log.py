@@ -76,7 +76,8 @@ def _reader(request: Request) -> AuditLogReader:
 
 def _view(entry: AuditEntry) -> AuditEntryView:
     return AuditEntryView(
-        id=entry.id, occurred_at=entry.occurred_at, actor_kind=entry.actor_kind,
+        id=entry.id, occurred_at=entry.occurred_at,
+        actor_kind=ActorKind(entry.actor_kind),
         actor_id=entry.actor_id, action=entry.action, entity_type=entry.entity_type,
         entity_id=entry.entity_id,
         before=None if entry.before is None else dict(entry.before),
