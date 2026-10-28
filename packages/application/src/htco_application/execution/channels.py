@@ -1,9 +1,11 @@
 """The Action Gateway's channel adapters (slice 5.13, `execution-engine.md` §3).
 
-- `EtsyApiChannel`: real. It reads through `MarketplacePort`, the guarded Etsy adapter that
-  sends GET requests only. Every write recipe is refused before anything leaves HTCO: Etsy writes
-  stay disabled until the owner-triggered slices of Phases 6 and 7, which deliver them through
-  the outbox with one `Deliverer` per write action.
+- `EtsyApiChannel`: real. It reads through `MarketplacePort`, the guarded Etsy adapter. Its only
+  writes are the owner-triggered ones of slices 6.6 and 6.8 (the tracking upload and vacation
+  mode, `EtsyWrites`): each re-reads Etsy first and sends nothing when the change is already
+  there, sends once (a write is never retried blindly), and is verified by a re-read. The gateway
+  has checked the Owner's trigger, the step-up, the scope and the write flag before. Every other
+  write recipe is refused before anything leaves HTCO.
 - `InternalChannel`: runs an application use case by recipe name.
 - `BrowserChannel` (the Protocol) and `FakeBrowserChannel`, which replays recorded recipe
   outcomes, including a security challenge (the real controller is Phase 8A).
@@ -34,8 +36,15 @@ from htco_application.marketplace import (
     Receipt,
     ShopReview,
 )
-from htco_application.order_receipts import for_automation, receipt_to_json
+from htco_application.order_receipts import (
+    for_automation,
+    receipt_to_json,
+    shipments_to_json,
+    without_buyer_data,
+    without_tracking_codes,
+)
 from htco_domain.actors import ActorKind
+from htco_domain.fulfillment import normalize_tracking_code
 
 SECURITY_CHALLENGE = "security_challenge"
 HUMAN_CHANNEL = "human_channel"
@@ -131,58 +140,126 @@ def _review(review: ShopReview) -> dict[str, JsonValue]:
     return mapped
 
 
-_READS = frozenset({"get_shop", "list_receipts", "list_reviews"})
+class EtsyWrites(Protocol):
+    """The Etsy writes the owner triggers (ADR-0022); only this channel calls them (the
+    gateway-bypass contract, tests/architecture/test_gateway_bypass.py)."""
+
+    async def create_receipt_shipment(
+        self, shop_id: int, receipt_id: int, *, tracking_code: str, carrier_name: str
+    ) -> None: ...
+
+    async def update_shop_vacation(
+        self, shop_id: int, *, is_vacation: bool, vacation_message: str | None
+    ) -> None: ...
+
+
+_WRITE_RECIPES = frozenset({"create_receipt_shipment", "update_shop_vacation"})
+type _Recipe = Callable[[int, ActionRequest], Awaitable[ChannelOutcome]]
+
+
+def _anonymous(receipt: OrderReceipt) -> dict[str, JsonValue]:
+    return receipt_to_json(without_tracking_codes(without_buyer_data(receipt)))
 
 
 class EtsyApiChannel:
     channel = Channel.API
 
-    def __init__(self, etsy: EtsyReads, shops: EtsyShopIds) -> None:
+    def __init__(
+        self, etsy: EtsyReads, shops: EtsyShopIds, *, writes: EtsyWrites | None = None
+    ) -> None:
         self._etsy = etsy
         self._shops = shops
+        # The recipes this channel runs (AUD-06, #147): the gateway refuses at startup a binding
+        # whose recipe is not here, unless it is disabled.
+        self._recipes: Mapping[str, _Recipe] = {
+            "get_shop": self._get_shop,
+            "list_receipts": self._list_receipts,
+            "list_reviews": self._list_reviews,
+            "list_order_history": self._list_order_history,
+            "list_shipments": self._list_shipments,
+        }
 
-    async def execute(self, request: ActionRequest, binding: ChannelBinding) -> ChannelOutcome:
-        if binding.recipe not in _READS:
-            raise MarketplaceWriteRefusedError(
-                f"{request.action.name}: Etsy writes stay disabled until Phases 6 and 7"
-            )
+        self._writes = writes
+
+    @property
+    def recipes(self) -> frozenset[str]:
+        # The writes are implemented whether or not this deployment wires them: an unwired write
+        # is refused at execute time, never routed to Etsy (ADR-0022).
+        return frozenset(self._recipes) | _WRITE_RECIPES
+
+    def _etsy_shop(self, request: ActionRequest) -> int:
         etsy_shop = None if request.shop_id is None else self._shops.etsy_shop_id(request.shop_id)
         if etsy_shop is None:
             raise MarketplaceNotFoundError("the shop has no Etsy connection", status=404)
-        if binding.recipe == "get_shop":
-            shop = await self._etsy.get_shop(etsy_shop)
-            return ChannelOutcome(
-                output={"shop_id": shop.shop_id, "name": shop.name, "currency": shop.currency_code}
+        return etsy_shop
+
+    async def execute(self, request: ActionRequest, binding: ChannelBinding) -> ChannelOutcome:
+        if binding.recipe in _WRITE_RECIPES:
+            if self._writes is None:
+                raise MarketplaceWriteRefusedError(
+                    f"{request.action.name}: this Etsy write is not deployed"
+                )
+            return await self._write(request, binding.recipe, self._writes)
+        recipe = None if binding.recipe is None else self._recipes.get(binding.recipe)
+        if recipe is None:
+            raise MarketplaceWriteRefusedError(
+                f"{request.action.name}: no recipe {binding.recipe} in the API channel"
             )
-        if binding.recipe == "list_reviews":
-            return ChannelOutcome(output=await self._reviews(etsy_shop, request.input))
+        return await recipe(self._etsy_shop(request), request)
+
+    async def _get_shop(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:  # noqa: ARG002
+        shop = await self._etsy.get_shop(etsy_shop)
+        return ChannelOutcome(
+            output={"shop_id": shop.shop_id, "name": shop.name, "currency": shop.currency_code}
+        )
+
+    async def _list_reviews(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:
+        return ChannelOutcome(output=await self._reviews(etsy_shop, request.input))
+
+    async def _list_receipts(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:
         if request.input.get("order_history") is True:
             if request.actor.kind is not ActorKind.AUTOMATION:
                 raise MarketplacePermissionError(
                     "the order history form is for automations", status=403
                 )
-            # The buyer's name and address are Etsy Order Intake's alone, and tracking codes
-            # Intake's and Tracking Sync's (ADR-0018, AUD-06): every other automation gets the
-            # same receipts without them.
+            # The buyer's data is `etsy.order_history.read`'s and tracking codes are
+            # `etsy.shipments.read`'s (ADR-0018, AUD-06, #147): this form never has them.
             return ChannelOutcome(
-                output=await self._order_history(etsy_shop, request.input, request.actor.id)
+                output=await self._order_history(etsy_shop, request.input, _anonymous)
             )
         return ChannelOutcome(output=await self._receipts(etsy_shop, request.input))
 
-    async def _order_history(
-        self, etsy_shop: int, values: Mapping[str, JsonValue], automation_id: str
-    ) -> dict[str, JsonValue]:
-        """Receipts as the order history stores them (`order_receipts`), in the form this
-        automation may receive (`for_automation`): an R1 output the gateway returns and never
-        stores."""
+    async def _list_order_history(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:
+        """`etsy.order_history.read`: the receipts as the order history stores them. Granted to
+        Etsy Order Intake alone; shaped by `for_automation` all the same."""
 
         def shape(receipt: OrderReceipt) -> dict[str, JsonValue]:
-            return receipt_to_json(for_automation(receipt, automation_id))
+            return receipt_to_json(for_automation(receipt, request.actor.id))
 
+        return ChannelOutcome(output=await self._order_history(etsy_shop, request.input, shape))
+
+    async def _list_shipments(self, etsy_shop: int, request: ActionRequest) -> ChannelOutcome:
+        """`etsy.shipments.read`: each receipt's shipments with their tracking codes, nothing of
+        the buyer. Granted to Tracking Sync alone."""
+        output = await self._order_history(
+            etsy_shop, request.input, shipments_to_json, key="shipments"
+        )
+        return ChannelOutcome(output=output)
+
+    async def _order_history(
+        self,
+        etsy_shop: int,
+        values: Mapping[str, JsonValue],
+        shape: Callable[[OrderReceipt], dict[str, JsonValue]],
+        *,
+        key: str = "receipts",
+    ) -> dict[str, JsonValue]:
+        """Receipts in the order history's form (`order_receipts`), each in the given shape: an
+        R1 output the gateway returns and never stores."""
         receipt_id = values.get("receipt_id")
         if isinstance(receipt_id, int):
             one = await self._etsy.get_order_receipt(etsy_shop, receipt_id)
-            return {"receipts": [shape(one)], "count": 1}
+            return {key: [shape(one)], "count": 1}
         since = values.get("min_last_modified")
         page = await self._etsy.list_order_receipts(
             etsy_shop,
@@ -195,7 +272,7 @@ class EtsyApiChannel:
             was_paid=_flag(values.get("was_paid")),
             was_shipped=_flag(values.get("was_shipped")),
         )
-        return {"receipts": [shape(r) for r in page.items], "count": page.total_count}
+        return {key: [shape(r) for r in page.items], "count": page.total_count}
 
     async def _receipts(
         self, etsy_shop: int, values: Mapping[str, JsonValue]
@@ -215,6 +292,39 @@ class EtsyApiChannel:
         )
         return {"receipts": [_receipt(r) for r in page.items], "count": page.total_count}
 
+    async def _write(
+        self, request: ActionRequest, recipe: str, writes: EtsyWrites
+    ) -> ChannelOutcome:
+        etsy_shop = self._etsy_shop(request)
+        values = request.input
+        if recipe == "create_receipt_shipment":
+            receipt_id = int(str(values["receipt_id"]))
+            code = str(values["tracking_code"])
+            # Re-read first (AC-6.6.2): a code already on the receipt is never sent again.
+            receipt = await self._etsy.get_order_receipt(etsy_shop, receipt_id)
+            present = _has_tracking(receipt, code)
+            if not present:
+                await writes.create_receipt_shipment(
+                    etsy_shop,
+                    receipt_id,
+                    tracking_code=code,
+                    carrier_name=str(values["carrier_name"]),
+                )
+            # The output never carries the code: it can locate the parcel, and so the buyer.
+            return ChannelOutcome(
+                output={"receipt_id": receipt_id, "sent": not present, "already_present": present}
+            )
+        wanted = values["is_vacation"] is True
+        already = (await self._etsy.get_shop(etsy_shop, urgent=True)).is_vacation is wanted
+        if not already:
+            message = values.get("vacation_message")
+            await writes.update_shop_vacation(
+                etsy_shop,
+                is_vacation=wanted,
+                vacation_message=message if isinstance(message, str) else None,
+            )
+        return ChannelOutcome(output={"is_vacation": wanted, "sent": not already})
+
     async def _reviews(
         self, etsy_shop: int, values: Mapping[str, JsonValue]
     ) -> dict[str, JsonValue]:
@@ -228,7 +338,25 @@ class EtsyApiChannel:
         return {"reviews": [_review(r) for r in page.items], "count": page.total_count}
 
     async def verify(self, request: ActionRequest, outcome: ChannelOutcome) -> bool:  # noqa: ARG002
-        return False  # no write runs through this channel yet, so nothing is re-read
+        """Re-read Etsy after a write: the tracking code is on the receipt, or the shop is in the
+        vacation state asked for. Reads verify nothing."""
+        if request.action.name not in {"etsy.shipments.create", "etsy.shop.update"}:
+            return False
+        etsy_shop = self._etsy_shop(request)
+        values = request.input
+        if request.action.name == "etsy.shipments.create":
+            receipt_id = int(str(values["receipt_id"]))
+            receipt = await self._etsy.get_order_receipt(etsy_shop, receipt_id)
+            return _has_tracking(receipt, str(values["tracking_code"]))
+        shop = await self._etsy.get_shop(etsy_shop, urgent=True)
+        return shop.is_vacation is (values["is_vacation"] is True)
+
+
+def _has_tracking(receipt: OrderReceipt, code: str) -> bool:
+    """The shared normaliser (separators and case): a code written differently is the same
+    parcel, never a second shipment and a second email to the buyer (sage on #161)."""
+    wanted = normalize_tracking_code(code)
+    return any(normalize_tracking_code(s.tracking_code) == wanted for s in receipt.shipments)
 
 
 def _flag(value: JsonValue) -> bool | None:
@@ -242,6 +370,10 @@ UseCase = Callable[[ActionRequest], Awaitable[Mapping[str, JsonValue]]]
 
 class InternalChannel:
     channel = Channel.INTERNAL
+
+    @property
+    def recipes(self) -> frozenset[str]:
+        return frozenset(self._use_cases)
 
     def __init__(self, use_cases: Mapping[str, UseCase]) -> None:
         self._use_cases = use_cases

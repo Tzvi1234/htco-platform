@@ -222,6 +222,8 @@ class Office:
                 browser=browser or Browser(),
                 human=self.human,
                 guards=guards,
+                # The inventory write runs here to show its refusal: its write flag is on.
+                write_flags=frozenset({"etsy.inventory.update"}),
             )
         )
 
@@ -614,13 +616,41 @@ async def test_api__a_write__refused_before_any_call() -> None:
     )
     binding = real_catalog(office()).actions["etsy.inventory.update"].bindings[0]
 
-    with pytest.raises(MarketplaceWriteRefusedError, match="writes stay disabled"):
+    with pytest.raises(MarketplaceWriteRefusedError, match="no recipe"):
         await adapter.execute(request, binding)
 
     assert marketplace.calls == []
 
 
-async def test_api__a_refused_write__failed_and_not_a_breaker_failure() -> None:
+@pytest.mark.parametrize(
+    ("action", "values"),
+    [
+        (
+            "etsy.shipments.create",
+            {"receipt_id": 1, "tracking_code": "FAKE-TRACK-01", "carrier_name": "usps"},
+        ),
+        ("etsy.shop.update", {"is_vacation": True}),
+    ],
+)
+async def test_api__an_owner_write_with_no_writes_wired__not_deployed_and_no_call(
+    action: str, values: dict[str, Any]
+) -> None:
+    """A deployment without Etsy writes (`writes=None`) refuses #161's write recipes before any
+    call, even though the channel names them among its recipes (quill2 on #161)."""
+    marketplace = FakeMarketplace()
+    adapter = EtsyApiChannel(marketplace, EtsyShops())
+    [binding] = real_catalog(office()).actions[action].bindings
+    assert binding.recipe in adapter.recipes  # so the gateway starts; the refusal is here
+
+    with pytest.raises(MarketplaceWriteRefusedError, match="not deployed"):
+        await adapter.execute(ask(action, key=f"{action}:1", input=values), binding)
+
+    assert marketplace.calls == []
+
+
+async def test_api__a_disabled_write__never_routed_and_not_a_breaker_failure() -> None:
+    """The inventory write is a disabled binding until its recipe is built (#147): it is never
+    routed, so it never reaches Etsy and never counts against the breaker."""
     clock_now = NOW
     breakers = MemoryBreakers()
     office_ = Office(real_catalog(office()), EtsyApiChannel(FakeMarketplace(), EtsyShops()),
@@ -636,10 +666,7 @@ async def test_api__a_refused_write__failed_and_not_a_breaker_failure() -> None:
 
     for n in range(5):  # as many refusals as failures would open the breaker
         result = await office_.gateway.submit(replace(write, idempotency_key=f"inventory:{n}"))
-        assert (result.outcome, result.error_code) == (
-            ActionOutcome.FAILED,
-            "MarketplaceWriteRefusedError",
-        )
+        assert (result.outcome, result.error_code) == (ActionOutcome.DENIED, "no_channel")
 
     assert breakers.admit("etsy:api", now=clock_now) is None
 

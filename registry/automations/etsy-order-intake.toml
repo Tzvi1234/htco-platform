@@ -11,7 +11,7 @@ side_effect = "internal"
 approval_required = false
 ai_steps = []
 # The Action Gateway lets it read receipts (slice 5.4); it writes only its own store.
-allowed_actions = ["etsy.receipts.read"]
+allowed_actions = ["etsy.order_history.read"]
 readiness = "ready"
 activation_phase = 5
 
@@ -42,7 +42,7 @@ text = "The shop is connected (an integration in status connected, in the execut
 
 [specification.steps]
 status = "defined"
-text = "A receipt: fetch it through the Action Gateway (etsy.receipts.read, order history form, GET-only) and ingest it in one transaction when Etsy's updated_timestamp is newer: order, items, refunds, buyer row, state transitions, estimated money, orders.* events. The history: the backfill from its checkpoint, then the 30-day re-read, under the shop's lock. Reconcile and sweep: re-read and compare, recording drifts (slice 5.5)."
+text = "A receipt: fetch it through the Action Gateway (etsy.order_history.read, GET-only) and ingest it in one transaction when Etsy's updated_timestamp is newer: order, items, refunds, buyer row, state transitions, estimated money, orders.* events. The history: the backfill from its checkpoint, then the 30-day re-read, under the shop's lock. Reconcile and sweep: re-read and compare, recording drifts (slice 5.5)."
 
 [specification.output_schema]
 status = "defined"
@@ -70,7 +70,7 @@ text = "120 s per attempt. A webhook's order is stored within a minute of the no
 
 [specification.permissions]
 status = "defined"
-text = "Runs as the htco_worker role inside its job's organization (RLS), with column grants that read no money column except the grand total; its only action is etsy.receipts.read."
+text = "Runs as the htco_worker role inside its job's organization (RLS), with column grants that read no money column except the grand total; its only action is etsy.order_history.read (granted to it alone, #147)."
 
 [specification.audit]
 status = "defined"

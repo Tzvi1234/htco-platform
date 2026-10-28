@@ -22,7 +22,7 @@ from htco_application.incidents import (
     IncidentService,
     order_resource,
 )
-from htco_application.kernel import JobError, TenantShop
+from htco_application.kernel import JobError, TenantShop, event_payload
 from htco_application.marketplace import OrderShipment
 from htco_application.tracking_sync import (
     TRACKING_DETECTED,
@@ -38,6 +38,7 @@ from htco_domain.automation import AutomationExecution, TriggerKind
 from htco_domain.fulfillment import tracking_fingerprint
 from htco_domain.incidents import Cause, IncidentState, ResourceKind
 from htco_domain.integrations import IntegrationStatus
+from htco_domain.workforce import Readiness
 from tests.application.test_action_gateway import ORG, SHOP, office
 from tests.application.test_execution_router import EtsyShops, FakeMarketplace
 from tests.application.test_order_intake import _vault
@@ -58,10 +59,14 @@ SECOND_CODE = "FAKE-INTAKE-TRACK-02"
 def tracking_office() -> Registry:
     base = office()
     automation = parse_automation(
-        engine_document(TRACKING_SYNC, allowed_actions=["etsy.receipts.read"])
+        engine_document(TRACKING_SYNC, allowed_actions=["etsy.shipments.read"])
     )
+    tools = dict(base.tools)
+    tools["etsy.shipments.read"] = replace(tools["etsy.shipments.read"], readiness=Readiness.ACTIVE)
     return replace(
-        base, automations=MappingProxyType({**base.automations, TRACKING_SYNC: automation})
+        base,
+        tools=MappingProxyType(tools),
+        automations=MappingProxyType({**base.automations, TRACKING_SYNC: automation}),
     )
 
 
@@ -169,8 +174,8 @@ async def test_ac_6_1_2_the_first_sighting_keeps_its_time_source_and_trigger() -
     assert row.last4 == "CK01"
     assert FAKE_TRACKING not in repr(row)
     [event] = sync.tracking.events.of(TRACKING_DETECTED)
-    assert event.payload["source"] == "etsy"
-    assert event.payload["observed_via"] == "webhook"
+    assert event_payload(event)["source"] == "etsy"
+    assert event_payload(event)["observed_via"] == "webhook"
     assert FAKE_TRACKING.replace("-", "") not in str(event.payload)
 
 
@@ -189,7 +194,7 @@ async def test_ac_6_3_2_tracking_resolves_the_open_incident_with_its_evidence() 
     [row] = sync.tracking.rows.values()
     assert last.evidence.reference == str(row.id)
     [event] = sync.incident_store.events.of(INCIDENT_RESOLVED)
-    assert event.payload["evidence_kind"] == "tracking_present"
+    assert event_payload(event)["evidence_kind"] == "tracking_present"
 
 
 async def test_a_receipt_without_shipments_records_nothing_and_resolves_nothing() -> None:

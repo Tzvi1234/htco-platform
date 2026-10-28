@@ -24,6 +24,7 @@ from htco_application.mfa import (
     SessionDirectory,
     mfa_failure_key,
 )
+from htco_application.passkeys import TOTP
 from htco_application.web_sessions import (
     MAX_FAILURES_PER_IP,
     RESET_LINK,
@@ -99,7 +100,10 @@ async def reset_password(  # noqa: PLR0913 - the link's tokens, the password, th
             factors = await mfa.factors_of(link_access_token)
             verified = [factor for factor in factors if factor.verified]
             if not verified:
-                return None  # no authenticator app: the password changes without a code
+                return None  # no second factor: the password changes without a code
+            # A passkey has no code: only the authenticator apps are asked (Codex on #171). A user
+            # with a second factor but no app never resets on the link alone (fails closed).
+            apps = [factor for factor in verified if factor.kind == TOTP]
             # Counted against the user only; the link's failure row carries the address, so one
             # wrong code counts once against the address limit.
             async with Throttled(
@@ -113,7 +117,7 @@ async def reset_password(  # noqa: PLR0913 - the link's tokens, the password, th
             ):
                 # The request names no factor: the code may come from any of the user's apps (one
                 # may be the lost one). One wrong code counts once, however many apps were tried.
-                for factor in verified:
+                for factor in apps:
                     try:
                         return await mfa.verify_totp(link_access_token, factor.id, entered)
                     except CredentialsRefusedError:

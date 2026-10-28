@@ -33,9 +33,22 @@ from htco_application.incidents import (
     drift_detection,
     order_resource,
 )
-from htco_application.kernel import EVENTS_DESTINATION, JobError, JsonValue, Offload, run_inline
-from htco_application.messaging import OutboxMessage
+from htco_application.kernel import (
+    DomainEvent,
+    JobError,
+    JsonValue,
+    Offload,
+    OutboxMessage,
+    event_payload,
+    publish,
+    run_inline,
+)
 from htco_application.notifications import NotificationRequest, NotificationService
+from htco_application.relay import (
+    RelayStore,
+    open_due_relay_items,
+    reconcile_relay_items,
+)
 from htco_application.review_alerts import low_review_alerts
 from htco_domain.actors import ActorKind, ActorRef
 from htco_domain.automation import TriggerKind
@@ -87,6 +100,10 @@ class SlaStore(Protocol):
         """Of these receipts, the cancelled or refunded ones, with Etsy's update time."""
         ...
 
+    def tracked_orders(self, shop_id: uuid.UUID, receipt_ids: tuple[int, ...]) -> frozenset[int]:
+        """Of these receipts, the ones with a tracking event (the AutoVA relay, 6.10)."""
+        ...
+
     def receipts_for_transactions(
         self, shop_id: uuid.UUID, transaction_ids: tuple[int, ...]
     ) -> Mapping[int, int]:
@@ -101,10 +118,10 @@ def breach_event(  # noqa: PLR0913 - one breach's facts
     order: AwaitingOrder,
     policy: SlaPolicy,
     deadline: datetime,
+    detected_at: datetime,
     correlation_id: str | None,
 ) -> OutboxMessage:
     payload: dict[str, JsonValue] = {
-        "event_type": SLA_BREACHED,
         "receipt_id": order.receipt_id,
         "policy_id": str(policy.id),
         "policy_version": policy.version,
@@ -113,13 +130,19 @@ def breach_event(  # noqa: PLR0913 - one breach's facts
         "paid_at": order.paid_at.isoformat(),
         "deadline": deadline.isoformat(),
     }
-    return OutboxMessage(
-        organization_id=organization_id,
-        shop_id=shop_id,
-        destination=EVENTS_DESTINATION,
-        idempotency_key=f"{SLA_BREACHED}:{shop_id}:{order.receipt_id}:{policy.id}:{policy.version}",
-        payload=payload,
-        correlation_id=None if correlation_id is None else correlation_id[:200],
+    return publish(
+        DomainEvent(
+            event_type=SLA_BREACHED,
+            organization_id=organization_id,
+            shop_id=shop_id,
+            idempotency_key=(
+                f"{SLA_BREACHED}:{shop_id}:{order.receipt_id}:{policy.id}:{policy.version}"
+            ),
+            occurred_at=detected_at,
+            actor=DETECTOR,
+            payload=payload,
+            correlation_id=correlation_id,
+        )
     )
 
 
@@ -134,6 +157,8 @@ class IncidentDetection:
     # Ship-by alerts (slice 6.9) through the notification path of 6.4; None: none raised.
     alerts: NotificationService | None = None
     ship_by_warning_days: int = SHIP_BY_WARNING_DAYS
+    # The AutoVA relay (slice 6.10): the inspection opens the due relay items; None: none open.
+    relay: RelayStore | None = None
     # Waits out a short gateway deferral inside the low-review scan (6.9); tests pass a fake.
     sleep: Callable[[float], Awaitable[None]] | None = None
 
@@ -162,8 +187,22 @@ class IncidentDetection:
             )
         )  # fmt: skip
 
+    async def _relay_cleanup(
+        self, ctx: HandlerContext, shop_id: uuid.UUID, now: datetime
+    ) -> tuple[int, int, int]:
+        if self.relay is None:
+            return 0, 0, 0
+        return await reconcile_relay_items(
+            self.relay, self.store.closed_orders, organization_id=ctx.organization_id,
+            shop_id=shop_id, now=now, tracked_orders=self.store.tracked_orders,
+            offload=self.offload,
+        )  # fmt: skip
+
     async def _inspect(self, ctx: HandlerContext, shop_id: uuid.UUID) -> HandlerOutcome:
         now = self.clock()
+        # The relay's retention first (local Codex on #159): a failing notification later in the
+        # run never keeps a code past its time to live.
+        cleaned = await self._relay_cleanup(ctx, shop_id, now)
         policies = await self.offload(lambda: self.store.policies(ctx.organization_id))
         awaiting = await self.offload(lambda: self.store.awaiting_tracking(shop_id))
         opened = 0
@@ -200,6 +239,7 @@ class IncidentDetection:
                         order=order,
                         policy=policy,
                         deadline=deadline,
+                        detected_at=now,
                         correlation_id=ctx.correlation_id,
                     ),
                 ),
@@ -215,6 +255,21 @@ class IncidentDetection:
         }
         if self.alerts is not None:
             output["ship_by_alerts"] = await self._ship_by(ctx, shop_id, policies, awaiting, now)
+            if self.relay is not None:
+                output["relay_items_opened"] = await open_due_relay_items(
+                    self.relay, self.alerts, organization_id=ctx.organization_id,
+                    shop_id=shop_id, awaiting=awaiting, now=now,
+                    correlation_id=ctx.correlation_id, offload=self.offload,
+                    calendar=select_policy(policies, shop_id=shop_id).calendar,
+                )  # fmt: skip
+                # Again after opening: an item opened from this run's snapshot whose order got
+                # its tracking meanwhile closes in the same run.
+                again = await self._relay_cleanup(ctx, shop_id, now)
+                cleaned = (cleaned[0] + again[0], cleaned[1] + again[1], cleaned[2] + again[2])
+        if self.relay is not None:
+            output["relay_items_cancelled"] = cleaned[0]
+            output["relay_items_expired"] = cleaned[1]
+            output["relay_items_tracked"] = cleaned[2]
         return Completed(output)
 
     async def _ship_by(
@@ -342,7 +397,7 @@ class DriftIncidents:
 
     @staticmethod
     def request_for(message: OutboxMessage) -> TriggerRequest | None:
-        payload = message.payload
+        payload = event_payload(message)
         drift = {name: payload.get(name) for name in _DRIFT_FIELDS}
         if (
             message.shop_id is None

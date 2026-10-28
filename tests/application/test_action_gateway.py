@@ -61,7 +61,7 @@ def office() -> Registry:
     their grants."""
     real = read_registry(REGISTRY).registry()
     tools = dict(real.tools)
-    for name in ("etsy.receipts.read", "etsy.shop.read"):
+    for name in ("etsy.receipts.read", "etsy.shop.read", "etsy.order_history.read"):
         tools[name] = replace(tools[name], readiness=Readiness.ACTIVE)
     from htco_application.workforce.registry import (  # noqa: PLC0415
         parse_automation,
@@ -70,7 +70,11 @@ def office() -> Registry:
 
     employee = parse_employee(employee_document("eitan", allowed_tools=["etsy.receipts.read"]))
     automation = parse_automation(
-        engine_document("etsy-order-intake", allowed_actions=["etsy.receipts.read"])
+        # Intake's own read (#147) beside the shared one the gateway's tests use.
+        engine_document(
+            "etsy-order-intake",
+            allowed_actions=["etsy.receipts.read", "etsy.order_history.read"],
+        )
     )
     return Registry(
         employees=MappingProxyType({"eitan": employee}),
@@ -106,7 +110,7 @@ class World:
         )
         self.gateway = ActionGatewayService(
             GatewayParts(
-                catalog=real_catalog(self.registry),
+                catalog=real_catalog(self.registry, built=True),
                 registry=lambda: self.registry,
                 store=self.store,
                 principals=self.principals,
@@ -116,6 +120,8 @@ class World:
                 capabilities=self.capabilities,
                 clock=lambda: NOW,
                 human=self.human,
+                # Writes are off unless their flag is on (W2, slice 6.6): these tests run one.
+                write_flags=frozenset({"etsy.inventory.update"}),
             )
         )
 

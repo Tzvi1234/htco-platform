@@ -20,7 +20,7 @@
 - [ ] 7.7 Activity record store
 - [ ] 7.8 Activity query API and view
 - [ ] 7.9 Scheduled Reporting & Notifications automation
-- [ ] 7.10 Agent Task Scheduling & Recovery automation
+- [ ] 7.10 Agent Task Scheduling & Recovery automation. Part 1: the recovery decision (`htco_domain.recovery`: a recorded effect closes, restartable resumes, the rest escalates; one recovery key per lease generation) and the `agent-task-scheduling-recovery` handler over claim, effect, apply and resume ports (`htco_application.task_recovery`); AC-7.10.1 to AC-7.10.3 tested in memory. Open: the Postgres store over the 7.1 tasks (#181) and automation executions (lease generation and `skip locked` claim, the AC-7.10.3 lock test against Postgres), the activity record written with each outcome (7.7, #191), the resumer, the worker schedule, stalled tasks past their SLA and tasks whose resource arrived, the escalation's view in the web client (ER-UX-07), and the specification's 18 sections (AC-7.10.4)
 - [ ] 7.11 Approvals and the Human channel on Postgres (the Phase 5 contract)
 - [ ] 7.12 Owner's first Etsy writes: shop, sections, holiday tools
 - [ ] 7.13 Supplier and quote model (moved from 13.1)

@@ -60,7 +60,14 @@ from htco_application.execution.gateway import (
     Channel,
 )
 from htco_application.execution.guards import Guards, InlineRetry
-from htco_application.execution.router import BrowserGate, ExecutionRouter, NoBrowser, NoRoute
+from htco_application.execution.router import (
+    BrowserGate,
+    ExecutionRouter,
+    NoBrowser,
+    NoRoute,
+    ShopScopes,
+    WriteSwitch,
+)
 from htco_application.execution.schema import validate
 from htco_application.jobs import JsonValue, describe_error
 from htco_application.marketplace import (
@@ -69,12 +76,13 @@ from htco_application.marketplace import (
     QuotaDeferredError,
 )
 from htco_application.messaging import OutboxMessage
-from htco_application.workforce.registry import Registry
+from htco_application.workforce.registry import Registry, restricted_grant_problems
 from htco_application.workforce.tool_access import ToolVerdict, decide_tool_access
 from htco_domain.actions import ActionState, ApprovalPolicy, VerifyMode, action_path
 from htco_domain.actors import ActorKind
 from htco_domain.guards import day_window
 from htco_domain.identity import Role
+from htco_domain.workforce import PRODUCTION_READINESS
 
 EVENT_DESTINATION = "events.publish"
 EXECUTED_EVENT = "actions.executed.v1"
@@ -240,6 +248,9 @@ class GatewayParts:
     guards: Guards | None = None  # breakers, limits and retries (slice 5.15)
     browser: BrowserGate = field(default_factory=NoBrowser)  # environments, flags, scopes (5.13)
     human: HumanTasks | None = None  # hand-offs to a person (slice 5.13; Postgres in Phase 7)
+    scopes: ShopScopes | None = None  # the shops' granted Etsy scopes (ADR-0022 §4)
+    # The writes switched on, by action (W2's flag): a set, or a switch read at every check.
+    write_flags: frozenset[str] | WriteSwitch = frozenset()
 
 
 class Refusal(Exception):  # noqa: N818 - a refusal is the result, not a failure of the gateway
@@ -260,8 +271,27 @@ class ActionGatewayService:
                 raise ValueError(f"no rate budget for {', '.join(missing)}")
         if parts.human is None and {Channel.BROWSER, Channel.HUMAN} & set(parts.adapters):
             raise ValueError("a browser or human channel needs a task store for its hand-offs")
+        unbuilt = sorted(
+            f"{definition.name} -> {binding.channel.value}:{binding.recipe}"
+            for definition in parts.catalog.actions.values()
+            for binding in definition.bindings
+            if not binding.disabled
+            and binding.channel in parts.adapters
+            and (recipes := getattr(parts.adapters[binding.channel], "recipes", None)) is not None
+            and binding.recipe not in recipes
+        )
+        if unbuilt:
+            # A recipe the channel cannot run would fail every call (AUD-06, #147): refuse to
+            # start, unless the binding is marked disabled until it is built.
+            raise ValueError(f"no implementation for {', '.join(unbuilt)}")
         self._p = parts
-        self._router = ExecutionRouter(parts.adapters, parts.capabilities, parts.browser)
+        self._router = ExecutionRouter(
+            parts.adapters,
+            parts.capabilities,
+            parts.browser,
+            scopes=parts.scopes,
+            write_flags=parts.write_flags,
+        )
 
     async def submit(self, request: ActionRequest) -> ActionResult:
         now = self._p.clock()
@@ -332,6 +362,8 @@ class ActionGatewayService:
     def _authorize(self, request: ActionRequest, definition: ActionDefinition) -> bool:
         """Raises `Refusal`; True when this actor needs an approval even for a read."""
         kind = request.actor.kind
+        if definition.actor_kinds is not None and kind not in definition.actor_kinds:
+            raise Refusal("forbidden", f"{definition.name} is not for a {kind.value}")
         if kind is ActorKind.ADVISOR:
             raise Refusal("forbidden", "advisors never act")
         if kind is ActorKind.SYSTEM:
@@ -339,11 +371,24 @@ class ActionGatewayService:
                 raise Refusal("forbidden", "the platform runs R0 reads only")
             return False
         if kind is ActorKind.AUTOMATION:
-            automation = self._p.registry().automations.get(request.actor.id)
-            if automation is None or definition.name not in automation.allowed_actions:
+            registry = self._p.registry()
+            automation = registry.automations.get(request.actor.id)
+            if (
+                automation is None
+                or definition.name not in automation.allowed_actions
+                # A restricted read only for its own automation (AUD-06), whatever the registry
+                # provider returns after startup.
+                or restricted_grant_problems({automation.id: automation}, {})
+            ):
                 raise Refusal(
                     "forbidden", f"{definition.name} is outside {request.actor.id}'s permissions"
                 )
+            if definition.approval_policy.is_write and (
+                automation.readiness not in PRODUCTION_READINESS
+            ):
+                # The kill switch at execution time (sage, #126): a draft automation's queued or
+                # retried run reaches here again, and its write stops.
+                raise Refusal("automation_not_ready", f"{request.actor.id} is not ready")
             return False
         if kind is ActorKind.EMPLOYEE:
             access = decide_tool_access(self._p.registry(), request.actor.id, definition.name)
@@ -361,10 +406,14 @@ class ActionGatewayService:
             raise Refusal("not_found", "no such organization for the user")
         if definition.user_capability is None:
             raise Refusal("forbidden", f"no user may start {definition.name}")
-        if (
-            decide(principal, definition.user_capability, shop=None, now=self._p.clock()).outcome
-            is not Outcome.ALLOW
-        ):
+        outcome = decide(
+            principal, definition.user_capability, shop=None, now=self._p.clock()
+        ).outcome
+        if outcome is Outcome.STEP_UP_REQUIRED:
+            raise Refusal("step_up_required", f"{definition.name} needs a recent step-up")
+        if outcome is Outcome.MFA_REQUIRED:
+            raise Refusal("mfa_required", f"{definition.name} needs a second factor")
+        if outcome is not Outcome.ALLOW:
             raise Refusal("forbidden", f"the role may not use {definition.name}")
         if request.shop_id is not None:
             owner = self._p.shops.organization_of_shop(request.shop_id)
@@ -459,6 +508,13 @@ class ActionGatewayService:
         deferral = self._admit(definition, binding)
         if deferral is not None:
             return self._defer(claim, request, definition, path, *deferral)
+        if definition.approval_policy.is_write and not self._router.write_enabled(definition.name):
+            # Checked again right before the send (sage, #126): a flag turned off while the action
+            # waited for its approval or its turn stops it.
+            return self._deny(
+                claim, request, Refusal("flag_off", f"the write flag of {definition.name} is off"),
+                path, self._p.clock(),
+            )  # fmt: skip
         slot = self._slot_key(request, definition) if guards is not None else None
         if guards is not None and slot is not None:
             now = self._p.clock()
@@ -613,6 +669,13 @@ class ActionGatewayService:
                          error=code or describe_error(error)[:64]),
             attempts=attempts,
         )  # fmt: skip
+        if definition.approval_policy is ApprovalPolicy.W3:
+            # One press or one approval, one send at most: the failure is final for this key, and
+            # the next request (with its own key) runs every check again.
+            self._record(claim.execution_id, [*path, _S.FAILED, _S.DEAD_LETTERED], result,
+                         request, definition, reason=describe_error(error),
+                         now=self._p.clock())  # fmt: skip
+            return result
         self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
                      reason=describe_error(error), now=self._p.clock(), final=False)  # fmt: skip
         return result
@@ -652,6 +715,12 @@ class ActionGatewayService:
                              error="verification"),
                 attempts=attempts,
             )  # fmt: skip
+            if definition.approval_policy is ApprovalPolicy.W3:
+                # The write may have reached Etsy (quill on #161): never resent under this key.
+                self._record(claim.execution_id, [*path, _S.FAILED, _S.DEAD_LETTERED], result,
+                             request, definition, reason="verification failed",
+                             now=now)  # fmt: skip
+                return result
             self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
                          reason="verification failed", now=now, final=False)  # fmt: skip
             return result

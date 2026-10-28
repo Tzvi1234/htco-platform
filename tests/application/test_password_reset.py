@@ -463,6 +463,31 @@ async def test_reset__second_authenticator_app__its_code_works() -> None:
     assert auth.passwords_set == [("aal2-access", NEW_PASSWORD)]
 
 
+async def test_reset__a_passkey_listed_first__the_apps_code_still_works() -> None:
+    """Codex on #171: a passkey is a verified factor too, but it has no code; the reset tries
+    the authenticator apps only, so a passkey listed first never aborts the recovery."""
+    store, auth = Store(), Auth(mfa_enrolled=True)
+    auth.recovery()
+    mfa = Authenticator(auth, passkeys=("pk-1",))
+
+    await reset(store, auth, code=RIGHT_CODE, mfa=mfa)
+
+    assert mfa.verified == [(RESET_ACCESS, "factor-1")]
+    assert auth.passwords_set == [("aal2-access", NEW_PASSWORD)]
+
+
+async def test_reset__a_user_with_only_a_passkey__never_resets_without_a_code() -> None:
+    """Fails closed: a second factor exists, so the password never changes on the link alone."""
+    store, auth = Store(), Auth(mfa_enrolled=True)
+    auth.recovery()
+    mfa = Authenticator(auth, codes={}, passkeys=("pk-1",))
+
+    with pytest.raises(MfaCodeRefusedError):
+        await reset(store, auth, code=RIGHT_CODE, mfa=mfa)
+
+    assert auth.passwords_set == []
+
+
 async def test_reset__wrong_code_for_every_authenticator__counted_once_for_the_user() -> None:
     store, auth = Store(), Auth(mfa_enrolled=True)
     auth.recovery()

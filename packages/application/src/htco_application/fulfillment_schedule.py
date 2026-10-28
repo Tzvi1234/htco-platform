@@ -30,6 +30,10 @@ FULFILLMENT_SCHEDULE = Schedule("fulfillment.inspect", timedelta(minutes=15))
 FULFILLMENT_SHOP_JOB = "fulfillment.inspect_shop"
 REVIEW_SCHEDULE = Schedule("fulfillment.reviews", timedelta(hours=1))
 REVIEW_SHOP_JOB = "fulfillment.reviews_shop"
+# The AutoVA relay's code retention (slice 6.10, local Codex on #159): its own hourly job, so a
+# pasted code never outlives its time to live whatever the inspection does.
+RELAY_RETENTION_SCHEDULE = Schedule("relay.code_retention", timedelta(hours=1))
+RELAY_RETENTION_SHOP_JOB = "relay.code_retention_shop"
 SCHEDULER = ActorRef(ActorKind.SYSTEM, "scheduler")
 
 _log = logging.getLogger(__name__)
@@ -47,6 +51,12 @@ def enqueue_fulfillment_inspections(
 
 def enqueue_review_checks(shops: ConnectedShops, queue: JobQueue, *, now: datetime) -> int:
     return _enqueue_per_shop(shops, queue, REVIEW_SCHEDULE, REVIEW_SHOP_JOB, now=now)
+
+
+def enqueue_relay_retention(shops: ConnectedShops, queue: JobQueue, *, now: datetime) -> int:
+    return _enqueue_per_shop(
+        shops, queue, RELAY_RETENTION_SCHEDULE, RELAY_RETENTION_SHOP_JOB, now=now
+    )
 
 
 def _enqueue_per_shop(

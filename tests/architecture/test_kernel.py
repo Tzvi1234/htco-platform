@@ -21,26 +21,30 @@ KERNEL_SOURCE = APPLICATION_SOURCE / "kernel"
 KERNEL_NAMES = frozenset(
     {
         "ConnectedShops",
+        "DomainEvent",
         "JobError",
         "JsonValue",
+        "OutboxMessage",
         "Offload",
         "Page",
         "ShopOwners",
         "TenantShop",
         "describe_error",
+        "read_event",
         "run_inline",
     }
 )
 EVENTS_DESTINATION_VALUE = "events.publish"
+# An outbox message built by hand for the events destination skips the envelope (AUD-01).
+UNPUBLISHED_EVENT = "OutboxMessage(destination=events)"
 
 # Copies inside areas another teammate has locked on the board (#95). Each one moves in its
 # own follow-up PR once the lock clears; the entry goes with it, and nothing may be added.
 PENDING_COPIES = frozenset(
     {
-        ("automation/durable.py", "Offload"),
-        ("automation/durable.py", "run_inline"),
         ("execution/service.py", "ShopOwners"),
         ("execution/service.py", EVENTS_DESTINATION_VALUE),
+        ("execution/service.py", UNPUBLISHED_EVENT),
     }
 )
 
@@ -79,6 +83,22 @@ def _destination_literals(tree: ast.Module) -> Iterator[tuple[int, str]]:
             yield node.lineno, EVENTS_DESTINATION_VALUE
 
 
+def _unpublished_events(tree: ast.Module) -> Iterator[tuple[int, str]]:
+    """`OutboxMessage(destination=EVENTS_DESTINATION, ...)`: an event built without `publish`."""
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id != "OutboxMessage":
+            continue
+        for keyword in node.keywords:
+            value = keyword.value
+            if keyword.arg == "destination" and (
+                (isinstance(value, ast.Name) and value.id.startswith("EVENT"))
+                or (isinstance(value, ast.Constant) and value.value == EVENTS_DESTINATION_VALUE)
+            ):
+                yield node.lineno, UNPUBLISHED_EVENT
+
+
 def find_kernel_copies(source_dir: Path) -> list[str]:
     copies = []
     for path in sorted(source_dir.rglob("*.py")):
@@ -89,6 +109,7 @@ def find_kernel_copies(source_dir: Path) -> list[str]:
         found = [(line, name) for line, name in _definitions(tree) if name in KERNEL_NAMES]
         found += list(_inline_offloads(tree))
         found += list(_destination_literals(tree))
+        found += list(_unpublished_events(tree))
         copies += [
             f"{relative}:{line} defines {name!r}"
             for line, name in sorted(set(found))
@@ -112,6 +133,7 @@ def test_application__pending_copies__still_exist() -> None:
         tree = ast.parse((APPLICATION_SOURCE / relative).read_text(encoding="utf-8"))
         names = {n for _, n in _definitions(tree)} | {n for _, n in _inline_offloads(tree)}
         names |= {n for _, n in _destination_literals(tree)}
+        names |= {n for _, n in _unpublished_events(tree)}
         if name not in names:
             stale.append((relative, name))
 
@@ -128,6 +150,7 @@ def test_application__pending_copies__still_exist() -> None:
         ("type JsonValue = str\n", "JsonValue"),
         ("def describe_error(error): ...\n", "describe_error"),
         ("EVENTS = 'events.publish'\n", EVENTS_DESTINATION_VALUE),
+        ("m = OutboxMessage(destination=EVENTS_DESTINATION)\n", UNPUBLISHED_EVENT),
     ],
 )
 def test_find_kernel_copies__a_second_copy__is_reported(

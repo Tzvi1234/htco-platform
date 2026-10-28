@@ -120,7 +120,7 @@ async def test_enroll_then_verify__session_becomes_aal2(client: httpx.AsyncClien
     )
     after = (await client.get("/v1/auth/mfa")).json()
 
-    assert before == {"assurance": "aal1", "enrolled": False, "factors": []}
+    assert before == {"assurance": "aal1", "enrolled": False, "factors": [], "passkeys": False}
     assert enrollment.status_code == 200
     assert enrollment.json()["qr_code"].startswith("data:image/svg+xml")
     assert enrollment.headers["cache-control"] == "no-store"

@@ -5,24 +5,50 @@ feature module needed them first. The kernel imports only the standard library a
 and never a feature module.
 """
 
-from htco_application.kernel.errors import MAX_ERROR_LENGTH, JobError, describe_error
-from htco_application.kernel.events import EVENTS_DESTINATION
+from htco_application.kernel.errors import (
+    MAX_ERROR_LENGTH,
+    DeadLetterError,
+    JobError,
+    describe_error,
+)
+from htco_application.kernel.events import (
+    ACCEPTED_VERSIONS,
+    EVENTS_DESTINATION,
+    DomainEvent,
+    MalformedEventError,
+    ReceivedEvent,
+    UnknownEventVersionError,
+    event_payload,
+    publish,
+    read_event,
+)
 from htco_application.kernel.locks import LockKeys
 from htco_application.kernel.offload import Offload, run_inline
+from htco_application.kernel.outbox import OutboxMessage
 from htco_application.kernel.ports import ConnectedShops, ShopOwners
 from htco_application.kernel.types import JsonValue, Page, TenantShop
 
 __all__ = [
+    "ACCEPTED_VERSIONS",
     "EVENTS_DESTINATION",
     "MAX_ERROR_LENGTH",
     "ConnectedShops",
+    "DeadLetterError",
+    "DomainEvent",
     "JobError",
     "JsonValue",
     "LockKeys",
+    "MalformedEventError",
     "Offload",
+    "OutboxMessage",
     "Page",
+    "ReceivedEvent",
     "ShopOwners",
     "TenantShop",
+    "UnknownEventVersionError",
     "describe_error",
+    "event_payload",
+    "publish",
+    "read_event",
     "run_inline",
 ]

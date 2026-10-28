@@ -10,7 +10,7 @@ form to any other actor). Contact data is never in it: the adapter never reads i
 
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from htco_application.kernel import JsonValue
@@ -209,4 +209,34 @@ def receipt_from_json(value: Mapping[str, Any]) -> OrderReceipt:
             postal_code=_text(address.get("postal_code")),
             country_code=_text(address.get("country_code")),
         ),
+    )
+
+
+def shipments_to_json(receipt: OrderReceipt) -> dict[str, JsonValue]:
+    """`etsy.shipments.read`'s form of a receipt: its shipments with their tracking codes, and
+    nothing of the buyer. A shipment without a code is left out: nothing to record yet."""
+    return {
+        "receipt_id": receipt.receipt_id,
+        "shipments": [
+            {
+                "tracking_code": shipment.tracking_code,
+                "carrier_name": shipment.carrier,
+                "shipment_notification_timestamp": int(shipment.notified_at.timestamp()),
+            }
+            for shipment in receipt.shipments
+            if shipment.tracking_code.strip()
+        ],
+    }
+
+
+def shipments_from_json(value: Mapping[str, Any]) -> tuple[int, tuple[OrderShipment, ...]]:
+    """The receipt ID and its shipments back; raises `KeyError`, `TypeError` or `ValueError`
+    on another shape."""
+    return int(value["receipt_id"]), tuple(
+        OrderShipment(
+            carrier=str(s.get("carrier_name") or ""),
+            tracking_code=str(s["tracking_code"]),
+            notified_at=datetime.fromtimestamp(int(s["shipment_notification_timestamp"]), UTC),
+        )
+        for s in value["shipments"]
     )

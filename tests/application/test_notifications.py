@@ -7,9 +7,15 @@ from typing import override
 
 import pytest
 
-from htco_application.incidents import INCIDENT_OPENED
-from htco_application.kernel import EVENTS_DESTINATION
-from htco_application.messaging import OutboxMessage, PendingDelivery
+from htco_application.incidents import (
+    INCIDENT_ESCALATED,
+    INCIDENT_OPENED,
+    Detection,
+    IncidentService,
+    order_resource,
+)
+from htco_application.kernel import EVENTS_DESTINATION, OutboxMessage, event_payload
+from htco_application.messaging import PendingDelivery
 from htco_application.notifications import (
     EMAIL_DESTINATION,
     NOTIFICATION_REQUESTED,
@@ -27,6 +33,8 @@ from htco_application.notifications import (
     notification_requested,
     render_email,
 )
+from htco_domain.actors import ActorKind, ActorRef
+from htco_domain.incidents import Cause, IncidentState, ResourceKind
 from htco_domain.notifications import (
     Locale,
     NotificationKind,
@@ -35,6 +43,8 @@ from htco_domain.notifications import (
     check_params,
     wants_email,
 )
+from tests.event_contracts import check_if_event
+from tests.fulfillment_fakes import MemoryIncidentStore
 from tests.notification_fakes import (
     FakeEmail,
     Member,
@@ -299,7 +309,7 @@ class NoticeStore:
         return self.agents
 
     def add(self, message: OutboxMessage, *, now: datetime) -> uuid.UUID:  # noqa: ARG002
-        self.added.append(message)
+        self.added.append(check_if_event(message))
         return uuid.uuid4()
 
 
@@ -313,9 +323,9 @@ async def test_ac_6_4_4_a_sign_in_from_a_new_device_sends_one_email_to_that_user
 
     assert sent == 1
     [event] = notice_store.added
-    assert event.payload["kind"] == "sign_in_new_device"
-    assert event.payload["user_id"] == str(OWNER)
-    assert event.payload["params"] == {"device": "Chrome on Windows"}
+    assert event_payload(event)["kind"] == "sign_in_new_device"
+    assert event_payload(event)["user_id"] == str(OWNER)
+    assert event_payload(event)["params"] == {"device": "Chrome on Windows"}
     # The worker turns the request into one notification and one email for that user only.
     store = members()
     await RequestedNotifications(NotificationService(store, clock=lambda: NOW)).handle(event)
@@ -383,7 +393,8 @@ def test_device_families_and_requests() -> None:
         NotificationRequest(ORG, NotificationKind.SIGN_IN_NEW_DEVICE, "k")
     with pytest.raises(UnsafeParameter):
         notification_requested(
-            NotificationRequest(ORG, NotificationKind.SHOP_CONNECTED, "k", {"name": FAKE_BUYER})
+            NotificationRequest(ORG, NotificationKind.SHOP_CONNECTED, "k", {"name": FAKE_BUYER}),
+            now=NOW,
         )
 
 
@@ -475,6 +486,40 @@ async def test_two_escalations_in_one_second_notify_twice_and_a_redelivery_never
 
     owners = [n for n in store.rows.values() if n.user_id == OWNER]
     assert len(owners) == 2
+
+
+async def test_enveloped_escalations_from_the_incident_service_notify_once_each() -> None:
+    """Main on #174 (#163 merged in): the notifier reads the real escalation events, in the
+    AUD-01 envelope, through `read_event`. Two escalations in one second are two notifications,
+    keyed by each escalation's ID; a redelivery of either is none."""
+    incidents = MemoryIncidentStore()
+    incident_service = IncidentService(incidents, clock=lambda: NOW)
+    robot = ActorRef(ActorKind.AUTOMATION, "incident-detection-escalation")
+    incident, _ = await incident_service.open(
+        Detection(
+            organization_id=ORG, cause=Cause.TRACKING_MISSING, resource_kind=ResourceKind.ORDER,
+            resource_id=order_resource(SHOP, 4000000001), detected_at=NOW,
+            source="sla_inspector", shop_id=SHOP, receipt_id=4000000001,
+        ),
+        actor=robot,
+    )  # fmt: skip
+    await incident_service.move(ORG, incident.id, IncidentState.ESCALATED, actor=robot)
+    await incident_service.move(ORG, incident.id, IncidentState.TRIAGED, actor=robot)
+    await incident_service.move(ORG, incident.id, IncidentState.ESCALATED, actor=robot)
+    first, second = incidents.events.of(INCIDENT_ESCALATED)
+    assert "payload_version" in first.payload  # the envelope, not the flat shape
+
+    store = members()
+    service = NotificationService(store, clock=lambda: NOW)
+    deliverer = EventDeliverer({INCIDENT_ESCALATED: IncidentNotifications(service)})
+    for message in (first, first, second, second):
+        await deliverer.deliver(delivery(message))
+
+    owners = sorted(n.dedup_key for n in store.rows.values() if n.user_id == OWNER)
+    assert owners == sorted(
+        f"incident_escalated:{incident.id}:{event_payload(m)['escalation_id']}"
+        for m in (first, second)
+    )
 
 
 @pytest.mark.parametrize(

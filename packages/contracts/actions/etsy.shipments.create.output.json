@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ht-co.app/contracts/actions/etsy.shipments.create.output.json",
+  "title": "etsy.shipments.create output",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "sent",
+    "already_present"
+  ],
+  "properties": {
+    "receipt_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sent": {
+      "type": "boolean"
+    },
+    "already_present": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

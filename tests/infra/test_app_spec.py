@@ -281,6 +281,7 @@ def test_deploy_never_puts_the_whole_app_object_in_a_step_environment() -> None:
 
 WORKER_SECRETS = {
     "PGPASSWORD",
+    "HTCO_SENTRY_DSN",  # AC-6.7.4: dead letters reach Sentry
     "HTCO_TOKEN_VAULT_KEY",
     "HTCO_TOKEN_VAULT_PREVIOUS_KEYS",
     "HTCO_ETSY_KEYSTRING",
@@ -341,3 +342,8 @@ def test_api__starts_automation_executions_for_the_worker() -> None:
     """Activation step 2b and the audited admin retry (5.10, 5.11): the API's engine creates
     executions and jobs, and never runs a handler."""
     assert _envs()["HTCO_AUTOMATIONS_ENABLED"]["value"] == "true"
+
+
+def test_spec__passkeys_stay_off_until_the_owner_enables_the_supabase_add_on() -> None:
+    """Issue #113: hosted Supabase needs the paid WebAuthn MFA add-on and the RP config first."""
+    assert _envs()["HTCO_PASSKEYS_ENABLED"]["value"] == "false"

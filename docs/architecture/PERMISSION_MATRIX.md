@@ -5,7 +5,7 @@
 | **Status** | 2.0 — the living office ([ADR-0012](../adr/0012-living-office-organization.md)). Section 1 is enforced in code by policy engine v0 (`htco_application.access.policy`, slice 2.4), whose test parses this table so the two cannot drift; RLS adds tenant isolation in the database (Phase 2). Employees' tool and automation grants (section 3) are enforced by `htco_application.workforce.tool_access` and the automation engine, from `registry/`; automations (section 2) from Phase 5. Extended per phase. |
 | **Principle** | Deny by default. A permission not listed here does not exist. |
 
-Legend: **✓** allowed · **S** allowed for shops granted to the user · **MFA** requires an `aal2` session · **RA** requires recent re-authentication (step-up, default 10 minutes) · **A** creates an approval instead of acting · **—** denied.
+Legend: **✓** allowed · **S** allowed for shops granted to the user · **MFA** requires an `aal2` session (from the authenticator app or a passkey, #113) · **RA** requires recent re-authentication (step-up, default 10 minutes) · **A** creates an approval instead of acting · **—** denied.
 
 Owner and Admin have organization-wide access to every shop; all other roles see only the shops granted to them.
 
@@ -22,6 +22,7 @@ Owner and Admin have organization-wide access to every shop; all other roles see
 | Open or update incidents | ✓ | ✓ | S | — | S | S | — |
 | Retry allowlisted sync | ✓ | ✓ | S | — | — | S | — |
 | Confirm a shipment write to Etsy | ✓ MFA RA | ✓ MFA RA | S A | — | — | — | — |
+| Update the shop's settings on Etsy (vacation mode) | ✓ MFA RA | — | — | — | — | — | — |
 | Request a bulk re-sync | ✓ | ✓ | S A | — | — | S A | — |
 | View tasks and approvals | ✓ | ✓ | S | S | S | S | S |
 | Decide low-risk approvals | ✓ MFA | ✓ MFA | S MFA | S MFA | — | — | — |
@@ -67,6 +68,8 @@ Automations run under their own service identities with least-privilege database
 | Etsy Order Intake, Order Deduplication & Verification | Read Etsy receipts; upsert orders, items, shipments; write inbox, events and activity records | Any Etsy write; reading tokens of other shops |
 | Product Sales Counters, Finance Ledger Ingestion | Write counters and ledger entries from verified events | Changing orders; any external call |
 | Tracking Synchronization, Incident Detection & Escalation | Read orders and shipments; create and close incidents; request notifications | Etsy writes |
+| Etsy Order Intake only: `etsy.order_history.read` (R1, AUD-06) | Read receipts in their order history form, with the buyer data it stores | Granting it to another automation, an employee or a user: `python -m tools.registry --check` refuses the grant (`RESTRICTED_GRANTS`) |
+| Tracking Synchronization only: `etsy.shipments.read` (R1, AUD-06) | Read the shipments' tracking codes and carriers; no buyer data | Granting it to another automation, an employee or a user: `python -m tools.registry --check` refuses the grant (`RESTRICTED_GRANTS`) |
 | Catalog Draft Creation & Publishing | Create drafts; publish only an approved specification | Pricing changes; publishing without an approval |
 | Supplier Quote Request & Follow-up | Record requests and quotes; update the workflow status | Activating a mapping without approval; payments |
 | Order & Financial Reconciliation | Read internal and external records; write reconciliation evidence and findings | Correcting records directly |

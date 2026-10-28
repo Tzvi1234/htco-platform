@@ -10,7 +10,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from htco_application.fulfillment_schedule import FULFILLMENT_SCHEDULE, REVIEW_SCHEDULE
+from htco_application.fulfillment_schedule import (
+    FULFILLMENT_SCHEDULE,
+    RELAY_RETENTION_SCHEDULE,
+    REVIEW_SCHEDULE,
+)
 from htco_application.maintenance import EXPIRY_SCHEDULE, PROBE_SCHEDULE
 from htco_application.maintenance import SCHEDULES as MAINTENANCE_SCHEDULES
 from htco_application.order_intake import (
@@ -28,6 +32,7 @@ SCHEDULES = (
     MAINTENANCE_SCHEDULES
     | ORDER_SCHEDULES
     | {FULFILLMENT_SCHEDULE.kind: FULFILLMENT_SCHEDULE, REVIEW_SCHEDULE.kind: REVIEW_SCHEDULE}
+    | {RELAY_RETENTION_SCHEDULE.kind: RELAY_RETENTION_SCHEDULE}
 )
 
 
@@ -39,6 +44,8 @@ class WorkerSettings(BaseSettings):
     environment: Literal["local", "test", "staging", "production"]
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     release: str | None = None
+    # Error monitoring (AC-6.7.4: dead-lettered executions) is off without a DSN. A secret.
+    sentry_dsn: SecretStr | None = None
     # The same database as the API; the worker's connections switch to the `htco_worker` role.
     database_url: SecretStr
     # Defaults to the host name and process ID, unique per running process.
@@ -81,6 +88,7 @@ class WorkerSettings(BaseSettings):
     office_url: str = Field(default="https://office.ht-co.app", pattern=r"^https://[^\s]+$")
 
     @field_validator(
+        "sentry_dsn",
         "etsy_keystring",
         "etsy_shared_secret",
         "token_vault_key",

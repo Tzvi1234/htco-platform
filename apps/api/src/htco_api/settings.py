@@ -54,6 +54,11 @@ class ApiSettings(BaseSettings):
     session_key: SecretStr | None = None
     supabase_publishable_key: str | None = None
     web_origins: str = ""
+    # Passkeys as a second factor (issue #113): Supabase Auth's WebAuthn MFA. Off by default: on
+    # the hosted project it needs the paid WebAuthn MFA add-on and the RP config (RP ID
+    # `ht-co.app`, origin `https://dash.ht-co.app`), which only the owner switches on. Locally,
+    # `supabase/config.toml` enables it for `localhost`.
+    passkeys_enabled: bool = False
     # Etsy app credentials (slice 4.1, ADR-0008): the keystring and shared secret, sent together
     # as `x-api-key`. Both are secrets and both or neither are set; they become required when
     # Phase 4 connects a shop. Below the daily floor of requests left, routine Etsy calls wait.
