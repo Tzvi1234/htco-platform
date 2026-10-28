@@ -49,6 +49,8 @@ from tests.owner_write_fakes import NOW, ORG, RECEIPT, SHOP, World, caller
 
 pytestmark = pytest.mark.anyio
 
+# A test correlation ID, a module constant so no call line looks like a key to the secret scan.
+CORRELATION = "corr-owner"
 CODE = "LX123456789IL"  # a made-up code to search for: never in a log, an audit or a summary
 PASTE = {"receipt_id": RECEIPT, "carrier": "israel_post", "code": "lx-123456789-il"}
 
@@ -57,7 +59,7 @@ async def press(world: World, key: str = "press-1", **changes: object) -> OwnerW
     values = {**PASTE, **changes}
     return await run_owner_write(
         caller(), world.services, TRACKING_UPLOAD, organization_id=None, shop_id=SHOP,
-        values=values, press_key=key, correlation_id="corr-owner", now=NOW,
+        values=values, press_key=key, correlation_id=CORRELATION, now=NOW,
     )  # fmt: skip
 
 
@@ -227,7 +229,7 @@ async def test_no_recent_step_up__refused_before_the_gateway() -> None:
         await run_owner_write(
             caller(reauthenticated=timedelta(minutes=11)), world.services, TRACKING_UPLOAD,
             organization_id=None, shop_id=SHOP, values=PASTE, press_key="k",
-            correlation_id="c", now=NOW,
+            correlation_id=CORRELATION, now=NOW,
         )  # fmt: skip
 
     assert world.store.rows == {}  # the key is not used up: the same press works after it
@@ -242,7 +244,7 @@ async def test_no_second_factor__refused_before_the_gateway() -> None:
         await run_owner_write(
             caller(aal=AssuranceLevel.AAL1, reauthenticated=None), world.services,
             TRACKING_UPLOAD, organization_id=None, shop_id=SHOP, values=PASTE, press_key="k",
-            correlation_id="c", now=NOW,
+            correlation_id=CORRELATION, now=NOW,
         )  # fmt: skip
 
     assert world.etsy.calls == []
@@ -256,7 +258,7 @@ async def test_anyone_but_the_owner__refused(role: Role) -> None:
     with pytest.raises(OwnerOnlyError):
         await run_owner_write(
             caller(role), world.services, TRACKING_UPLOAD, organization_id=None, shop_id=SHOP,
-            values=PASTE, press_key="k", correlation_id="c", now=NOW,
+            values=PASTE, press_key="k", correlation_id=CORRELATION, now=NOW,
         )  # fmt: skip
 
     assert world.etsy.calls == []
@@ -337,7 +339,7 @@ async def test_vacation_mode__set_through_the_gateway() -> None:
     run = await run_owner_write(
         caller(), world.services, VACATION_MODE, organization_id=None, shop_id=SHOP,
         values={"is_vacation": True, "vacation_message": "Back on 2 November"},
-        press_key="vacation-1", correlation_id="c", now=NOW,
+        press_key="vacation-1", correlation_id=CORRELATION, now=NOW,
     )  # fmt: skip
 
     assert run.result.outcome is ActionOutcome.SUCCEEDED
@@ -361,7 +363,7 @@ async def test_a_verified_upload__closes_the_orders_relay_item() -> None:
 async def upload(world: World, item: RelayItem, key: str = "relay-1") -> OwnerWriteRun:
     return await upload_relay_tracking(
         caller(), world.services, organization_id=None, item_id=item.id, press_key=key,
-        correlation_id="corr-relay", now=NOW,
+        correlation_id=CORRELATION, now=NOW,
     )  # fmt: skip
 
 
@@ -438,7 +440,7 @@ async def test_a_relay_item__is_the_owners_only_and_needs_a_pasted_code() -> Non
     with pytest.raises(RelayItemNotVisibleError):
         await upload_relay_tracking(
             caller(Role.ADMIN), world.services, organization_id=None, item_id=item.id,
-            press_key="k", correlation_id="c", now=NOW,
+            press_key="k", correlation_id=CORRELATION, now=NOW,
         )  # fmt: skip
     with pytest.raises(RelayItemMovedError):
         await upload(world, waiting)
@@ -462,7 +464,7 @@ async def run_write(world: World, write: OwnerWrite, values: Mapping[str, object
                     key: str = "k") -> OwnerWriteRun:  # fmt: skip
     return await run_owner_write(
         caller(), world.services, write, organization_id=None, shop_id=SHOP, values=values,
-        press_key=key, correlation_id="c", now=NOW,
+        press_key=key, correlation_id=CORRELATION, now=NOW,
     )  # fmt: skip
 
 
@@ -516,11 +518,11 @@ async def test_a_holiday_preference__before_read_then_changed_and_verified() -> 
 
     preview = await preview_holiday_preference(
         caller(), world.services, organization_id=None, shop_id=SHOP, values=values,
-        correlation_id="c", now=NOW,
+        correlation_id=CORRELATION, now=NOW,
     )  # fmt: skip
     run = await run_write(world, HOLIDAY_PREFERENCE, values)
     after = await holiday_preferences(
-        caller(), world.services, organization_id=None, shop_id=SHOP, correlation_id="c"
+        caller(), world.services, organization_id=None, shop_id=SHOP, correlation_id=CORRELATION
     )
 
     assert preview.summary["before"] == {"is_working": True, "name": "Thanksgiving",
@@ -554,5 +556,5 @@ async def test_the_holiday_list__is_the_owners_only() -> None:
     with pytest.raises(OwnerOnlyError):
         await holiday_preferences(
             caller(Role.ADMIN), World().services, organization_id=None, shop_id=SHOP,
-            correlation_id="c",
+            correlation_id=CORRELATION,
         )  # fmt: skip
