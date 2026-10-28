@@ -130,7 +130,8 @@ async def test_main__etsy_off__connect_still_asks_for_a_session_first(
 
 
 @pytest.mark.usefixtures("restore_logging")
-@pytest.mark.parametrize(("flag", "in_api"), [(None, True), ("true", True), ("false", False)])
+@pytest.mark.ac("AC-5.5.5")
+@pytest.mark.parametrize(("flag", "in_api"), [(None, False), ("true", True), ("false", False)])
 def test_main__order_sync_runs_in_the_api_only_as_the_fallback(
     environment: pytest.MonkeyPatch, flag: str | None, in_api: bool
 ) -> None:

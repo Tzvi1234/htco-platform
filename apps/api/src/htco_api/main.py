@@ -614,8 +614,8 @@ def _etsy_wiring(
         # Etsy webhooks (slice 5.3): configured when enabled; Etsy's deliveries prove them.
         webhooks_configured=settings.etsy_webhooks_enabled,
     )
-    # The stored order history (slice 5.4): synced by the worker's Etsy Order Intake once
-    # HTCO_ORDER_SYNC_IN_API is off; until then this process runs it as the fallback.
+    # The stored order history (slice 5.4): synced by the worker's Etsy Order Intake
+    # (HTCO_ORDER_SYNC_IN_API off, the default); on, this process runs it as the rollback.
     history = OrderSync(
         store=PostgresOrderStore(database),
         pages=adapter_pages(adapter, tokens),

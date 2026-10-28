@@ -177,7 +177,7 @@ services:
         value: "true"
       # Slice 5.4: the order history sync ran here only as the fallback. Etsy Order Intake is active
       # (5.11, activation step 3): stale reads, the manual sync and "Re-sync selected" go to the
-      # worker's queue. Rollback: "true" again.
+      # worker's queue. "false" is also the code's default now; kept explicit. Rollback: "true".
       - key: HTCO_ORDER_SYNC_IN_API
         scope: RUN_TIME
         value: "false"
