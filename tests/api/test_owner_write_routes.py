@@ -88,7 +88,7 @@ async def test_the_console__the_owners_writes_off_by_default() -> None:
         "tracking_upload", "vacation_mode", "mark_shipped", "holiday_preference",
     ]  # fmt: skip
     assert all(not r["enabled"] and r["reconsent_required"] for r in rows)
-    assert rows[0]["reconnect_url"] == "/v1/shops/etsy/connect"
+    assert rows[0]["reconnect_url"] == f"{BASE}/tracking_upload/reconnect"
 
 
 async def test_the_console__an_admin_403() -> None:
@@ -182,7 +182,7 @@ async def test_the_press__403_and_nothing_sent(
     assert answer.status_code == 403, answer.text
     assert answer.json()["type"] == PROBLEMS + problem
     if problem == "scope-missing":
-        assert answer.json()["reconnect_url"] == "/v1/shops/etsy/connect"
+        assert answer.json()["reconnect_url"] == f"{BASE}/tracking_upload/reconnect"
         assert answer.json()["scope"] == "transactions_w"
     assert world.etsy.calls == []
 

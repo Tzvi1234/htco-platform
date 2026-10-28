@@ -128,6 +128,7 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "list_holiday_preferences",
         "preview_holiday_change",
         "run_holiday_change",
+        "reconnect_for_write",
         "preview_relay_upload",
         "upload_relay_item",
         "start_passkey",

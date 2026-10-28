@@ -31,12 +31,15 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from htco_api.auth import CurrentAuth
+from htco_api.etsy import AuthorizationView, etsy_connect_of, web_session_of
 from htco_api.idempotency import IDEMPOTENCY_HEADER, IDEMPOTENCY_KEY_REUSED, run_idempotently
 from htco_api.identity import ORGANIZATION_REQUIRED, problem_responses
 from htco_api.incidents import RELAY_ITEM_MOVED, RELAY_UNAVAILABLE, RelayItemView
-from htco_api.policy_guard import FORBIDDEN, MFA_REQUIRED, STEP_UP_REQUIRED
+from htco_api.policy_guard import FORBIDDEN, MFA_REQUIRED, STEP_UP_REQUIRED, require_capability
 from htco_api.problems import NOT_FOUND, Problem, ProblemError, ProblemType, ValidationProblem
 from htco_application.access.authentication import AuthContext, NoMembershipError
+from htco_application.access.policy import Capability
+from htco_application.etsy_connect import start_write_reconsent
 from htco_application.owner_writes import (
     HOLIDAY_PREFERENCE,
     MARK_SHIPPED,
@@ -60,6 +63,7 @@ from htco_application.owner_writes import (
     owner_write_console,
     preview_holiday_preference,
     preview_owner_write,
+    reconsent_scope,
     relay_upload_preview,
     run_owner_write,
     upload_relay_tracking,
@@ -262,8 +266,10 @@ def _problem(error: Exception) -> ProblemError:  # noqa: PLR0911 - one answer pe
         if error.code == "scope_missing":
             return ProblemError(
                 SCOPE_MISSING,
-                extra={"scope": error.state.scope or "",
-                       "reconnect_url": error.state.reconnect_path or ""},
+                extra={
+                    "scope": error.state.scope or "",
+                    "reconnect_url": error.state.reconnect_path or "",
+                },
             )
         return ProblemError(_REFUSALS[error.code])
     if isinstance(error, PressKeyReusedError):
@@ -310,6 +316,8 @@ _PRESS = {
         ValidationProblem,
     ),
 }
+# The re-consent is the connect flow's: the Owner, a second factor and a recent step-up.
+_ConnectOwner = Annotated[AuthContext, Depends(require_capability(Capability.CONNECT_SHOP))]
 _KEY_HEADER: dict[str, Any] = {
     "parameters": [
         {
@@ -623,6 +631,57 @@ def owner_writes_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa:
             request, auth, services, HOLIDAY_PREFERENCE, organization_id, shop_id,
             body.model_dump(),
         )  # fmt: skip
+
+    @router.post(
+        "/shops/{shop_id}/owner-writes/{key}/reconnect",
+        summary="Reconnect the shop to grant one write's Etsy scope (the re-consent)",
+        responses=problem_responses(
+            {
+                **_COMMON,
+                403: "Not the Owner, no second factor, no recent step-up (forbidden, "
+                "mfa-required, step-up-required, web-session-required), or the request did not "
+                "come from the web app (csrf-failed)",
+                404: "No such shop for the caller, or a write that needs no scope",
+                422: ("Invalid ID or write", ValidationProblem),
+                503: "The write actions or the Etsy connection are not set up "
+                "(owner-writes-unavailable, etsy-unavailable)",
+            }
+        ),
+    )
+    async def reconnect_for_write(  # noqa: PLR0913, PLR0917 - the route's inputs
+        shop_id: uuid.UUID,
+        key: Literal["tracking_upload", "vacation_mode", "mark_shipped", "holiday_preference"],
+        request: Request,
+        response: Response,
+        auth: _ConnectOwner,
+        services: Services,
+        organization_id: uuid.UUID | None = None,
+    ) -> AuthorizationView:
+        """AC-6.8.2: Etsy's authorization URL asking for the read scopes plus exactly the one
+        write scope this write needs (`transactions_w` or `shops_w`). The Owner with a second
+        factor and a recent step-up, from the web app; the state and PKCE verifier are bound to
+        this session, as in the connect flow, whose callback stores the scopes Etsy granted, so
+        the console shows the scope as held. Audited (`shop.write_reconsent_started`). The
+        normal connect stays read-only."""
+        etsy = etsy_connect_of(request)
+        session = web_session_of(request)
+        try:
+            organization, scope = await anyio.to_thread.run_sync(
+                lambda: reconsent_scope(
+                    auth, services, organization_id=organization_id, shop_id=shop_id, key=key
+                )
+            )
+        except _KNOWN as error:
+            raise _problem(error) from None
+        except LookupError:  # a write that needs no scope
+            raise ProblemError(NOT_FOUND) from None
+        url = await start_write_reconsent(
+            etsy, organization_id=organization, shop_id=shop_id, user_id=auth.user_id,
+            session_id=session, write_scope=scope, reason=key, now=clock(),
+            correlation_id=_correlation(request),
+        )  # fmt: skip
+        response.headers["Cache-Control"] = "no-store"
+        return AuthorizationView(authorization_url=url)
 
     @router.get(
         "/relay-items/{item_id}/upload-preview",

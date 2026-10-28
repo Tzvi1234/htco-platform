@@ -153,6 +153,7 @@ async def _world(  # noqa: PLR0913 - one keyword per variation
     probe: Probe | None = None,
     probes_on: bool = True,
     shop_remover: Any = None,
+    owner_writes: Any = None,
 ) -> AsyncIterator[World]:
     clock = Clock()
     vault, audit = Vault(), AuditLog()
@@ -186,6 +187,7 @@ async def _world(  # noqa: PLR0913 - one keyword per variation
             capability_checks=checks if probes_on else None,
             token_vault=vault,
             shop_remover=shop_remover(vault, audit) if shop_remover is not None else None,
+            owner_writes=owner_writes(vault) if owner_writes is not None else None,
         )
     )
     transport = httpx.ASGITransport(app=app, client=("203.0.113.9", 50000))

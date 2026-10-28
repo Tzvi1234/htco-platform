@@ -419,8 +419,9 @@ def _states(
 ) -> tuple[OwnerWriteState, ...]:
     scopes = services.shops.scopes_of(shop_id)
     last = services.history.last_runs(organization_id, shop_id, frozenset(w.action for w in writes))
-    return tuple(_state(services, w, scopes=scopes, last=last.get(w.action), shop_id=shop_id)
-        for w in writes)
+    return tuple(
+        _state(services, w, scopes=scopes, last=last.get(w.action), shop_id=shop_id) for w in writes
+    )
 
 
 def owner_write_console(

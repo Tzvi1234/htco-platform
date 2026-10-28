@@ -11,8 +11,8 @@ So every `EtsyApiChannel(..., writes=...)` in a composition root must either
 - build, in the same function, a non-memory approval service (a `Postgres...Approval...` class)
   and no `MemoryApprovalService`; or
 - be an owner-triggered site in the API, named in `OWNER_TRIGGERED_WRITE_SITES` with its reason
-  (empty until 6.6 part B). The worker and the browser worker run automations, so they can never
-  be on that list.
+  (6.6 part B: the API's owner writes, #220). The worker and the browser worker run
+  automations, so they can never be on that list.
 
 Any other use of `EtsyApiChannel` in a composition root (the class as a value, an import under
 another name, a star import, its name as a string, `**kwargs`, `writes` set after construction)
@@ -41,7 +41,14 @@ DURABLE_APPROVALS = re.compile(r"^Postgres\w*Approval\w*$")
 # (path, enclosing function) -> why the owner triggers every write this site sends. Adding an
 # entry is an architecture review: the route must enforce W3 (owner step-up), the flag and the
 # kill switch, and no automation may reach this gateway.
-OWNER_TRIGGERED_WRITE_SITES: dict[tuple[str, str], str] = {}
+OWNER_TRIGGERED_WRITE_SITES: dict[tuple[str, str], str] = {
+    ("apps/api/src/htco_api/main.py", "owner_write_services"): (
+        "6.6 part B and 6.8 (#220): the Owner's own press on /v1/.../owner-writes, after an "
+        "Owner role, second factor and step-up check (the W3 authorization), with each write's "
+        "flag (HTCO_ETSY_WRITE_ACTIONS, empty by default) and the kill switch read again before "
+        "the send; no automation reaches this gateway (its approvals are never decided)"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -245,3 +252,21 @@ def test_guard__an_owner_triggered_site_is_allowed_only_in_the_api() -> None:
         assert len(_check(source, root="worker")) == 1
     finally:
         del OWNER_TRIGGERED_WRITE_SITES[("x.py", "owner_gateway")]
+
+
+def test_the_only_wiring_of_writes__is_the_owners_press_in_the_api() -> None:
+    """#220: the API's owner writes are the one site; the worker's channel stays read-only."""
+    sites = _all_sites()
+    assert {(s.path, s.function) for s in sites if s.wires_writes} == set(
+        OWNER_TRIGGERED_WRITE_SITES
+    )
+    assert not any(s.root == "worker" and s.wires_writes for s in sites)
+
+
+def test_every_owner_write__is_off_until_the_owner_names_its_flag() -> None:
+    from htco_application.owner_writes import OWNER_WRITES, WriteSwitches  # noqa: PLC0415
+
+    switches = WriteSwitches()
+    assert not any(switches.is_on(w.action) for w in OWNER_WRITES)
+    halted = WriteSwitches(frozenset(w.action for w in OWNER_WRITES), halted=lambda: True)
+    assert all(halted.flag_on(w.action) and not halted.is_on(w.action) for w in OWNER_WRITES)
