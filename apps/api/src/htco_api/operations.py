@@ -22,7 +22,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from htco_api.auth import CurrentAuth
-from htco_api.idempotency import IDEMPOTENCY_OPENAPI, idempotency_store, run_idempotently
+from htco_api.idempotency import (
+    IDEMPOTENCY_OPENAPI,
+    STAGED_KEY_REQUIRED,
+    idempotency_store,
+    run_idempotently,
+)
 from htco_api.identity import ORGANIZATION_REQUIRED, problem_responses
 from htco_api.policy_guard import FORBIDDEN
 from htco_api.problems import (
@@ -290,8 +295,8 @@ def operations_router(*, clock: Callable[[], datetime]) -> APIRouter:
         responses=problem_responses(
             {
                 **_COMMON,
-                400: "The caller belongs to several organizations and named none, or no or an "
-                "invalid Idempotency-Key",
+                400: "The caller belongs to several organizations and named none, or an invalid "
+                "Idempotency-Key",
                 404: "No such job in the organization",
                 409: (
                     "The job is not dead (job-not-dead), or it runs an execution: retry the "
@@ -343,7 +348,12 @@ def operations_router(*, clock: Callable[[], datetime]) -> APIRouter:
             return 202, RetriedJobView(job_id=job_id, state="queued").model_dump(mode="json")
 
         return await run_idempotently(
-            request, user_id=auth.user_id, store=idempotency, now=now, work=work
+            request,
+            user_id=auth.user_id,
+            store=idempotency,
+            now=now,
+            work=work,
+            required=STAGED_KEY_REQUIRED,
         )
 
     return router

@@ -27,7 +27,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from htco_api.auth import CurrentAuth
-from htco_api.idempotency import IDEMPOTENCY_OPENAPI, idempotency_store, run_idempotently
+from htco_api.idempotency import (
+    IDEMPOTENCY_OPENAPI,
+    STAGED_KEY_REQUIRED,
+    idempotency_store,
+    run_idempotently,
+)
 from htco_api.identity import (
     ORGANIZATION_REQUIRED,
     decode_cursor,
@@ -534,7 +539,7 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
         responses=problem_responses(
             {
                 **relay_problems,
-                400: "No or an invalid Idempotency-Key, or several organizations and none named",
+                400: "An invalid Idempotency-Key, or several organizations and none named",
                 403: "Not an Owner or Admin (forbidden), or no second factor (mfa-required)",
                 404: "No such relay item for the caller",
                 409: "Pasted already or closed (relay-item-moved), the number is used for "
@@ -595,7 +600,12 @@ def incidents_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PL
             return 200, _paste_view(item).model_dump(mode="json")
 
         answer = await run_idempotently(
-            request, user_id=auth.user_id, store=idempotency, now=now, work=work
+            request,
+            user_id=auth.user_id,
+            store=idempotency,
+            now=now,
+            work=work,
+            required=STAGED_KEY_REQUIRED,
         )
         answer.headers["Cache-Control"] = "no-store"
         return answer

@@ -22,7 +22,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from htco_api.auth import CurrentAuth
-from htco_api.idempotency import IDEMPOTENCY_OPENAPI, idempotency_store, run_idempotently
+from htco_api.idempotency import (
+    IDEMPOTENCY_OPENAPI,
+    STAGED_KEY_REQUIRED,
+    idempotency_store,
+    run_idempotently,
+)
 from htco_api.identity import FORBIDDEN, problem_responses
 from htco_api.problems import (
     NOT_FOUND,
@@ -189,7 +194,7 @@ def access_router(*, clock: Callable[[], datetime]) -> APIRouter:
         response_model=InvitationView,
         responses=problem_responses(
             {
-                400: "The body is not valid JSON, or no or an invalid Idempotency-Key",
+                400: "The body is not valid JSON, or an invalid Idempotency-Key",
                 409: "Already a member, or the email already has an account, or the first "
                 "request with this Idempotency-Key still runs (idempotency-in-progress)",
                 422: (
@@ -251,6 +256,7 @@ def access_router(*, clock: Callable[[], datetime]) -> APIRouter:
             store=idempotency,
             now=now,
             work=work,
+            required=STAGED_KEY_REQUIRED,
             redact=lambda body: body | {"invite_link": None},
         )
         answer.headers["Cache-Control"] = "no-store"

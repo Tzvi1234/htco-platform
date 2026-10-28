@@ -8,6 +8,7 @@ import pytest
 
 from htco_api.app import AppOptions, create_app
 from htco_api.auth import Authenticator
+from htco_api.idempotency import STAGED_KEY_REQUIRED
 from htco_api.incidents import IncidentCenter
 from htco_application.access.authentication import Membership
 from htco_application.relay import LIST_LIMIT, RelayItem
@@ -193,7 +194,8 @@ async def test_pr_b_paste__same_idempotency_key__replayed_without_the_number() -
     assert CODE not in repr(idempotency.rows)
 
 
-async def test_pr_b_paste__without_an_idempotency_key__400_and_nothing_pasted() -> None:
+async def test_pr_b_paste__without_an_idempotency_key__the_staged_rule() -> None:
+    """Required once STAGED_KEY_REQUIRED flips (400, nothing pasted); until then it runs."""
     store = MemoryRelayStore()
     item = an_item(store)
     async with client(store) as http:
@@ -202,9 +204,13 @@ async def test_pr_b_paste__without_an_idempotency_key__400_and_nothing_pasted() 
             f"/v1/relay-items/{item.id}/tracking", json={"carrier": "usps", "code": CODE}
         )
 
-    assert answer.status_code == 400
-    assert answer.json()["type"].endswith("/idempotency-key-required")
-    assert store.items[item.id].state is RelayState.AWAITING_TRACKING
+    if STAGED_KEY_REQUIRED:
+        assert answer.status_code == 400
+        assert answer.json()["type"].endswith("/idempotency-key-required")
+        assert store.items[item.id].state is RelayState.AWAITING_TRACKING
+    else:
+        assert answer.status_code == 200
+        assert store.items[item.id].state is RelayState.HANDED_OFF
 
 
 @pytest.mark.ac("AC-6.10.4")

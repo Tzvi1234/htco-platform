@@ -8,6 +8,7 @@ import pytest
 
 from htco_api.app import AppOptions, create_app
 from htco_api.auth import Authenticator
+from htco_api.idempotency import STAGED_KEY_REQUIRED
 from htco_application.access.authentication import AuthenticatedUser, Membership
 from htco_application.access.management import Inviter as InviterPort
 from htco_domain.identity import Role
@@ -213,16 +214,21 @@ async def test_invite__same_idempotency_key__invites_once_and_never_stores_the_l
     assert INVITE_LINK not in repr(idempotency.rows)
 
 
-async def test_invite__without_an_idempotency_key__400_and_nobody_invited(store: Store) -> None:
+async def test_invite__without_an_idempotency_key__the_staged_rule(store: Store) -> None:
+    """Required once STAGED_KEY_REQUIRED flips (400, nobody invited); until then it runs."""
     inviter = Inviter()
     async with client_for(store, OWNER, inviter=inviter) as client:
         client.event_hooks["request"] = []
         response = await client.post(
             f"{BASE}/invitations", json={"email": "new@example.test", "role": "viewer"}
         )
-    assert response.status_code == 400
-    assert response.json()["type"] == PROBLEMS + "idempotency-key-required"
-    assert inviter.invited == []
+    if STAGED_KEY_REQUIRED:
+        assert response.status_code == 400
+        assert response.json()["type"] == PROBLEMS + "idempotency-key-required"
+        assert inviter.invited == []
+    else:
+        assert response.status_code == 201
+        assert inviter.invited == ["new@example.test"]
 
 
 async def test_change_role_remove_grant_and_revoke(owner: httpx.AsyncClient, store: Store) -> None:

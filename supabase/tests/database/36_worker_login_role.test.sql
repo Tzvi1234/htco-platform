@@ -3,6 +3,8 @@
 -- to `htco_worker`.
 begin;
 create extension if not exists pgtap with schema extensions;
+-- Only for pgTAP's functions while acting as the login (rolled back with the test).
+grant usage on schema extensions to htco_worker_login;
 select plan(10);
 
 select ok(

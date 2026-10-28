@@ -98,7 +98,8 @@ def sites_in(source: str, *, path: str, root: str) -> list[Site]:
                 isinstance(node, ast.Attribute) and node.attr == CHANNEL
             )
             if referenced and id(node) not in callee_ids:
-                found.append(Site(path, root, function, node.lineno, True, True, durable, memory))
+                line = getattr(node, "lineno", 0)
+                found.append(Site(path, root, function, line, True, True, durable, memory))
     return found
 
 

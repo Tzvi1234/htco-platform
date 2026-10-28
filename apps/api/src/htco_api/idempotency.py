@@ -60,16 +60,22 @@ IDEMPOTENCY_IN_PROGRESS = ProblemType(
 type Work = Callable[[], Awaitable[tuple[int, dict[str, Any]]]]
 type Redact = Callable[[dict[str, Any]], dict[str, Any]]
 
-# The header as an OpenAPI parameter, for `openapi_extra` of a route that requires it.
+# Architecture audit 6.1, staged: the invitation, re-sync, dead-letter retry and relay paste
+# routes replay on an `Idempotency-Key` now and require it once the web client sends it (a
+# required header is a breaking contract change, refused by the contract check). Flipping this
+# to True is that follow-up: it changes the routes and their OpenAPI together.
+STAGED_KEY_REQUIRED = False
+
+# The header as an OpenAPI parameter, for `openapi_extra` of the staged routes.
 IDEMPOTENCY_OPENAPI: dict[str, Any] = {
     "parameters": [
         {
             "name": IDEMPOTENCY_HEADER,
             "in": "header",
-            "required": True,
+            "required": STAGED_KEY_REQUIRED,
             "schema": {"type": "string", "minLength": 1, "maxLength": 255},
             "description": "A key for this request; a retry with the same key and body "
-            "returns the first response (24 hours).",
+            "returns the first response (24 hours). Send it: it becomes required.",
         }
     ]
 }

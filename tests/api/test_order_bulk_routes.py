@@ -12,6 +12,7 @@ from datetime import timedelta
 import httpx
 import pytest
 
+from htco_api.idempotency import STAGED_KEY_REQUIRED
 from htco_application.audit import AuditRecord
 from htco_application.etsy_webhooks import WindowLimiter
 from htco_domain.identity import Role
@@ -115,11 +116,16 @@ async def test_resync__same_idempotency_key__queued_once_and_replayed(bulk: Bulk
     assert len(bulk.queue.asked) == 1
 
 
-async def test_resync__without_an_idempotency_key__400_and_nothing_queued(bulk: Bulk) -> None:
+async def test_resync__without_an_idempotency_key__the_staged_rule(bulk: Bulk) -> None:
+    """Required once STAGED_KEY_REQUIRED flips (400, nothing queued); until then it runs."""
     response = await bulk.post("order-resyncs", {"order_ids": [9001]}, key=None)
 
-    problem(response, "idempotency-key-required", 400)
-    assert bulk.queue.asked == []
+    if STAGED_KEY_REQUIRED:
+        problem(response, "idempotency-key-required", 400)
+        assert bulk.queue.asked == []
+    else:
+        assert response.status_code == 202
+        assert len(bulk.queue.asked) == 1
 
 
 async def test_resync__over_the_rate__429_with_retry_after(bulk: Bulk) -> None:

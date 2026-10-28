@@ -2,13 +2,15 @@
 (architecture audit 6.1; SOFTWARE_DESIGN: unsafe `POST` endpoints that create or trigger work).
 
 A new `POST`, `PUT`, `PATCH` or `DELETE` fails here until it either requires the header (through
-`run_idempotently` and `IDEMPOTENCY_OPENAPI`) or is added to `EXEMPT` with why a retry is safe
-without it.
+`run_idempotently`) or is added to `EXEMPT` with why a retry is safe without it. The four
+routes of audit 6.1 are staged: they declare the key and replay on it, and require it once
+`STAGED_KEY_REQUIRED` flips.
 """
 
 from typing import Any
 
 from htco_api.app import create_app
+from htco_api.idempotency import STAGED_KEY_REQUIRED
 
 UNSAFE = frozenset({"post", "put", "patch", "delete"})
 _SESSION = (
@@ -61,13 +63,32 @@ def _operations() -> dict[str, dict[str, Any]]:
     }
 
 
+# Audit 6.1, staged (STAGED_KEY_REQUIRED): they replay on the key now and require it once the web
+# client sends it; the contract check refuses a new required header as a breaking change.
+STAGED = frozenset(
+    {"invite_organization_member", "resync_shop_orders", "retry_dead_letter", "paste_tracking"}
+)
+
+
 def _requires_the_key(operation: dict[str, Any]) -> bool:
     return any(
         parameter.get("in") == "header"
         and parameter.get("name") == "Idempotency-Key"
-        and parameter.get("required") is True
+        and (
+            parameter.get("required") is True
+            or (operation["operationId"] in STAGED and parameter.get("required") is False)
+        )
         for parameter in operation.get("parameters", [])
     )
+
+
+def test_the_staged_routes__declare_the_key_as_the_switch_says() -> None:
+    operations = _operations()
+    for name in STAGED:
+        [parameter] = [
+            p for p in operations[name]["parameters"] if p.get("name") == "Idempotency-Key"
+        ]
+        assert parameter["required"] is STAGED_KEY_REQUIRED, name
 
 
 def test_every_unsafe_route__requires_an_idempotency_key_or_is_exempt_with_a_reason() -> None:

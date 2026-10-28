@@ -9,6 +9,7 @@ import pytest
 
 from htco_api.app import AppOptions, create_app
 from htco_api.auth import Authenticator
+from htco_api.idempotency import STAGED_KEY_REQUIRED
 from htco_application.access.authentication import Membership
 from htco_application.audit import AuditRecord
 from htco_application.operations_health import (
@@ -153,15 +154,20 @@ async def test_retry__same_idempotency_key__retried_once_and_replayed() -> None:
     assert len(jobs.audits) == 1
 
 
-async def test_retry__without_an_idempotency_key__400_and_nothing_changed() -> None:
+async def test_retry__without_an_idempotency_key__the_staged_rule() -> None:
+    """Required once STAGED_KEY_REQUIRED flips (400, nothing changed); until then it runs."""
     jobs = dead()
     async with client(Role.ADMIN, jobs=jobs) as http:
         http.event_hooks["request"] = []
         answer = await http.post(f"/v1/operations/dead-letters/{JOB}/retry")
 
-    assert answer.status_code == 400
-    assert answer.json()["type"].endswith("/idempotency-key-required")
-    assert jobs.audits == []
+    if STAGED_KEY_REQUIRED:
+        assert answer.status_code == 400
+        assert answer.json()["type"].endswith("/idempotency-key-required")
+        assert jobs.audits == []
+    else:
+        assert answer.status_code == 202
+        assert len(jobs.audits) == 1
 
 
 async def test_retry__an_execution_job__409_naming_the_execution() -> None:

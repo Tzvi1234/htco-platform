@@ -38,7 +38,12 @@ from pydantic import BaseModel, Field, WithJsonSchema
 
 from htco_api.auth import CurrentAuth
 from htco_api.etsy import not_connected
-from htco_api.idempotency import IDEMPOTENCY_OPENAPI, idempotency_store, run_idempotently
+from htco_api.idempotency import (
+    IDEMPOTENCY_OPENAPI,
+    STAGED_KEY_REQUIRED,
+    idempotency_store,
+    run_idempotently,
+)
 from htco_api.identity import problem_responses
 from htco_api.policy_guard import FORBIDDEN
 from htco_api.problems import (
@@ -1161,7 +1166,7 @@ def _add_bulk_routes(router: APIRouter, *, clock: Callable[[], datetime]) -> Non
         responses=problem_responses(
             {
                 **_SHOP_ERRORS,
-                400: "The body is not valid JSON, or no or an invalid Idempotency-Key",
+                400: "The body is not valid JSON, or an invalid Idempotency-Key",
                 403: "The role may not re-sync orders (orders-action-forbidden)",
                 409: "The first request with this Idempotency-Key still runs "
                 "(idempotency-in-progress)",
@@ -1205,5 +1210,10 @@ def _add_bulk_routes(router: APIRouter, *, clock: Callable[[], datetime]) -> Non
             return 202, ResyncOrdersView(queued=queued).model_dump(mode="json")
 
         return await run_idempotently(
-            request, user_id=auth.user_id, store=idempotency, now=now, work=work
+            request,
+            user_id=auth.user_id,
+            store=idempotency,
+            now=now,
+            work=work,
+            required=STAGED_KEY_REQUIRED,
         )
