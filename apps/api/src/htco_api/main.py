@@ -47,7 +47,7 @@ from htco_application.execution.guards import Guards
 from htco_application.execution.service import ActionGatewayService, GatewayParts, Principals
 from htco_application.incidents import IncidentService
 from htco_application.jobs import JobError
-from htco_application.marketplace import MarketplacePort
+from htco_application.marketplace import MarketplacePort, QuotaMonitor
 from htco_application.mfa import Enrollment, Factor
 from htco_application.notifications import SecurityNotices
 from htco_application.order_history import OrderSync, adapter_pages
@@ -82,7 +82,7 @@ from htco_integrations.etsy import EtsyAdapter, EtsyConfig, EtsyCredentials, app
 from htco_integrations.etsy_oauth import EtsyOAuthClient
 from htco_persistence.access import PostgresAccessStore
 from htco_persistence.actions import PostgresActionStore, PostgresOwnerWriteHistory
-from htco_persistence.audit import PostgresAuditLog
+from htco_persistence.audit import PostgresAuditLog, PostgresAuditLogReader
 from htco_persistence.automation import (
     PostgresAutomationCatalog,
     PostgresExecutionReader,
@@ -102,6 +102,7 @@ from htco_persistence.idempotency import PostgresIdempotencyStore
 from htco_persistence.identity import PostgresMembershipReader
 from htco_persistence.jobs import PostgresJobQueue
 from htco_persistence.notifications import (
+    PostgresFailedEmailReader,
     PostgresNotificationInbox,
     PostgresSecurityNoticeStore,
 )
@@ -220,6 +221,7 @@ def main(
         web_auth=wiring.web_auth,
         etsy=wiring.etsy,
         integrations=wiring.integrations,
+        etsy_quota=wiring.etsy_quota,
         capability_checks=wiring.capability_checks,
         token_vault=wiring.token_vault,
         shop_remover=wiring.shop_remover,
@@ -234,6 +236,8 @@ def main(
         incident_center=wiring.incident_center,
         security_notices=wiring.security_notices,
         operations=wiring.operations,
+        audit_log=wiring.audit_log,
+        failed_emails=wiring.failed_emails,
         owner_writes=wiring.owner_writes,
         resources=wiring.resources,
     )
@@ -428,6 +432,8 @@ class _Wiring:
     integrations: IntegrationReader | None = None
     # Etsy reads with refreshed tokens; no route calls it yet (Phase 5 ingests orders with it).
     marketplace: MarketplacePort | None = None
+    # The same adapter's daily request budget and floor, for the shop card (AC-4.1.2).
+    etsy_quota: QuotaMonitor | None = None
     # Read-only capability probes (slice 4.5), with the adapter; off when the connect flow is off.
     capability_checks: CapabilityChecks | None = None
     # The connected shop's live data for the dashboard: read-only adapter calls through a short
@@ -441,6 +447,8 @@ class _Wiring:
     incident_center: IncidentCenter | None = None
     security_notices: SecurityNotices | None = None
     operations: PostgresOperationsHealth | None = None
+    audit_log: PostgresAuditLogReader | None = None
+    failed_emails: PostgresFailedEmailReader | None = None
     # The Owner's write actions (slices 6.6, 6.8); off when the connect flow is off.
     owner_writes: OwnerWriteServices | None = None
     resources: list[Resource] = field(default_factory=list)
@@ -526,6 +534,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         token_vault=token_vault,
         etsy=etsy,
         marketplace=marketplace,
+        etsy_quota=marketplace,
         capability_checks=checks,
         dashboard=dashboard,
         integrations=PostgresIntegrationReader(database, app_key_fingerprint=app_key),
@@ -556,6 +565,8 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
             offload=anyio.to_thread.run_sync,
         ),
         operations=PostgresOperationsHealth(database),
+        audit_log=PostgresAuditLogReader(database),
+        failed_emails=PostgresFailedEmailReader(database),
         owner_writes=None if writer is None else owner_write_services(settings, database, writer),
         resources=resources,
     )
@@ -583,7 +594,7 @@ def _etsy_wiring(
     web_auth: WebAuth | None,
 ) -> tuple[
     EtsyConnect | None,
-    MarketplacePort | None,
+    EtsyAdapter | None,
     CapabilityChecks | None,
     ShopDashboard | None,
     EtsyAdapter | None,
@@ -633,8 +644,8 @@ def _etsy_wiring(
         # Etsy webhooks (slice 5.3): configured when enabled; Etsy's deliveries prove them.
         webhooks_configured=settings.etsy_webhooks_enabled,
     )
-    # The stored order history (slice 5.4): synced by the worker's Etsy Order Intake once
-    # HTCO_ORDER_SYNC_IN_API is off; until then this process runs it as the fallback.
+    # The stored order history (slice 5.4): synced by the worker's Etsy Order Intake
+    # (HTCO_ORDER_SYNC_IN_API off, the default); on, this process runs it as the rollback.
     history = OrderSync(
         store=PostgresOrderStore(database),
         pages=adapter_pages(adapter, tokens),

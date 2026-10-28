@@ -393,6 +393,26 @@ class QuotaSnapshot:
         return self.remaining_today is not None and self.remaining_today < floor
 
 
+@dataclass(frozen=True)
+class QuotaStatus:
+    """The marketplace's daily request budget for the shop card (AC-4.1.2): the latest snapshot
+    this process saw (None before its first call; the budget is the app's, not one shop's) and
+    the floor below which routine calls are deferred."""
+
+    snapshot: QuotaSnapshot | None
+    floor: int
+
+    @property
+    def below_floor(self) -> bool:
+        return self.snapshot is not None and self.snapshot.is_below(self.floor)
+
+
+class QuotaMonitor(Protocol):
+    """The adapter's view of its request budget (`htco_integrations.etsy.EtsyAdapter`)."""
+
+    def quota_status(self) -> QuotaStatus: ...
+
+
 # --- Errors -----------------------------------------------------------------------------------
 
 

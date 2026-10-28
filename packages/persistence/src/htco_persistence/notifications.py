@@ -1,4 +1,5 @@
-"""Notifications, preferences and email deliveries on Postgres (slice 6.4), as the worker.
+"""Notifications, preferences and email deliveries on Postgres (slice 6.4), as the worker; and
+the API's reads (the inbox, the failed-email admin view of AC-6.4.3).
 
 Synchronous; run in worker threads. Members are reached only through
 `app.worker_notification_recipients` and `app.worker_member_email`, inside the job's organization.
@@ -7,11 +8,14 @@ Synchronous; run in worker threads. Members are reached only through
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from typing import Any
 
+import anyio
 from psycopg.types.json import Jsonb
 
+from htco_application.email_failures import FailedEmail, FailedEmailPage, FailedStatus
 from htco_application.kernel import OutboxMessage
-from htco_application.notifications import Notification, Recipient
+from htco_application.notifications import NO_LINKS, DeliveryLinks, Notification, Recipient
 from htco_domain.notifications import Audience, Locale, NotificationKind, Preference
 from htco_persistence.database import Database
 from htco_persistence.messaging import add_outbox_in
@@ -123,14 +127,15 @@ class PostgresEmailDirectory:
         provider_id: str | None,
         error: str | None,
         now: datetime,
+        about: DeliveryLinks = NO_LINKS,
     ) -> None:
         with self._database.connection() as connection, connection.transaction():
             connection.execute(
                 """
                 insert into app.email_deliveries
                   (id, outbox_id, organization_id, user_id, kind, status, provider_id, error,
-                   created_at)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   created_at, shop_id, incident_id, receipt_id)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 on conflict (outbox_id) do nothing
                 """,
                 [
@@ -143,8 +148,57 @@ class PostgresEmailDirectory:
                     provider_id,
                     error,
                     now,
+                    about.shop_id,
+                    about.incident_id,
+                    about.receipt_id,
                 ],
             )
+
+
+class PostgresFailedEmailReader:
+    """The failed-email admin view (AC-6.4.3), read as the caller: the table's policy shows rows
+    to the Owner and Admins only, and the address comes masked from the database."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def failed_emails(
+        self,
+        claims: Mapping[str, Any],
+        organization_id: uuid.UUID,
+        *,
+        status: FailedStatus,
+        before: uuid.UUID | None,
+        limit: int,
+    ) -> FailedEmailPage:
+        def run() -> FailedEmailPage:
+            with self._database.user_transaction(claims) as connection:
+                rows = connection.execute(
+                    """
+                    select id, kind, status, error, created_at, user_id,
+                           app.admin_member_email_masked(organization_id, user_id),
+                           shop_id, incident_id, receipt_id
+                    from app.email_deliveries
+                    where organization_id = %s and status = %s
+                      and (%s::uuid is null or id < %s::uuid)
+                    order by id desc
+                    limit %s
+                    """,
+                    [organization_id, status.value, before, before, limit + 1],
+                ).fetchall()
+            items = tuple(
+                FailedEmail(
+                    id=r[0], kind=r[1], status=FailedStatus(r[2]), reason=r[3], created_at=r[4],
+                    recipient_user_id=r[5], recipient=r[6], shop_id=r[7], incident_id=r[8],
+                    receipt_id=r[9],
+                )
+                for r in rows[:limit]
+            )  # fmt: skip
+            return FailedEmailPage(
+                items=items, next_before=items[-1].id if len(rows) > limit else None
+            )
+
+        return await anyio.to_thread.run_sync(run)
 
 
 _NOTIFICATION_COLUMNS = """

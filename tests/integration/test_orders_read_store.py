@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import timedelta
 
 import pytest
 
@@ -67,6 +68,39 @@ async def test_one_order__unknown_or_another_shop__none(database: Database) -> N
         await store.load_order(uuid.uuid4(), integration.etsy_shop_id, 83, buyer_data=True) is None
     )
     assert await store.timeline(uuid.uuid4(), 83) == ()
+
+
+@pytest.mark.ac("AC-6.1.2")
+async def test_one_order__its_tracking_first_seen_oldest_first_without_the_fingerprint(
+    database: Database,
+) -> None:
+    tenant, integration = await connected(database)
+    store = PostgresOrderStore(database)
+    with tenant_scope(tenant.organization_id):
+        await store.ingest_receipts(integration, [order(85)], context=WEBHOOK, now=NOW)
+    with database.connection() as connection, connection.transaction():
+        for last4, source, via, hours in (
+            ("0002", "autova_manual", "relay", 1),
+            ("0001", "etsy", "webhook", 4),
+        ):
+            connection.execute(
+                """
+                insert into app.tracking_events
+                  (id, organization_id, shop_id, receipt_id, carrier, carrier_name, fingerprint,
+                   last4, source, observed_via, first_observed_at)
+                values (%s, %s, %s, 85, 'usps', 'USPS', %s, %s, %s, %s, %s)
+                """,
+                [uuid.uuid4(), tenant.organization_id, integration.shop_id, bytes(32 - len(last4))
+                 + last4.encode(), last4, source, via, NOW - timedelta(hours=hours)],
+            )  # fmt: skip
+
+    found = await store.tracking(integration.shop_id, 85)
+
+    assert [(t.last4, t.source, t.observed_via) for t in found] == [
+        ("0001", "etsy", "webhook"),
+        ("0002", "autova_manual", "relay"),
+    ]
+    assert await store.tracking(uuid.uuid4(), 85) == ()
 
 
 async def test_the_window__every_stored_order_carries_its_state(database: Database) -> None:

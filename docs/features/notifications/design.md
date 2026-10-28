@@ -13,7 +13,7 @@
 
 - `app.notifications`: unique `(organization_id, user_id, dedup_key)`; `params` identifiers only (1 kB); `in_app` false when the recipient chose email only for that kind (the inbox leaves it out).
 - `app.notification_settings` (language) and `app.notification_preferences` (in-app, email per kind): the user's own.
-- `app.email_deliveries`: sent, failed or skipped, with a status code; never the address or the body.
+- `app.email_deliveries`: sent, failed or skipped, with a status code and what it was about (shop, incident, order: identifiers only); never the address or the body.
 - `app.worker_notification_recipients(roles, user, shop)` and `app.worker_member_email(user)`: security definer, executable only by the worker, scoped to its job's organization.
 
 ## Flows

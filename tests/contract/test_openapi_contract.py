@@ -100,6 +100,8 @@ def test_contract__is_openapi_3_1_with_stable_operation_ids() -> None:
         "get_shop_stats",
         "get_operations_health",
         "retry_dead_letter",
+        "list_email_failures",
+        "list_audit_log",
         "start_order_sync",
         "list_automations",
         "list_automation_executions",

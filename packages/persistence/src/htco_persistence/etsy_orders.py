@@ -26,7 +26,7 @@ from htco_application.marketplace import (
     ShippingAddress,
     display_name,
 )
-from htco_application.order_history import OrderStatusChange, SyncState
+from htco_application.order_history import OrderStatusChange, OrderTracking, SyncState
 from htco_application.order_ingest import (
     BACKFILL,
     SYNC,
@@ -165,6 +165,14 @@ select from_state, to_state, source, observed_at
 from app.order_status_events
 where shop_id = %s and receipt_id = %s
 order by observed_at, id
+"""
+
+# The parcels as first seen (AC-6.1.2): never the fingerprint, the code only as its last four.
+_TRACKING = """
+select carrier, carrier_name, last4, source, observed_via, first_observed_at
+from app.tracking_events
+where shop_id = %s and receipt_id = %s
+order by first_observed_at, id
 """
 
 _ITEMS = """
@@ -680,6 +688,20 @@ class PostgresOrderStore:
                 )
                 for row in rows
             )
+
+        return await anyio.to_thread.run_sync(run)
+
+    async def tracking(self, shop_id: uuid.UUID, receipt_id: int) -> tuple[OrderTracking, ...]:
+        def run() -> tuple[OrderTracking, ...]:
+            with self._database.connection() as connection:
+                rows = connection.execute(_TRACKING, [shop_id, receipt_id]).fetchall()
+            return tuple(
+                OrderTracking(
+                    carrier=row[0], carrier_name=row[1], last4=row[2], source=row[3],
+                    observed_via=row[4], first_observed_at=row[5],
+                )
+                for row in rows
+            )  # fmt: skip
 
         return await anyio.to_thread.run_sync(run)
 

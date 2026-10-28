@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from htco_application.marketplace import OrderReceipt, display_name
-from htco_application.order_history import OrderStatusChange, SyncState
+from htco_application.order_history import OrderStatusChange, OrderTracking, SyncState
 from htco_application.order_ingest import BACKFILL, SYNC, IngestContext
 from htco_application.shop_integrations import ShopIntegration
 
@@ -41,6 +41,8 @@ class MemoryOrderStore:
     contexts: list[IngestContext] = field(default_factory=list)
     # Recorded transitions per order (slice 5.6), in the order they were recorded.
     timelines: dict[tuple[uuid.UUID, int], list[OrderStatusChange]] = field(default_factory=dict)
+    # Tracking first seen per order (`tracking_events`, AC-6.1.2).
+    parcels: dict[tuple[uuid.UUID, int], list[OrderTracking]] = field(default_factory=dict)
 
     async def state(self, shop_id: uuid.UUID) -> SyncState | None:
         found = self.states.get(shop_id)
@@ -148,6 +150,10 @@ class MemoryOrderStore:
     async def timeline(self, shop_id: uuid.UUID, receipt_id: int) -> tuple[OrderStatusChange, ...]:
         found = self.timelines.get((shop_id, receipt_id), [])
         return tuple(sorted(found, key=lambda c: c.observed_at))
+
+    async def tracking(self, shop_id: uuid.UUID, receipt_id: int) -> tuple[OrderTracking, ...]:
+        found = self.parcels.get((shop_id, receipt_id), [])
+        return tuple(sorted(found, key=lambda t: t.first_observed_at))
 
     @asynccontextmanager
     async def lock(self, shop_id: uuid.UUID) -> AsyncIterator[bool]:

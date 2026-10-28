@@ -84,6 +84,7 @@ from htco_application.marketplace import (
     ProductStock,
     QuotaDeferredError,
     QuotaSnapshot,
+    QuotaStatus,
     Receipt,
     ReceiptAddressCheck,
     ReceiptLine,
@@ -334,6 +335,10 @@ class EtsyAdapter:
 
     def last_seen_quota(self) -> QuotaSnapshot | None:
         return self._quota
+
+    def quota_status(self) -> QuotaStatus:
+        """The last seen budget with the configured floor, for the shop card (AC-4.1.2)."""
+        return QuotaStatus(snapshot=self._quota, floor=self._config.daily_quota_floor)
 
     # --- EtsyShopDirectory (the connect flow, slice 4.3) --------------------------------------
 

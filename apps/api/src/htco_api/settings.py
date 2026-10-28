@@ -88,10 +88,11 @@ class ApiSettings(BaseSettings):
     etsy_webhooks_enabled: bool = False
     etsy_webhook_secret: SecretStr | None = None
     etsy_webhook_rate_per_second: int = Field(default=50, ge=1, le=1000)
-    # Slice 5.4: the order history sync runs in this process only as a fallback. On (the default
-    # until Etsy Order Intake is activated, slice 5.11): a stale read starts it here as before.
-    # Off: a stale read or the manual sync enqueues `etsy.order_sync` for the worker and returns.
-    order_sync_in_api: bool = True
+    # Slice 5.4: the order history sync runs in this process only as a fallback. Off (the default
+    # since Etsy Order Intake was activated, slice 5.11, AC-5.5.5): a stale read or the manual
+    # sync enqueues `etsy.order_sync` for the worker and returns. On: the rollback, a stale read
+    # starts the sync here as before.
+    order_sync_in_api: bool = False
     # The owner-triggered Etsy writes (slices 6.6, 6.8, ADR-0022): every write is off unless its
     # action is named here, comma-separated (`etsy.shipments.create,etsy.shop.update`); only the
     # owner names them. `HTCO_ETSY_WRITES_HALTED` is the kill switch over all of them. Both are

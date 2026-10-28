@@ -300,6 +300,34 @@ class EmailPort(Protocol):
     async def send(self, message: EmailMessage) -> EmailReceipt: ...
 
 
+@dataclass(frozen=True)
+class DeliveryLinks:
+    """What an email was about, for the failed-email admin view (AC-6.4.3): identifiers only."""
+
+    shop_id: uuid.UUID | None = None
+    incident_id: uuid.UUID | None = None
+    receipt_id: int | None = None
+
+
+NO_LINKS = DeliveryLinks()
+_RECEIPT_ID_MAX = 2**63 - 1  # the column is a bigint
+
+
+def delivery_links(shop_id: uuid.UUID | None, params: Mapping[str, str]) -> DeliveryLinks:
+    """The shop of the outbox message, and the incident and order its parameters name (a value
+    that is not an ID is left out)."""
+    incident: uuid.UUID | None = None
+    try:
+        incident = uuid.UUID(params["incident_id"]) if "incident_id" in params else None
+    except ValueError:
+        incident = None
+    receipt = params.get("receipt_id", "")
+    receipt_id = int(receipt) if receipt.isascii() and receipt.isdigit() else None
+    if receipt_id is not None and not 0 < receipt_id <= _RECEIPT_ID_MAX:
+        receipt_id = None
+    return DeliveryLinks(shop_id=shop_id, incident_id=incident, receipt_id=receipt_id)
+
+
 class EmailDirectory(Protocol):
     """Synchronous; run through `offload`."""
 
@@ -318,6 +346,7 @@ class EmailDirectory(Protocol):
         provider_id: str | None,
         error: str | None,
         now: datetime,
+        about: DeliveryLinks = NO_LINKS,
     ) -> None: ...
 
 
@@ -551,9 +580,11 @@ class EmailDeliverer:
         params = {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
         organization_id = message.organization_id
         address = await self.offload(lambda: self.directory.address_of(organization_id, user_id))
+        about = delivery_links(message.shop_id, params)
         if address is None:
             await self._record(
                 delivery,
+                about=about,
                 user_id=user_id,
                 kind=kind,
                 status="skipped",
@@ -578,6 +609,7 @@ class EmailDeliverer:
         except EmailPermanentError as error:
             await self._record(
                 delivery,
+                about=about,
                 user_id=user_id,
                 kind=kind,
                 status="failed",
@@ -587,6 +619,7 @@ class EmailDeliverer:
             return
         await self._record(
             delivery,
+            about=about,
             user_id=user_id,
             kind=kind,
             status="sent",
@@ -623,13 +656,14 @@ class EmailDeliverer:
         status: str,
         provider_id: str | None,
         error: str | None,
+        about: DeliveryLinks,
     ) -> None:
         now = self.clock()
         await self.offload(
             lambda: self.directory.record_email(
                 outbox_id=delivery.id, organization_id=delivery.message.organization_id,
                 user_id=user_id, kind=kind, status=status, provider_id=provider_id, error=error,
-                now=now,
+                now=now, about=about,
             )
         )  # fmt: skip
 

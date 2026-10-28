@@ -25,7 +25,7 @@ No Etsy key exists yet, so everything is tested against hand-written fixtures bu
 | ID | Criterion (Given / When / Then) | Slice | Status |
 |---|---|---|---|
 | AC-4.1.1 | Given Etsy answers 400, 401, 403, 404, 409, 422, 429 or 5xx, when the adapter calls it, then each status maps to a typed error; 5xx, 429 and transport failures retry with backoff (429 honours `retry-after`), other 4xx do not retry. | 4.1 | Pass |
-| AC-4.1.2 | Given Etsy reported fewer requests left today than the configured floor, when a routine (non-urgent) call is made, then it is deferred with `QuotaDeferredError`, a warning is logged and the `htco.etsy.calls_deferred` counter grows; urgent calls still run; the last seen budget is available for the shop card. | 4.1 | Pass at the adapter; the shop card shows it from slice 4.6 |
+| AC-4.1.2 | Given Etsy reported fewer requests left today than the configured floor, when a routine (non-urgent) call is made, then it is deferred with `QuotaDeferredError`, a warning is logged and the `htco.etsy.calls_deferred` counter grows; urgent calls still run; the last seen budget is available for the shop card. | 4.1 | Pass at the adapter and the API: `GET /v1/shop-integrations` carries `etsy_quota` (limit, remaining today, when seen, floor, below floor); the web shop card renders it in clients |
 | AC-4.1.3 | Given any committed fixture, when the test suite runs, then a test fails if it contains an email address, a street address or a token-shaped string. | 4.1 | Pass |
 | AC-4.3.1 | A callback with a missing, reused, expired or foreign `state` is rejected and audited. | 4.3 | Pass (application, API and database tests) |
 | AC-4.3.2 | Connecting the same Etsy shop twice updates one shop record instead of creating two. | 4.3 | Pass |
