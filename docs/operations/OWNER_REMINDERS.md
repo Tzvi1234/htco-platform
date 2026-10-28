@@ -15,7 +15,6 @@
 - [ ] **Connect Resend and the DNS for `office.ht-co.app`, together with the owner** ([D-29](../product/ASSUMPTIONS.md)). The code is built and OFF: SPF, DKIM and DMARC records, then Resend as Supabase Auth's custom SMTP and as the notification sender ([auth-bff operations](../features/auth-bff/operations.md#connecting-resend-for-auth-emails)). *Blocks:* AC-3.5.6, the password reset end to end ([Phase 3](../plan/phases/phase-03-design-system-web-shell.md)), and 6.4's email sending ([Phase 6](../plan/phases/phase-06-fulfillment-incidents.md)).
 - [ ] **The worker's dedicated database login role.** The owner sets its password in Supabase and adds the new secret named in the architecture-fixes pull request. *Blocks:* deploying that pull request; until then the worker keeps its current role.
 - [ ] **`HTCO_SENTRY_DSN` for the worker, and a Sentry volume alert per `automation_id`.** The owner adds the DSN secret and, in Sentry, a new-issue and volume alert rule keyed on the `automation_id` tag. *Blocks:* AC-6.7.4 reaching the owner in production (6.7).
-- [ ] **Owner live tests of the Etsy writes from the write console:** the tracking upload (`etsy.shipments.create`) and vacation mode (`etsy.shop.update`) on LeatherPY, each behind its flag, the kill switch, W3 step-up, audit and a re-read before and after. *Blocks:* switching any Etsy write flag on for regular use ([Phase 6](../plan/phases/phase-06-fulfillment-incidents.md) 6.6 and 6.8, the Write Actions console of [Phase 7](../plan/phases/phase-07-tasks-approvals.md) slice 7.18).
 
 ## When the owner decides
 
@@ -25,7 +24,6 @@
 
 - [ ] **AC-6.7.5 against rule P1-4: revisit when 7.1 lands.** The owner's decision of 2026-10-28 ([D-26](../product/ASSUMPTIONS.md)): AC-6.7.5 waits for the 7.1 task model (#181), an exception to P1-4 for now. *Blocks:* 6.7's AC-6.7.5 and its web step AC-7.19.4.
 - [ ] **The OpenRouter and Jev decision, at the start of 9.1.** The owner researches OpenRouter as the routing layer across open-source models, possibly with Jev, first; ask him when 9.1 starts ([Phase 9](../plan/phases/phase-09-router-advisor.md)). *Blocks:* 9.1's provider adapters and 9.2's catalog rows.
-- [ ] **htco-clients#74, passkeys:** waits for the decision on Supabase's WebAuthn add-on. *Blocks:* passkeys in Settings and the sign-in step.
 
 ## Dated
 
