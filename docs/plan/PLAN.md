@@ -49,7 +49,7 @@ Every phase file has the same structure: goal, why now, scope in and out, prereq
 | [8](phases/phase-08-workforce-runtime.md) | Workforce runtime and tool registry | Employees, tools and automations live in the database with versions; agents run on the Action Gateway with the LangGraph Postgres checkpointer; POC gates pass | — (runtime only) | platform, clients | L | |
 | [8A](phases/phase-08a-browser-infrastructure.md) | Browser Infrastructure | Optional, honest Browser Environment per shop: Playwright or CDP Chromium, Browser Controller with profile locks, preflight and health, challenges to a person, structured extraction, injection guards, monitoring; first read-only exports where scoped; AutoVA recipes A-01 (Export first) and A-02 (approve the chosen quote) | — | platform, clients | L | |
 | [8B](phases/phase-08b-authenticator.md) | Authenticator | PyOTP on the existing vault: enrolment with consent, several accounts per shop, code view with countdown, injection into the browser worker, RBAC, audit, replay protection | — | platform, clients | M | |
-| [9](phases/phase-09-router-advisor.md) | Model router and Decision Advisor | Per-employee routing, budgets, tool and channel permissions, simple vs complex routing and the Jev benchmark; the first employee works | **Eitan** | platform | M | |
+| [9](phases/phase-09-router-advisor.md) | Model router and Decision Advisor | Per-employee routing, budgets, tool and channel permissions, simple vs complex routing and the Jev benchmark; the first employee works | **Eitan** | both | M | |
 | [10](phases/phase-10-supervision.md) | Supervision and daily reconciliation | Deterministic monitors, Noa's reviews, the nightly supervisor and the daily operations report | **Noa**; Order & Financial Reconciliation, Quality Review Scheduling | both | M | |
 | [11](phases/phase-11-listing-health.md) | Listing Health (first content workflow) | Audit every listing (API, plus stats export where scoped), approve fixes, see them applied and verified on Etsy | **Daniel**, **Noam** | both | M | **M3 MVP** |
 | [12](phases/phase-12-product-studio.md) | Product Studio | One product from research to an Etsy draft and, after approval, a live listing; shop structure writes | **Shon**, **Nika**; Catalog Draft Creation & Publishing | both | L | |
@@ -139,6 +139,7 @@ A phase is complete only when all of these hold:
 6. Open risks and new assumptions recorded in [ASSUMPTIONS.md](../product/ASSUMPTIONS.md).
 7. **No employee or automation is activated without** a fully defined specification, a passed evaluation and the owner's approval of its autonomy level.
 8. The owner has seen the demo and approved moving on.
+9. **Every user-facing slice of the phase has its web step**, built in the phase or named in a later one, or says "No UI: <reason>" ([ER-UX-07](../engineering/ENGINEERING_RULES.md#13-user-experience-accessibility-and-language-er-ux), [UI_COVERAGE.md](UI_COVERAGE.md)).
 
 ## 6. Status
 

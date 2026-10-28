@@ -86,6 +86,7 @@ A monitor is a declared check with a query, a threshold, a severity and an owner
 | Worker heartbeats and leases | Workers without a heartbeat; executions, tasks and sessions with an expired lease |
 | Queue health | Depth, age, retries and dead letters above thresholds |
 | Missing records | State changes without the required audit or activity record (sampled by correlation ID) |
+| Refund patterns | Refunds and cancellations grouped by Etsy's reason and Eitan's suggested reason; a cause that recurs above its threshold opens one finding with one improvement task (listing, supplier or packaging) |
 
 | ID | Acceptance criterion |
 |---|---|
@@ -163,6 +164,9 @@ Web views: findings list and detail (evidence, owner, follow-up, verification), 
 |---|---|
 | AC-10.7.1 | **Scenario A** ([TESTING_STRATEGY §10](../../engineering/TESTING_STRATEGY.md#10-office-acceptance-scenarios)): for one paid order, the CRM shows its full trail across actors (automations, Eitan, Noa, people) from intake to delivery or incident, and the activity, findings and reconciliation views answer "did every Etsy order reach the CRM yesterday" and "which automations failed" without reading logs. |
 | AC-10.7.2 | Monitor status shows the last run time of each monitor; a monitor that missed its schedule is shown as not run, never as healthy. |
+| AC-10.7.3 | **Acting on a finding.** From a finding's detail, a permitted person assigns its owner, dismisses it with a required reason, or attaches verification evidence. The server applies the 10.2 rules (AC-10.2.1, AC-10.2.2), each action writes an activity record, and roles without the permission see no controls. |
+| AC-10.7.4 | **Refund patterns.** The refunds-by-reason statistics show Etsy's reasons and Eitan's suggested reasons (AC-9.7.6) apart, and each recurring cause links to the one finding and improvement task that the refund-pattern monitor (10.1) opened for it. |
+| AC-10.7.5 | **Repeat customers.** The shop's Statistics tab shows the share of orders from returning buyers beside the existing share of repeat buyers, computed on demand from the stored order history with no stored customer list (ADR-0018), with the period and the number of orders it is based on. |
 
 ### 10.8 — Platform health alerts (from 5.9)
 

@@ -14,10 +14,12 @@ Rolling wave: this phase is planned at the level of scope, slices and gates; acc
 ## Progress
 
 - [ ] 19.1 Engineering requests and their links
+- [ ] 19.1a Engineering requests on the web
 - [ ] 19.2 GitHub integration with least privilege
 - [ ] 19.3 Ownership and deduplication
 - [ ] 19.4 Engineering safety controls
 - [ ] 19.5 Amir activated: reliability and remediation
+- [ ] 19.5a Debug reports and remediations on the web
 - [ ] 19.6 Alex activated: software and architecture
 - [ ] 19.7 Iris activated: agent systems, tools and office experience
 - [ ] 19.8 Engineering Console actions
@@ -74,10 +76,12 @@ Each follows the activation rule of [Phase 9](phase-09-router-advisor.md) slice 
 | Slice | Content | Key acceptance |
 |---|---|---|
 | 19.1 | `engineering_requests` and `engineering_changes` with sources and links | Every merged pull request of the platform links to a request; every request shows its issue, branch, PR, CI and deployment state |
+| 19.1a | Web: engineering requests in the Engineering Console: a list by source, owner and state, and each request's detail with its issue, branch, pull request, CI runs and deployment, the finding, incident or proposal it came from, and the requests linked to it as duplicates (19.3) | Every state comes from the recorded links and events; views follow roles; no write action here (19.8 has them) |
 | 19.2 | GitHub App with least privilege; pull request, CI and deployment events through the inbox | The App cannot change branch protection, rulesets, secrets or workflow permissions (verified by its permission manifest) |
 | 19.3 | Ownership and deduplication: rules route requests to Alex, Amir or Iris; similar open requests are linked, not duplicated | One open request per problem; a second detection adds evidence to the first |
 | 19.4 | Safety controls: test-integrity job (Phase 1) extended to logging removal; registry changes that touch an employee's own grants, autonomy or routing need the owner's review (CODEOWNERS); tool bridge denies merge and deploy tools to every employee | An employee's pull request that weakens a test, removes a log statement or widens its own permissions fails CI or review |
 | 19.5 | Amir: incident investigation, allowlisted remediations, debug reports, regression tests | Only allowlisted, reversible, idempotent remediations run; anything else becomes an approval or a request; incidents resolve only on evidence |
+| 19.5a | Web: an incident's detail shows Amir's debug report, each remediation run with its allowlist entry and result, and the pull request of its regression test | Traces stay masked; a refused remediation shows why it was refused |
 | 19.6 | Alex: requests to pull requests with tests, migrations and docs | Every PR has failing-tests-first evidence and passes CI; no merge without review |
 | 19.7 | Iris: changes to `registry/`, skills, tool definitions and evaluations through pull requests; office UX improvements | A profile change creates a new version only through review and re-evaluation; permission, budget or autonomy changes need the owner's approval |
 | 19.8 | Engineering Console actions (web, and Windows in [Phase 17](phase-17-windows.md)): approve a release gate, retry a dead letter, run a dry-run | Every action goes through the API's checks, needs step-up where high-risk, and is audited |

@@ -221,6 +221,8 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.4.1 | Each challenge fixture stops the run within one step, with zero automatic retries, and one Human task. |
 | AC-8A.4.2 | The second challenge in 24 hours suspends the environment and switches its `browser.etsy.*` flags off for that shop. |
 | AC-8A.4.3 | After a person completes the login, the waiting execution resumes exactly once. |
+| AC-8A.4.4 | **The challenge on the web.** Its Human task names the shop, the kind of challenge and the run, and links to Sign in now (Live View, 8A.11). The screenshot is shown only to users with `VIEW_BUYER_CONTACT` on that shop, until it is deleted after 7 days, and the environment's history keeps its hash. |
+| AC-8A.4.5 | **Sign-in details are stored sealed** (`private.shop_credentials`, DATA_MODEL, main's decision of 2026-10-27). Each environment's site sign-in, the Etsy or AutoVA email and password, is sealed with the token vault's key ring (DC0) the moment the write-only form of AC-8A.9.7 sends it. Only the Secret Broker opens it, for a grant bound to one execution (5.17), and it is never returned, logged or sent to a model. Replacing or removing it is audited, and deleting the environment deletes it. Tested: no API response, log line, audit row or model input holds the password, and a removed one can no longer be granted. |
 
 ### 8A.5 — Recipes, structured extraction and result verification
 
@@ -234,6 +236,7 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.5.1 | A recipe navigates only to its allowed URL patterns; any other navigation aborts the run. |
 | AC-8A.5.2 | An export that fails its schema stores nothing and opens a quality finding; one that passes is idempotent per shop and day. |
 | AC-8A.5.3 | A recipe whose scope row is missing, or whose flag is off, is refused before the controller starts. |
+| AC-8A.5.4 | **The exports on the web.** The Statistics screen shows the rows that B-02 (`shop_traffic_daily`, `listing_metrics`) and B-03 (`ads_daily`) stored, per shop and day, each with its recipe version and `observed_at`. With the flag off, or before the first valid run, it says so and never shows zero. |
 
 ### 8A.6 — Browser Use driver for employees (moved earlier, ADR-0025 §5)
 
@@ -292,6 +295,8 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 |---|---|
 | AC-8A.8.1 | A dashboard shows each environment's status, last session, challenges in 7 days and recipe success rate. |
 | AC-8A.8.2 | An alert fires when any environment is `SUSPENDED`, or when challenges exceed the threshold. |
+| AC-8A.8.3 | **Browser workers on Admin › Health.** Each browser worker shows its heartbeat, its Chromium build, its slots in use and the result of its startup checks (`egress_rules_missing`, `policies_missing`, a build that differs from the fleet's). A worker that refuses sessions says why. |
+| AC-8A.8.4 | **The same figures in the web app.** Admin › Browser environments shows each environment's challenges in 7 days and recipe success rate beside its status and last session, and Admin › Health lists the browser DLQ with its audited retry. Every browser alert of this phase (AC-8A.2.22, AC-8A.3.4, AC-8A.8.2) also reaches the Owner through the notification path of 6.4, so Grafana is never the only place a figure or an alert appears. |
 
 ### 8A.9 — Environment screens
 
@@ -318,6 +323,9 @@ The controller can fall back from Playwright to Browser Use only for employee ac
 | AC-8A.9.2 | The kill switch stops running sessions within one step and refuses new ones. |
 | AC-8A.9.3 | The management screen lists only the environments that the viewer's role and shop access allow (RLS). It names each validation issue before saving. Every change needs step-up, and changes to the egress or the provider are Owner-only (negative tests). |
 | AC-8A.9.4 | Check now, Provision, Re-provision and Recover each enqueue a browser job; the API never runs a browser. The screen shows each result once its outcome is published. |
+| AC-8A.9.5 | **Health in words.** Each environment shows its last preflight and session check, with every failed check named (Chromium start, disk, DNS or TLS, egress, the probe page, signed out) and the reason it is `DEGRADED` or `LOGIN_REQUIRED`. The latest daily network diagnostics (egress stability, latency, the egress IP's reputation) are shown, labelled as diagnostics only. |
+| AC-8A.9.6 | **Flags on the web.** In an environment's list of enabled actions, the Owner switches each action's flag on (step-up, and only when its scope row is recorded) or off, and each change is audited. A flag that a suspension switched off (AC-8A.4.2) says so and stays off until the Owner switches it on again. |
+| AC-8A.9.7 | **Sign-in details are write-only.** Creating or editing an environment, a shop's Etsy one or the owner's AutoVA one, takes the site's sign-in email and password with the consent text and step-up (optional for Etsy, where a person can sign in through Live View). The password is sealed at once and never shown again; it can only be replaced or removed, and each change is audited. Who may set or replace each one is PERMISSION_MATRIX 1a: a shop's Etsy details the Owner or an Admin, the owner's AutoVA details the Owner only, each with MFA and recent re-authentication; every other role sees no form. Admin › Browser environments lists the AutoVA environment like a shop's. |
 
 ### 8A.10 — AutoVA recipes: A-01 (Export first) and A-02 (approve the chosen quote)
 
@@ -347,6 +355,7 @@ AutoVA is the owner's supplier platform (`beta.autova.io`). These recipes run in
 | AC-8A.10.3 | A-02 refuses to act when the page's supplier, price or terms differ from the approved quote's hash, and opens a Human task. |
 | AC-8A.10.4 | A fixture page with a Pay button: A-02 never clicks it (the allowlist test), and a payment step stops the run with a Human task. |
 | AC-8A.10.5 | An AutoVA order still Unpaid after its window raises exactly one alert and one task for the owner; HTCO takes no payment action. |
+| AC-8A.10.6 | **AutoVA orders on the web.** Each order shows its latest AutoVA snapshot (status, paid, carrier, and AutoVA's profit labelled `ESTIMATED`) with its source (`autova_export` or `autova_screen`) and `observed_at`. A list of AutoVA orders, filterable by status, shows the Unpaid ones past their window first. Tracking numbers go only to buyer-data roles. |
 
 ### 8A.11 — Live View and Human Takeover ([ADR-0026](../../adr/0026-browser-live-view-and-human-takeover.md))
 

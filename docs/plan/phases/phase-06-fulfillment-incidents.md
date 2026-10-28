@@ -11,7 +11,7 @@
 
 ## Progress
 
-- [x] 6.1 Tracking detection (migration `20261025100000_fulfillment_incidents.sql`, pgTAP `19_fulfillment_incidents`; [feature docs](../../features/fulfillment-monitoring/overview.md); inactive until 6.7)
+- [ ] 6.1 (reopened 2026-10-27: AC-6.1.2 is met on the web only with AC-6.5.3) Tracking detection (migration `20261025100000_fulfillment_incidents.sql`, pgTAP `19_fulfillment_incidents`; [feature docs](../../features/fulfillment-monitoring/overview.md); inactive until 6.7)
 - [x] 6.2 SLA policies and inspector (default window 7 business days, the owner's decision of 2026-10-23, replacing 10; schedule `fulfillment.inspect`, off by flag)
 - [x] 6.3 Incidents ([feature docs](../../features/incidents/overview.md); AC-6.3.4's trigger from `sync_drifts` is `DriftIncidents`, 6.7 PR #129; the drift's shop must be the execution's own, and the guard fails closed)
 - [ ] 6.4 (partial, audit 2026-10-28: AC-6.4.3's admin view of permanent email failures is only an RLS policy on `email_deliveries`, with no route and no screen; its web step is AC-6.5.6) Notifications and email (migration `20261025110000_notifications.sql`, pgTAP `25_notifications`; [feature docs](../../features/notifications/overview.md); Resend built and OFF until the owner's DNS for `office.ht-co.app`)
@@ -132,6 +132,10 @@ Incident list (severity, shop, age, state), incident detail (evidence, timeline,
 |---|---|
 | AC-6.5.1 | Incident states use status dot plus word, never colour alone. |
 | AC-6.5.2 | Screen reader announces new notifications politely, not intrusively. |
+| AC-6.5.3 | **Tracking on the order timeline.** The order timeline shows each tracking event of the order: when it was first seen, its source (`etsy`, `autova_manual`, `autova_browser`, `autova_email`) and what saw it (webhook, schedule or relay), with only the code's last four characters. This is AC-6.1.2 on the web, and the order API returns these events with the order. |
+| AC-6.5.4 | **SLA policies and the calendar on the web.** The shop page shows the SLA policy that applies to the shop: the window, calendar or business days, the time zone, the weekend days and the holidays, each holiday with its source (the policy, or Etsy's holiday preferences once they are read). The built-in default (7 business days) is marked as such. The Owner or an Admin edits it with step-up; each change raises its version, is audited and applies from the next inspection, and every other role sees it read-only. |
+| AC-6.5.5 | **Moving an incident.** A person with the right to update incidents moves one a step along its machine from its detail, with a note. The detail offers only the steps its state allows, none to a role without that right and never a resolution without evidence, and it shows each refusal (evidence required, changed meanwhile) in words. |
+| AC-6.5.6 | **Email failures on Admin › Health.** The Owner and Admins see failed and skipped emails (kind, time and status code from `email_deliveries`, never the address or the body) beside the dead `email.send` messages: the admin view that AC-6.4.3 names. |
 
 ### 6.6 — Guarded shipment write
 
@@ -164,6 +168,7 @@ The Owner re-consents to `transactions_w` and runs `etsy.shipments.create` or `e
 | AC-6.8.1 | (Rewritten for W3 on 2026-10-28.) The Owner's own press runs one of these tools only after a recent step-up; any other actor's request (an automation, an employee or an agent) creates an Owner approval and sends nothing to Etsy until the Owner approves that request, every time, with no standing permission after a first verified run; an Admin's trigger is refused. Tested before any Etsy call, with fakes. |
 | AC-6.8.2 | A missing `transactions_w` scope refuses the write before any Etsy call, with a "reconnect to grant" link. |
 | AC-6.8.3 | Tests and CI never reach Etsy for these tools (fakes only); the adapter refuses a write without an owner-trigger record or a decided approval. |
+| AC-6.8.4 | **The tools' state on the shop page.** The shop page lists `etsy.shipments.create` and `etsy.receipts.update` with their state on that shop: owner-trigger only, first run verified (with its date and result), or `transactions_w` missing (with the reconnect link of AC-6.8.2), before any write is tried. The Owner's run starts from the order, behind step-up, and its result is shown as Etsy returned it. |
 
 ### 6.9 — Ship-by SLA, holiday calendar and low-review alerts
 
@@ -177,6 +182,7 @@ All deterministic ([feature backlog](../../product/FEATURE_BACKLOG.md)).
 |---|---|
 | AC-6.9.1 | An order whose ship-by date is within the warning window without a shipment raises one alert; holidays from the shop's preferences are excluded. |
 | AC-6.9.2 | A new review of 3 stars or fewer raises one alert, once, with the listing and order linked. |
+| AC-6.9.3 | **Ship time per country on the web.** The shop's Statistics tab shows orders by destination country on a map and in an accessible table, with the median days from paid to shipped and from paid to delivered, from the stored shipments and `order.delivered` events. A country with too few orders says so instead of showing a median. |
 
 ### 6.10 — AutoVA tracking relay
 
@@ -199,6 +205,7 @@ The owner orders from suppliers through AutoVA and today copies each tracking nu
 | AC-6.10.2 | A tracking number already present on the Etsy receipt is never uploaded again; the relay item closes on that evidence. |
 | AC-6.10.3 | When the API refuses the shipment write, the item moves to B-12 only if its flag and scope row are on; otherwise to a Human task, never silently. |
 | AC-6.10.4 | The carrier and tracking formats are validated before any write; an invalid value is rejected with a clear message. |
+| AC-6.10.5 | **Relay items on the web.** Every open relay item is listed in the dashboard, and on its order, with its state and next step; its notification opens it. A tracking item shows its supplier window and offers the next step: paste the number and pick the carrier, B-12 waiting for the owner's approval, or a Human upload with its copy button. A closed item shows its source (`autova_manual`, `autova_browser`, `autova_email`) and the re-read that verified it; from Phase 7 the same items appear in the task views of 7.5. |
 
 ## Test plan
 
