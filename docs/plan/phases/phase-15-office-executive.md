@@ -91,6 +91,15 @@ Each follows the activation rule of [Phase 9](phase-09-router-advisor.md) slice 
 | 15.9 | Activity Feed & Audit; Notifications & Approvals; web push with consent (FR-NTF-02) | A push opens the exact item after sign-in; subscriptions are removed on logout |
 | 15.10 | Maya and Lia activated; daily and weekly office reviews | Sheets defined, evaluations passed, autonomy approved, routing measured; each review is built from recorded activity and lists its sources |
 
+### FUTURE — A per-agent email identity and mailbox (the owner's note of 2026-10-28)
+
+**Future, not scheduled in this phase's slices; it comes after 8A and 8B.** Each AI employee gets its own email address and mailbox (for example `<slug>@agents.ht-co.app`, FR-EML-04), so that it can open and manage accounts on outside services under its own identity and send mail, as some public AI agents already do. It builds on Phase 8A (a browser environment per agent for sign-ups), Phase 8B (the account's password and TOTP in the Agent Secrets Vault, 8B.8, injected and never seen by the model) and the email pipeline of Phase 14 (inbound mail as untrusted data, quarantine). Rules, to be turned into acceptance criteria when it is scheduled:
+
+- **Approval-gated.** Opening an account, and each first mail to a new recipient, is an approval for the Owner (W3) until a per-agent send policy allows otherwise; the Write Actions console (7.18) lists these as write capabilities.
+- **Per-agent send policies.** Each agent's policy names its allowed recipients or domains, its daily send limit and the account kinds it may open; anything outside it is refused before sending.
+- **Audited.** Every account opened, mail sent and mail received is recorded as an activity record and an audit entry, with no buyer data and no secret.
+- **Kill switch and abuse tests.** The agent's kill switch (8.6) stops its mail at once; no address receives or sends mail before its abuse tests pass.
+
 ## Test plan
 
 UI tests per area with recorded fixtures; offline-mode tests; accessibility tests (list views, reduced motion, screen readers) in Hebrew and English; evaluations for Maya (planning and escalation cases) and Lia (reports and approval presentations checked against records); a live demo with real activity.
