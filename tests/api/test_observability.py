@@ -1,6 +1,6 @@
 """Tracing and error monitoring end to end through the API (AC-1.7.1, AC-1.7.2)."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from typing import override
 
@@ -126,7 +126,12 @@ async def test_error_reporter_failure__still_answers_with_the_500_problem(logs: 
     class _BrokenReporter(ErrorReporter):
         @override
         def report(
-            self, error: BaseException, *, request_id: str | None, trace_id: str | None
+            self,
+            error: BaseException,
+            *,
+            request_id: str | None,
+            trace_id: str | None,
+            tags: Mapping[str, str] | None = None,
         ) -> None:
             raise ConnectionError("monitoring is down")
 

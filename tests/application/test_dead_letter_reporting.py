@@ -4,6 +4,7 @@ reporter never changes the dead letter."""
 
 import logging
 from datetime import timedelta
+from typing import Any
 
 import pytest
 
@@ -131,6 +132,29 @@ async def test_dead_letter_report__carries_no_buyer_data() -> None:
     assert (dead.error_type, dead.error) == ("ValueError", "ValueError")
     for secret in (BUYER_EMAIL, BUYER_NAME, BUYER_ADDRESS, "3412987711"):
         assert secret not in repr(dead)
+
+
+@pytest.mark.ac("AC-6.7.4")
+async def test_last_attempt__another_run_moved_it_first__nothing_reported() -> None:
+    reports = Reports()
+    world = World(reports)
+    world.book.failures = 99
+    execution = world.engine.trigger(paid())
+    await world.engine.execute(execution.id, worker=WORKER)
+    world.now += timedelta(seconds=10)
+    original = world.store.advance
+
+    def lose_the_dead_letter(before: Any, steps: Any, **kwargs: Any) -> bool:
+        if steps[-1][0].state is ExecutionState.DEAD_LETTERED:
+            return False  # another run changed the execution first: nothing is written
+        return original(before, steps, **kwargs)
+
+    world.store.advance = lose_the_dead_letter  # type: ignore[method-assign]
+
+    await world.engine.execute(execution.id, worker=WORKER)
+
+    assert world.store.rows[execution.id].execution.state is not ExecutionState.DEAD_LETTERED
+    assert reports.received == []
 
 
 @pytest.mark.ac("AC-6.7.4")

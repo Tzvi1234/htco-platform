@@ -3,7 +3,9 @@
 The engine calls `on_dead_letter` with a `DeadLetter` once the dead letter is stored. Here that
 becomes a report to the worker's `ErrorReporter`: Sentry when `HTCO_SENTRY_DSN` is set, nothing
 otherwise. The report says only what the `DeadLetter` holds (the automation, the execution and
-the stored error), so no buyer data, receipt, email, name or address can reach it.
+the stored error), so no buyer name, email or address can reach it. The automation, the error
+type and the execution are also tags, to filter by; each dead letter stays its own Sentry issue
+(no fingerprint), so the "new issue" alert fires for every one (AC-6.7.4: never silently).
 """
 
 from htco_application.automation.durable import DeadLetter, DeadLetterReporter
@@ -24,7 +26,16 @@ class DeadLetteredExecutionError(Exception):
 
 def dead_letter_reporter(reporter: ErrorReporter) -> DeadLetterReporter:
     def report(dead: DeadLetter) -> None:
-        reporter.report(DeadLetteredExecutionError(dead), request_id=None, trace_id=None)
+        reporter.report(
+            DeadLetteredExecutionError(dead),
+            request_id=None,
+            trace_id=None,
+            tags={
+                "automation_id": dead.automation_id,
+                "error_type": dead.error_type,
+                "execution_id": str(dead.execution_id),
+            },
+        )
 
     return report
 

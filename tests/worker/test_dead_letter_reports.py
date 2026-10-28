@@ -97,6 +97,13 @@ async def test_dead_letter__one_sentry_event_with_identifiers_and_no_buyer_data(
         f"automation.dead_lettered: etsy-order-intake execution={execution.id} "
         "error_type=ValueError error=ValueError"
     )
+    # Filterable in Sentry; no fingerprint, so each dead letter is its own issue and alerts.
+    assert event["tags"] == {
+        "automation_id": "etsy-order-intake",
+        "error_type": "ValueError",
+        "execution_id": str(execution.id),
+    }
+    assert "fingerprint" not in event
     sent = transport.serialized()
     for secret in (BUYER_EMAIL, BUYER_NAME, BUYER_ADDRESS, "3412987711"):
         assert secret not in sent

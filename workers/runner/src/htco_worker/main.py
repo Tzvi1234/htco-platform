@@ -774,10 +774,13 @@ async def _serve(settings: WorkerSettings) -> None:
             await worker.run(stop)
             group.cancel_scope.cancel()
     finally:
-        await http.aclose()
-        await database.stop()
-        # Reports queued just before a deploy or restart are delivered, not lost.
-        error_reporter.close()
+        try:
+            await http.aclose()
+            await database.stop()
+        finally:
+            # Reports queued just before a deploy or restart are delivered, not lost, even when
+            # closing the HTTP client or the pool fails.
+            error_reporter.close()
 
 
 async def stop_on_signal(stop: anyio.Event) -> None:
