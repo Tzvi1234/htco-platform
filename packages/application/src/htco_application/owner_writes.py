@@ -21,6 +21,7 @@ summarised as its carrier and last four characters, never logged, audited or sto
 """
 
 import hashlib
+import json
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -444,11 +445,18 @@ def relay_upload_preview(
     return OwnerWritePreview(state, item.shop_id, summary, _blocked(state, refusal))
 
 
-def _press_key(auth: AuthContext, write: OwnerWrite, shop_id: uuid.UUID, key: str) -> str:
-    """The gateway's idempotency key of one press: the caller's key, hashed with who and where
-    (never the input, which may hold a tracking code)."""
-    digest = hashlib.sha256(f"{auth.user_id}:{shop_id}:{write.key}:{key}".encode()).hexdigest()
-    return f"owner:{write.key}:{digest[:48]}"
+def _press_key(
+    auth: AuthContext, write: OwnerWrite, shop_id: uuid.UUID, key: str,
+    values: Mapping[str, JsonValue],
+) -> str:  # fmt: skip
+    """The gateway's idempotency key of one press: the caller's key hashed with who, where and
+    what. A replayed press (same key, same request) answers its first result and sends nothing;
+    the same key with another request is another press, never the first one's answer (the
+    gateway answers a finished key's result whatever was asked). The caller's key is never
+    stored, so the hash cannot be searched for a tracking code."""
+    canonical = json.dumps(dict(values), sort_keys=True, separators=(",", ":"))
+    material = f"{auth.user_id}:{shop_id}:{write.key}:{key}:{canonical}"
+    return f"owner:{write.key}:{hashlib.sha256(material.encode()).hexdigest()[:48]}"
 
 
 def _check_press(
@@ -478,7 +486,7 @@ async def _submit(  # noqa: PLR0913 - the press and its request
         action=ActionRef(write.action, write.version),
         actor=ActorRef(ActorKind.USER, str(auth.user_id)),
         organization_id=organization_id,
-        idempotency_key=_press_key(auth, write, shop_id, press_key),
+        idempotency_key=_press_key(auth, write, shop_id, press_key, prepared.input),
         correlation_id=correlation_id,
         input=prepared.input,
         shop_id=shop_id,
