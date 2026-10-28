@@ -6,7 +6,8 @@
 |---|---|---|
 | `HTCO_ETSY_WEBHOOKS_ENABLED` | `false` | Turns `POST /webhooks/etsy` on; off answers 404 |
 | `HTCO_ETSY_WEBHOOK_SECRET` | unset | The endpoint's signing secret (`whsec_...`), from the GitHub secret `ETSY_WEBHOOK_SECRET`; required when enabled; checked at startup without being repeated |
-| `HTCO_ETSY_WEBHOOK_RATE_PER_SECOND` | `50` | Per API instance; above it the answer is 429 with `Retry-After` |
+| `HTCO_ETSY_WEBHOOK_RATE_PER_SECOND` | `50` | Per API instance, counting only deliveries whose signature verifies; above it the answer is 429 with `Retry-After` |
+| `HTCO_ETSY_WEBHOOK_IP_RATE_PER_SECOND` | `20` | Per client IP (`do-connecting-ip`) and API instance, before anything is read or verified; above it the answer is 429 with `Retry-After` |
 | `HTCO_ORDER_SYNC_IN_API` | `false` | Slice 5.4: a stale read or the manual sync enqueues `etsy.order_sync` for the worker and returns at once (the default since 5.11, AC-5.5.5). `true`: the rollback, the API process runs the order history sync as before |
 | `HTCO_RECONCILIATION_SCHEDULE` | `06:00,18:00` | Slice 5.5, worker: when reconciliation runs, local `HH:MM` comma-separated; the day's last run is the full sweep. Runs only when `orders.reconciliation` is in `HTCO_WORKER_SCHEDULES` |
 | `HTCO_RECONCILIATION_TZ` | `Asia/Jerusalem` | The IANA time zone of those times: 06:00 stays 06:00 across a DST change (the image carries `tzdata`) |

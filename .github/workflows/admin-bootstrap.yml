@@ -2,7 +2,8 @@
 # owner membership for a user who already exists in Supabase Auth. Idempotent: running it again
 # changes nothing. Started only by the repository owner; the first step stops anyone else.
 #
-# Repository configuration (Settings → Secrets and variables → Actions):
+# Configuration: variables in Settings → Secrets and variables → Actions; secrets in the
+# `production` Environment (Settings → Environments → production), not repository secrets:
 #   variables  SUPABASE_PROJECT_REF, SUPABASE_POOLER_HOST
 #   secret     SUPABASE_DB_PASSWORD
 name: Admin bootstrap
@@ -34,6 +35,9 @@ jobs:
     name: bootstrap
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # The protected `production` Environment holds the secret: only `main` may use it (Codex
+    # security review P1). The owner check below is an extra signal, not the boundary.
+    environment: production
     permissions:
       contents: read
     steps:
