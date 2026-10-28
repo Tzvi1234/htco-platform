@@ -194,6 +194,25 @@ async def test_pr_b_paste__same_idempotency_key__replayed_without_the_number() -
     assert CODE not in repr(idempotency.rows)
 
 
+async def test_pr_b_paste__a_refused_first_try_is_not_kept__the_retry_runs() -> None:
+    """A failed first attempt (422 tracking-invalid) leaves the key free: the corrected paste
+    under the same key runs, instead of replaying the refusal or answering 422 key-reused."""
+    store, idempotency = MemoryRelayStore(), MemoryIdempotencyStore()
+    item = an_item(store)
+    headers = {"Idempotency-Key": "paste-2"}
+    url = f"/v1/relay-items/{item.id}/tracking"
+    async with client(store, idempotency=idempotency) as http:
+        refused = await http.post(url, json={"carrier": "usps", "code": "12345"}, headers=headers)
+        assert idempotency.rows == {}
+        retried = await http.post(url, json={"carrier": "usps", "code": CODE}, headers=headers)
+
+    assert [refused.status_code, retried.status_code] == [422, 200]
+    assert refused.json()["type"].endswith("/tracking-invalid")
+    assert "Idempotent-Replayed" not in retried.headers
+    assert store.items[item.id].state is RelayState.HANDED_OFF
+    assert [a.action for a in store.audits] == ["relay.tracking_pasted"]
+
+
 async def test_pr_b_paste__without_an_idempotency_key__the_staged_rule() -> None:
     """Required once STAGED_KEY_REQUIRED flips (400, nothing pasted); until then it runs."""
     store = MemoryRelayStore()

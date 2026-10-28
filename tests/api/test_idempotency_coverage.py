@@ -102,8 +102,9 @@ def test_every_unsafe_route__requires_an_idempotency_key_or_is_exempt_with_a_rea
     assert all(reason.strip() for reason in EXEMPT.values())
 
 
-def test_the_routes_that_trigger_work__require_the_key() -> None:
-    """The four of audit 6.1, and the automation trigger of slice 5.2."""
+def test_the_routes_that_trigger_work__declare_the_key() -> None:
+    """The four of audit 6.1 (staged: declared, optional until STAGED_KEY_REQUIRED flips), and
+    the automation trigger of slice 5.2."""
     operations = _operations()
     assert {
         "invite_organization_member",

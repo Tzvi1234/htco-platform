@@ -214,6 +214,29 @@ async def test_invite__same_idempotency_key__invites_once_and_never_stores_the_l
     assert INVITE_LINK not in repr(idempotency.rows)
 
 
+async def test_invite__same_key_with_another_body__422_and_nobody_invited(store: Store) -> None:
+    """Architecture audit 6.1: a key names one request; another email under it is refused
+    (422 idempotency-key-reused) and the second invitee gets nothing."""
+    inviter = Inviter()
+    headers = {"Idempotency-Key": "invite-2"}
+    async with client_for(store, OWNER, inviter=inviter) as client:
+        first = await client.post(
+            f"{BASE}/invitations",
+            json={"email": "new@example.test", "role": "viewer"},
+            headers=headers,
+        )
+        other = await client.post(
+            f"{BASE}/invitations", json={"email": "other@example.test", "role": "viewer"},
+            headers=headers,
+        )  # fmt: skip
+
+    assert [first.status_code, other.status_code] == [201, 422]
+    assert other.json()["type"] == PROBLEMS + "idempotency-key-reused"
+    assert "errors" not in other.json()
+    assert inviter.invited == ["new@example.test"]
+    assert [r.action for r in store.audit] == ["membership.created"]
+
+
 async def test_invite__without_an_idempotency_key__the_staged_rule(store: Store) -> None:
     """Required once STAGED_KEY_REQUIRED flips (400, nobody invited); until then it runs."""
     inviter = Inviter()

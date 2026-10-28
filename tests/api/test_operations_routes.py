@@ -57,7 +57,7 @@ class Operations:
 
 def client(
     role: Role = Role.OWNER, *, jobs: Jobs | None = None, reader: Reader | None = None,
-    wired: bool = True,
+    wired: bool = True, replays: bool = True,
 ) -> httpx.AsyncClient:  # fmt: skip
     verifier = JwtVerifier(issuer=ISSUER, audience=AUDIENCE, jwks=FakeJwks(KEY))
     app = create_app(
@@ -66,7 +66,7 @@ def client(
                 verifier, Memberships(Membership(ORG, role, frozenset({SHOP})))
             ),
             operations=Operations(reader or Reader(), jobs or dead()) if wired else None,
-            idempotency=MemoryIdempotencyStore(),
+            idempotency=MemoryIdempotencyStore() if replays else None,
             clock=lambda: NOW,
         )
     )
@@ -152,6 +152,37 @@ async def test_retry__same_idempotency_key__retried_once_and_replayed() -> None:
     assert again.json() == first.json()
     assert again.headers["Idempotent-Replayed"] == "true"
     assert len(jobs.audits) == 1
+
+
+async def test_retry__same_key_for_another_organization__422_and_not_retried() -> None:
+    """The fingerprint covers the query: the same key with another `?organization_id=` is a
+    different request (422 idempotency-key-reused), not the first organization's answer."""
+    jobs = dead()
+    headers = {"Idempotency-Key": "retry-org"}
+    url = f"/v1/operations/dead-letters/{JOB}/retry"
+    async with client(Role.ADMIN, jobs=jobs) as http:
+        first = await http.post(url, params={"organization_id": str(ORG)}, headers=headers)
+        other = await http.post(url, params={"organization_id": str(uuid.uuid4())}, headers=headers)
+
+    assert first.status_code == 202
+    assert other.status_code == 422
+    assert other.json()["type"].endswith("/idempotency-key-reused")
+    assert "Idempotent-Replayed" not in other.headers
+    assert len(jobs.audits) == 1
+
+
+async def test_retry__no_idempotency_store_wired__503_and_not_retried() -> None:
+    """Without the store the route cannot keep its once-per-key promise, so it refuses (503
+    not-ready), with a key or without one."""
+    jobs = dead()
+    async with client(Role.ADMIN, jobs=jobs, replays=False) as http:
+        keyed = await http.post(f"/v1/operations/dead-letters/{JOB}/retry")
+        http.event_hooks["request"] = []
+        bare = await http.post(f"/v1/operations/dead-letters/{JOB}/retry")
+
+    assert [keyed.status_code, bare.status_code] == [503, 503]
+    assert keyed.json()["type"].endswith("/not-ready")
+    assert jobs.audits == []
 
 
 async def test_retry__without_an_idempotency_key__the_staged_rule() -> None:
