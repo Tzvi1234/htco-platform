@@ -30,7 +30,7 @@ text = "eitan: accountable for the outcome (the owner until Eitan is active in P
 
 [specification.trigger]
 status = "defined"
-text = "Primary: event (the order.* webhooks, key etsy:{shop_id}:{receipt_id}:{event_type}). Also schedule (reconciliation twice a day and the open-orders sweep), workflow (the dashboard's stale read and the Owner's manual sync, through etsy.order_sync jobs) and agent_tool, each through the engine's authorization."
+text = "Primary: event (the order.* webhooks, key etsy:{shop_id}:{receipt_id}:{event_type}:{correlation_id}, one run per webhook delivery). Also schedule (reconciliation twice a day and the open-orders sweep), workflow (the dashboard's stale read and the Owner's manual sync, through etsy.order_sync jobs) and agent_tool, each through the engine's authorization."
 
 [specification.input_schema]
 status = "defined"

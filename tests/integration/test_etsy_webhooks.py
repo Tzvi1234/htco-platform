@@ -91,7 +91,10 @@ async def test_webhook__routed_to_the_connected_shop_with_one_job(admin: Databas
 
     assert first.job_id is not None
     assert replay.duplicate
-    assert other.job_id == first.job_id  # the same receipt and event type: one job
+    # Codex post-merge review (owner gate v4): another delivery is another job, the replay not.
+    assert replay.job_id == first.job_id
+    assert other.job_id is not None
+    assert other.job_id != first.job_id
     row = "select organization_id, shop_id from jobs.jobs where id = %s"
     with admin.connection() as connection:
         assert connection.execute(row, [first.job_id]).fetchone() == (
