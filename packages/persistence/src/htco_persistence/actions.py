@@ -17,7 +17,7 @@ from htco_application.execution.gateway import (
     ActionResult,
     Channel,
 )
-from htco_application.execution.service import Claim, Finish
+from htco_application.execution.service import Claim, Finish, StaleExecutionError
 from htco_domain.actions import ACTION_FINAL_STATES, ActionState
 from htco_persistence.audit import append_audit
 from htco_persistence.database import Database
@@ -25,7 +25,7 @@ from htco_persistence.messaging import add_outbox_in
 
 _COLUMNS = (
     "id, state, outcome, channel, attempts, verified, error_code, output, approval_id, retry_at, "
-    "request_hash"
+    "request_hash, generation"
 )
 
 
@@ -98,20 +98,44 @@ class PostgresActionStore:
             error_code=row[6],
             request_hash=row[10],
             channel=None if row[3] is None else Channel(row[3]),
+            generation=row[11],
         )
+
+    def resume(
+        self,
+        execution_id: uuid.UUID,
+        *,
+        state: ActionState,
+        generation: int,
+        lease_until: datetime,
+        now: datetime,
+    ) -> int | None:
+        with self._database.connection() as connection, connection.transaction():
+            row = connection.execute(
+                """
+                update app.action_executions
+                set generation = generation + 1, resuming_until = %s
+                where id = %s and state = %s and generation = %s
+                  and (resuming_until is null or resuming_until <= %s)
+                returning generation
+                """,
+                [lease_until, execution_id, state.value, generation, now],
+            ).fetchone()
+        return None if row is None else int(row[0])
 
     def record(self, execution_id: uuid.UUID, step: Finish, *, now: datetime) -> None:
         result = step.result
         final = step.state in ACTION_FINAL_STATES
         with self._database.connection() as connection, connection.transaction():
-            connection.execute(
+            updated = connection.execute(
                 """
                 update app.action_executions
                 set state = %s, outcome = %s, channel = %s, attempts = attempts + %s,
                     verified = %s, error_code = %s, reason = %s, output = %s,
                     evidence = %s, approval_id = coalesce(%s, approval_id), retry_at = %s,
-                    finished_at = case when %s then %s else finished_at end
-                where id = %s
+                    finished_at = case when %s then %s else finished_at end,
+                    resuming_until = null
+                where id = %s and generation = %s
                 """,
                 [
                     step.state.value,
@@ -130,8 +154,12 @@ class PostgresActionStore:
                     final,
                     now,
                     execution_id,
+                    step.generation,
                 ],
             )
+            if updated.rowcount == 0:
+                # Another caller resumed the row (its generation moved on): write nothing.
+                raise StaleExecutionError(f"action execution {execution_id} was resumed elsewhere")
             if step.audit is not None:
                 append_audit(connection, step.audit)
             if step.event is not None:

@@ -3,7 +3,10 @@
 `submit` is the only entry point for business actions:
 
 1. **Claim** `(action, idempotency_key)`: a finished action returns its stored result (a replay
-   runs nothing, AC-5.12.1); one still in progress answers `DEFERRED`.
+   runs nothing, AC-5.12.1); one still in progress answers `DEFERRED`. A resumable action
+   (waiting for its approval, failed, deferred) is resumed by one caller only: `resume` is a
+   compare-and-set on the row's generation that takes a lease, and every later record must match
+   that generation (Codex post-merge review, owner gate v4). The others answer `in_progress`.
 2. **Validate** the action, its version and its input against the action's JSON Schema.
 3. **Authorize** the actor: users through the policy engine and the action's `user_capability`
    (a shop the user may not use does not exist: `not_found`), employees through
@@ -111,6 +114,8 @@ _SERVER_ERRORS = 500
 # at a known time: a resubmission before retry_at sends nothing. A busy slot is checked again.
 _HELD_UNTIL_RETRY_AT = frozenset({"rate_limited", "breaker_open"})
 _TRANSPORT_ERRORS = (MarketplaceUnavailableError, ConnectionError, TimeoutError)
+# A resumption's lease when the action or the guards are unknown (a refusal follows at once).
+_DEFAULT_RESUME_LEASE = timedelta(minutes=1)
 
 
 class _NoTaskStoreError(Exception):
@@ -173,6 +178,13 @@ class Claim:
     error_code: str | None = None  # why it was deferred or failed
     request_hash: str | None = None  # of the request that created it
     channel: Channel | None = None  # the channel it ran on, if it ran
+    # The row's generation: a resumption raises it (`ActionStore.resume`) and every record must
+    # match it, so a caller that lost the resumption can never write over the winner.
+    generation: int = 0
+
+
+class StaleExecutionError(Exception):
+    """A record whose generation is no longer the row's: another caller resumed it."""
 
 
 @dataclass(frozen=True)
@@ -182,6 +194,7 @@ class Finish:
     state: ActionState
     path: tuple[ActionState, ...]  # the states passed since the last record, checked in order
     result: ActionResult
+    generation: int = 0  # the generation this caller holds (`Claim.generation`)
     reason: str | None = None
     approval_id: uuid.UUID | None = None
     audit: AuditRecord | None = None
@@ -195,8 +208,24 @@ class ActionStore(Protocol):
         """Insert `(action, idempotency_key)` as RECEIVED unless it exists; return it."""
         ...
 
+    def resume(
+        self,
+        execution_id: uuid.UUID,
+        *,
+        state: ActionState,
+        generation: int,
+        lease_until: datetime,
+        now: datetime,
+    ) -> int | None:
+        """Compare-and-set: if the row is still in `state` at `generation` and no other
+        resumption holds its lease, raise the generation and take the lease until `lease_until`;
+        the new generation, or None when another caller won."""
+        ...
+
     def record(self, execution_id: uuid.UUID, step: Finish, *, now: datetime) -> None:
-        """Store the step, its audit record and its event in one transaction."""
+        """Store the step, its audit record and its event in one transaction, only while the row
+        is at `step.generation` (and release a resumption's lease); else raise
+        `StaleExecutionError` and write nothing."""
         ...
 
 
@@ -300,6 +329,42 @@ class ActionGatewayService:
         early = self._answer_from_claim(claim, request, digest, now)
         if early is not None:
             return early
+        if not claim.created:
+            won = self._p.store.resume(
+                claim.execution_id,
+                state=claim.state,
+                generation=claim.generation,
+                lease_until=now + self._resume_lease(request),
+                now=now,
+            )
+            if won is None:  # another caller resumes it: only the winner calls the channel
+                return self._lost(request, digest, now)
+            claim = replace(claim, generation=won)
+        try:
+            return await self._continue(claim, request, digest, now)
+        except StaleExecutionError:
+            # The lease ran out and another caller resumed it: its record stands, not ours.
+            return self._lost(request, digest, now)
+
+    def _lost(self, request: ActionRequest, digest: str, now: datetime) -> ActionResult:
+        """A caller that lost the resumption: the winner's stored result once it is final, else
+        `in_progress`. It never calls the channel."""
+        claim = self._p.store.claim(request, request_hash=digest, now=now)
+        if claim.result is not None:
+            return claim.result
+        return self._result(claim.execution_id, ActionOutcome.DEFERRED, error="in_progress")
+
+    def _resume_lease(self, request: ActionRequest) -> timedelta:
+        """How long a resumption holds the row: the action's timeout and the slot margin, so the
+        lease outlives the call like a concurrency slot's does."""
+        definition = self._p.catalog.get(request.action.name, request.action.version)
+        timeout = _DEFAULT_RESUME_LEASE if definition is None else definition.timeout
+        margin = _DEFAULT_RESUME_LEASE if self._p.guards is None else self._p.guards.slot_margin
+        return timeout + margin
+
+    async def _continue(
+        self, claim: Claim, request: ActionRequest, digest: str, now: datetime
+    ) -> ActionResult:
         # A resubmission without its approval (an automation resumed after the decision, slice
         # 5.14) uses the approval requested for this very request; the hash still has to match.
         implicit = request.approval_id is None and claim.approval_id is not None
@@ -457,7 +522,7 @@ class ActionGatewayService:
         )
         result = self._result(claim.execution_id, ActionOutcome.PENDING_APPROVAL)
         self._record(
-            claim.execution_id,
+            claim,
             [*path, _S.WAITING_APPROVAL] if claim.state is not _S.WAITING_APPROVAL else path[:1],
             result,
             request,
@@ -480,7 +545,7 @@ class ActionGatewayService:
         result = self._result(claim.execution_id, ActionOutcome.DENIED, error=refusal.code)
         definition = self._p.catalog.actions.get(request.action.name)
         self._record(
-            claim.execution_id,
+            claim,
             [*path, _S.DENIED],
             result,
             request,
@@ -649,7 +714,7 @@ class ActionGatewayService:
             execution_id=claim.execution_id, outcome=ActionOutcome.DEFERRED, attempts=attempts,
             channel=channel, error_code=code, retry_at=retry_at,
         )  # fmt: skip
-        self._record(claim.execution_id, [*path, _S.DEFERRED], result, request, definition,
+        self._record(claim, [*path, _S.DEFERRED], result, request, definition,
                      reason=code, now=self._p.clock(), final=False)  # fmt: skip
         return result
 
@@ -672,11 +737,11 @@ class ActionGatewayService:
         if definition.approval_policy is ApprovalPolicy.W3:
             # One press or one approval, one send at most: the failure is final for this key, and
             # the next request (with its own key) runs every check again.
-            self._record(claim.execution_id, [*path, _S.FAILED, _S.DEAD_LETTERED], result,
+            self._record(claim, [*path, _S.FAILED, _S.DEAD_LETTERED], result,
                          request, definition, reason=describe_error(error),
                          now=self._p.clock())  # fmt: skip
             return result
-        self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
+        self._record(claim, [*path, _S.FAILED], result, request, definition,
                      reason=describe_error(error), now=self._p.clock(), final=False)  # fmt: skip
         return result
 
@@ -704,7 +769,7 @@ class ActionGatewayService:
                              channel=binding.channel),
                 attempts=attempts,
             )  # fmt: skip
-            self._record(claim.execution_id, [*path, _S.HANDED_TO_HUMAN], result, request,
+            self._record(claim, [*path, _S.HANDED_TO_HUMAN], result, request,
                          definition, reason=reason, now=now, final=False)  # fmt: skip
             return result
         if definition.verify is not VerifyMode.NONE:
@@ -717,11 +782,11 @@ class ActionGatewayService:
             )  # fmt: skip
             if definition.approval_policy is ApprovalPolicy.W3:
                 # The write may have reached Etsy (quill on #161): never resent under this key.
-                self._record(claim.execution_id, [*path, _S.FAILED, _S.DEAD_LETTERED], result,
+                self._record(claim, [*path, _S.FAILED, _S.DEAD_LETTERED], result,
                              request, definition, reason="verification failed",
                              now=now)  # fmt: skip
                 return result
-            self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
+            self._record(claim, [*path, _S.FAILED], result, request, definition,
                          reason="verification failed", now=now, final=False)  # fmt: skip
             return result
         result = ActionResult(
@@ -732,7 +797,7 @@ class ActionGatewayService:
             output=dict(outcome.output),
             verified=bool(verified),
         )
-        self._record(claim.execution_id, [*path, _S.SUCCEEDED], result, request, definition,
+        self._record(claim, [*path, _S.SUCCEEDED], result, request, definition,
                      now=now)  # fmt: skip
         return result
 
@@ -748,19 +813,19 @@ class ActionGatewayService:
         now = self._p.clock()
         if task.state is HumanTaskState.CANCELLED:
             result = replace(waiting, outcome=ActionOutcome.FAILED, error_code="cancelled")
-            self._record(claim.execution_id, [_S.HANDED_TO_HUMAN, _S.CANCELLED], result, request,
+            self._record(claim, [_S.HANDED_TO_HUMAN, _S.CANCELLED], result, request,
                          definition, reason="cancelled by a person", now=now)  # fmt: skip
             return result
         output = dict(task.output or {})
         path = [_S.HANDED_TO_HUMAN, _S.RUNNING, _S.VERIFYING]
         if validate(output, definition.output_schema):
             result = replace(waiting, outcome=ActionOutcome.FAILED, error_code="verification")
-            self._record(claim.execution_id, [*path, _S.FAILED], result, request, definition,
+            self._record(claim, [*path, _S.FAILED], result, request, definition,
                          reason="the person's result does not match the output contract",
                          now=now, final=False)  # fmt: skip
             return result
         result = replace(waiting, outcome=ActionOutcome.SUCCEEDED, output=output, verified=True)
-        self._record(claim.execution_id, [*path, _S.SUCCEEDED], result, request, definition,
+        self._record(claim, [*path, _S.SUCCEEDED], result, request, definition,
                      now=now)  # fmt: skip
         return result
 
@@ -792,7 +857,7 @@ class ActionGatewayService:
 
     def _record(  # noqa: PLR0913 - one argument per part of the record
         self,
-        execution_id: uuid.UUID,
+        claim: Claim,
         path: Sequence[ActionState],
         result: ActionResult,
         request: ActionRequest,
@@ -803,6 +868,7 @@ class ActionGatewayService:
         approval_id: uuid.UUID | None = None,
         final: bool = True,
     ) -> None:
+        execution_id = claim.execution_id
         action_path(*path)
         audited = definition is not None and definition.approval_policy.audited
         audit = None
@@ -844,6 +910,7 @@ class ActionGatewayService:
                 state=path[-1],
                 path=tuple(path),
                 result=result,
+                generation=claim.generation,
                 reason=None if reason is None else reason[:500],
                 approval_id=approval_id,
                 audit=audit,
