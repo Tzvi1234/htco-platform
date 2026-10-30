@@ -270,6 +270,55 @@ async def test_worker__the_inspector_opens_one_incident_for_a_late_order(
     assert outbox(database, "fulfillment.sla_breached.v1", shop=shop) == 1
 
 
+@pytest.mark.ac("AC-6.3.4")
+async def test_worker__a_drift_acknowledged_while_draft__one_incident_after_activation(
+    database: Database, worker_db: Database
+) -> None:
+    """Codex post-merge review (owner gate v4): a drift whose event the draft automation refused
+    has no incident; the inspection after the activation opens exactly one, linked by its ID."""
+    from htco_application.execution.gateway import UnavailableGateway  # noqa: PLC0415
+
+    tenant, integration = await connected(database)
+    org, shop = tenant.organization_id, integration.shop_id
+    drift = uuid.uuid4()
+    with database.connection() as connection:
+        connection.execute(
+            """
+            insert into app.sync_drifts (id, organization_id, shop_id, receipt_id, kind, observed,
+                                         etsy_updated_at, source, detected_at)
+            values (%s, %s, %s, 91, 'status', '{}'::jsonb, %s, 'reconciliation', %s)
+            """,
+            [drift, org, shop, NOW - timedelta(hours=2), NOW - timedelta(hours=1)],
+        )
+    context = HandlerContext(
+        execution_id=uuid.uuid7(), automation_id="incident-detection-escalation",
+        actor=ACTOR, organization_id=org, shop_id=shop, correlation_id="sched:drift",
+        causation_id=None, attempt=1, payload={"mode": "inspect"}, gateway=UnavailableGateway(),
+    )  # fmt: skip
+    with tenant_scope(org):
+        incidents = IncidentService(PostgresIncidentStore(worker_db), clock=lambda: NOW)
+        inspector = IncidentDetection(PostgresSlaStore(worker_db), incidents, clock=lambda: NOW)
+        first = await inspector(context)
+        again = await inspector(context)
+        due = PostgresSlaStore(worker_db).unlinked_drifts(shop, limit=10)
+
+    assert isinstance(first, Completed)
+    assert isinstance(again, Completed)
+    assert first.output["drifts_backfilled"] == 1
+    assert "drifts_backfilled" not in again.output
+    assert due == ()
+    assert (
+        count(
+            database,
+            "select count(*) from app.incidents where shop_id = %s and cause = 'sync_drift'"
+            " and receipt_id = 91 and details->>'drift_id' = %s",
+            [shop, str(drift)],
+        )
+        == 1
+    )
+    assert outbox(database, INCIDENT_OPENED, shop=shop) == 1
+
+
 async def test_worker__a_checked_receipt_is_due_again_only_after_it_changes_on_etsy(
     database: Database, worker_db: Database
 ) -> None:

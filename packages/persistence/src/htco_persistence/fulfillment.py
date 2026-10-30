@@ -15,7 +15,7 @@ from psycopg.types.json import Jsonb
 from htco_application.incident_center import IncidentDetail, IncidentHistoryEntry
 from htco_application.incidents import IncidentRecord, IncidentStep, StaleIncident
 from htco_application.kernel import OutboxMessage
-from htco_application.sla_inspector import AwaitingOrder
+from htco_application.sla_inspector import AwaitingOrder, StoredDrift
 from htco_application.tracking_sync import RecordedTracking, TrackingObservation, TrackingSource
 from htco_domain.fulfillment import BusinessCalendar, SlaPolicy, WindowUnit
 from htco_domain.incidents import (
@@ -238,6 +238,31 @@ class PostgresSlaStore:
                 [shop_id, list(transaction_ids)],
             ).fetchall()
         return {int(r[0]): int(r[1]) for r in rows}
+
+    def unlinked_drifts(self, shop_id: uuid.UUID, *, limit: int) -> tuple[StoredDrift, ...]:
+        """The drift backfill (Codex post-merge review, owner gate v4): drifts whose order has no
+        `sync_drift` incident open, or resolved at or after the drift."""
+        with self._database.connection() as connection:
+            rows = connection.execute(
+                """
+                select d.id, d.receipt_id, d.kind, d.detected_at
+                from app.sync_drifts d
+                where d.shop_id = %s
+                  and not exists (
+                    select 1 from app.incidents i
+                    where i.organization_id = d.organization_id and i.shop_id = d.shop_id
+                      and i.receipt_id = d.receipt_id and i.cause = 'sync_drift'
+                      and (i.resolved_at is null or i.resolved_at >= d.detected_at)
+                  )
+                order by d.detected_at, d.id
+                limit %s
+                """,
+                [shop_id, limit],
+            ).fetchall()
+        return tuple(
+            StoredDrift(drift_id=r[0], receipt_id=int(r[1]), kind=r[2], detected_at=r[3])
+            for r in rows
+        )
 
 
 _INCIDENT_COLUMNS = """

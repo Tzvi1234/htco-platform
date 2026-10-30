@@ -110,6 +110,26 @@ class SlaStore(Protocol):
         """The stored order of each transaction, in this shop only (low-review alerts, 6.9)."""
         ...
 
+    def unlinked_drifts(self, shop_id: uuid.UUID, *, limit: int) -> tuple[StoredDrift, ...]:
+        """The shop's drifts (`app.sync_drifts`) that no `sync_drift` incident of their order
+        covers: none still open, and none resolved at or after the drift was detected (the one
+        its event opened or found, or a later one). Oldest first, at most `limit`."""
+        ...
+
+
+@dataclass(frozen=True)
+class StoredDrift:
+    """A drift reconciliation recorded (`app.sync_drifts`): identifiers and its time only."""
+
+    drift_id: uuid.UUID
+    receipt_id: int
+    kind: str
+    detected_at: datetime
+
+
+# Drifts opened per inspection by the backfill; the rest follow on the next run.
+DRIFT_BACKFILL_LIMIT = 100
+
 
 def breach_event(  # noqa: PLR0913 - one breach's facts
     *,
@@ -246,6 +266,7 @@ class IncidentDetection:
             )
             _, created = await self.incidents.open(detection, actor=DETECTOR)
             opened += created
+        backfilled = await self._drift_backfill(ctx, shop_id)
         closed, escalated = await self._follow_up(ctx, shop_id, now)
         output: dict[str, JsonValue] = {
             "checked": len(awaiting),
@@ -253,6 +274,8 @@ class IncidentDetection:
             "resolved": closed,
             "escalated": escalated,
         }
+        if backfilled:
+            output["drifts_backfilled"] = backfilled
         if self.alerts is not None:
             output["ship_by_alerts"] = await self._ship_by(ctx, shop_id, policies, awaiting, now)
             if self.relay is not None:
@@ -366,6 +389,31 @@ class IncidentDetection:
                 )
                 escalated += 1
         return resolved, escalated
+
+    async def _drift_backfill(self, ctx: HandlerContext, shop_id: uuid.UUID) -> int:
+        """Open the incident of every drift no incident covers yet (AC-6.3.4; Codex post-merge
+        review, owner gate v4). A drift event that reached the subscriber while this automation
+        was draft was refused and acknowledged for good, and reconciliation never emits it again:
+        the first inspection after the activation opens its incident, from the stored drift, with
+        the same detection as the event's run. Deterministic and idempotent: an incident opened
+        here is linked by the drift's ID, so the next run finds nothing."""
+        drifts = await self.offload(
+            lambda: self.store.unlinked_drifts(shop_id, limit=DRIFT_BACKFILL_LIMIT)
+        )
+        opened = 0
+        for stored in drifts:
+            drift = ObservedDrift(
+                organization_id=ctx.organization_id,
+                shop_id=shop_id,
+                receipt_id=stored.receipt_id,
+                kind=stored.kind,
+                detected_at=stored.detected_at,
+                drift_id=stored.drift_id,
+                correlation_id=ctx.correlation_id,
+            )
+            _, created = await self.incidents.open(drift_detection(drift), actor=DETECTOR)
+            opened += created
+        return opened
 
     async def _drift(self, ctx: HandlerContext, raw: Mapping[str, JsonValue]) -> HandlerOutcome:
         try:

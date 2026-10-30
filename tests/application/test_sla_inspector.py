@@ -49,6 +49,7 @@ class Inspector:
         self.tracking = MemoryTrackingStore()
         self.sla = MemorySlaStore(self.tracking, policy_rows=policies or [THREE_DAYS])
         self.incident_store = MemoryIncidentStore()
+        self.sla.incidents = self.incident_store  # the drift backfill sees the incidents
 
     def await_order(self, receipt_id: int, paid_at: datetime = PAID) -> None:
         self.sla.awaiting.setdefault(SHOP, []).append(AwaitingOrder(receipt_id, paid_at))

@@ -247,7 +247,9 @@ def test_shipments_output__carries_tracking_codes_and_no_buyer_field() -> None:
     shipment = receipt["properties"]["shipments"]["items"]
 
     assert set(output["properties"]) == {"shipments", "count"}
-    assert set(receipt["properties"]) == {"receipt_id", "shipments"}
+    # The receipt's Etsy version too: Tracking Sync checkpoints what it read (Codex post-merge
+    # review, owner gate v4).
+    assert set(receipt["properties"]) == {"receipt_id", "updated_timestamp", "shipments"}
     assert set(shipment["properties"]) == {
         "tracking_code",
         "carrier_name",
