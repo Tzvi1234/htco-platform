@@ -42,10 +42,15 @@ class ApiSettings(BaseSettings):
     # Supabase secret key (`sb_secret_…`), used only to send invitations (slice 2.6), never for
     # database queries. Without it, invitations answer 503.
     supabase_secret_key: SecretStr | None = None
-    # Where the one-time invitation link lands (the web app's accept-invitation page).
+    # The API's link callback as the browser reaches it (production
+    # `https://dash.ht-co.app/api/v1/auth/links/callback`). Invitation and emailed password reset
+    # links go there with a one-time token, which the API redeems on the server. Without it,
+    # invitations and password reset links answer 503.
+    auth_link_callback_url: AnyHttpUrl | None = None
+    # Where the link callback sends an invitation's browser on (the web app's accept page).
     invite_redirect_url: AnyHttpUrl | None = None
-    # Where the emailed password reset link lands (the web app's reset page). Without it, asking
-    # for a reset link answers 503.
+    # Where the link callback sends a password reset's browser on (the web app's reset page).
+    # Without it, asking for a reset link answers 503.
     password_reset_redirect_url: AnyHttpUrl | None = None
     # Web sign-in (slice 3.5). The session key seals Supabase tokens at rest: 32 random bytes,
     # base64 (`openssl rand -base64 32`), a secret. The publishable key identifies the Supabase
@@ -114,6 +119,7 @@ class ApiSettings(BaseSettings):
         "database_url",
         "supabase_url",
         "supabase_secret_key",
+        "auth_link_callback_url",
         "invite_redirect_url",
         "password_reset_redirect_url",
         "session_key",
@@ -173,13 +179,17 @@ class ApiSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _deployed_reset_redirect_uses_https(self) -> Self:
-        # The recovery tokens ride in the URL fragment: an HTTP page could be replaced on path.
+        # The link's one-time token rides in the callback's query, and the `Secure` link cookie
+        # needs HTTPS: an HTTP page could be replaced on path.
         deployed = self.environment in {Environment.STAGING, Environment.PRODUCTION}
         url = self.password_reset_redirect_url
         if deployed and url is not None and url.scheme != "https":
             raise ValueError(
                 "HTCO_PASSWORD_RESET_REDIRECT_URL must use HTTPS in staging and production"
             )
+        callback = self.auth_link_callback_url
+        if deployed and callback is not None and callback.scheme != "https":
+            raise ValueError("HTCO_AUTH_LINK_CALLBACK_URL must use HTTPS in staging and production")
         return self
 
     @model_validator(mode="after")

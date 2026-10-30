@@ -107,13 +107,18 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: ${HTCO_SUPABASE_SECRET_KEY}
-      # Invitation links land on the web app's accept page, which posts the link's tokens and the
-      # new password to /v1/auth/invitations/accept. Must be in Supabase's redirect allow-list.
+      # Invitation and password reset links go to the API's link callback (Codex security review,
+      # owner gate v4): it redeems the one-time token on the server, keeps the session's tokens in
+      # an HttpOnly cookie and sends the browser on to the page below. The emailed reset link needs
+      # the owner's Supabase template change (docs/operations/OWNER_REMINDERS.md).
+      - key: HTCO_AUTH_LINK_CALLBACK_URL
+        scope: RUN_TIME
+        value: https://dash.ht-co.app/api/v1/auth/links/callback
+      # The accept page posts only the new password to /v1/auth/invitations/accept.
       - key: HTCO_INVITE_REDIRECT_URL
         scope: RUN_TIME
         value: https://dash.ht-co.app/accept-invite
-      # Emailed password reset links land on the web app's reset page, which posts the link's tokens
-      # and the new password to /v1/auth/password/reset. Must be in Supabase's redirect allow-list.
+      # The reset page posts only the new password (and a code) to /v1/auth/password/reset.
       - key: HTCO_PASSWORD_RESET_REDIRECT_URL
         scope: RUN_TIME
         value: https://dash.ht-co.app/reset-password
@@ -145,8 +150,8 @@ services:
         type: SECRET
         value: ${HTCO_TOKEN_VAULT_PREVIOUS_KEYS}
       # Etsy app credentials (slices 4.1 and 4.3), from the GitHub secrets ETSY_KEYSTRING and
-      # ETSY_SHARED_SECRET. The redirect URI is the web app's callback route, registered exactly
-      # in the Etsy app. Connecting stays off (503 etsy-unavailable) until the credentials, the
+      # ETSY_SHARED_SECRET. The redirect URI is the API's callback (Codex security review, owner
+      # gate v4), registered exactly in the Etsy app (an owner step before this deploys). Connecting stays off (503 etsy-unavailable) until the credentials, the
       # vault key and web sign-in are all set; blank secrets mean unset.
       - key: HTCO_ETSY_KEYSTRING
         scope: RUN_TIME
@@ -158,7 +163,7 @@ services:
         value: ${HTCO_ETSY_SHARED_SECRET}
       - key: HTCO_ETSY_REDIRECT_URI
         scope: RUN_TIME
-        value: https://dash.ht-co.app/integrations/etsy/callback
+        value: https://dash.ht-co.app/api/v1/integrations/etsy/callback
       # Etsy webhooks (slice 5.3): `POST /webhooks/etsy`, on since the owner registered the endpoint
       # in the Etsy developer portal (activation step 5 of 5.11). The signing secret comes from the
       # GitHub secret ETSY_WEBHOOK_SECRET (docs/features/orders-ingest/operations.md); blank means

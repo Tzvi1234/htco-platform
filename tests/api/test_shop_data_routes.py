@@ -30,6 +30,7 @@ from htco_application.shop_dashboard import ShopDashboard
 from htco_application.shop_data_cache import ShopDataCache
 from htco_domain.identity import Role
 from htco_domain.integrations import IntegrationStatus
+from htco_platform.crypto import Sealer
 from htco_platform.jwt import JwtVerifier
 from tests.api.test_etsy_connect_routes import (
     CREDENTIALS,
@@ -117,6 +118,7 @@ async def _world(*, dashboard_on: bool = True) -> AsyncIterator[World]:
                 JwtVerifier(issuer=ISSUER, audience=AUDIENCE, jwks=FakeJwks(KEY)), memberships
             ),
             web_auth=WebAuth(
+                link_sealer=Sealer(b"k" * 32),
                 auth=Auth(),
                 tokens=Aal2AfterVerify(),
                 store=Store(),
@@ -141,9 +143,8 @@ async def _world(*, dashboard_on: bool = True) -> AsyncIterator[World]:
         assert verified.status_code == 200
         started = await http.post("/v1/shops/etsy/connect", headers=CSRF)
         state = httpx.URL(started.json()["authorization_url"]).params["state"]
-        done = await http.post(
-            "/v1/integrations/etsy/callback", json={"code": GOOD_CODE, "state": state}, headers=CSRF
-        )
+        await http.get("/v1/integrations/etsy/callback", params={"code": GOOD_CODE, "state": state})
+        done = await http.post("/v1/integrations/etsy/callback", headers=CSRF)
         assert done.status_code == 200, done.text
         world.shop_id = done.json()["shop"]["id"]
         memberships.granted = frozenset({uuid.UUID(world.shop_id)})

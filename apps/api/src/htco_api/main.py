@@ -325,6 +325,9 @@ class _AuthProvider:
         except (AuthServiceError, RateLimitedError) as error:
             raise ResetEmailNotSentError(type(error).__name__) from None
 
+    async def verify_link(self, token_hash: str, verify_type: str) -> IssuedTokens:
+        return await self._call(self._auth.verify_link(token_hash, verify_type))
+
     async def enroll_totp(self, access_token: str, *, friendly_name: str) -> Enrollment:
         try:
             enrolled = await self._auth.enroll_totp(access_token, friendly_name=friendly_name)
@@ -460,7 +463,12 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
         jwks=HttpJwksSource(http, settings.auth_jwks_url),
     )
     inviter = None
-    if settings.supabase_secret_key is not None:
+    callback = (
+        None if settings.auth_link_callback_url is None else str(settings.auth_link_callback_url)
+    )
+    # Invitation links point at the API's link callback, which redeems them on the server; without
+    # it there is no safe link to hand out, so invitations stay off (Codex review, owner gate v4).
+    if settings.supabase_secret_key is not None and callback is not None:
         inviter = _Inviter(
             SupabaseInviter(
                 http,
@@ -469,6 +477,7 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
                 redirect_to=None
                 if settings.invite_redirect_url is None
                 else str(settings.invite_redirect_url),
+                callback_url=callback,
             )
         )
     web_auth = None
@@ -480,17 +489,23 @@ def _wiring(settings: ApiSettings, tracer_provider: TracerProvider) -> _Wiring:
                 publishable_key=settings.supabase_publishable_key,
             )
         )
+        sealer = Sealer.from_base64(settings.session_key.get_secret_value())
+        pages = {
+            "invite": settings.invite_redirect_url,
+            "recovery": settings.password_reset_redirect_url,
+        }
         web_auth = WebAuth(
             auth=provider,
             mfa=provider,
             tokens=VerifiedTokenReader(verifier),
-            store=PostgresSessionStore(
-                database, Sealer.from_base64(settings.session_key.get_secret_value())
-            ),
+            store=PostgresSessionStore(database, sealer),
             allowed_origins=settings.web_origin_list,
+            # The emailed link goes to the API's link callback, which then opens the reset page.
             password_reset_redirect=None
             if settings.password_reset_redirect_url is None
-            else str(settings.password_reset_redirect_url),
+            else callback,
+            link_pages={kind: str(page) for kind, page in pages.items() if page is not None},
+            link_sealer=sealer,
             # Off unless the owner switches passkeys on (issue #113): the add-on and the RP config.
             passkeys=provider if settings.passkeys_enabled else None,
             factor_audit=FactorAuditLog(

@@ -24,6 +24,7 @@ from htco_application.shop_capabilities import CapabilityChecks
 from htco_application.shop_integrations import IntegrationSummary
 from htco_domain.identity import Role
 from htco_domain.integrations import IntegrationStatus
+from htco_platform.crypto import Sealer
 from htco_platform.jwt import JwtVerifier
 from tests.api.test_etsy_connect_routes import (
     CREDENTIALS,
@@ -105,10 +106,12 @@ class World:
         started = await self.http.post("/v1/shops/etsy/connect", headers=CSRF)
         assert started.status_code == 200, started.text
         state = httpx.URL(started.json()["authorization_url"]).params["state"]
+        await self.http.get(
+            "/v1/integrations/etsy/callback", params={"code": GOOD_CODE, "state": state}
+        )
         done = await self.send(
             self.http.post(
                 "/v1/integrations/etsy/callback",
-                json={"code": GOOD_CODE, "state": state},
                 headers=CSRF,
             )
         )
@@ -174,6 +177,7 @@ async def _world(  # noqa: PLR0913 - one keyword per variation
                 JwtVerifier(issuer=ISSUER, audience=AUDIENCE, jwks=FakeJwks(KEY)), memberships
             ),
             web_auth=WebAuth(
+                link_sealer=Sealer(b"k" * 32),
                 auth=Auth(),
                 tokens=Aal2AfterVerify(),
                 store=Store(),

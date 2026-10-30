@@ -6,23 +6,31 @@ unsafe request that relies on the cookie, and the sign-in itself (login CSRF), m
 `X-HTCO-CSRF` header and come from an allowed origin: the `Origin` header when present, otherwise
 `Sec-Fetch-Site` (AC-3.5.2). Bearer requests from native apps carry no cookie and skip this.
 
-An invited user accepts the invitation here too: the invitation link lands on the web app with
-Supabase tokens in the URL fragment, and the web app posts them once with a new password to
-`/v1/auth/invitations/accept`, which answers exactly like a sign-in.
+An invited user accepts the invitation here too. The invitation link lands on the API's link
+callback, `GET /v1/auth/links/callback?token_hash=…&type=invite`, which redeems the one-time token
+with Supabase on the server, keeps the session's tokens sealed in the short-lived `HttpOnly`
+cookie `__Host-htco_link` and sends the browser on to the web app's accept page with a clean URL.
+The page posts only the new password to `/v1/auth/invitations/accept`, which reads the cookie and
+answers exactly like a sign-in. No token ever reaches the page's JavaScript (Codex security
+review, owner gate v4).
 
 A forgotten password works the same way (slice 3.5 part 3): `/v1/auth/password/forgot` always
 answers 202 and sends the email after the response, so neither the answer nor its timing says
-whether the account exists; the emailed link lands on the web app, which posts its tokens with the
-new password (and, for a user with an authenticator app, a code) to `/v1/auth/password/reset`.
+whether the account exists; the emailed link (`type=recovery`) lands on the same callback, and the
+reset page posts the new password (and, for a user with an authenticator app, a code) to
+`/v1/auth/password/reset`.
 """
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Annotated, Any
+from datetime import datetime, timedelta
+from typing import Annotated, Any, Literal
+from urllib.parse import urlencode
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Response, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from htco_api import notices
@@ -34,6 +42,14 @@ from htco_api.problems import (
     ProblemError,
     ProblemType,
     ValidationProblem,
+)
+from htco_api.sealed_cookies import (
+    LINK_COOKIE,
+    CookieTooLargeError,
+    expire,
+    expired_header,
+    open_sealed,
+    set_sealed,
 )
 from htco_application.mfa import (
     MfaNotEnrolledError,
@@ -52,13 +68,16 @@ from htco_application.password_reset import admit_password_reset, send_password_
 from htco_application.password_reset import reset_password as reset_password_from_link
 from htco_application.web_sessions import (
     ABSOLUTE_LIFETIME,
+    PASSWORD_LINKS,
     THROTTLE_WINDOW,
     ActiveSession,
     AuthProvider,
     ClientInfo,
     InvitationRefusedError,
+    IssuedTokens,
     MfaCodeRefusedError,
     MfaCodeRequiredError,
+    PasswordLink,
     ResetLinkRefusedError,
     SamePasswordError,
     SessionEndedError,
@@ -67,12 +86,16 @@ from htco_application.web_sessions import (
     TooManyAttemptsError,
     WeakPasswordError,
     accept_invitation,
+    redeem_link,
     resume_session,
     sign_in,
     sign_out,
 )
+from htco_platform.crypto import Sealer
 
 SESSION_COOKIE = "__Host-htco_session"
+# How long a redeemed link's sealed tokens wait for the page to post the new password.
+LINK_LIFETIME = timedelta(minutes=15)
 CSRF_HEADER = "X-HTCO-CSRF"
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _SAME_SITE = frozenset({"same-origin", "same-site", "none"})
@@ -149,8 +172,15 @@ class WebAuth:
     allowed_origins: tuple[str, ...]
     # Authenticator-app enrollment and verification; without it, the MFA routes answer 503.
     mfa: MfaProvider | None = None
-    # Where emailed password reset links land; without it, asking for one answers 503.
+    # Where emailed password reset links go: the API's link callback, as the browser reaches it;
+    # without it, asking for one answers 503.
     password_reset_redirect: str | None = None
+    # The web app's page for each link type (`invite`, `recovery`), where the callback sends the
+    # browser after redeeming the link; a type without a page answers 503 at the callback.
+    link_pages: Mapping[str, str] = field(default_factory=dict)
+    # Seals a redeemed link's tokens (and Etsy's callback) into a short-lived cookie; without it,
+    # the link callback answers 503.
+    link_sealer: Sealer | None = None
     # Passkeys (issue #113): Supabase Auth's WebAuthn factor. None (the default) switches them off.
     passkeys: PasskeyProvider | None = None
     # Records factors enrolled and removed (no credential material).
@@ -235,9 +265,7 @@ class SignInRequest(BaseModel):
 
 
 class AcceptInvitationRequest(BaseModel):
-    # The tokens from the invitation link's redirect (URL fragment), posted once.
-    access_token: str = Field(min_length=1, max_length=8192)
-    refresh_token: str = Field(min_length=1, max_length=1024)
+    # The link itself rides in the `__Host-htco_link` cookie the link callback set.
     # The same length rule as the sign-in service's password policy (12 characters).
     password: str = Field(min_length=12, max_length=128)
 
@@ -247,9 +275,7 @@ class ForgotPasswordRequest(BaseModel):
 
 
 class ResetPasswordRequest(BaseModel):
-    # The tokens from the reset link's redirect (URL fragment), posted once.
-    access_token: str = Field(min_length=1, max_length=8192)
-    refresh_token: str = Field(min_length=1, max_length=1024)
+    # The link itself rides in the `__Host-htco_link` cookie the link callback set.
     password: str = Field(min_length=12, max_length=128)
     # The authenticator app's code, for a user who has one (asked for with `mfa-code-required`).
     code: str | None = Field(default=None, pattern=r"^[0-9]{6}$")
@@ -325,6 +351,38 @@ def _expired_cookie() -> str:
     return f"{SESSION_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=strict"
 
 
+def _link_tokens(
+    request: Request, web: WebAuth, link: PasswordLink, refused: ProblemType, now: datetime
+) -> IssuedTokens:
+    """The tokens the link callback sealed into the link cookie, for this kind of link only; the
+    `refused` problem (and the cookie removed) when there are none."""
+    opened = (
+        None
+        if web.link_sealer is None
+        else open_sealed(request, web.link_sealer, LINK_COOKIE, now=now)
+    )
+    if opened is None or opened.get("type") != link.verify_type:
+        raise ProblemError(refused, headers={"Set-Cookie": expired_header(LINK_COOKIE)})
+    try:
+        return IssuedTokens(
+            opened["access_token"],
+            opened["refresh_token"],
+            datetime.fromtimestamp(int(opened["expires_at"]), now.tzinfo),
+        )
+    except KeyError, ValueError:
+        raise ProblemError(refused, headers={"Set-Cookie": expired_header(LINK_COOKIE)}) from None
+
+
+def _to_page(page: str, outcome: str | None = None) -> RedirectResponse:
+    """A 303 to the web app's page; `outcome` (`invalid`, `too-many`) is the only query."""
+    location = page if outcome is None else f"{page}?{urlencode({'link': outcome})}"
+    return RedirectResponse(
+        location,
+        status_code=status.HTTP_303_SEE_OTHER,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+
+
 def _problem(description: str) -> dict[str, Any]:
     return {"model": Problem, "content": {PROBLEM_MEDIA_TYPE: {}}, "description": description}
 
@@ -386,11 +444,14 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
         summary="Accept an invitation: set a password and sign in",
         responses={
             400: _problem("The body is not valid JSON"),
-            401: _problem("The invitation link is invalid, expired or already used"),
+            401: _problem(
+                "The invitation link is invalid, expired or already used, or no link was opened "
+                "on this browser (no link cookie)"
+            ),
             403: _problem("The request did not come from the web app"),
             # Two shapes: `validation-error` (with `errors`) and `weak-password` (without).
             422: _problem(
-                "Missing tokens or a password of the wrong length (validation-error), "
+                "A password of the wrong length (validation-error), "
                 "a password the sign-in service calls weak (weak-password), "
                 "or the current password (same-password)"
             ),
@@ -404,19 +465,24 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
         """Sets the invited user's password with Supabase Auth and starts a server-side session,
         exactly like a sign-in (same cookie, `no-store`)."""
         check_csrf(request, web)
+        now = clock()
+        link = PASSWORD_LINKS["invite"]
+        linked = _link_tokens(request, web, link, INVITATION_REFUSED, now)
         try:
             signed_in = await accept_invitation(
-                body.access_token,
-                body.refresh_token,
+                linked.access_token,
+                linked.refresh_token,
                 body.password,
                 client=client_info(request),
                 auth=web.auth,
                 tokens=web.tokens,
                 store=web.store,
-                now=clock(),
+                now=now,
             )
         except InvitationRefusedError:
-            raise ProblemError(INVITATION_REFUSED) from None
+            raise ProblemError(
+                INVITATION_REFUSED, headers={"Set-Cookie": expired_header(LINK_COOKIE)}
+            ) from None
         except WeakPasswordError:
             raise ProblemError(WEAK_PASSWORD) from None
         except SamePasswordError:
@@ -426,10 +492,77 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
         except TooManyAttemptsError:
             raise _too_many() from None
         _set_cookie(response, signed_in.cookie_value)
+        expire(response, LINK_COOKIE)
         response.headers["Cache-Control"] = "no-store"
         return SessionView(
             user_id=str(signed_in.user.user_id), assurance=signed_in.user.assurance.value
         )
+
+    @router.get(
+        "/links/callback",
+        status_code=status.HTTP_303_SEE_OTHER,
+        response_class=RedirectResponse,
+        summary="Open an invitation or password reset link",
+        responses={
+            303: {
+                "description": "To the web app's accept or reset page, with a clean URL; "
+                "`?link=invalid` when the link is invalid, expired or used, `?link=too-many` "
+                "after too many failed links from this address"
+            },
+            422: _validation("Missing or malformed token, or an unknown link type"),
+            503: _problem("Sign-in is unavailable"),
+        },
+    )
+    async def open_link(
+        request: Request,
+        web: Web,
+        token_hash: Annotated[str, Query(min_length=1, max_length=512)],
+        type: Annotated[Literal["invite", "recovery"], Query()],
+    ) -> RedirectResponse:
+        """Redeems the link's one-time token with Supabase Auth on the server, keeps the
+        session's tokens sealed in the `__Host-htco_link` cookie (`HttpOnly`, `Secure`,
+        `SameSite=Strict`, 15 minutes) and sends the browser on to the web app's page. The page
+        then posts only the new password."""
+        link = PASSWORD_LINKS[type]
+        page = web.link_pages.get(type)
+        if web.link_sealer is None or page is None:
+            raise ProblemError(AUTH_UNAVAILABLE)
+        now = clock()
+        try:
+            issued = await redeem_link(
+                token_hash,
+                link=link,
+                client=client_info(request),
+                auth=web.auth,
+                store=web.store,
+                now=now,
+            )
+        except InvitationRefusedError, ResetLinkRefusedError:
+            refused = _to_page(page, "invalid")
+            expire(refused, LINK_COOKIE)
+            return refused
+        except TooManyAttemptsError:
+            return _to_page(page, "too-many")
+        redirect = _to_page(page)
+        try:
+            set_sealed(
+                redirect,
+                web.link_sealer,
+                LINK_COOKIE,
+                {
+                    "type": type,
+                    "access_token": issued.access_token,
+                    "refresh_token": issued.refresh_token,
+                    "expires_at": str(int(issued.expires_at.timestamp())),
+                },
+                now=now,
+                lifetime=LINK_LIFETIME,
+            )
+        except CookieTooLargeError:
+            _log.warning("auth.link_cookie_too_large", link=type)
+            return _to_page(page, "invalid")
+        _log.info("auth.link_opened", link=type)
+        return redirect
 
     @router.post(
         "/password/forgot",
@@ -468,7 +601,8 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
         responses={
             400: _problem("The body is not valid JSON"),
             401: _problem(
-                "The reset link is invalid, expired or already used (reset-link-refused), "
+                "The reset link is invalid, expired or already used, or none was opened on this "
+                "browser (reset-link-refused), "
                 "or the authenticator code is wrong (mfa-code-refused)"
             ),
             403: _problem(
@@ -477,7 +611,7 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
             ),
             # Two shapes: `validation-error` (with `errors`) and `weak-password` (without).
             422: _problem(
-                "Missing tokens, a password of the wrong length or a malformed code "
+                "A password of the wrong length or a malformed code "
                 "(validation-error), a password the sign-in service calls weak (weak-password), "
                 "or the current password (same-password)"
             ),
@@ -491,10 +625,12 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
         """Sets the new password with Supabase Auth, starts a server-side session exactly like a
         sign-in (same cookie, `no-store`) and signs out every other session of the user."""
         check_csrf(request, web)
+        now = clock()
+        linked = _link_tokens(request, web, PASSWORD_LINKS["recovery"], RESET_LINK_REFUSED, now)
         try:
             signed_in = await reset_password_from_link(
-                body.access_token,
-                body.refresh_token,
+                linked.access_token,
+                linked.refresh_token,
                 body.password,
                 code=body.code,
                 client=client_info(request),
@@ -502,10 +638,12 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
                 mfa=mfa_of(web),
                 tokens=web.tokens,
                 store=web.store,
-                now=clock(),
+                now=now,
             )
         except ResetLinkRefusedError:
-            raise ProblemError(RESET_LINK_REFUSED) from None
+            raise ProblemError(
+                RESET_LINK_REFUSED, headers={"Set-Cookie": expired_header(LINK_COOKIE)}
+            ) from None
         except MfaCodeRequiredError:
             raise ProblemError(MFA_CODE_REQUIRED) from None
         except MfaCodeRefusedError:
@@ -517,6 +655,7 @@ def web_auth_router(*, clock: Any) -> APIRouter:  # noqa: PLR0915 - one nested f
         except TooManyAttemptsError:
             raise _too_many() from None
         _set_cookie(response, signed_in.cookie_value)
+        expire(response, LINK_COOKIE)
         response.headers["Cache-Control"] = "no-store"
         _log.info("auth.password_reset", session_id=str(signed_in.session_id))
         return SessionView(
