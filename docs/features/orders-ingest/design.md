@@ -13,7 +13,7 @@
 ## Contracts
 
 - **Endpoint:** `POST /webhooks/etsy` — Etsy's raw JSON body with the `webhook-id`, `webhook-timestamp` and `webhook-signature` headers; `204` on acceptance; problems `400 webhook-invalid`, `401 webhook-signature-invalid`, `404 not-found` (off), `413 webhook-too-large`, `429 webhook-rate-limited` with `Retry-After`. Not signed in, no CSRF (Etsy calls it).
-- **Job:** `etsy.webhook_event` — payload: `event_type`, Etsy `shop_id`, `receipt_id` or `listing_id` (and `product_id`), `webhook_id`. Key: `etsy:{shop_id}:{receipt_id}:{event_type}` for orders; `etsy:{shop_id}:{listing_id}[:{product_id}]:{event_type}@{webhook-timestamp}` for listings and stock.
+- **Job:** `etsy.webhook_event` — payload: `event_type`, Etsy `shop_id`, `receipt_id` or `listing_id` (and `product_id`), `webhook_id`. Key: `etsy:{shop_id}:{receipt_id}:{event_type}:{webhook_id}` for orders (one job per delivery; an exact replay is stopped by the inbox); `etsy:{shop_id}:{listing_id}[:{product_id}]:{event_type}@{webhook-timestamp}` for listings and stock.
 - **Events:** `catalog.listing_changed.v1`, `catalog.inventory_changed.v1`, `catalog.out_of_stock.v1` through the outbox (`events.publish`), IDs and re-read facts only (state, quantities, Etsy's update time). Order events (`orders.*`) are Etsy Order Intake's (5.4).
 - **Tables:** `jobs.inbox` (slice 5.2) with `source = 'etsy'`, `event_id = webhook-id`, the event's IDs as payload, and a new index on `job_id`; the worker may now insert `app.automation_executions` of its job's organization (migration `20261024100000_etsy_webhook_intake.sql`).
 
@@ -71,7 +71,7 @@ sequenceDiagram
 
 **Gateway in the worker.** `ActionGatewayService` with the registry and action contracts copied into the image (`/app/registry`, `/app/packages/contracts/actions`), the Postgres action store, breakers, rate budget (`etsy:app`, 5/s and 5,000/day placeholders) and slots, and the shared approval contract (#70) in memory: a write waits for an approval no one can give in the worker, so no write runs. Users never act in the worker.
 
-**Keys.** A webhook's run: `etsy:{shop_id}:{receipt_id}:{event_type}` (5.11). A requested history run: `etsy:{shop_id}:history:{job key}` with one `etsy.order_sync` job per shop and 10 minutes (stale reads), or per minute (the Owner's manual sync). Each gateway read is keyed by the execution, its attempt and the page.
+**Keys.** A webhook's run: `etsy:{shop_id}:{receipt_id}:{event_type}:{correlation_id}` (5.11; one per delivery, Codex post-merge review). A requested history run: `etsy:{shop_id}:history:{job key}` with one `etsy.order_sync` job per shop and 10 minutes (stale reads), or per minute (the Owner's manual sync). Each gateway read is keyed by the execution, its attempt and the page.
 
 **Locks.** The history run keeps the #57 per-shop advisory lock, shared with the API process's fallback run, so the two never sync one shop at once.
 

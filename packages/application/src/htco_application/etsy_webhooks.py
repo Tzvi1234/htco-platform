@@ -7,10 +7,11 @@
    endpoint's signing secret (`whsec_` and base64), a timestamp within 5 minutes of our clock, and
    a body of at most 64 KiB. Every refusal names its reason and never the body.
 2. **Record** the event once in the inbox (`source = "etsy"`, `event_id = webhook-id`, the same ID
-   across Etsy's retries), with the job that processes it, in one transaction. The job is keyed by
-   the resource: an order event by `etsy:{shop_id}:{receipt_id}:{event_type}`, so the same order
-   change announced twice (two webhook IDs) runs once. An unknown event type, or a shop that is
-   not connected to HTCO, is stored with no job and counted.
+   across Etsy's retries), with the job that processes it, in one transaction. An order event's
+   job is keyed by the delivery, `etsy:{shop_id}:{receipt_id}:{event_type}:{webhook_id}`: every
+   distinct delivery runs (a second parcel's `order.shipped`), a replayed webhook ID does not.
+   An unknown event type, or a shop that is not connected to HTCO, is stored with no job and
+   counted.
 3. **Answer** at once; the worker's `etsy.webhook_event` job does the rest.
 
 The payload is never trusted: it only says *what* changed. The job re-reads the receipt (through
@@ -308,13 +309,30 @@ class Accepted:
     job_id: uuid.UUID | None  # None: stored, not processed (unknown type or shop)
 
 
+def delivery_key(webhook_id: str) -> str:
+    """The signed webhook ID as a key part: itself when short, else its SHA-256 (keys keep 200
+    characters, so a long ID must never be cut into another delivery's key)."""
+    if len(webhook_id) <= _DELIVERY_KEY_MAX:
+        return webhook_id
+    return "sha256:" + hashlib.sha256(webhook_id.encode()).hexdigest()
+
+
+_DELIVERY_KEY_MAX = 64
+
+
 def webhook_job(event: EtsyWebhookEvent, shop: TenantShop, signed: SignedRequest) -> JobSpec:
-    """The processing job, keyed by the resource so one change announced twice runs once."""
+    """The processing job. An order job is keyed by the signed delivery (Codex post-merge review,
+    owner gate v4): a later delivery for the same receipt and type (a second parcel's
+    `order.shipped`) is a new change and runs again; a replay of the same webhook ID is stopped
+    by the inbox's `(source, event_id)`."""
     route = event.route
     if route is None or event.resource_id is None:  # pragma: no cover - checked by the caller
         raise ValueError("only routed events with a resource have a job")
     if route.resource is ResourceKind.ORDER:
-        key = f"etsy:{shop.shop_id}:{event.receipt_id}:{event.event_type}"
+        key = (
+            f"etsy:{shop.shop_id}:{event.receipt_id}:{event.event_type}"
+            f":{delivery_key(signed.webhook_id)}"
+        )
     else:
         # Listings and stock change many times: the same change (same second) once.
         product = "" if event.product_id is None else f":{event.product_id}"
@@ -487,7 +505,11 @@ class EngineOrderIntake:
             automation_id=ORDER_INTAKE,
             trigger=TriggerKind.EVENT,
             actor=WEBHOOK_ACTOR,
-            idempotency_key=f"etsy:{shop.shop_id}:{receipt_id}:{event_type}",
+            # One run per delivery (the correlation names the webhook ID): a later change of the
+            # receipt is read again, a replay of the same job is not.
+            idempotency_key=(
+                f"etsy:{shop.shop_id}:{receipt_id}:{event_type}:{delivery_key(correlation_id)}"
+            ),
             payload={"receipt_id": receipt_id, "event_type": event_type},
             correlation_id=correlation_id,
             organization_id=shop.organization_id,

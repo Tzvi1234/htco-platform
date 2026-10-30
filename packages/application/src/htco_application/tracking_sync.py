@@ -127,8 +127,13 @@ class TrackingStore(Protocol):
         until Etsy changes it (a second parcel), so it never pins the batch."""
         ...
 
-    def mark_checked(self, shop_id: uuid.UUID, receipt_id: int, *, now: datetime) -> None:
-        """The receipt was read at its stored Etsy version."""
+    def mark_checked(
+        self, shop_id: uuid.UUID, receipt_id: int, *, etsy_updated_at: datetime, now: datetime
+    ) -> None:
+        """The receipt was read at `etsy_updated_at`, the version the read itself returned, never
+        the stored one: an order intake that stores a newer version meanwhile leaves the receipt
+        due (Codex post-merge review, owner gate v4). Monotonic: an older run that finishes last
+        never moves the checkpoint back."""
         ...
 
 
@@ -271,9 +276,17 @@ class TrackingSync:
         reader = ShipmentsRead(ctx, self.clock)
         recorded = 0
         for receipt in receipts:
-            shipments = await reader.shipments(receipt)
-            recorded += await self._shipments(ctx, shop_id, receipt, shipments, via)
-            await self.offload(partial(self.store.mark_checked, shop_id, receipt, now=self.clock()))
+            read = await reader.shipments(receipt)
+            recorded += await self._shipments(ctx, shop_id, receipt, read.shipments, via)
+            await self.offload(
+                partial(
+                    self.store.mark_checked,
+                    shop_id,
+                    receipt,
+                    etsy_updated_at=read.etsy_updated_at,
+                    now=self.clock(),
+                )
+            )
         return Completed({"receipts": len(receipts), "recorded": recorded, "via": via.value})
 
     async def _shipments(

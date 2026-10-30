@@ -15,7 +15,7 @@ from psycopg.types.json import Jsonb
 from htco_application.incident_center import IncidentDetail, IncidentHistoryEntry
 from htco_application.incidents import IncidentRecord, IncidentStep, StaleIncident
 from htco_application.kernel import OutboxMessage
-from htco_application.sla_inspector import AwaitingOrder
+from htco_application.sla_inspector import AwaitingOrder, StoredDrift
 from htco_application.tracking_sync import RecordedTracking, TrackingObservation, TrackingSource
 from htco_domain.fulfillment import BusinessCalendar, SlaPolicy, WindowUnit
 from htco_domain.incidents import (
@@ -101,18 +101,25 @@ class PostgresTrackingStore:
             ).fetchall()
         return tuple(int(r[0]) for r in rows)
 
-    def mark_checked(self, shop_id: uuid.UUID, receipt_id: int, *, now: datetime) -> None:
+    def mark_checked(
+        self, shop_id: uuid.UUID, receipt_id: int, *, etsy_updated_at: datetime, now: datetime
+    ) -> None:
+        # The version the read observed, never the stored order's (which a concurrent intake may
+        # have advanced); `greatest` keeps the checkpoint monotonic.
         with self._database.connection() as connection, connection.transaction():
             connection.execute(
                 """
                 insert into app.tracking_checks
                   (organization_id, shop_id, receipt_id, etsy_updated_at, checked_at)
-                select o.organization_id, o.shop_id, o.receipt_id, o.etsy_updated_at, %s
+                select o.organization_id, o.shop_id, o.receipt_id, %s, %s
                 from app.etsy_orders o where o.shop_id = %s and o.receipt_id = %s
                 on conflict (shop_id, receipt_id) do update
-                  set etsy_updated_at = excluded.etsy_updated_at, checked_at = excluded.checked_at
+                  set etsy_updated_at = greatest(
+                        app.tracking_checks.etsy_updated_at, excluded.etsy_updated_at
+                      ),
+                      checked_at = excluded.checked_at
                 """,
-                [now, shop_id, receipt_id],
+                [etsy_updated_at, now, shop_id, receipt_id],
             )
 
 
@@ -231,6 +238,31 @@ class PostgresSlaStore:
                 [shop_id, list(transaction_ids)],
             ).fetchall()
         return {int(r[0]): int(r[1]) for r in rows}
+
+    def unlinked_drifts(self, shop_id: uuid.UUID, *, limit: int) -> tuple[StoredDrift, ...]:
+        """The drift backfill (Codex post-merge review, owner gate v4): drifts whose order has no
+        `sync_drift` incident open, or resolved at or after the drift."""
+        with self._database.connection() as connection:
+            rows = connection.execute(
+                """
+                select d.id, d.receipt_id, d.kind, d.detected_at
+                from app.sync_drifts d
+                where d.shop_id = %s
+                  and not exists (
+                    select 1 from app.incidents i
+                    where i.organization_id = d.organization_id and i.shop_id = d.shop_id
+                      and i.receipt_id = d.receipt_id and i.cause = 'sync_drift'
+                      and (i.resolved_at is null or i.resolved_at >= d.detected_at)
+                  )
+                order by d.detected_at, d.id
+                limit %s
+                """,
+                [shop_id, limit],
+            ).fetchall()
+        return tuple(
+            StoredDrift(drift_id=r[0], receipt_id=int(r[1]), kind=r[2], detected_at=r[3])
+            for r in rows
+        )
 
 
 _INCIDENT_COLUMNS = """

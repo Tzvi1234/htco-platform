@@ -9,7 +9,7 @@ form to any other actor). Contact data is never in it: the adapter never reads i
 """
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -212,11 +212,23 @@ def receipt_from_json(value: Mapping[str, Any]) -> OrderReceipt:
     )
 
 
+@dataclass(frozen=True)
+class ReceiptShipments:
+    """One receipt as `etsy.shipments.read` returns it: the Etsy version read and its parcels."""
+
+    receipt_id: int
+    etsy_updated_at: datetime  # the receipt's `updated_timestamp` in this very read
+    shipments: tuple[OrderShipment, ...]
+
+
 def shipments_to_json(receipt: OrderReceipt) -> dict[str, JsonValue]:
     """`etsy.shipments.read`'s form of a receipt: its shipments with their tracking codes, and
-    nothing of the buyer. A shipment without a code is left out: nothing to record yet."""
+    nothing of the buyer. A shipment without a code is left out: nothing to record yet. The
+    receipt's Etsy version travels with them, so the reader checkpoints what it observed (Codex
+    post-merge review, owner gate v4)."""
     return {
         "receipt_id": receipt.receipt_id,
+        "updated_timestamp": int(receipt.updated_at.timestamp()),
         "shipments": [
             {
                 "tracking_code": shipment.tracking_code,
@@ -229,14 +241,18 @@ def shipments_to_json(receipt: OrderReceipt) -> dict[str, JsonValue]:
     }
 
 
-def shipments_from_json(value: Mapping[str, Any]) -> tuple[int, tuple[OrderShipment, ...]]:
-    """The receipt ID and its shipments back; raises `KeyError`, `TypeError` or `ValueError`
-    on another shape."""
-    return int(value["receipt_id"]), tuple(
-        OrderShipment(
-            carrier=str(s.get("carrier_name") or ""),
-            tracking_code=str(s["tracking_code"]),
-            notified_at=datetime.fromtimestamp(int(s["shipment_notification_timestamp"]), UTC),
-        )
-        for s in value["shipments"]
+def shipments_from_json(value: Mapping[str, Any]) -> ReceiptShipments:
+    """The receipt, its Etsy version and its shipments back; raises `KeyError`, `TypeError` or
+    `ValueError` on another shape."""
+    return ReceiptShipments(
+        receipt_id=int(value["receipt_id"]),
+        etsy_updated_at=datetime.fromtimestamp(int(value["updated_timestamp"]), UTC),
+        shipments=tuple(
+            OrderShipment(
+                carrier=str(s.get("carrier_name") or ""),
+                tracking_code=str(s["tracking_code"]),
+                notified_at=datetime.fromtimestamp(int(s["shipment_notification_timestamp"]), UTC),
+            )
+            for s in value["shipments"]
+        ),
     )

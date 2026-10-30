@@ -19,6 +19,7 @@ from typing import Any
 import anyio
 import pytest
 
+from htco_application.audit import AuditRecord
 from htco_application.automation.durable import (
     Completed,
     DurableAutomationEngine,
@@ -31,6 +32,7 @@ from htco_application.automation.records import registry_from_rows
 from htco_application.etsy_webhooks import ORDER_INTAKE
 from htco_application.execution.gateway import Channel
 from htco_application.execution.service import ActionGatewayService, GatewayParts
+from htco_application.kernel import TenantShop
 from htco_application.marketplace import OrderReceipt
 from htco_application.order_automations import (
     SALES_COUNTERS,
@@ -50,11 +52,20 @@ from htco_domain.orders import OrderState
 from htco_persistence.actions import PostgresActionStore
 from htco_persistence.automation import PostgresAutomationCatalog, PostgresExecutionStore
 from htco_persistence.database import Database, tenant_scope
+from htco_persistence.etsy_connect import PostgresShopConnector
 from htco_persistence.etsy_orders import PostgresOrderStore
+from htco_persistence.maintenance import PostgresPurgeStore
 from htco_persistence.order_automations import PostgresOrderAutomationStore
 from tests.execution_fakes import Approvals, Capabilities, FakeChannel, Principals, Shops
 from tests.integration.test_durable_engine import register
-from tests.integration.test_etsy_connection import _url, scalar
+from tests.integration.test_etsy_connection import (
+    Tenant,
+    _url,
+    etsy_ids,
+    request_for,
+    scalar,
+    vault,
+)
 from tests.integration.test_order_history import connected, order
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -505,6 +516,72 @@ async def test_counters__orders_stored_by_the_history_backfill__counted_by_the_r
             [shop],
         ).fetchone()
     assert row == (4, 2)  # two paid orders of two units; the cancelled one counts nothing
+
+
+@pytest.mark.ac("AC-5.11.5")
+async def test_counters__purge_reconnect_backfill_rebuild__each_order_counted_once(
+    admin: Database, worker_db: Database
+) -> None:
+    """Codex post-merge review (owner gate v4): the disconnect purge deleted the orders (and so,
+    by cascade, the counters' ledger) but kept the counters, so a reconnect's rebuild counted
+    every unit again. The counters go with the purge; the rebuilt counters equal the orders."""
+    tenant = Tenant(admin)
+    org = tenant.organization_id
+    the_vault = vault(admin)
+    etsy = etsy_ids()
+    connector = PostgresShopConnector(admin, the_vault)
+    shop = (await connector.connect(request_for(tenant, etsy))).shop.id
+    history = [order(53_301), order(53_302)]  # two paid orders of two units each
+    handler = ProductSalesCounters(PostgresOrderAutomationStore(worker_db), clock=lambda: NOW)
+
+    def ctx() -> HandlerContext:
+        return HandlerContext(
+            execution_id=uuid.uuid7(), automation_id=SALES_COUNTERS, actor=ADMIN,
+            organization_id=org, shop_id=shop, correlation_id="c-purge", causation_id=None,
+            attempt=1, payload={"rebuild": True},
+            gateway=None,  # type: ignore[arg-type]
+        )  # fmt: skip
+
+    async def backfill() -> None:
+        integration = await the_vault.describe(shop)
+        assert integration is not None
+        await PostgresOrderStore(admin).save_backfill_page(
+            integration, history, next_offset=None, now=NOW
+        )
+
+    def counter() -> object:
+        with admin.connection() as c:
+            return c.execute(
+                "select units, orders from app.product_sales_counters"
+                " where shop_id = %s and listing_id = 777",
+                [shop],
+            ).fetchone()
+
+    await backfill()
+    with tenant_scope(org):
+        await handler(ctx())
+    assert counter() == (4, 2)
+
+    await the_vault.disconnect(shop, purge_after=NOW + timedelta(days=30))
+    audit = AuditRecord.new(
+        organization_id=org, actor=WORKER, action="shop.purged", entity_type="shop",
+        entity_id=str(shop),
+    )  # fmt: skip
+    with tenant_scope(org):
+        purged = await PostgresPurgeStore(worker_db).purge(
+            TenantShop(org, shop), now=NOW + timedelta(days=31), audit=audit
+        )
+    assert purged is not None
+    assert purged["product_sales_counters"] == 1
+    assert counter() is None
+
+    await connector.connect(request_for(tenant, etsy))
+    await backfill()
+    with tenant_scope(org):
+        rebuilt = await handler(ctx())
+
+    assert rebuilt == Completed({"rebuilt": 2, "moved": 2})
+    assert counter() == (4, 2)  # not (8, 4)
 
 
 @pytest.mark.ac("AC-5.11.5")

@@ -29,9 +29,9 @@ from htco_application.order_ingest import (
     drift_id,
     plan_ingest,
 )
-from htco_application.sla_inspector import DriftIncidents
+from htco_application.sla_inspector import DriftIncidents, StoredDrift
 from htco_domain.automation import TriggerKind
-from htco_domain.incidents import Cause
+from htco_domain.incidents import Cause, IncidentState
 from tests.application.test_sla_inspector import Inspector
 from tests.application.test_tracking_sync import Engine
 from tests.event_contracts import assert_event_contract
@@ -48,6 +48,7 @@ SCHEMA = (
     Path(__file__).resolve().parents[2]
     / "packages/contracts/automations/incident-detection-escalation.input.json"
 )
+OUTPUT_SCHEMA = SCHEMA.with_name("incident-detection-escalation.output.json")
 
 
 def drift_message(**payload: Any) -> OutboxMessage:
@@ -178,6 +179,84 @@ async def test_a_draft_automation_is_refused_and_logged_without_failing_the_deli
 
     assert len(engine.requests) == 1
     assert "fulfillment.drift_not_started" in logs.raw()
+
+
+def stored_drift(message: OutboxMessage) -> StoredDrift:
+    """The `app.sync_drifts` row the event names."""
+    facts = event_payload(message)
+    return StoredDrift(
+        drift_id=uuid.UUID(str(facts["drift_id"])),
+        receipt_id=int(str(facts["receipt_id"])),
+        kind=str(facts["kind"]),
+        detected_at=datetime.fromisoformat(str(facts["detected_at"])),
+    )
+
+
+@pytest.mark.ac("AC-6.3.4")
+async def test_a_drift_refused_while_draft__opens_exactly_one_incident_after_activation() -> None:
+    """Codex post-merge review (owner gate v4): the draft automation refused the drift event and
+    the outbox acknowledged it for good. The first inspection after the activation opens its
+    incident from the stored drift, linked by its ID, and later runs open nothing more."""
+    message = drift_message()
+    draft = Engine(refuse=True)
+    await DriftIncidents(draft).handle(message)  # refused and acknowledged: no run, no incident
+    inspector = Inspector(NOW + timedelta(minutes=15))
+    inspector.sla.drifts[SHOP] = [stored_drift(message)]
+    assert inspector.incident_store.incidents == {}
+
+    # Activated: the schedule's inspection runs.
+    first = await inspector.handler(inspector.context({"mode": "inspect"}))
+    again = await inspector.handler(inspector.context({"mode": "inspect"}))
+
+    [incident] = inspector.incident_store.incidents.values()
+    assert incident.cause is Cause.SYNC_DRIFT
+    assert incident.receipt_id == RECEIPT
+    assert incident.details["drift_id"] == str(uuid.UUID(int=9))
+    assert incident.detected_at == NOW  # when the drift was seen, not when it was backfilled
+    assert isinstance(first, Completed)
+    assert first.output["drifts_backfilled"] == 1
+    assert again == Completed({"checked": 0, "opened": 0, "resolved": 0, "escalated": 0})
+    output_schema = json.loads(OUTPUT_SCHEMA.read_text(encoding="utf-8"))
+    assert validate(dict(first.output), output_schema) == []
+
+
+async def test_a_drift_its_event_already_opened__is_never_backfilled() -> None:
+    engine = Engine()
+    message = drift_message()
+    await DriftIncidents(engine).handle(message)
+    inspector = Inspector(NOW)
+    inspector.sla.drifts[SHOP] = [stored_drift(message)]
+    await inspector.handler(inspector.context(dict(engine.requests[0].payload)))
+
+    outcome = await inspector.handler(inspector.context({"mode": "inspect"}))
+
+    assert isinstance(outcome, Completed)
+    assert "drifts_backfilled" not in outcome.output
+    assert len(inspector.incident_store.incidents) == 1
+
+
+async def test_a_drift_after_its_orders_incident_resolved__opens_a_new_one() -> None:
+    """An incident resolved before a later drift does not cover it: the backfill opens one."""
+    inspector = Inspector(NOW + timedelta(days=2))
+    earlier = stored_drift(drift_message())
+    later = stored_drift(
+        drift_message(
+            drift_id=str(uuid.UUID(int=10)), detected_at=(NOW + timedelta(days=1)).isoformat()
+        )
+    )
+    inspector.sla.drifts[SHOP] = [earlier]
+    await inspector.handler(inspector.context({"mode": "inspect"}))
+    [first] = inspector.incident_store.incidents.values()
+    inspector.incident_store.incidents[first.id] = replace(
+        first, state=IncidentState.RESOLVED, resolved_at=NOW + timedelta(hours=1)
+    )
+    inspector.sla.drifts[SHOP] = [earlier, later]
+
+    outcome = await inspector.handler(inspector.context({"mode": "inspect"}))
+
+    assert isinstance(outcome, Completed)
+    assert outcome.output["drifts_backfilled"] == 1
+    assert len(inspector.incident_store.incidents) == 2
 
 
 @pytest.mark.parametrize(

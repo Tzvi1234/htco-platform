@@ -22,6 +22,7 @@ from htco_application.execution.service import (
     EVENT_DESTINATION,
     ActionGatewayService,
     GatewayParts,
+    StaleExecutionError,
     request_hash,
 )
 from htco_application.workforce.files import read_registry
@@ -177,6 +178,86 @@ async def test_submit__concurrently__one_runs_the_other_is_deferred_then_gets_th
     assert len(world.channel.calls) == 1
     assert {r.outcome for r in results} <= {ActionOutcome.SUCCEEDED, ActionOutcome.DEFERRED}
     assert later.outcome is ActionOutcome.SUCCEEDED
+
+
+async def _resume_concurrently(world: World, request: ActionRequest, callers: int = 3) -> list[Any]:
+    results: list[Any] = []
+
+    async def submit() -> None:
+        results.append(await world.gateway.submit(request))
+
+    async with anyio.create_task_group() as group:
+        for _ in range(callers):
+            group.start_soon(submit)
+    return results
+
+
+async def test_resume__concurrently_from_deferred__one_channel_call() -> None:
+    # Codex post-merge review (owner gate v4): two resubmissions of a deferred read both called
+    # the channel; the compare-and-set on the generation elects one resumer.
+    world = World(fail=ConnectionError("down"), output={"receipts": []}, delay=0.05)
+    first = await world.gateway.submit(ask())
+    world.store.only().state = ActionState.DEFERRED  # as a busy guard leaves it
+    world.channel.fail = None
+    world.channel.calls.clear()
+
+    results = await _resume_concurrently(world, ask())
+    later = await world.gateway.submit(ask())
+
+    assert first.outcome is not ActionOutcome.SUCCEEDED
+    assert len(world.channel.calls) == 1
+    assert sum(r.outcome is ActionOutcome.SUCCEEDED for r in results) == 1
+    assert {r.error_code for r in results if r.outcome is not ActionOutcome.SUCCEEDED} == {
+        "in_progress"
+    }
+    assert later.outcome is ActionOutcome.SUCCEEDED
+    assert world.store.only().generation == 1  # one resumption, one transition
+
+
+async def test_resume__concurrently_from_waiting_approval__runs_the_write_once() -> None:
+    world = World(output={"listing_id": 1}, delay=0.05)
+    write = ask(
+        "etsy.inventory.update",
+        actor=USER_ACTOR,
+        key="inventory:resume",
+        input={"listing_id": 1, "products": []},
+    )
+    await world.gateway.submit(write)
+    approved = replace(write, approval_id=world.approvals.approve_last())
+
+    results = await _resume_concurrently(world, approved)
+    again = await world.gateway.submit(approved)
+
+    assert len(world.channel.calls) == 1
+    assert sum(r.outcome is ActionOutcome.SUCCEEDED for r in results) == 1
+    assert again.outcome is ActionOutcome.SUCCEEDED
+    assert world.store.only().state is ActionState.SUCCEEDED
+
+
+async def test_record__after_another_caller_resumed__writes_nothing() -> None:
+    # A lease that ran out: the slow caller's record is stale and the winner's stands.
+    world = World(fail=ConnectionError("down"))
+    await world.gateway.submit(ask())
+    [execution_id] = world.store.ids
+    row = world.store.only()
+    row.state = ActionState.DEFERRED
+    assert (
+        world.store.resume(
+            execution_id, state=ActionState.DEFERRED, generation=0, lease_until=NOW, now=NOW
+        )
+        == 1
+    )
+    assert (
+        world.store.resume(
+            execution_id, state=ActionState.DEFERRED, generation=0, lease_until=NOW, now=NOW
+        )
+        is None
+    )  # the old generation lost
+
+    stale = replace(row.steps[-1], generation=0)
+    with pytest.raises(StaleExecutionError):
+        world.store.record(execution_id, stale, now=NOW)
+    assert row.state is ActionState.DEFERRED
 
 
 @pytest.mark.ac("AC-5.12.2")

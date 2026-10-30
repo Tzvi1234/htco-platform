@@ -26,6 +26,7 @@ from htco_application.etsy_webhooks import (
     WebhookRejectedError,
     WebhookSecret,
     WindowLimiter,
+    delivery_key,
     parse_event,
     verify_signature,
 )
@@ -247,7 +248,7 @@ async def test_ingress__each_event_type_is_stored_and_routed_to_one_job(event_ty
     assert job.spec.payload["event_type"] == event_type
     assert job.spec.correlation_id == "etsy-webhook:msg_fake0001"
     if ROUTES[event_type].resource is ResourceKind.ORDER:
-        assert job.spec.idempotency_key == f"etsy:{SHOP}:{RECEIPT}:{event_type}"
+        assert job.spec.idempotency_key == f"etsy:{SHOP}:{RECEIPT}:{event_type}:msg_fake0001"
         assert job.spec.payload["receipt_id"] == RECEIPT
     else:
         assert job.spec.payload["listing_id"] == LISTING
@@ -272,15 +273,27 @@ async def test_ingress__a_replayed_webhook_id_is_ignored() -> None:
     assert len(world.inbox.queue.jobs) == 1
 
 
-async def test_ingress__the_same_order_change_announced_twice_runs_once() -> None:
+async def test_ingress__each_distinct_order_delivery_gets_its_own_job() -> None:
+    """Codex post-merge review (owner gate v4): two deliveries for the same receipt and type are
+    two changes (a second parcel), never one job; only the exact replay is suppressed."""
     world = World()
 
-    first = await world.send("order.paid", webhook_id="msg_fake0001")
-    second = await world.send("order.paid", webhook_id="msg_fake0002")
+    first = await world.send("order.shipped", webhook_id="msg_fake0001")
+    second = await world.send("order.shipped", webhook_id="msg_fake0002")
+    replay = await world.send("order.shipped", webhook_id="msg_fake0002")
 
-    assert len(world.inbox.rows) == 2  # both events are kept
-    assert first.job_id == second.job_id  # one job for the receipt and event type
-    assert len(world.inbox.queue.jobs) == 1
+    assert len(world.inbox.rows) == 2  # both events are kept, the replay is not
+    assert first.job_id != second.job_id
+    assert replay.duplicate
+    assert replay.job_id == second.job_id
+    assert len(world.inbox.queue.jobs) == 2
+
+
+def test_delivery_key__a_long_webhook_id_is_hashed_never_cut() -> None:
+    long_a, long_b = "m" * 199 + "a", "m" * 199 + "b"
+    assert delivery_key("msg_fake0001") == "msg_fake0001"
+    assert delivery_key(long_a) != delivery_key(long_b)
+    assert len(delivery_key(long_a)) <= 71
 
 
 async def test_ingress__listing_changes_at_different_times_each_get_a_job() -> None:
@@ -455,7 +468,9 @@ async def test_process__order_events_trigger_etsy_order_intake_once_per_receipt(
     [request] = run.engine.requests
     assert request.automation_id == ORDER_INTAKE
     assert request.trigger is TriggerKind.EVENT
-    assert request.idempotency_key == f"etsy:{SHOP}:{RECEIPT}:{event_type}"
+    assert request.idempotency_key == (
+        f"etsy:{SHOP}:{RECEIPT}:{event_type}:etsy-webhook:msg_fake0001"
+    )
     assert request.payload == {"receipt_id": RECEIPT, "event_type": event_type}
     assert (request.organization_id, request.shop_id) == (ORG, SHOP)
     assert request.correlation_id == "etsy-webhook:msg_fake0001"

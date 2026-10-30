@@ -8,8 +8,9 @@ with the state transitions, the estimated money and the events.
 
 Two kinds of run, both keyed by the trigger:
 
-- **A receipt** (a webhook, `etsy:{shop_id}:{receipt_id}:{event_type}`): re-read that receipt and
-  ingest it. `order.delivered` marks it delivered when the re-read shows it shipped.
+- **A receipt** (a webhook, `etsy:{shop_id}:{receipt_id}:{event_type}:{correlation_id}`, one per
+  delivery): re-read that receipt and ingest it. `order.delivered` marks it delivered when the
+  re-read shows it shipped.
 - **The history** (`mode = "history"`: the dashboard's stale read, the Owner's manual sync): the
   #57 backfill from its checkpoint, then the 30-day re-read by `min_last_modified`, under the
   shop's advisory lock shared with the API process's fallback run.

@@ -1,6 +1,7 @@
 """In-memory parts of the Action Gateway (slice 5.12): the store with the Postgres store's rules,
 approvals, a channel adapter, principals and capabilities. Shared by the gateway's tests."""
 
+import asyncio
 import threading
 import uuid
 from collections.abc import Mapping
@@ -16,7 +17,7 @@ from htco_application.execution.contracts import (
     ChannelOutcome,
 )
 from htco_application.execution.gateway import ActionRequest, ActionResult, Channel
-from htco_application.execution.service import Claim, Finish
+from htco_application.execution.service import Claim, Finish, StaleExecutionError
 from htco_application.workforce.files import read_action_catalog, read_registry
 from htco_application.workforce.registry import Registry
 from htco_domain.actions import ACTION_FINAL_STATES, ActionState
@@ -49,6 +50,8 @@ class Row:
     result: ActionResult | None = None
     approval_id: uuid.UUID | None = None
     steps: list[Finish] = field(default_factory=list)
+    generation: int = 0
+    resuming_until: datetime | None = None
 
 
 @dataclass
@@ -78,14 +81,36 @@ class MemoryActionStore:
                 error_code=None if row.result is None else row.result.error_code,
                 request_hash=row.request_hash,
                 channel=None if row.result is None else row.result.channel,
+                generation=row.generation,
             )
+
+    def resume(
+        self,
+        execution_id: uuid.UUID,
+        *,
+        state: ActionState,
+        generation: int,
+        lease_until: datetime,
+        now: datetime,
+    ) -> int | None:
+        with self._guard:
+            row = self.rows[self.ids[execution_id]]
+            held = row.resuming_until is not None and row.resuming_until > now
+            if row.state is not state or row.generation != generation or held:
+                return None
+            row.generation += 1
+            row.resuming_until = lease_until
+            return row.generation
 
     def record(self, execution_id: uuid.UUID, step: Finish, *, now: datetime) -> None:  # noqa: ARG002
         if step.event is not None:
             check_if_event(step.event)  # the gateway's real events, against their schemas
         with self._guard:
             row = self.rows[self.ids[execution_id]]
+            if row.generation != step.generation:
+                raise StaleExecutionError(f"action execution {execution_id} was resumed elsewhere")
             row.state, row.result = step.state, step.result
+            row.resuming_until = None
             row.approval_id = step.approval_id or row.approval_id
             row.steps.append(step)
 
@@ -132,10 +157,13 @@ class FakeChannel:
     verified: bool = True
     fail: Exception | None = None
     hand_off: bool = False
+    delay: float = 0  # seconds the call yields, so a concurrent caller runs meanwhile
     calls: list[tuple[ActionRequest, ChannelBinding]] = field(default_factory=list)
 
     async def execute(self, request: ActionRequest, binding: ChannelBinding) -> ChannelOutcome:
         self.calls.append((request, binding))
+        if self.delay:
+            await asyncio.sleep(self.delay)
         if self.fail is not None:
             raise self.fail
         return ChannelOutcome(output=dict(self.output), handed_to_human=self.hand_off)  # type: ignore[arg-type]

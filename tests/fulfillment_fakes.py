@@ -8,10 +8,10 @@ from datetime import datetime
 
 from htco_application.incidents import IncidentRecord, IncidentStep, StaleIncident
 from htco_application.kernel import OutboxMessage
-from htco_application.sla_inspector import AwaitingOrder
+from htco_application.sla_inspector import AwaitingOrder, StoredDrift
 from htco_application.tracking_sync import RecordedTracking, TrackingObservation, TrackingSource
 from htco_domain.fulfillment import SlaPolicy
-from htco_domain.incidents import IncidentState, check_incident_transition
+from htco_domain.incidents import Cause, IncidentState, check_incident_transition
 from tests.event_contracts import check_if_event
 
 
@@ -56,8 +56,20 @@ class MemoryTrackingStore:
         due = (r for r in self.shipped.get(shop_id, []) if (shop_id, r) not in self.checked)
         return tuple(due)[:limit]
 
-    def mark_checked(self, shop_id: uuid.UUID, receipt_id: int, *, now: datetime) -> None:  # noqa: ARG002 - the port
-        self.checked.add((shop_id, receipt_id))
+    # The Etsy version each check observed (monotonic, like Postgres's `greatest`).
+    observed: dict[tuple[uuid.UUID, int], datetime] = field(default_factory=dict)
+
+    def mark_checked(
+        self,
+        shop_id: uuid.UUID,
+        receipt_id: int,
+        *,
+        etsy_updated_at: datetime,
+        now: datetime,  # noqa: ARG002 - the port
+    ) -> None:
+        key = (shop_id, receipt_id)
+        self.checked.add(key)
+        self.observed[key] = max(self.observed.get(key, etsy_updated_at), etsy_updated_at)
 
     def changed_on_etsy(self, shop_id: uuid.UUID, receipt_id: int) -> None:
         self.checked.discard((shop_id, receipt_id))
@@ -71,6 +83,9 @@ class MemorySlaStore:
     closed: dict[uuid.UUID, dict[int, datetime]] = field(default_factory=dict)
     # shop -> transaction -> receipt: the stored order items (low-review alerts, 6.9).
     transactions: dict[uuid.UUID, dict[int, int]] = field(default_factory=dict)
+    # shop -> the drifts reconciliation recorded (`sync_drifts`), and the incidents that cover them.
+    drifts: dict[uuid.UUID, list[StoredDrift]] = field(default_factory=dict)
+    incidents: MemoryIncidentStore | None = None
 
     def policies(self, organization_id: uuid.UUID) -> tuple[SlaPolicy, ...]:  # noqa: ARG002 - one organization
         return tuple(self.policy_rows)
@@ -103,6 +118,26 @@ class MemorySlaStore:
     ) -> Mapping[int, int]:
         known = self.transactions.get(shop_id, {})
         return {t: known[t] for t in transaction_ids if t in known}
+
+    def unlinked_drifts(self, shop_id: uuid.UUID, *, limit: int) -> tuple[StoredDrift, ...]:
+        """The Postgres store's rule: no `sync_drift` incident of the order open, or resolved at
+        or after the drift (needs `incidents` to see them; without it every drift is due)."""
+        incidents = () if self.incidents is None else tuple(self.incidents.incidents.values())
+
+        def covered(drift: StoredDrift) -> bool:
+            return any(
+                i.cause is Cause.SYNC_DRIFT
+                and i.shop_id == shop_id
+                and i.receipt_id == drift.receipt_id
+                and (i.resolved_at is None or i.resolved_at >= drift.detected_at)
+                for i in incidents
+            )
+
+        due = sorted(
+            (d for d in self.drifts.get(shop_id, []) if not covered(d)),
+            key=lambda d: (d.detected_at, d.drift_id),
+        )
+        return tuple(due[:limit])
 
 
 @dataclass

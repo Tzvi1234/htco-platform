@@ -20,9 +20,13 @@ from datetime import datetime
 from htco_application.automation.durable import HandlerContext
 from htco_application.execution.gateway import ActionOutcome, ActionRef, ActionRequest
 from htco_application.kernel import JobError, JsonValue, Page
-from htco_application.marketplace import MarketplaceRateLimitedError, OrderReceipt, OrderShipment
+from htco_application.marketplace import MarketplaceRateLimitedError, OrderReceipt
 from htco_application.order_history import PAGE
-from htco_application.order_receipts import receipt_from_json, shipments_from_json
+from htco_application.order_receipts import (
+    ReceiptShipments,
+    receipt_from_json,
+    shipments_from_json,
+)
 from htco_domain.actors import ActorKind, ActorRef
 
 RECEIPTS_READ = ActionRef("etsy.receipts.read", 1)
@@ -131,7 +135,8 @@ class ReceiptsRead(_GatewayRead):
 class ShipmentsRead(_GatewayRead):
     """`etsy.shipments.read`, for one execution of Tracking Sync: a receipt's shipments."""
 
-    async def shipments(self, receipt_id: int) -> tuple[OrderShipment, ...]:
+    async def shipments(self, receipt_id: int) -> ReceiptShipments:
+        """The receipt's shipments and the Etsy version this read observed."""
         output = await self._submit(
             SHIPMENTS_READ, {"receipt_id": receipt_id}, f"shipments:{receipt_id}"
         )
@@ -144,9 +149,9 @@ class ShipmentsRead(_GatewayRead):
             raise IntakeActionError(
                 f"{SHIPMENTS_READ.name} returned unreadable shipments"
             ) from None
-        for found_id, shipments in found:
-            if found_id == receipt_id:
-                return shipments
+        for receipt in found:
+            if receipt.receipt_id == receipt_id:
+                return receipt
         raise IntakeActionError(f"{SHIPMENTS_READ.name} returned no receipt {receipt_id}")
 
 
