@@ -418,3 +418,41 @@ async def test_set_password__the_current_password__is_a_same_password_error() ->
     async with client:
         with pytest.raises(SamePasswordError):
             await subject.set_password("access-1", "a long new passphrase")
+
+
+async def test_verify_link__redeems_the_token_hash_on_the_server() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=TOKENS)
+
+    subject, client = auth(handler)
+    async with client:
+        tokens = await subject.verify_link("hash-1", "recovery")
+
+    assert tokens.access_token == "access-1"  # noqa: S105 - test value
+    [request] = seen
+    assert str(request.url) == f"{URL}/auth/v1/verify"
+    assert request.headers["apikey"] == KEY
+    assert json.loads(request.content) == {"type": "recovery", "token_hash": "hash-1"}
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (httpx.Response(403, json={"error_code": "otp_expired"}), InvalidCredentialsError),
+        (httpx.Response(400, json={"error_code": "validation_failed"}), InvalidCredentialsError),
+        (httpx.Response(429), RateLimitedError),
+        (httpx.Response(500), AuthServiceError),
+        (httpx.Response(200, json={"user": {}}), AuthServiceError),
+    ],
+    ids=["expired", "malformed", "rate-limited", "down", "no-tokens"],
+)
+async def test_verify_link__refusals_and_failures(
+    response: httpx.Response, expected: type[Exception]
+) -> None:
+    subject, client = auth(lambda _: response)
+    async with client:
+        with pytest.raises(expected):
+            await subject.verify_link("hash-1", "invite")

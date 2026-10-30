@@ -13,16 +13,20 @@ from htco_application.access.authentication import AuthenticatedUser
 from htco_application.web_sessions import (
     ABSOLUTE_LIFETIME,
     IDLE_LIFETIME,
+    INVITATION_LINK,
     MAX_FAILURES_PER_EMAIL,
     MAX_FAILURES_PER_IP,
+    RESET_LINK,
     ClientInfo,
     InvitationRefusedError,
     IssuedTokens,
+    ResetLinkRefusedError,
     SessionEndedError,
     SignInRefusedError,
     TooManyAttemptsError,
     WeakPasswordError,
     accept_invitation,
+    redeem_link,
     resume_session,
     sign_in,
     sign_out,
@@ -607,3 +611,52 @@ async def test_accept_invitation__replayed_link__refused_before_setting_the_pass
         await accept(store, auth, password="another long passphrase")  # noqa: S106 - test value
 
     assert auth.passwords_set == [(INVITE_ACCESS, NEW_PASSWORD)]
+
+
+# Redeeming a link's one-time token on the server (Codex security review, owner gate v4) ---------
+
+
+async def test_redeem_link__returns_the_links_session_tokens() -> None:
+    auth = Auth()
+
+    issued = await redeem_link(
+        "invite-hash", link=INVITATION_LINK, client=CLIENT, auth=auth, store=Store(), now=NOW
+    )
+
+    assert (issued.access_token, issued.refresh_token) == (INVITE_ACCESS, INVITE_REFRESH)
+
+
+async def test_redeem_link__refused_token__the_links_refusal_and_counted() -> None:
+    store = Store()
+
+    with pytest.raises(ResetLinkRefusedError):
+        await redeem_link(
+            "forged", link=RESET_LINK, client=CLIENT, auth=Auth(), store=store, now=NOW
+        )
+
+    assert [a[2] for a in store.attempts] == [False]
+
+
+async def test_redeem_link__too_many_refusals_from_one_address__not_asked_again() -> None:
+    auth, store = Auth(), Store()
+    for n in range(MAX_FAILURES_PER_IP):
+        with pytest.raises(InvitationRefusedError):
+            await redeem_link(
+                f"forged-{n}", link=INVITATION_LINK, client=CLIENT, auth=auth, store=store, now=NOW
+            )
+
+    with pytest.raises(TooManyAttemptsError):
+        await redeem_link(
+            "invite-hash", link=INVITATION_LINK, client=CLIENT, auth=auth, store=store, now=NOW
+        )
+    assert auth.redeemed == set()
+
+
+async def test_redeem_link__success__not_counted() -> None:
+    store = Store()
+
+    await redeem_link(
+        "recovery-hash", link=RESET_LINK, client=CLIENT, auth=Auth(), store=store, now=NOW
+    )
+
+    assert store.attempts == []

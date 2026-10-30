@@ -160,3 +160,48 @@ async def test_invite__link_under_properties__is_accepted() -> None:
 
 async def test_invited__repr__hides_the_link() -> None:
     assert LINK not in repr(Invited(NEW_USER, LINK))
+
+
+CALLBACK = "https://dash.ht-co.app/api/v1/auth/links/callback"
+
+
+def callback_inviter(answer: dict[str, object]) -> tuple[SupabaseInviter, httpx.AsyncClient]:
+    client = new_async_http_client(
+        tracer_provider=TracerProvider(),
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=answer)),
+    )
+    subject = SupabaseInviter(
+        client,
+        supabase_url=URL,
+        secret_key="sb_secret_abc",  # noqa: S106 - a test value
+        redirect_to=None,
+        callback_url=CALLBACK,
+    )
+    return subject, client
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"id": str(NEW_USER), "action_link": LINK, "hashed_token": "h-1"},
+        {"id": str(NEW_USER), "properties": {"action_link": LINK, "hashed_token": "h-1"}},
+    ],
+    ids=["top-level", "under-properties"],
+)
+async def test_invite__with_a_callback__the_link_carries_only_the_one_time_token_hash(
+    answer: dict[str, object],
+) -> None:
+    subject, client = callback_inviter(answer)
+    async with client:
+        invited = await subject.invite("n@x.test")
+
+    # The API's own callback redeems it on the server (Codex security review, owner gate v4);
+    # Supabase's action_link would hand the session's tokens to the browser.
+    assert invited.link == f"{CALLBACK}?token_hash=h-1&type=invite"
+
+
+async def test_invite__with_a_callback_but_no_token_hash__invitation_failed() -> None:
+    subject, client = callback_inviter({"id": str(NEW_USER), "action_link": LINK})
+    async with client:
+        with pytest.raises(InvitationFailedError):
+            await subject.invite("n@x.test")

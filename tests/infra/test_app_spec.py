@@ -83,10 +83,16 @@ def test_spec__password_reset_links_land_on_the_web_apps_reset_page() -> None:
     assert env.get("type") != "SECRET"
 
 
-def test_spec__etsy_redirect_uri_is_the_web_apps_callback_route() -> None:
+def test_spec__links_go_to_the_apis_link_callback() -> None:
+    env = _envs()["HTCO_AUTH_LINK_CALLBACK_URL"]
+    assert env["value"] == "https://dash.ht-co.app/api/v1/auth/links/callback"
+    assert env.get("type") != "SECRET"
+
+
+def test_spec__etsy_redirect_uri_is_the_apis_callback() -> None:
     env = _envs()["HTCO_ETSY_REDIRECT_URI"]
 
-    assert env["value"] == "https://dash.ht-co.app/integrations/etsy/callback"
+    assert env["value"] == "https://dash.ht-co.app/api/v1/integrations/etsy/callback"
     assert "type" not in env  # a plain value, registered exactly at Etsy
 
 

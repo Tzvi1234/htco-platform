@@ -3,7 +3,10 @@
 The project has no email provider yet, so Supabase does not send the invitation: the admin
 `generate_link` call creates (or refreshes) the invited user and returns a one-time invitation
 link, which the Owner or Admin passes on themselves. The link is a bearer credential: it is never
-logged and its `repr` is hidden. It expires with Supabase's email OTP expiry.
+logged and its `repr` is hidden. It expires with Supabase's email OTP expiry. With the API's link
+callback configured, the link points there and carries only the one-time `hashed_token`, which
+the API redeems on the server; Supabase's own `action_link` would hand the session's tokens to the
+browser in the URL fragment.
 
 The secret key is used only here, for this call, and never for database queries: requests read
 and write data as the signed-in user, under RLS. New-style secret keys (`sb_secret_…`) go in the
@@ -14,6 +17,7 @@ requires.
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, override
+from urllib.parse import urlencode
 
 import httpx
 
@@ -44,6 +48,7 @@ class SupabaseInviter:
         supabase_url: str,
         secret_key: str,
         redirect_to: str | None,
+        callback_url: str | None = None,
     ) -> None:
         self._client = client
         self._url = supabase_url.rstrip("/") + "/auth/v1/admin/generate_link"
@@ -51,6 +56,8 @@ class SupabaseInviter:
         if secret_key.startswith("eyJ"):
             self._headers["Authorization"] = f"Bearer {secret_key}"
         self._redirect_to = redirect_to
+        # The API's link callback (`/v1/auth/links/callback`, as the browser reaches it).
+        self._callback_url = callback_url
 
     async def invite(self, email: str) -> Invited:
         body = {"type": "invite", "email": email}
@@ -71,10 +78,23 @@ class SupabaseInviter:
             user_id = uuid.UUID(str(answer["id"]))
         except (ValueError, KeyError, TypeError) as error:
             raise InvitationFailedError("the sign-in service answered without a user ID") from error
-        link = _action_link(answer)
+        link = self._link(answer)
         if link is None:
             raise InvitationFailedError("the sign-in service answered without a link")
         return Invited(user_id=user_id, link=link)
+
+    def _link(self, answer: dict[str, Any]) -> str | None:
+        """With a callback, the API's own link that carries only the one-time `token_hash`: the
+        API redeems it on the server (Codex security review, owner gate v4). Without one,
+        Supabase's `action_link`, whose redirect hands the browser the session's tokens."""
+        if self._callback_url is None:
+            return _action_link(answer)
+        token_hash = _hashed_token(answer)
+        if token_hash is None:
+            return None
+        separator = "&" if "?" in self._callback_url else "?"
+        query = urlencode({"token_hash": token_hash, "type": "invite"})
+        return f"{self._callback_url}{separator}{query}"
 
     @override
     def __repr__(self) -> str:
@@ -87,6 +107,14 @@ def _action_link(answer: dict[str, Any]) -> str | None:
     candidates = [answer.get("action_link")]
     if isinstance(properties, dict):
         candidates.append(properties.get("action_link"))
+    return next((c for c in candidates if isinstance(c, str) and c), None)
+
+
+def _hashed_token(answer: dict[str, Any]) -> str | None:
+    properties = answer.get("properties")
+    candidates = [answer.get("hashed_token")]
+    if isinstance(properties, dict):
+        candidates.append(properties.get("hashed_token"))
     return next((c for c in candidates if isinstance(c, str) and c), None)
 
 

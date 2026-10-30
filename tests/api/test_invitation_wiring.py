@@ -162,13 +162,22 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     return monkeypatch
 
 
+CALLBACK = "https://dash.ht-co.app/api/v1/auth/links/callback"
+
+
 @pytest.mark.usefixtures("restore_logging")
-@pytest.mark.parametrize(("secret", "on"), [("sb_secret_x", True), (None, False)])
-def test_main__invitations_need_the_secret_key(
-    environment: pytest.MonkeyPatch, secret: str | None, *, on: bool
+@pytest.mark.parametrize(
+    ("secret", "callback", "on"),
+    [("sb_secret_x", CALLBACK, True), (None, CALLBACK, False), ("sb_secret_x", None, False)],
+    ids=["both", "no-secret", "no-callback"],
+)
+def test_main__invitations_need_the_secret_key_and_the_link_callback(
+    environment: pytest.MonkeyPatch, secret: str | None, callback: str | None, *, on: bool
 ) -> None:
     if secret is not None:
         environment.setenv("HTCO_SUPABASE_SECRET_KEY", secret)
+    if callback is not None:
+        environment.setenv("HTCO_AUTH_LINK_CALLBACK_URL", callback)
     server = _Server()
 
     main(serve=server)
@@ -201,13 +210,14 @@ def test_main__web_sign_in_needs_the_session_key_and_publishable_key(
 @pytest.mark.parametrize(
     "redirect", ["https://dash.ht-co.app/reset-password", None], ids=["set", "unset"]
 )
-def test_main__password_reset_links_land_on_the_configured_page(
+def test_main__password_reset_links_go_to_the_callback_then_the_configured_page(
     environment: pytest.MonkeyPatch, redirect: str | None
 ) -> None:
     import base64  # noqa: PLC0415 - local to this test
 
     environment.setenv("HTCO_SESSION_KEY", base64.b64encode(b"k" * 32).decode())
     environment.setenv("HTCO_SUPABASE_PUBLISHABLE_KEY", "sb_publishable_x")
+    environment.setenv("HTCO_AUTH_LINK_CALLBACK_URL", CALLBACK)
     if redirect is not None:
         environment.setenv("HTCO_PASSWORD_RESET_REDIRECT_URL", redirect)
     server = _Server()
@@ -215,4 +225,34 @@ def test_main__password_reset_links_land_on_the_configured_page(
     main(serve=server)
 
     [app] = server.apps
-    assert app.state.web_auth.password_reset_redirect == redirect
+    web = app.state.web_auth
+    assert web.password_reset_redirect == (None if redirect is None else CALLBACK)
+    assert web.link_pages.get("recovery") == redirect
+    assert web.link_sealer is not None
+
+
+async def test_provider__verify_link__returns_the_tokens() -> None:
+    subject, client = provider(
+        httpx.Response(200, json={"access_token": "a", "refresh_token": "r", "expires_in": 3600})
+    )
+    async with client:
+        issued = await subject.verify_link("hash-1", "invite")
+    assert issued.access_token == "a"  # noqa: S105 - test value
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (httpx.Response(403, json={"error_code": "otp_expired"}), CredentialsRefusedError),
+        (httpx.Response(429), TooManyAttemptsError),
+        (httpx.Response(500), ProblemError),
+    ],
+    ids=["refused", "rate-limited", "down"],
+)
+async def test_provider__verify_link_errors__are_the_applications(
+    response: httpx.Response, expected: type[Exception]
+) -> None:
+    subject, client = provider(response)
+    async with client:
+        with pytest.raises(expected):
+            await subject.verify_link("hash-1", "invite")

@@ -23,8 +23,10 @@ sequenceDiagram
   A->>DB: private.oauth_authorizations: sha256(state), sealed verifier, org, user, web session, +10 min
   A-->>B: {authorization_url} (no-store)
   B->>E: www.etsy.com/oauth/connect?…state…code_challenge (S256)
-  E-->>B: 302 dash.ht-co.app/integrations/etsy/callback?code&state
-  B->>A: POST /v1/integrations/etsy/callback {code, state} (same-site: cookie sent)
+  E-->>B: 302 dash.ht-co.app/api/v1/integrations/etsy/callback?code&state
+  B->>A: GET /v1/integrations/etsy/callback?code&state (cross-site: no session cookie)
+  A-->>B: 303 /integrations/etsy/callback (clean URL), sealed HttpOnly cookie __Host-htco_etsy_callback (10 min), no-referrer
+  B->>A: POST /v1/integrations/etsy/callback, no body (same-site: session and callback cookies sent)
   A->>DB: delete … where state_hash = sha256(state) returning … (single use)
   A->>A: same user and web session? not expired? still Owner with aal2?
   A->>E: POST /v3/public/oauth/token (authorization_code + code_verifier)
@@ -38,7 +40,8 @@ sequenceDiagram
 | Endpoint | Who | Request | Answer |
 |---|---|---|---|
 | `POST /v1/shops/etsy/connect` | Owner, `aal2`, step-up in the last 10 minutes (`connect_shop` in the permission matrix), web session with CSRF header and allowed origin | No body | 200 `{"authorization_url": "https://www.etsy.com/oauth/connect?…"}`, `Cache-Control: no-store` |
-| `POST /v1/integrations/etsy/callback` | The same web session (CSRF); Owner with `aal2` (the step-up was proven at the start) | `{"code": "…" (1–2048), "state": "…" (≤512, missing or blank is rejected and audited)}` | 200 `{"shop": ShopView, "integration": IntegrationView, "reconnected": bool}`, `no-store` |
+| `GET /v1/integrations/etsy/callback` (Codex security review, owner gate v4) | Etsy's redirect; no session needed | `code` (≤2048), `state` (≤512), `error` in Etsy's query | 303 to the web app's clean `/integrations/etsy/callback` (`?outcome=cancelled`, `failed` or `incomplete` when there is no code), with the code and state sealed in the `__Host-htco_etsy_callback` cookie (`HttpOnly; Secure; SameSite=Strict`, 10 minutes); `no-store`, `Referrer-Policy: no-referrer`. Nothing is redeemed yet. Generic: a first connection, a reconnection and a re-consent for more scopes all finish here |
+| `POST /v1/integrations/etsy/callback` | The same web session (CSRF); Owner with `aal2` (the step-up was proven at the start) | No body: the code and state come from the callback cookie, removed whatever the outcome (no cookie is rejected and audited as a missing state) | 200 `{"shop": ShopView, "integration": IntegrationView, "reconnected": bool}`, `no-store` |
 | `GET /v1/shop-integrations?organization_id=` | Owner and Admin (organization-wide roles); no MFA needed to look | — | 200 `{"items": [IntegrationView]}` |
 | `POST /v1/shop-integrations/{shop_id}/capability-checks` (slice 4.5) | Owner and Admin; CSRF for web sessions | No body | 200 `{"shop_id", "capabilities": [CapabilityView]}`; 404, 409 `shop-not-connected`, 429 `capability-check-too-soon` (`Retry-After`), 503 `etsy-unavailable` |
 | `POST /v1/shop-integrations/{shop_id}/disconnect` (slice 4.7) | Owner, `aal2`, step-up in the last 10 minutes (`connect_shop`); CSRF | No body | 200 `IntegrationView` (status `disconnected`, `purge_after`); 403 `forbidden`, `mfa-required`, `step-up-required`, `csrf-failed`; 404 |
@@ -114,7 +117,8 @@ Threats beyond the [vault's](token-vault.md#security) and the [adapter's](securi
 | Over-broad access after connecting | Only the connecting Owner gets a grant | `test_connect__creates_the_shop_integration_owner_grant_and_audit_in_one_go` |
 | Tokens, codes or verifiers in responses, logs, errors or audit | Views carry no token; `repr=False` on every token field; errors and logs name only the grant type and status; audit records carry scopes and reasons | `test_no_endpoint_response__ever_contains_a_token_code_or_verifier`, `test_token_requests__never_log_or_raise_with_a_token_code_or_secret`, `test_access_token__errors_never_carry_a_token`, `test_main__everything_configured__etsy_connect_on_and_no_secret_logged` |
 | Refresh storms or loops locking the shop out | One refresh under per-shop locks; no retries; a failed attempt shared for a minute; `needs_reauth` after `invalid_grant` or three spaced failures | `test_refresh__ten_concurrent_requests_in_two_processes__one_refresh_call`, `test_access_token__callers_waiting_during_one_failed_refresh__share_its_result`, `test_access_token__*` |
-| Open redirect through the redirect URI | Fixed from configuration (`HTCO_ETSY_REDIRECT_URI`, HTTPS, no query or fragment when deployed), never from the request | `test_etsy_redirect_uri__*`, `test_spec__etsy_redirect_uri_is_the_web_apps_callback_route` |
+| Open redirect through the redirect URI | Fixed from configuration (`HTCO_ETSY_REDIRECT_URI`, HTTPS, no query or fragment when deployed), never from the request | `test_etsy_redirect_uri__*`, `test_spec__etsy_redirect_uri_is_the_apis_callback` |
+| Authorization code and state in the web app's URL, static-host logs or same-origin referrers | The redirect URI is the API's `GET` callback, which seals them into an `HttpOnly` cookie and redirects to a clean page with `no-referrer`; the web app's document policy is `no-referrer` too | `test_redirect__seals_code_and_state_in_an_httponly_cookie_and_cleans_the_url`, `test_callback__the_cookie_is_spent_after_one_try`, `test_callback__without_the_cookie__400_rejected_and_audited` |
 
 ASVS 5.0, chapter V10 (OAuth and OIDC), client side (exact requirement numbers to be confirmed in the phase security review, as for slice 4.2):
 
@@ -163,7 +167,7 @@ Database tests run in CI's `database` job (`just test-db`, `just db-test`).
 | Setting | Value |
 |---|---|
 | `HTCO_ETSY_KEYSTRING`, `HTCO_ETSY_SHARED_SECRET` | Secrets; deployed from GitHub secrets `ETSY_KEYSTRING`, `ETSY_SHARED_SECRET` |
-| `HTCO_ETSY_REDIRECT_URI` | `https://dash.ht-co.app/integrations/etsy/callback` (in `infra/digitalocean/app.yaml`); must match the Etsy app's registered callback exactly |
+| `HTCO_ETSY_REDIRECT_URI` | `https://dash.ht-co.app/api/v1/integrations/etsy/callback` (in `infra/digitalocean/app.yaml`); must match the Etsy app's registered callback exactly (re-registered by the owner, [OWNER_REMINDERS](../../operations/OWNER_REMINDERS.md)) |
 | `HTCO_TOKEN_VAULT_KEY` | Secret (see [token vault](token-vault.md#configuration)); without it connecting stays off |
 | `HTCO_SESSION_KEY` | Also seals the pending PKCE verifiers; rotating it drops pending authorizations (owners click "Connect" again) |
 

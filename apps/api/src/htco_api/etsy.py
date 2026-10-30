@@ -4,9 +4,16 @@
 stepped up in the last ten minutes, from the web app (cookie session, CSRF header and origin). The
 answer is Etsy's authorization URL; the browser goes there.
 
-`POST /v1/integrations/etsy/callback`: the web app's `/integrations/etsy/callback` page posts the
-`code` and `state` Etsy put in its URL, as a same-site request with the session cookie. The state
-must belong to this browser session; a rejected callback is audited.
+`GET /v1/integrations/etsy/callback` is the redirect URI registered at Etsy (Codex security review,
+owner gate v4): the code and state Etsy sends back never reach the web app's URL, its JavaScript or
+a referrer. Etsy's redirect is a cross-site navigation, which carries no `SameSite=Strict` session
+cookie, so the callback only seals them into the short-lived `HttpOnly` cookie
+`__Host-htco_etsy_callback` and sends the browser to the web app's clean
+`/integrations/etsy/callback` page. That page then calls `POST /v1/integrations/etsy/callback`
+without a body, as a same-site request with the session cookie and the CSRF header; the API
+redeems the code from the sealed cookie. The state must belong to this browser session; a
+rejected callback is audited. The callback is generic: any connect flow that sends the owner to
+Etsy (a first connection, a reconnection, a re-consent for more scopes) finishes here.
 
 `GET /v1/shop-integrations`: Owner and Admin see each connection's status, scopes, token health
 and the latest capability probe results (slice 4.5), and Etsy's remaining daily request budget
@@ -25,11 +32,12 @@ No response carries a token, a code or a verifier (AC-4.2.3); connect answers ar
 
 import uuid
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from htco_api import notices
@@ -50,6 +58,15 @@ from htco_api.problems import (
     ValidationProblem,
     request_id_of,
 )
+from htco_api.sealed_cookies import (
+    ETSY_CALLBACK_COOKIE,
+    CookieTooLargeError,
+    expire,
+    expired_header,
+    open_sealed,
+    set_sealed,
+)
+from htco_api.web_auth import WebAuth
 from htco_application.access.authentication import AuthContext, NoMembershipError
 from htco_application.access.policy import Capability, Outcome
 from htco_application.etsy_connect import (
@@ -99,6 +116,7 @@ from htco_domain.integrations import (
     TokenHealth,
 )
 from htco_domain.notifications import NotificationKind
+from htco_platform.crypto import Sealer
 
 ETSY_UNAVAILABLE = ProblemType(
     "etsy-unavailable",
@@ -176,11 +194,10 @@ class AuthorizationView(BaseModel):
     authorization_url: str
 
 
-class EtsyCallback(BaseModel):
-    # From the callback URL's query, exactly as Etsy sent them.
-    code: str = Field(min_length=1, max_length=2048)
-    # Missing or blank is accepted here and rejected (and audited) as a missing state.
-    state: str | None = Field(default=None, max_length=512)
+# Etsy's code and state wait here between Etsy's redirect and the web app's finishing request.
+ETSY_CALLBACK_LIFETIME = timedelta(minutes=10)
+# The web app's finishing page, on the same origin as the API (ADR-0006); a clean URL.
+ETSY_FINISH_PAGE = "/integrations/etsy/callback"
 
 
 class CapabilityView(BaseModel):
@@ -364,6 +381,24 @@ def _session(request: Request) -> uuid.UUID:
     return session
 
 
+def _callback_sealer(request: Request) -> Sealer:
+    """The web sign-in's cookie sealer; the connect flow is off without web sign-in anyway."""
+    web = getattr(request.app.state, "web_auth", None)
+    if not isinstance(web, WebAuth) or web.link_sealer is None:
+        raise ProblemError(ETSY_UNAVAILABLE)
+    return web.link_sealer
+
+
+def _to_finish(outcome: str | None = None) -> RedirectResponse:
+    """A 303 to the web app's finishing page; `outcome` is the only query, never a secret."""
+    location = ETSY_FINISH_PAGE if outcome is None else f"{ETSY_FINISH_PAGE}?outcome={outcome}"
+    return RedirectResponse(
+        location,
+        status_code=status.HTTP_303_SEE_OTHER,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+
+
 def _reader(request: Request) -> IntegrationReader:
     reader = getattr(request.app.state, "integrations", None)
     if reader is None:
@@ -372,7 +407,7 @@ def _reader(request: Request) -> IntegrationReader:
     return found
 
 
-def etsy_router(*, clock: Callable[[], datetime]) -> APIRouter:
+def etsy_router(*, clock: Callable[[], datetime]) -> APIRouter:  # noqa: PLR0915 - one nested function per route
     router = APIRouter(prefix="/v1", tags=["etsy"])
 
     @router.post(
@@ -408,19 +443,62 @@ def etsy_router(*, clock: Callable[[], datetime]) -> APIRouter:
         response.headers["Cache-Control"] = "no-store"
         return AuthorizationView(authorization_url=url)
 
+    @router.get(
+        "/integrations/etsy/callback",
+        status_code=status.HTTP_303_SEE_OTHER,
+        response_class=RedirectResponse,
+        summary="Etsy's redirect after consent",
+        responses={
+            303: {
+                "description": "To the web app's `/integrations/etsy/callback` page with a clean "
+                "URL; `?outcome=cancelled` when the owner declined at Etsy, `?outcome=failed` "
+                "when Etsy reported another error, `?outcome=incomplete` without a code"
+            },
+            503: {"description": "The Etsy connection is unavailable (etsy-unavailable)"},
+        },
+    )
+    async def etsy_redirect(
+        request: Request,
+        code: Annotated[str | None, Query(max_length=2048)] = None,
+        state: Annotated[str | None, Query(max_length=512)] = None,
+        error: Annotated[str | None, Query(max_length=256)] = None,
+    ) -> RedirectResponse:
+        """Seals Etsy's code and state into the `__Host-htco_etsy_callback` cookie (`HttpOnly`,
+        `Secure`, `SameSite=Strict`, ten minutes) and sends the browser on; nothing is redeemed
+        yet, since this cross-site redirect carries no session cookie."""
+        _etsy(request)
+        sealer = _callback_sealer(request)
+        if error is not None:
+            return _to_finish("cancelled" if error == "access_denied" else "failed")
+        if not code:
+            return _to_finish("incomplete")
+        redirect = _to_finish()
+        try:
+            set_sealed(
+                redirect,
+                sealer,
+                ETSY_CALLBACK_COOKIE,
+                {"code": code} | ({} if state is None else {"state": state}),
+                now=clock(),
+                lifetime=ETSY_CALLBACK_LIFETIME,
+            )
+        except CookieTooLargeError:
+            return _to_finish("failed")
+        return redirect
+
     @router.post(
         "/integrations/etsy/callback",
         summary="Finish connecting an Etsy shop",
         responses=problem_responses(
             {
-                400: "The state is missing, unknown, used, expired or from another session "
+                400: "No callback cookie, or its state is missing, unknown, used, expired or from "
+                "another session "
                 "(etsy-state-rejected), Etsy refused the code (etsy-authorization-refused), "
                 "or the body is not valid JSON",
                 403: "Not the Owner with a second factor (forbidden, mfa-required), not a web "
                 "session (web-session-required), or not from the web app (csrf-failed)",
                 409: "The Etsy account has no shop (etsy-no-shop), or the shop is connected to "
                 "another organization (etsy-shop-connected-elsewhere)",
-                422: ("Missing or oversized code", ValidationProblem),
                 502: "Etsy did not answer usefully; nothing was saved (etsy-unreachable)",
                 503: "Sign-in, the database or the Etsy connection is unavailable "
                 "(etsy-unavailable)",
@@ -428,35 +506,42 @@ def etsy_router(*, clock: Callable[[], datetime]) -> APIRouter:
         ),
     )
     async def complete_etsy_connection(
-        body: EtsyCallback, request: Request, response: Response, auth: CurrentAuth
+        request: Request, response: Response, auth: CurrentAuth
     ) -> ConnectedShopView:
-        """Exchanges the code, stores the tokens sealed, creates or updates the shop (one per
-        Etsy shop and organization), grants the connecting Owner, and audits the connection."""
+        """Redeems the code from the callback cookie (once: the cookie is removed whatever the
+        outcome), stores the tokens sealed, creates or updates the shop (one per Etsy shop and
+        organization), grants the connecting Owner, and audits the connection."""
         etsy = _etsy(request)
         session = _session(request)
         now = clock()
+        sent = open_sealed(request, _callback_sealer(request), ETSY_CALLBACK_COOKIE, now=now) or {}
+        expire(response, ETSY_CALLBACK_COOKIE)
+        gone = {"Set-Cookie": expired_header(ETSY_CALLBACK_COOKIE)}
         try:
             connected = await complete_connection(
                 etsy,
                 auth,
                 session_id=session,
-                code=body.code,
-                state=body.state,
+                # No cookie: audited and refused as a missing state before any code is used.
+                code=sent.get("code", ""),
+                state=sent.get("state") if sent.get("code") else None,
                 now=now,
                 correlation_id=request_id_of(request),
             )
         except StateRejectedError:
-            raise ProblemError(ETSY_STATE_REJECTED) from None
+            raise ProblemError(ETSY_STATE_REJECTED, headers=gone) from None
         except ConnectNotAllowedError as error:
-            raise ProblemError(_PROBLEM_FOR_OUTCOME.get(error.outcome, FORBIDDEN)) from None
+            raise ProblemError(
+                _PROBLEM_FOR_OUTCOME.get(error.outcome, FORBIDDEN), headers=gone
+            ) from None
         except EtsyAuthorizationRefusedError:
-            raise ProblemError(ETSY_AUTHORIZATION_REFUSED) from None
+            raise ProblemError(ETSY_AUTHORIZATION_REFUSED, headers=gone) from None
         except EtsyUnreachableError:
-            raise ProblemError(ETSY_UNREACHABLE) from None
+            raise ProblemError(ETSY_UNREACHABLE, headers=gone) from None
         except EtsyAccountHasNoShopError:
-            raise ProblemError(ETSY_NO_SHOP) from None
+            raise ProblemError(ETSY_NO_SHOP, headers=gone) from None
         except EtsyShopConnectedElsewhereError:
-            raise ProblemError(ETSY_SHOP_CONNECTED_ELSEWHERE) from None
+            raise ProblemError(ETSY_SHOP_CONNECTED_ELSEWHERE, headers=gone) from None
         response.headers["Cache-Control"] = "no-store"
         await notices.shop_changed(
             request, NotificationKind.SHOP_CONNECTED, connected.integration.organization_id,

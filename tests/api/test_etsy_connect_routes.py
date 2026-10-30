@@ -1,8 +1,11 @@
 """The Etsy connect endpoints (slices 4.3 and 4.4) through the API, with in-memory fakes.
 
 `POST /v1/shops/etsy/connect` needs the Owner, a second factor and a recent step-up, from the web
-app (CSRF); it answers the authorization URL. `POST /v1/integrations/etsy/callback` completes the
-connection for the same web session. `GET /v1/shop-integrations` shows status, scopes and token
+app (CSRF); it answers the authorization URL. Etsy sends the browser back to
+`GET /v1/integrations/etsy/callback`, which seals the code and state into an `HttpOnly` cookie and
+redirects to the web app's clean finishing page; its `POST /v1/integrations/etsy/callback` (no
+body) completes the connection for the same web session (Codex security review, owner gate v4).
+`GET /v1/shop-integrations` shows status, scopes and token
 health to Owner and Admin. No response ever carries a token (AC-4.2.3).
 """
 
@@ -18,6 +21,7 @@ import pytest
 
 from htco_api.app import AppOptions, create_app
 from htco_api.auth import Authenticator
+from htco_api.sealed_cookies import ETSY_CALLBACK_COOKIE
 from htco_api.web_auth import WebAuth
 from htco_application.access.authentication import AuthenticatedUser, Membership
 from htco_application.etsy_connect import EtsyConnect
@@ -27,6 +31,7 @@ from htco_application.shop_integrations import IntegrationSummary
 from htco_application.web_sessions import CredentialsRefusedError, IssuedTokens
 from htco_domain.identity import AssuranceLevel, Role
 from htco_domain.integrations import IntegrationProvider, IntegrationStatus
+from htco_platform.crypto import Sealer
 from htco_platform.jwt import JwtVerifier
 from tests.auth_tokens import AUDIENCE, ISSUER, FakeJwks, SigningKey, claims
 from tests.etsy_fakes import (
@@ -127,10 +132,15 @@ class World:
     async def connect(self) -> httpx.Response:
         return await self._send(self.http.post("/v1/shops/etsy/connect", headers=CSRF))
 
-    async def callback(self, body: dict[str, Any], **headers: str) -> httpx.Response:
+    async def callback(self, query: dict[str, Any], **headers: str) -> httpx.Response:
+        """Etsy's redirect (a top-level GET, no CSRF header), then the finishing page's POST."""
+        await self.redirect(query)
         return await self._send(
-            self.http.post("/v1/integrations/etsy/callback", json=body, headers=CSRF | headers)
+            self.http.post("/v1/integrations/etsy/callback", headers=CSRF | headers)
         )
+
+    async def redirect(self, query: dict[str, Any]) -> httpx.Response:
+        return await self.http.get("/v1/integrations/etsy/callback", params=query)
 
     async def integrations(self) -> httpx.Response:
         return await self._send(self.http.get("/v1/shop-integrations"))
@@ -155,7 +165,12 @@ async def _world(*, etsy: bool = True, role: Role = Role.OWNER) -> AsyncIterator
     memberships = Memberships(role)
     verifier = JwtVerifier(issuer=ISSUER, audience=AUDIENCE, jwks=FakeJwks(KEY))
     web = WebAuth(
-        auth=Auth(), tokens=Aal2AfterVerify(), store=Store(), allowed_origins=(ORIGIN,), mfa=Mfa()
+        auth=Auth(),
+        tokens=Aal2AfterVerify(),
+        store=Store(),
+        allowed_origins=(ORIGIN,),
+        mfa=Mfa(),
+        link_sealer=Sealer(b"k" * 32),
     )
     connect = EtsyConnect(
         authorization_server=server,
@@ -304,9 +319,7 @@ async def test_connect__bearer_token__refused_because_step_up_needs_the_web_sess
             headers={"Authorization": f"Bearer {token}"},
         ) as bearer:
             connect = await bearer.post("/v1/shops/etsy/connect")
-            callback = await bearer.post(
-                "/v1/integrations/etsy/callback", json={"code": GOOD_CODE, "state": "x"}
-            )
+            callback = await bearer.post("/v1/integrations/etsy/callback")
 
         assert connect.json()["type"] == PROBLEMS + "step-up-required"
         assert callback.status_code == 403
@@ -424,27 +437,82 @@ async def test_callback__state_from_another_browser_session__400_rejected(world:
 async def test_callback__without_csrf__403_and_the_state_stays_usable(world: World) -> None:
     state = await world.state()
 
+    await world.redirect({"code": GOOD_CODE, "state": state})
     refused = await world.http.post(
-        "/v1/integrations/etsy/callback",
-        json={"code": GOOD_CODE, "state": state},
-        headers={"Origin": "https://evil.example"},
+        "/v1/integrations/etsy/callback", headers={"Origin": "https://evil.example"}
     )
-    accepted = await world.callback({"code": GOOD_CODE, "state": state})
+    accepted = await world._send(world.http.post("/v1/integrations/etsy/callback", headers=CSRF))
 
     assert refused.status_code == 403
     assert refused.json()["type"] == PROBLEMS + "csrf-failed"
     assert accepted.status_code == 200
 
 
+async def test_redirect__seals_code_and_state_in_an_httponly_cookie_and_cleans_the_url(
+    world: World,
+) -> None:
+    state = await world.state()
+
+    response = await world.redirect({"code": GOOD_CODE, "state": state})
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/integrations/etsy/callback"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["cache-control"] == "no-store"
+    cookie = response.headers["set-cookie"]
+    assert cookie.startswith(f"{ETSY_CALLBACK_COOKIE}=")
+    for attribute in ("Secure", "HttpOnly", "SameSite=strict", "Path=/", "Max-Age=600"):
+        assert attribute.lower() in cookie.lower()
+    assert GOOD_CODE not in cookie
+    assert state not in cookie
+    assert world.server.exchanged == []  # nothing is redeemed without the session
+
+
 @pytest.mark.parametrize(
-    "body",
-    [{}, {"state": "x"}, {"code": "", "state": "x"}, {"code": "c" * 2049, "state": "x"}],
+    ("query", "outcome"),
+    [
+        ({"error": "access_denied", "state": "x"}, "cancelled"),
+        ({"error": "server_error"}, "failed"),
+        ({}, "incomplete"),
+        ({"code": "", "state": "x"}, "incomplete"),
+    ],
+    ids=["declined", "etsy-error", "nothing", "empty-code"],
 )
-async def test_callback__invalid_body__422(world: World, body: dict[str, str]) -> None:
-    response = await world.callback(body)
+async def test_redirect__without_a_code__to_the_page_with_its_outcome_and_no_cookie(
+    world: World, query: dict[str, str], outcome: str
+) -> None:
+    response = await world.redirect(query)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/integrations/etsy/callback?outcome={outcome}"
+    assert "set-cookie" not in response.headers
+
+
+async def test_redirect__oversized_code__422(world: World) -> None:
+    response = await world.redirect({"code": "c" * 2049, "state": "x"})
 
     assert response.status_code == 422
     assert response.json()["type"] == PROBLEMS + "validation-error"
+
+
+async def test_callback__without_the_cookie__400_rejected_and_audited(world: World) -> None:
+    await world.state()
+
+    response = await world._send(world.http.post("/v1/integrations/etsy/callback", headers=CSRF))
+
+    assert response.status_code == 400
+    assert response.json()["type"] == PROBLEMS + "etsy-state-rejected"
+    assert world.server.exchanged == []
+    assert [r.action for r in world.audit.records] == ["shop.connect_rejected"]
+
+
+async def test_callback__the_cookie_is_spent_after_one_try(world: World) -> None:
+    first = await world.callback({"code": GOOD_CODE, "state": await world.state()})
+    second = await world._send(world.http.post("/v1/integrations/etsy/callback", headers=CSRF))
+
+    assert first.status_code == 200
+    assert "max-age=0" in first.headers["set-cookie"].lower()
+    assert second.json()["type"] == PROBLEMS + "etsy-state-rejected"
 
 
 async def test_callback__etsy_refuses_the_code__400_authorization_refused(world: World) -> None:

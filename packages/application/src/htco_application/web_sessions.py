@@ -13,11 +13,13 @@ code) is reserved in the attempt log atomically before the provider is asked, an
 the outcome is known (`Throttled`): attempts in flight count against the limits, so a parallel
 burst cannot pass them.
 
-Accepting an invitation opens the same kind of session. The invitation link lands on the web app
-with the invited user's Supabase tokens; the web app posts them once with the chosen password.
-The access token is verified, the password set as that user, the refresh token exchanged for fresh
-tokens, and the session opened as at sign-in. Failures are counted per link and per client address
-in the same attempt log as sign-ins, so failed sign-ins and refused links share the address limit.
+Accepting an invitation opens the same kind of session. The invitation link lands on the API's
+link callback with a one-time token, which is redeemed here for the invited user's Supabase
+tokens (`redeem_link`); the API keeps them sealed in an `HttpOnly` cookie, never readable by the
+page, and the web app posts only the chosen password. The access token is verified, the password
+set as that user, the refresh token exchanged for fresh tokens, and the session opened as at
+sign-in. Failures are counted per link and per client address in the same attempt log as sign-ins,
+so failed sign-ins and refused links share the address limit.
 A password reset link works the same way (`set_password_from_link`; see `password_reset`).
 """
 
@@ -172,6 +174,11 @@ class AuthProvider(Protocol):
     async def send_password_reset(self, email: str, redirect_to: str) -> None:
         """Emails a password reset link that lands on `redirect_to`. Says nothing about whether
         the account exists; raises ResetEmailNotSentError when the email was not sent."""
+        ...
+
+    async def verify_link(self, token_hash: str, verify_type: str) -> IssuedTokens:
+        """Redeems a link's one-time token (`invite` or `recovery`) for the session it opens.
+        Raises CredentialsRefusedError when the token is expired, used or forged."""
         ...
 
 
@@ -380,10 +387,44 @@ class PasswordLink:
     # Namespaces the link's throttle key in the attempt log.
     namespace: str
     refused: type[Exception]
+    # The auth provider's name for the link's one-time token (`verify_link`).
+    verify_type: str
 
 
-INVITATION_LINK = PasswordLink("invitation", InvitationRefusedError)
-RESET_LINK = PasswordLink("password-reset", ResetLinkRefusedError)
+INVITATION_LINK = PasswordLink("invitation", InvitationRefusedError, "invite")
+RESET_LINK = PasswordLink("password-reset", ResetLinkRefusedError, "recovery")
+PASSWORD_LINKS = {link.verify_type: link for link in (INVITATION_LINK, RESET_LINK)}
+
+
+async def redeem_link(  # noqa: PLR0913 - the link's token, its kind and the collaborators
+    token_hash: str,
+    *,
+    link: PasswordLink,
+    client: ClientInfo,
+    auth: AuthProvider,
+    store: SessionStore,
+    now: datetime,
+) -> IssuedTokens:
+    """Redeems the link's one-time token for its session's tokens, on the server (Codex security
+    review, owner gate v4): the browser gets only an `HttpOnly` cookie that holds them sealed.
+
+    Refused tokens count per token and per address in the same attempt log as sign-ins, so
+    guessing tokens hits the address limit; a provider outage does not count."""
+    async with Throttled(
+        store,
+        _hash(f"{link.namespace}-link:{token_hash}"),
+        _hash(client.ip) if client.ip else None,
+        max_by_key=MAX_FAILURES_PER_EMAIL,
+        max_by_ip=MAX_FAILURES_PER_IP,
+        now=now,
+        failures=(link.refused,),
+        succeeded=AttemptOutcome.NOT_COUNTED,
+    ):
+        try:
+            return await auth.verify_link(token_hash, link.verify_type)
+        except CredentialsRefusedError:
+            raise link.refused("the link is not valid") from None
+
 
 # Turns the link's session into an `aal2` one with the user's authenticator app, when needed.
 Elevate = Callable[[str, AuthenticatedUser], Awaitable[IssuedTokens | None]]

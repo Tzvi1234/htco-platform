@@ -60,6 +60,8 @@ class Auth:
     reset_email_fails: bool = False
     # A user with an authenticator app: Supabase wants an `aal2` session to change the password.
     mfa_enrolled: bool = False
+    # Link tokens already redeemed (`verify_link`): each one opens its session once.
+    redeemed: set[str] = field(default_factory=set)
 
     async def sign_in_with_password(self, email: str, password: str) -> IssuedTokens:
         await anyio.lowlevel.checkpoint()  # a network call: concurrent requests interleave here
@@ -93,6 +95,15 @@ class Auth:
         if self.reset_email_fails:
             raise ResetEmailNotSentError("the provider failed")
         self.reset_emails.append((email, redirect_to))
+
+    async def verify_link(self, token_hash: str, verify_type: str) -> IssuedTokens:
+        """A link's one-time token: `<type>-hash` opens that link's session once."""
+        await anyio.lowlevel.checkpoint()  # a network call
+        if token_hash in self.redeemed or token_hash != f"{verify_type}-hash":
+            raise CredentialsRefusedError
+        self.redeemed.add(token_hash)
+        access, refresh = self.invitation() if verify_type == "invite" else self.recovery()
+        return IssuedTokens(access, refresh, NOW + timedelta(hours=1))
 
     def invitation(self) -> tuple[str, str]:
         """The access and refresh tokens of a session opened by an invitation link."""

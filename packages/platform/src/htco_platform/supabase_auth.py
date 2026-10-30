@@ -149,6 +149,31 @@ class SupabaseAuth:
         if response.is_error:
             raise AuthServiceError(f"Supabase Auth answered {response.status_code}")
 
+    async def verify_link(self, token_hash: str, link_type: str) -> AuthTokens:
+        """Redeems an emailed or generated link's one-time `token_hash` (`invite` or `recovery`)
+        for the session it opens, on the server: the tokens never reach the browser.
+
+        Any refusal (expired, used, forged) is InvalidCredentialsError; Supabase does not say
+        which, and neither do we."""
+        try:
+            response = await self._client.post(
+                f"{self._base}/verify",
+                json={"type": link_type, "token_hash": token_hash},
+                headers=self._headers,
+            )
+        except httpx.HTTPError as error:
+            raise AuthServiceError("Supabase Auth is unreachable") from error
+        if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
+            raise RateLimitedError("Supabase Auth rate limit")
+        if response.is_client_error:
+            raise InvalidCredentialsError("link refused")
+        if response.is_error:
+            raise AuthServiceError(f"Supabase Auth answered {response.status_code}")
+        try:
+            return _tokens(response.json())
+        except (ValueError, KeyError, TypeError) as error:
+            raise AuthServiceError("Supabase Auth answered without tokens") from error
+
     # MFA (slice 3.5 part 2): every call acts as the user, with their access token.
 
     async def enroll_totp(self, access_token: str, *, friendly_name: str) -> TotpEnrollment:
