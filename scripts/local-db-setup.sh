@@ -14,8 +14,8 @@ python_version="$(tr -d '[:space:]' < "$repo/.python-version")"
 # release's own .sha256 file comes from the same origin as the archive, so it proves nothing.
 # When CI moves to a new uv, update the version and the digest together (it is on the release
 # page and in `gh api repos/astral-sh/uv/releases/tags/<version>`, field `digest`).
-uv_pinned_version="0.13.5"
-uv_sha256_x86_64="f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
+uv_pinned_version="0.13.6"
+uv_sha256_x86_64="f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645"
 # x86_64 only, checked before anything is installed: CI's database job installs the linux_amd64
 # Supabase CLI, and local-db-ci.sh replays that step as it is, so on ARM the run cannot work.
 machine="$(uname -m)"

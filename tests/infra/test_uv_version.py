@@ -60,7 +60,7 @@ def test_dockerfile__builds_with_a_fixed_uv() -> None:
 # the GitHub release API (`gh api repos/astral-sh/uv/releases/tags/<version>`, field `digest`)
 # and must change together with `version:` in every workflow; every job runs on ubuntu x86_64.
 UV_LINUX_X86_64_SHA256 = {
-    "0.13.5": "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f",
+    "0.13.6": "f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645",
 }
 
 
