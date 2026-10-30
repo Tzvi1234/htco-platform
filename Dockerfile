@@ -1,8 +1,8 @@
 # HTCO API image: built once in CI, scanned, and deployed by digest (SOFTWARE_DESIGN §13).
 # Base images are pinned by digest; Renovate proposes updates after the release-age window.
 
-ARG PYTHON_IMAGE=python:3.14.8-slim-trixie@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff
+ARG PYTHON_IMAGE=python:3.14.10-slim-trixie@sha256:3cabfd7d7aaf394e6040e79fa1eec6ca1c52b74ed9188650472695d9a9326999
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0
 
 FROM ${UV_IMAGE} AS uv
 
