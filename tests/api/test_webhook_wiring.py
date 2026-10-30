@@ -63,4 +63,5 @@ def test_main__webhooks_enabled__the_route_has_its_ingress_and_limiter(
     [(app, _)] = serve.calls
     assert isinstance(app.state.etsy_webhooks, EtsyWebhookIngress)
     assert isinstance(app.state.etsy_webhook_limiter, WindowLimiter)
+    assert isinstance(app.state.etsy_webhook_ip_limiter, WindowLimiter)
     assert SECRET_TEXT not in repr(app.state.etsy_webhooks)

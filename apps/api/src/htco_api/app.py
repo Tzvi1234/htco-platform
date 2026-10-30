@@ -145,7 +145,9 @@ class AppOptions:
     automations: AutomationServices | None = None
     # Etsy webhooks (slice 5.3): without the ingress, `POST /webhooks/etsy` answers 404.
     etsy_webhooks: EtsyWebhookIngress | None = None
+    # The Etsy-wide limiter is charged only once a signature verifies; the per-IP one before.
     etsy_webhook_limiter: WindowLimiter | None = None
+    etsy_webhook_ip_limiter: WindowLimiter | None = None
     # Browser environment statuses (slice 5.16), read only; without it, that route answers 503.
     browser_environments: BrowserEnvironmentServices | None = None
     # The chain view of one execution (slice 5.18); without it, that route answers 503.
@@ -210,6 +212,7 @@ def create_app(options: AppOptions | None = None) -> FastAPI:
     app.state.automations = options.automations
     app.state.etsy_webhooks = options.etsy_webhooks
     app.state.etsy_webhook_limiter = options.etsy_webhook_limiter
+    app.state.etsy_webhook_ip_limiter = options.etsy_webhook_ip_limiter
     app.state.browser_environments = options.browser_environments
     app.state.execution_chain = options.execution_chain
     app.state.incident_center = options.incident_center

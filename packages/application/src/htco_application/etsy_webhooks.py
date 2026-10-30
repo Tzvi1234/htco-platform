@@ -25,6 +25,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import re
@@ -130,6 +131,18 @@ class SignedRequest:
     raw_timestamp: str
 
 
+def has_signature_headers(headers: Mapping[str, str]) -> bool:
+    """`webhook-id` (at most 200 characters), `webhook-timestamp` and `webhook-signature` are
+    all present and non-empty. Checked before the body is read: without them, refused at once."""
+    lower = {name.lower(): value for name, value in headers.items()}
+    webhook_id = lower.get("webhook-id", "").strip()
+    return (
+        0 < len(webhook_id) <= 200  # noqa: PLR2004
+        and bool(lower.get("webhook-timestamp", "").strip())
+        and bool(lower.get("webhook-signature", "").strip())
+    )
+
+
 def verify_signature(
     secret: WebhookSecret,
     headers: Mapping[str, str],
@@ -141,12 +154,12 @@ def verify_signature(
     """Standard Webhooks verification on the raw body. Raises `WebhookRejectedError`."""
     if len(body) > MAX_BODY_BYTES:
         raise WebhookRejectedError(Rejection.TOO_LARGE)
-    lower = {name.lower(): value for name, value in headers.items()}
-    webhook_id = lower.get("webhook-id", "").strip()
-    raw_timestamp = lower.get("webhook-timestamp", "").strip()
-    signatures = lower.get("webhook-signature", "").strip()
-    if not webhook_id or not raw_timestamp or not signatures or len(webhook_id) > 200:  # noqa: PLR2004
+    if not has_signature_headers(headers):
         raise WebhookRejectedError(Rejection.MISSING_HEADERS)
+    lower = {name.lower(): value for name, value in headers.items()}
+    webhook_id = lower["webhook-id"].strip()
+    raw_timestamp = lower["webhook-timestamp"].strip()
+    signatures = lower["webhook-signature"].strip()
     if not raw_timestamp.isdigit() or len(raw_timestamp) > 12:  # noqa: PLR2004
         raise WebhookRejectedError(Rejection.BAD_TIMESTAMP)
     sent = datetime.fromtimestamp(int(raw_timestamp), UTC)
@@ -346,9 +359,16 @@ class EtsyWebhookIngress:
     # Events stored without a job, by reason (the 5.9 metrics read these).
     unrouted: Counter[str] = field(default_factory=Counter)
 
+    def verify(self, headers: Mapping[str, str], body: bytes) -> SignedRequest:
+        """Step 1 alone: size, headers, timestamp and signature. Raises `WebhookRejectedError`."""
+        return verify_signature(self.secret, headers, body, now=self.clock())
+
     async def receive(self, headers: Mapping[str, str], body: bytes) -> Accepted:
+        return await self.accept(self.verify(headers, body), body)
+
+    async def accept(self, signed: SignedRequest, body: bytes) -> Accepted:
+        """Steps 2 and 3, for a body `verify` has just accepted."""
         now = self.clock()
-        signed = verify_signature(self.secret, headers, body, now=now)
         event = parse_event(body)
         shop = await self.shops.connected_shop(event.etsy_shop_id)
         inbox_event = InboxEvent(
@@ -398,26 +418,72 @@ def _unrouted_reason(event: EtsyWebhookEvent, shop: TenantShop | None) -> str | 
 # --- Per-source rate limit (the API process) --------------------------------------------------
 
 
+def ip_source(ip: str | None) -> str:
+    """The per-IP limiter's key: an IPv4 address as is, an IPv6 one by its /64 (one host or
+    customer usually holds a whole /64, so per address it could rotate freely), and a missing or
+    unparsable value as one shared `ip:unknown` bucket."""
+    try:
+        address = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return "ip:unknown"
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            return f"ip:{address.ipv4_mapped}"
+        return f"ip:{ipaddress.IPv6Network((address, 64), strict=False)}"
+    return f"ip:{address}"
+
+
 @dataclass
 class WindowLimiter:
     """At most `limit` requests per `window` for each source; the rest get 429 with the seconds
-    until the window ends. In memory per API instance: a guard against floods, not a budget."""
+    until the window ends. In memory per API instance: a guard against floods, not a budget.
+
+    `POST /webhooks/etsy` uses two: one per client IP (`ip_source`) that counts only requests
+    failing before or at the signature check, and the Etsy-wide one (source `"etsy"`) charged
+    only once the signature verifies. A forged IP header can therefore never block a signed
+    delivery, and unsigned traffic cannot spend Etsy's allowance.
+
+    The table holds at most `max_sources` windows and keeps them oldest-start first. Ended windows
+    are pruned once per `window`, from the front. A new source is never refused because the table
+    is full: ended windows are evicted first, and if every window is still live the oldest one is
+    forgotten (that source starts a fresh window). Memory stays bounded; a flood wider than
+    `max_sources` can only make the limiter forget, never block a newcomer."""
 
     limit: int
     window: timedelta = timedelta(seconds=1)
+    max_sources: int = 10_000
     _windows: dict[str, tuple[datetime, int]] = field(default_factory=dict)
+    _next_prune: datetime | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def admit(self, source: str, *, now: datetime) -> float | None:
         """None when admitted; otherwise the seconds to wait."""
         with self._lock:
+            if self._next_prune is None or now >= self._next_prune:
+                self._drop_ended(now)
+                self._next_prune = now + self.window
             start, used = self._windows.get(source, (now, 0))
             if now - start >= self.window:
                 start, used = now, 0
             if used >= self.limit:
                 return max(0.0, (start + self.window - now).total_seconds())
+            if used == 0:
+                # A new window goes to the end, so the table stays ordered by start.
+                self._windows.pop(source, None)
+                if len(self._windows) >= self.max_sources:
+                    self._drop_ended(now)
+                if len(self._windows) >= self.max_sources:
+                    del self._windows[next(iter(self._windows))]
             self._windows[source] = (start, used + 1)
             return None
+
+    def _drop_ended(self, now: datetime) -> None:
+        """Ended windows sit at the front: drop them until the first live one."""
+        while self._windows:
+            oldest = next(iter(self._windows))
+            if now - self._windows[oldest][0] < self.window:
+                return
+            del self._windows[oldest]
 
 
 # --- Processing (the worker) ------------------------------------------------------------------

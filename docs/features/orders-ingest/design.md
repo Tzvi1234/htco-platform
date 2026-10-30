@@ -53,7 +53,7 @@ sequenceDiagram
 
 - **Re-read, never trust.** The payload only names a resource. Orders go through Etsy Order Intake, which re-reads the receipt itself; listings and stock are read with GETs before anything is published.
 - **Duplicate deliveries.** Etsy retries with the same `webhook-id`: the inbox's `(source, event_id)` keeps one row. The same order change announced with two IDs shares one job and one execution key.
-- **Rate limit per instance.** A fixed one-second window per source (`HTCO_ETSY_WEBHOOK_RATE_PER_SECOND`, 50) guards against floods; Etsy retries a 429 later.
+- **Rate limits per instance.** Fixed one-second windows. `do-connecting-ip` may be forged, so the client IP never decides whether a signed request is checked. A request without the three signature headers is refused at once, before its body is read; one with them always gets the bounded body read and the HMAC check. Only failures (missing headers, too large, bad signature or timestamp) are charged to their IP (`HTCO_ETSY_WEBHOOK_IP_RATE_PER_SECOND`, 20; IPv6 by its /64), and past that window a failure answers 429. Only a verified delivery is charged to the Etsy-wide window (`HTCO_ETSY_WEBHOOK_RATE_PER_SECOND`, 50), so neither unsigned traffic nor a flood under Etsy's IP can starve Etsy's deliveries (Codex security review P2). Etsy retries a 429 later.
 - **Catalog re-reads use the adapter directly** in the worker, like the daily probes. Moving them onto the gateway needs `etsy.listings.read` action contracts; that follows with the catalog slices.
 
 ## Etsy Order Intake (slice 5.4)

@@ -98,6 +98,18 @@ The API runs on DigitalOcean App Platform as the app `htco` (Frankfurt) at `http
 
 Configuration: variables `SUPABASE_PROJECT_REF`, `SUPABASE_POOLER_HOST`, `HTCO_SUPABASE_URL`; secrets `DIGITALOCEAN_ACCESS_TOKEN`, `GHCR_PULL_TOKEN` (`read:packages`, lets DigitalOcean pull the private image), `SUPABASE_DB_PASSWORD`, `HTCO_SENTRY_DSN`, `HTCO_SUPABASE_SECRET_KEY`.
 
+### The `production` Environment (owner, one time)
+
+**Deploy API**, **Migrate database** and **Admin bootstrap** run their jobs in the GitHub Environment `production` (Codex security review P1). A manual workflow runs the YAML of whichever branch is chosen, so their "only the repository owner" step is an extra signal, not the boundary: anyone with write access could dispatch a branch that removes it. The boundary is the Environment's rules, which live in the repository settings, outside any branch. The owner sets them once (no code or API call does this):
+
+1. **Settings → Environments → production** (it exists after the first run that references it, or create it there). Under **Deployment branches and tags** choose **Selected branches and tags** and add only `main`. Optionally add yourself under **Required reviewers**, and leave **Allow administrators to bypass** off where practical.
+2. Move each production secret from **Settings → Secrets and variables → Actions → Repository secrets** to the Environment's **Environment secrets** (same name, the value pasted again), then **delete the repository secret**. While a repository copy remains, any branch's job without `environment: production` can still read it. The names:
+   `DIGITALOCEAN_ACCESS_TOKEN`, `GHCR_PULL_TOKEN`, `SUPABASE_DB_PASSWORD`, `SUPABASE_ACCESS_TOKEN`, `HTCO_SENTRY_DSN`, `HTCO_SUPABASE_SECRET_KEY`, `HTCO_SESSION_KEY`, `HTCO_TOKEN_VAULT_KEY`, `HTCO_TOKEN_VAULT_PREVIOUS_KEYS`, `ETSY_KEYSTRING`, `ETSY_SHARED_SECRET`, `ETSY_WEBHOOK_SECRET`, `HTCO_WORKER_DATABASE_PASSWORD`.
+   The variables (`SUPABASE_PROJECT_REF`, `SUPABASE_POOLER_HOST`, `HTCO_SUPABASE_URL`, `HTCO_SUPABASE_PUBLISHABLE_KEY`, `HTCO_WEB_ORIGINS`) are not secret and may stay repository variables.
+3. Check, **only after step 1 is saved**: create a branch identical to `main` (no extra commits) and run **Deploy API** from it. The job must stop before any step runs, with a message containing "is not allowed to deploy to production". **Warning: this really deploys.** If step 1 is not in effect, the run goes ahead and deploys that branch to production; because it is identical to `main`, what is deployed is what `main` would deploy. Delete the branch afterwards.
+
+Until step 2 is done the workflows keep working from the repository secrets, without the branch restriction. **Migrate database**'s dry run needs the database password too, so it also runs in `production`; with a required reviewer, every run, dry or not, waits for approval.
+
 ## Rollback
 
 Code: revert the pull request. Deployment: run **Deploy API** with `image_tag` set to the commit SHA of the last good deployment (from that run's summary); the image is already in GHCR, so nothing is rebuilt.

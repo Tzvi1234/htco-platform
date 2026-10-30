@@ -5593,7 +5593,7 @@ paths:
                 type: string
                 format: uuid
         '429':
-          description: Over the per-source rate limit (webhook-rate-limited)
+          description: Over the per-IP failure limit or the Etsy-wide rate limit (webhook-rate-limited)
           content:
             application/problem+json:
               schema:

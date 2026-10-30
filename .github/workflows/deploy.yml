@@ -6,7 +6,8 @@
 # push it to GHCR as ghcr.io/tzvi1234/htco-api:<commit SHA>, then deploy it. With `image_tag`:
 # deploy that already pushed image again, which is how a rollback is done (AC-1.5.3).
 #
-# Repository configuration (Settings → Secrets and variables → Actions):
+# Configuration: variables in Settings → Secrets and variables → Actions; secrets in the
+# `production` Environment (Settings → Environments → production), not repository secrets:
 #   variables  SUPABASE_PROJECT_REF, SUPABASE_POOLER_HOST, HTCO_SUPABASE_URL,
 #              HTCO_SUPABASE_PUBLISHABLE_KEY, HTCO_WEB_ORIGINS
 #   secrets    DIGITALOCEAN_ACCESS_TOKEN (App Platform scopes only), GHCR_PULL_TOKEN (read:packages),
@@ -37,6 +38,9 @@ jobs:
     name: deploy
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # The protected `production` Environment holds the secrets: only `main` may deploy to it
+    # (Codex security review P1). The owner check below is an extra signal, not the boundary.
+    environment: production
     permissions:
       contents: read
       packages: write

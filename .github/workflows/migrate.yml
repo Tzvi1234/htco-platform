@@ -6,7 +6,8 @@
 # After the migrations it loads the reviewed automation definitions (`htco registry sync
 # --automations`, slice 5.10): a dry run always, applied with `apply: true`.
 #
-# Repository configuration (Settings → Secrets and variables → Actions):
+# Configuration: variables in Settings → Secrets and variables → Actions; secrets in the
+# `production` Environment (Settings → Environments → production), not repository secrets:
 #   variable SUPABASE_PROJECT_REF   the project's reference ID
 #   variable SUPABASE_POOLER_HOST   the session pooler's host (as for the deploy)
 #   secret   SUPABASE_ACCESS_TOKEN  a personal access token of the owner's Supabase account
@@ -32,6 +33,9 @@ jobs:
     name: migrate
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # The protected `production` Environment holds the secrets: only `main` may use it (Codex
+    # security review P1). The dry run needs the database password too, so it runs here as well.
+    environment: production
     permissions:
       contents: read
     env:
