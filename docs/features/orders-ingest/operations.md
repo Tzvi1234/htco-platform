@@ -7,7 +7,7 @@
 | `HTCO_ETSY_WEBHOOKS_ENABLED` | `false` | Turns `POST /webhooks/etsy` on; off answers 404 |
 | `HTCO_ETSY_WEBHOOK_SECRET` | unset | The endpoint's signing secret (`whsec_...`), from the GitHub secret `ETSY_WEBHOOK_SECRET`; required when enabled; checked at startup without being repeated |
 | `HTCO_ETSY_WEBHOOK_RATE_PER_SECOND` | `50` | Per API instance, counting only deliveries whose signature verifies; above it the answer is 429 with `Retry-After` |
-| `HTCO_ETSY_WEBHOOK_IP_RATE_PER_SECOND` | `20` | Per client IP (`do-connecting-ip`) and API instance, before anything is read or verified; above it the answer is 429 with `Retry-After` |
+| `HTCO_ETSY_WEBHOOK_IP_RATE_PER_SECOND` | `20` | Failed requests per client IP (`do-connecting-ip`, IPv6 by its /64) and API instance: no signature headers, a body over 64 KiB, a bad signature or timestamp. A verified delivery is never counted here, so this cannot hold Etsy below the Etsy-wide 50/s, and a forged `do-connecting-ip` cannot block Etsy. Above it a failure answers 429 with `Retry-After` instead of 401/413. At most 10,000 IPs are tracked; past that, ended windows are evicted first, then the oldest live one (a new IP is never refused because the table is full) |
 | `HTCO_ORDER_SYNC_IN_API` | `false` | Slice 5.4: a stale read or the manual sync enqueues `etsy.order_sync` for the worker and returns at once (the default since 5.11, AC-5.5.5). `true`: the rollback, the API process runs the order history sync as before |
 | `HTCO_RECONCILIATION_SCHEDULE` | `06:00,18:00` | Slice 5.5, worker: when reconciliation runs, local `HH:MM` comma-separated; the day's last run is the full sweep. Runs only when `orders.reconciliation` is in `HTCO_WORKER_SCHEDULES` |
 | `HTCO_RECONCILIATION_TZ` | `Asia/Jerusalem` | The IANA time zone of those times: 06:00 stays 06:00 across a DST change (the image carries `tzdata`) |
@@ -46,7 +46,7 @@ Call budget (placeholder `etsy:app` 5,000 a day): calls per run times runs per d
 
 ### Etsy shows failed deliveries
 1. **Check:** the API logs `etsy.webhook_rejected` and its `reason`.
-2. **Likely cause:** `bad_signature` (wrong or rotated secret), `stale_timestamp` (clock skew), `rate_limited` (a burst).
+2. **Likely cause:** `bad_signature` (wrong or rotated secret), `stale_timestamp` (clock skew), `rate_limited` (a burst of verified deliveries), `ip_rate_limited` (one IP sending many failing requests; never Etsy's signed deliveries).
 3. **Fix:** update the secret; Etsy retries for about 30 hours, and the portal can replay failed messages.
 4. **Verify:** new deliveries answer 204. Reconciliation (5.5) fills any gap meanwhile.
 

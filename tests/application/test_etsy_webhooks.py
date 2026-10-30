@@ -27,6 +27,7 @@ from htco_application.etsy_webhooks import (
     WebhookSecret,
     WindowLimiter,
     has_signature_headers,
+    ip_source,
     parse_event,
     verify_signature,
 )
@@ -358,17 +359,57 @@ def test_limiter__over_the_limit_waits_until_the_window_ends_then_admits() -> No
     assert limiter.admit("etsy", now=NOW + timedelta(seconds=1)) is None  # Etsy's retry
 
 
-def test_limiter__many_sources__the_table_stays_bounded() -> None:
-    # The per-IP limiter must not grow without end under a flood from many addresses.
-    limiter = WindowLimiter(5, max_sources=3)
+def test_limiter__full_table__a_new_source_is_admitted_and_the_table_stays_bounded() -> None:
+    # The per-IP limiter must not grow without end under a flood from many addresses, and a
+    # full table must never refuse a newcomer (SAGE security note B).
+    limiter = WindowLimiter(1, max_sources=3)
     for n in range(3):
+        assert limiter.admit(f"ip:{n}", now=NOW + timedelta(milliseconds=n)) is None
+    assert limiter.admit("ip:new", now=NOW + timedelta(milliseconds=250)) is None
+    assert list(limiter._windows) == ["ip:1", "ip:2", "ip:new"]  # the oldest live one forgotten
+    assert limiter.admit("ip:2", now=NOW + timedelta(milliseconds=260)) is not None  # still live
+
+
+def test_limiter__full_table__ended_windows_are_evicted_before_live_ones() -> None:
+    limiter = WindowLimiter(1, max_sources=3)
+    assert limiter.admit("ip:old", now=NOW) is None
+    later = NOW + timedelta(milliseconds=900)
+    assert limiter.admit("ip:a", now=later) is None
+    assert limiter.admit("ip:b", now=later) is None
+    # 1.1 s: only ip:old's window has ended; it goes, the live ones stay.
+    assert limiter.admit("ip:new", now=NOW + timedelta(milliseconds=1100)) is None
+    assert list(limiter._windows) == ["ip:a", "ip:b", "ip:new"]
+
+
+def test_limiter__ended_windows_are_pruned_once_per_window() -> None:
+    limiter = WindowLimiter(5)
+    for n in range(4):
         assert limiter.admit(f"ip:{n}", now=NOW) is None
-    wait = limiter.admit("ip:new", now=NOW + timedelta(milliseconds=250))
-    assert wait == pytest.approx(0.75)
-    assert limiter.admit("ip:0", now=NOW) is None  # a known source keeps its window
-    # Once the windows end they are dropped and a new source is admitted.
-    assert limiter.admit("ip:new", now=NOW + timedelta(seconds=1)) is None
-    assert len(limiter._windows) == 1
+    # Within the same window nothing is swept, even past an ended window's end.
+    assert limiter.admit("ip:4", now=NOW + timedelta(milliseconds=500)) is None
+    assert len(limiter._windows) == 5
+    # The next window's first call drops the four ended windows, keeping the live one.
+    assert limiter.admit("ip:5", now=NOW + timedelta(milliseconds=1200)) is None
+    assert list(limiter._windows) == ["ip:4", "ip:5"]
+
+
+@pytest.mark.parametrize(
+    ("ip", "source"),
+    [
+        ("203.0.113.66", "ip:203.0.113.66"),
+        (" 203.0.113.66 ", "ip:203.0.113.66"),
+        ("2001:db8:1:2:aaaa::1", "ip:2001:db8:1:2::/64"),
+        ("2001:db8:1:2:ffff:ffff:ffff:ffff", "ip:2001:db8:1:2::/64"),
+        ("::ffff:198.51.100.7", "ip:198.51.100.7"),
+        (None, "ip:unknown"),
+        ("", "ip:unknown"),
+        ("not-an-ip", "ip:unknown"),
+    ],
+)
+def test_ip_source__ipv6_by_its_64__unparsable_shares_one_bucket(
+    ip: str | None, source: str
+) -> None:
+    assert ip_source(ip) == source
 
 
 def test_signature_headers__all_three_needed_before_the_body_is_read() -> None:

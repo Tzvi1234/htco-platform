@@ -80,8 +80,9 @@ class ApiSettings(BaseSettings):
     automations_enabled: bool = False
     # Slice 5.3: Etsy webhooks at `POST /webhooks/etsy`. Off by default (the route answers 404);
     # on, it needs the endpoint's signing secret from the Etsy developer portal (`whsec_...`, the
-    # GitHub secret ETSY_WEBHOOK_SECRET). Both rate limits are per API instance: the per-IP one
-    # before anything is verified, the Etsy-wide one only for deliveries whose signature verifies.
+    # GitHub secret ETSY_WEBHOOK_SECRET). Both rate limits are per API instance. The per-IP one
+    # counts only failures (no signature headers, too large, bad signature or timestamp), never a
+    # verified delivery, so it cannot hold Etsy below the Etsy-wide one (verified deliveries).
     etsy_webhooks_enabled: bool = False
     etsy_webhook_secret: SecretStr | None = None
     etsy_webhook_rate_per_second: int = Field(default=50, ge=1, le=1000)
