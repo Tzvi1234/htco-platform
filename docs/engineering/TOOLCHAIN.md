@@ -12,11 +12,11 @@
 
 | Area | Choice | Locked | Why |
 |---|---|---|---|
-| Language | CPython | 3.14.10 (`.python-version`; base image `python:3.14.x-slim-trixie` pinned by digest in slice 1.5) | 3.13 is already security-only; FastAPI, Pydantic, psycopg and pytest support 3.14. LangGraph does not declare 3.14 yet, but our smoke test runs on it (assumption A-10 verified 2026-10-14), so no fallback to 3.13 is needed. Never use floating tags (`python:3`, `slim`, `latest` now point to 3.15). |
+| Language | CPython | 3.14.8 (`.python-version`; base image `python:3.14.x-slim-trixie` pinned by digest in slice 1.5) | 3.13 is already security-only; FastAPI, Pydantic, psycopg and pytest support 3.14. LangGraph does not declare 3.14 yet, but our smoke test runs on it (assumption A-10 verified 2026-10-14), so no fallback to 3.13 is needed. Never use floating tags (`python:3`, `slim`, `latest` now point to 3.15). |
 | Packages and workspace | uv, one workspace with a virtual root and one `uv.lock` | 0.13.5, enforced with `required-version = ">=0.13.4,<0.14"` (0.13.5 since 2026-10-25: see the release-age exception below) | Fast, reproducible, workspace-aware; `--package` builds one deployable. Plain `uv sync` installs every member. |
 | Build backend | `uv_build` | `>=0.13,<0.14` | Needed for non-editable installs in images |
 | Task runner | just (`rust-just` from PyPI, in the `dev` group) | 1.58.0 | Comes from `uv.lock` like every other tool, so contributors only install uv |
-| Images | Multi-stage `Dockerfile` from `python:3.14.10-slim-trixie` and `ghcr.io/astral-sh/uv:0.13.5`, both pinned by digest; non-root user 10001; bytecode compiled; built with Buildx in GitHub Actions | | Built once, deployed by digest. CPython patch releases are taken when published (security fixes) and pinned by digest. |
+| Images | Multi-stage `Dockerfile` from `python:3.14.8-slim-trixie` and `ghcr.io/astral-sh/uv:0.13.5`, both pinned by digest; non-root user 10001; bytecode compiled; built with Buildx in GitHub Actions | | Built once, deployed by digest. CPython patch releases are taken when published (security fixes) and pinned by digest. |
 
 ## Application libraries
 

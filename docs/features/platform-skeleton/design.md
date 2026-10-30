@@ -92,7 +92,7 @@ flowchart LR
 | Stage | From | Does |
 |---|---|---|
 | `uv` | `ghcr.io/astral-sh/uv:0.13.5@sha256:…` | Provides the uv binary |
-| `build` | `python:3.14.10-slim-trixie@sha256:…` | `uv sync --locked --no-dev --no-editable --package htco-api` into `/app/.venv` with bytecode compiled; the build context is an allow-list (`pyproject.toml`, `uv.lock`, `.python-version`, `apps/`, `packages/`) |
+| `build` | `python:3.14.8-slim-trixie@sha256:…` | `uv sync --locked --no-dev --no-editable --package htco-api` into `/app/.venv` with bytecode compiled; the build context is an allow-list (`pyproject.toml`, `uv.lock`, `.python-version`, `apps/`, `packages/`) |
 | `runtime` | same Python image | Copies only `/app/.venv` (owned by root); runs `python -m htco_api` as user `10001` on port 8080 (`HTCO_HOST=0.0.0.0`, `HTCO_PORT=8080`) |
 
 `HTCO_ENVIRONMENT` is deliberately not set in the image: the platform must say which environment it runs, and the image refuses to start (exit 78) until it does.

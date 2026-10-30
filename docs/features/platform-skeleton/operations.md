@@ -24,7 +24,7 @@ Until slice 1.5 deploys the API, operations means running it locally and keeping
 | `HTCO_ETSY_REDIRECT_URI` | unset; production `https://dash.ht-co.app/integrations/etsy/callback` | The OAuth redirect URI, registered exactly in the Etsy app; HTTPS without query or fragment when deployed. With the Etsy credentials, `HTCO_TOKEN_VAULT_KEY` and web sign-in it turns the connect flow on (`etsy_connect` in `api.starting`); otherwise the connect endpoints answer 503 `etsy-unavailable` ([connect flow](../etsy-integration/connect-flow.md)) |
 | `HTCO_ETSY_DAILY_QUOTA_FLOOR` | `500` | Requests left today below which routine Etsy calls are deferred |
 | `HTCO_RELEASE` | unset | Build identifier (git SHA) attached to error reports and the `api.starting` line |
-| Python version | `.python-version` (3.14.10) | uv installs and uses exactly this interpreter |
+| Python version | `.python-version` (3.14.8) | uv installs and uses exactly this interpreter |
 | uv version | `[tool.uv] required-version` | Any other uv version refuses to run on the workspace |
 | Release age | `[tool.uv] exclude-newer = "7 days"` | Resolution ignores versions younger than seven days |
 | Coverage floors | `justfile` recipe `test`, `[tool.coverage.report] fail_under` | Domain 95%, application 90%, total 80% (branch coverage) |
